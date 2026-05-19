@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Otterpia",
+    "slug": "otterpia",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.saikokandi.otterpia"
+    },
+    "android": {
+      "package": "com.saikokandi.otterpia",
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-web-browser",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Otterpia to save images to your photo library.",
+          "savePhotosPermission": "Allow Otterpia to save images to your photo library.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "71673f8e-ebd6-42d6-aa02-6b71a15a84b3"
+      }
+    },
+    "owner": "mabisuuu"
+  }
+}
