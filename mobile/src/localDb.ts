@@ -25,6 +25,7 @@ export interface FeedItem {
 
 const TERMS_KEY = '@otterpia:terms'
 const ITEMS_KEY = '@otterpia:items'
+const HIDDEN_KEY = '@otterpia:hidden_items'
 const MAX_ITEMS = 600
 const STRICT_KEYWORD_PLATFORMS = new Set(['mdpr', 'news', 'tver'])
 
@@ -85,13 +86,24 @@ export async function getItems(): Promise<FeedItem[]> {
   return raw ? (JSON.parse(raw) as FeedItem[]) : []
 }
 
+async function getHiddenKeys(): Promise<Set<string>> {
+  const raw = await AsyncStorage.getItem(HIDDEN_KEY)
+  return new Set(raw ? (JSON.parse(raw) as string[]) : [])
+}
+
+async function addHiddenKey(key: string): Promise<void> {
+  const hidden = await getHiddenKeys()
+  hidden.add(key)
+  await AsyncStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden]))
+}
+
 export async function mergeItems(newItems: FeedItem[]): Promise<number> {
-  const existing = await getItems()
+  const [existing, hidden] = await Promise.all([getItems(), getHiddenKeys()])
   const itemKey = (i: FeedItem) => `${i.id}::${i.watch_term_keyword || ''}`
   const cleanedNewItems = newItems.map(normalizeFeedItem).filter(i => !isSearchPageFallback(i))
   const incomingByKey = new Map(cleanedNewItems.map(i => [itemKey(i), i]))
   const seen = new Set(existing.map(itemKey))
-  const fresh = cleanedNewItems.filter(i => i.id && !seen.has(itemKey(i)))
+  const fresh = cleanedNewItems.filter(i => i.id && !seen.has(itemKey(i)) && !hidden.has(itemKey(i)))
   let updated = 0
   const refreshed = existing.map(item => {
     const incoming = incomingByKey.get(itemKey(item))
@@ -112,12 +124,16 @@ export async function mergeItems(newItems: FeedItem[]): Promise<number> {
 
 export async function deleteFeedItem(id: string, watchTermKeyword?: string): Promise<void> {
   const items = await getItems()
+  const toDelete = items.filter(i =>
+    i.id === id && (watchTermKeyword === undefined || i.watch_term_keyword === watchTermKeyword),
+  )
   await AsyncStorage.setItem(
     ITEMS_KEY,
     JSON.stringify(items.filter(i =>
       i.id !== id || (watchTermKeyword !== undefined && i.watch_term_keyword !== watchTermKeyword),
     )),
   )
+  await Promise.all(toDelete.map(i => addHiddenKey(`${i.id}::${i.watch_term_keyword || ''}`)))
 }
 
 function mergeKnownItem(existing: FeedItem, incoming: FeedItem): FeedItem {
@@ -281,13 +297,14 @@ export async function queryFeed(opts: {
   keyword?: string | null
   days?: number
 }): Promise<FeedItem[]> {
-  const [all, subs] = await Promise.all([getItems(), getSubscribedPlatforms()])
+  const [all, subs, hidden] = await Promise.all([getItems(), getSubscribedPlatforms(), getHiddenKeys()])
   const days = opts.days ?? 30
   const cutoff = days > 0
     ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
     : null
   return all
     .map(normalizeFeedItem)
+    .filter(i => !hidden.has(`${i.id}::${i.watch_term_keyword || ''}`))
     .filter(i => !isSearchPageFallback(i))
     .filter(i => !isBareAddressItem(i))
     .filter(i => !cutoff || i.published_at >= cutoff || i.platform === '5ch' || i.platform === 'girlschannel' || i.platform === 'togetter')

@@ -35,11 +35,9 @@ def _build_connectors(db) -> list[BaseConnector]:
     if youtube_key:
         connectors.append(YouTubeConnector(api_key=youtube_key))
 
-    # Use twscrape-based connector if a Twitter session is active.
-    # The session is established via POST /api/twitter/login and restored on startup.
-    from app.connectors.twitter import twitter_logged_in_username
-    if twitter_logged_in_username():
-        connectors.append(TwitterConnector())
+    twitter_cred = db.get(PlatformCredential, "twitter")
+    if twitter_cred and twitter_cred.bearer_token:
+        connectors.append(TwitterConnector(bearer_token=twitter_cred.bearer_token))
 
     return connectors
 

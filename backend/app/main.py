@@ -5,93 +5,22 @@ from typing import AsyncGenerator
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, text
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api import credentials, feed, watch_terms
-from app.api import twitter as twitter_api
-from app.connectors.twitter import init_twitter_api
 from app.database import Base, SessionLocal, engine, get_db
 from app.ingestion.scheduler import poll_once, scheduler, start_scheduler
-from app.models import Match, PlatformCredential, SourceItem, WatchTerm
+from app.models import Match, SourceItem, WatchTerm
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
 log = logging.getLogger(__name__)
 
 
-def _run_migrations() -> None:
-    """Idempotently add new columns introduced after the initial schema."""
-    with engine.connect() as conn:
-        # Detect dialect
-        dialect = engine.dialect.name
-
-        if dialect == "postgresql":
-            stmts = [
-                "ALTER TABLE platform_credentials ADD COLUMN IF NOT EXISTS username VARCHAR",
-                "ALTER TABLE platform_credentials ADD COLUMN IF NOT EXISTS password VARCHAR",
-                "ALTER TABLE platform_credentials ADD COLUMN IF NOT EXISTS email VARCHAR",
-            ]
-        else:
-            # SQLite does not support IF NOT EXISTS on ALTER TABLE;
-            # check via PRAGMA before adding.
-            cols_result = conn.execute(text("PRAGMA table_info(platform_credentials)"))
-            existing = {row[1] for row in cols_result}
-            stmts = []
-            for col in ("username", "password", "email"):
-                if col not in existing:
-                    stmts.append(f"ALTER TABLE platform_credentials ADD COLUMN {col} VARCHAR")
-
-        for stmt in stmts:
-            try:
-                conn.execute(text(stmt))
-            except Exception as exc:
-                log.debug("Migration stmt skipped (%s): %s", exc, stmt)
-
-        conn.commit()
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     Base.metadata.create_all(bind=engine)
-    _run_migrations()
-
-    # Restore Twitter session from stored credentials (non-blocking)
-    db = SessionLocal()
-    try:
-        cred = db.get(PlatformCredential, "twitter")
-        if cred and cred.username and cred.password:
-            log.info("Restoring Twitter session for @%s …", cred.username)
-
-            async def _restore_and_save(username, password, email, cookies_json):
-                success, new_cookies = await init_twitter_api(
-                    username=username,
-                    password=password,
-                    email=email,
-                    cookies_json=cookies_json,
-                )
-                if success and new_cookies and new_cookies != cookies_json:
-                    # Persist refreshed cookies
-                    _db = SessionLocal()
-                    try:
-                        _cred = _db.get(PlatformCredential, "twitter")
-                        if _cred:
-                            _cred.bearer_token = new_cookies
-                            _db.commit()
-                    finally:
-                        _db.close()
-
-            asyncio.create_task(
-                _restore_and_save(
-                    cred.username,
-                    cred.password,
-                    cred.email or "",
-                    cred.bearer_token,  # stored session cookies
-                )
-            )
-    finally:
-        db.close()
-
     start_scheduler()
     asyncio.create_task(poll_once())
     yield
@@ -110,7 +39,6 @@ app.add_middleware(
 app.include_router(watch_terms.router)
 app.include_router(feed.router)
 app.include_router(credentials.router)
-app.include_router(twitter_api.router)
 
 
 @app.get("/api/health")

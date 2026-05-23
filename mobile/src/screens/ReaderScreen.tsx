@@ -734,7 +734,7 @@ function makeStyles(t: Theme) {
     container: { flex: 1, backgroundColor: t.bg },
     webview: { flex: 1 },
     overlay: {
-      position: 'absolute', top: 0, left: 0, right: 0, bottom: 62,
+      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
       justifyContent: 'center', alignItems: 'center',
       backgroundColor: 'transparent',
     },
@@ -784,9 +784,16 @@ function makeStyles(t: Theme) {
     errorBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
     // ── Bottom toolbar ────────────────────────────────────────────────────────
     bottomBar: {
+      position: 'absolute', bottom: 24, left: 16, right: 16,
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around',
-      backgroundColor: t.card, paddingHorizontal: 8, paddingTop: 8, paddingBottom: 20,
-      borderTopWidth: 1, borderColor: t.divider,
+      backgroundColor: t.card,
+      paddingHorizontal: 6, paddingVertical: 8,
+      borderRadius: 30,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.12,
+      shadowRadius: 14,
+      elevation: 8,
     },
     navBtn: {
       width: 36, height: 36, borderRadius: 18,
