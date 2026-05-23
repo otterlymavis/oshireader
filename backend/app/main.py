@@ -62,11 +62,31 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         cred = db.get(PlatformCredential, "twitter")
         if cred and cred.username and cred.password:
             log.info("Restoring Twitter session for @%s …", cred.username)
+
+            async def _restore_and_save(username, password, email, cookies_json):
+                success, new_cookies = await init_twitter_api(
+                    username=username,
+                    password=password,
+                    email=email,
+                    cookies_json=cookies_json,
+                )
+                if success and new_cookies and new_cookies != cookies_json:
+                    # Persist refreshed cookies
+                    _db = SessionLocal()
+                    try:
+                        _cred = _db.get(PlatformCredential, "twitter")
+                        if _cred:
+                            _cred.bearer_token = new_cookies
+                            _db.commit()
+                    finally:
+                        _db.close()
+
             asyncio.create_task(
-                init_twitter_api(
-                    username=cred.username,
-                    password=cred.password,
-                    email=cred.email or "",
+                _restore_and_save(
+                    cred.username,
+                    cred.password,
+                    cred.email or "",
+                    cred.bearer_token,  # stored session cookies
                 )
             )
     finally:

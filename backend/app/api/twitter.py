@@ -1,5 +1,4 @@
 """Twitter account login / status / disconnect endpoints."""
-import asyncio
 import logging
 
 from fastapi import APIRouter, Depends
@@ -26,10 +25,10 @@ async def login(body: TwitterLoginRequest, db: Session = Depends(get_db)):
     """
     Log in with the provided Twitter credentials.
 
-    Credentials are persisted in the database so the session can be
-    restored automatically on the next backend restart.
+    Credentials and session cookies are persisted in the database so the
+    session can be restored automatically on the next backend restart.
     """
-    # Persist credentials in DB
+    # Persist credentials
     cred = db.get(PlatformCredential, "twitter")
     if cred is None:
         cred = PlatformCredential(platform="twitter")
@@ -40,15 +39,22 @@ async def login(body: TwitterLoginRequest, db: Session = Depends(get_db)):
     cred.email = (body.email or "").strip() or None
     db.commit()
 
-    # Perform the actual login (runs in background so request returns quickly)
-    success = await init_twitter_api(
+    # Perform login — pass existing cookies so we can try a fast restore
+    # (bearer_token column is repurposed to store session cookies JSON)
+    success, new_cookies_json = await init_twitter_api(
         username=cred.username,
         password=cred.password,
         email=cred.email or "",
+        cookies_json=cred.bearer_token,  # repurposed for session cookies
     )
 
     if not success:
         return TwitterStatusOut(logged_in=False, username=None)
+
+    # Persist updated session cookies
+    if new_cookies_json:
+        cred.bearer_token = new_cookies_json
+        db.commit()
 
     return TwitterStatusOut(logged_in=True, username=cred.username)
 
@@ -61,6 +67,7 @@ async def disconnect(db: Session = Depends(get_db)):
         cred.username = None
         cred.password = None
         cred.email = None
+        cred.bearer_token = None  # also clear stored cookies
         db.commit()
 
     await logout_twitter()
