@@ -10,3 +10,4 @@ psycopg2-binary>=2.9.9
 feedparser>=6.0.11
 beautifulsoup4>=4.12.0
 lxml>=5.2.0
+twscrape>=0.14.0

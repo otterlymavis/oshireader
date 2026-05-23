@@ -90,3 +90,27 @@ export const fetchCredentials = (): Promise<Credential[]> =>
 
 export const checkHealth = (): Promise<{ status: string }> =>
   fetch(`${API_BASE}/api/health`).then(json<{ status: string }>)
+
+// ── Twitter account (twscrape-based) ──────────────────────────────────────
+
+export interface TwitterStatus {
+  logged_in: boolean
+  username: string | null
+}
+
+export const fetchTwitterStatus = (): Promise<TwitterStatus> =>
+  fetch(`${API_BASE}/api/twitter/status`).then(json<TwitterStatus>)
+
+export const twitterLogin = (
+  username: string,
+  password: string,
+  email?: string,
+): Promise<TwitterStatus> =>
+  fetch(`${API_BASE}/api/twitter/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, email: email ?? null }),
+  }).then(json<TwitterStatus>)
+
+export const twitterDisconnect = (): Promise<TwitterStatus> =>
+  fetch(`${API_BASE}/api/twitter/disconnect`, { method: 'POST' }).then(json<TwitterStatus>)

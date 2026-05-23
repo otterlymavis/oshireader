@@ -60,6 +60,17 @@ class CredentialOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TwitterLoginRequest(BaseModel):
+    username: str
+    password: str
+    email: str | None = None
+
+
+class TwitterStatusOut(BaseModel):
+    logged_in: bool
+    username: str | None
+
+
 class FeedItemOut(BaseModel):
     match_id: int
     watch_term_id: int

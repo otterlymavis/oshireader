@@ -41,6 +41,10 @@ class PlatformCredential(Base):
     bearer_token = Column(String)
     api_key = Column(String)
     api_secret = Column(String)
+    # Twitter account login (twscrape)
+    username = Column(String)
+    password = Column(String)
+    email = Column(String)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

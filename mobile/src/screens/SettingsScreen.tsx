@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import {
+  ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
@@ -27,6 +28,7 @@ import { useTheme } from '../ThemeContext'
 import { useLang } from '../LangContext'
 import { LANG_LABELS, type Lang } from '../i18n'
 import type { Theme } from '../theme'
+import { fetchTwitterStatus, twitterLogin, twitterDisconnect } from '../api'
 
 function makeStyles(th: Theme) {
   return StyleSheet.create({
@@ -158,6 +160,34 @@ function makeStyles(th: Theme) {
       fontSize: 13, color: th.text, backgroundColor: th.inputBg,
       fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
+    // Twitter login section
+    twitterConnectedRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12,
+      borderBottomWidth: 1, borderColor: th.divider,
+    },
+    twitterConnectedLabel: { fontSize: 13, color: th.textSub, fontWeight: '500' },
+    twitterConnectedValue: { fontSize: 13, color: th.primary, fontWeight: '700' },
+    twitterFormRow: {
+      paddingHorizontal: 16, paddingVertical: 10,
+      gap: 8,
+    },
+    twitterInput: {
+      borderWidth: 1, borderColor: th.border, borderRadius: 8,
+      paddingHorizontal: 10, paddingVertical: 8,
+      fontSize: 13, color: th.text, backgroundColor: th.inputBg,
+    },
+    twitterConnectBtn: {
+      backgroundColor: th.primary, borderRadius: 8,
+      paddingVertical: 10, alignItems: 'center', marginTop: 4,
+    },
+    twitterConnectBtnOff: { opacity: 0.4 },
+    twitterConnectBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+    twitterDisconnectBtn: {
+      paddingHorizontal: 16, paddingVertical: 10,
+    },
+    twitterDisconnectText: { color: '#DC2626', fontSize: 13, fontWeight: '600' },
+    twitterHint: { fontSize: 11, color: th.textMuted, lineHeight: 16, marginTop: 4 },
     // Source rows — checkmark style
     sourceRow: {
       flexDirection: 'row', alignItems: 'center',
@@ -218,6 +248,38 @@ export default function SettingsScreen() {
   const { settings, save: saveSettings } = useSettings()
   const [ytKey, setYtKey] = useState('')
   useEffect(() => { setYtKey(settings.youtubeApiKey) }, [settings.youtubeApiKey])
+
+  // Twitter account
+  const [twUsername, setTwUsername] = useState('')
+  const [twPassword, setTwPassword] = useState('')
+  const [twEmail, setTwEmail] = useState('')
+  const { data: twStatus, refetch: refetchTwStatus } = useQuery({
+    queryKey: ['twitter-status'],
+    queryFn: fetchTwitterStatus,
+    retry: false,
+  })
+
+  const twLogin = useMutation({
+    mutationFn: () => twitterLogin(twUsername.trim(), twPassword, twEmail.trim() || undefined),
+    onSuccess: (data) => {
+      if (data.logged_in) {
+        setTwUsername('')
+        setTwPassword('')
+        setTwEmail('')
+        refetchTwStatus()
+        Alert.alert('🐦 Twitter', `Connected as @${data.username}`)
+      } else {
+        Alert.alert('Login Failed', 'Could not log in. Check your username and password.')
+      }
+    },
+    onError: (e: Error) => Alert.alert('Error', e.message),
+  })
+
+  const twDisconnect = useMutation({
+    mutationFn: twitterDisconnect,
+    onSuccess: () => { refetchTwStatus(); Alert.alert('Twitter', 'Disconnected.') },
+    onError: (e: Error) => Alert.alert('Error', e.message),
+  })
 
   const { data: terms = [] } = useQuery({ queryKey: ['watch-terms'], queryFn: getTerms })
   const { data: _persistedSubs } = useQuery({
@@ -546,6 +608,73 @@ export default function SettingsScreen() {
               <Text style={s.rowValue}>なし</Text>
             )}
           </View>
+        </View>
+
+        {/* Twitter Account */}
+        <Text style={[s.section, { marginTop: 24 }]}>🐦 Twitter</Text>
+        <View style={s.card}>
+          {twStatus?.logged_in ? (
+            <>
+              <View style={s.twitterConnectedRow}>
+                <Text style={s.twitterConnectedLabel}>Connected as</Text>
+                <Text style={s.twitterConnectedValue}>@{twStatus.username}</Text>
+              </View>
+              <Pressable
+                style={s.twitterDisconnectBtn}
+                onPress={() => twDisconnect.mutate()}
+                disabled={twDisconnect.isPending}
+              >
+                <Text style={s.twitterDisconnectText}>
+                  {twDisconnect.isPending ? 'Disconnecting…' : '✕ Disconnect Twitter'}
+                </Text>
+              </Pressable>
+            </>
+          ) : (
+            <View style={s.twitterFormRow}>
+              <TextInput
+                style={s.twitterInput}
+                placeholder="Twitter username"
+                placeholderTextColor={theme.textMuted}
+                value={twUsername}
+                onChangeText={setTwUsername}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={s.twitterInput}
+                placeholder="Password"
+                placeholderTextColor={theme.textMuted}
+                value={twPassword}
+                onChangeText={setTwPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={s.twitterInput}
+                placeholder="Email (optional, for 2FA accounts)"
+                placeholderTextColor={theme.textMuted}
+                value={twEmail}
+                onChangeText={setTwEmail}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                autoCorrect={false}
+              />
+              <Pressable
+                style={[s.twitterConnectBtn, (!twUsername.trim() || !twPassword || twLogin.isPending) && s.twitterConnectBtnOff]}
+                onPress={() => twLogin.mutate()}
+                disabled={!twUsername.trim() || !twPassword || twLogin.isPending}
+              >
+                {twLogin.isPending
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={s.twitterConnectBtnText}>Connect Twitter Account</Text>
+                }
+              </Pressable>
+              <Text style={s.twitterHint}>
+                Your credentials are sent to your backend and used to log into Twitter's internal API. Login may take 10–30 seconds.
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* API Keys */}
