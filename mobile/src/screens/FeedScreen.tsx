@@ -17,6 +17,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getTerms, queryFeed, mergeItems, getSaved, toggleSaved, getSubscribedPlatforms, getWallpaper, getSourcesOrder, setSourcesOrder, deleteFeedItem, type FeedItem } from '../localDb'
 import { scrapeAll } from '../scraper'
 import { scrapeCustomUrls } from '../scraper/custom'
+import { fetchFeed, type FeedItem as BackendFeedItem } from '../api'
+import { useSettings } from '../hooks/useSettings'
 import { FeedCard, PLATFORM_META, PLATFORM_DISPLAY, DEFAULT_META } from '../components/FeedCard'
 import { AddUrlModal } from '../components/AddUrlModal'
 import { SourceReorderModal } from '../components/SourceReorderModal'
@@ -125,12 +127,30 @@ function SourceChip({
   )
 }
 
+/** Convert a backend feed item to the local FeedItem shape. */
+function toLocalItem(fi: BackendFeedItem): FeedItem {
+  return {
+    id: fi.item.id,
+    platform: fi.item.platform,
+    url: fi.item.url,
+    title: fi.item.title,
+    content_text: fi.item.content_text,
+    author: fi.item.author,
+    thumbnail_url: fi.item.thumbnail_url,
+    media_type: fi.item.media_type ?? 'article',
+    published_at: fi.item.published_at,
+    watch_term_keyword: fi.watch_term_keyword,
+    fetched_at: fi.matched_at,
+  }
+}
+
 export default function FeedScreen() {
   const { theme, style } = useTheme()
   const s = useMemo(() => makeStyles(theme), [theme])
   const qc = useQueryClient()
   const navigation = useNavigation()
   const { t } = useLang()
+  const { settings } = useSettings()
   const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null)
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null)
   const [mediaFilter, setMediaFilter] = useState<'all' | 'media_only'>('all')
@@ -174,12 +194,25 @@ export default function FeedScreen() {
     setIsRefreshing(true)
     try {
       const activeTerms = terms.filter(tr => tr.is_active)
-      await Promise.allSettled([
+
+      const tasks: Promise<any>[] = [
+        // Local on-device scrapers (always run)
         ...activeTerms.map(tr =>
           scrapeAll(tr.keyword, tr.collection_mode).then(items => mergeItems(items)),
         ),
         scrapeCustomUrls().then(items => mergeItems(items)),
-      ])
+      ]
+
+      // Backend feed (only when enabled in settings)
+      if (settings.useBackendFeed) {
+        tasks.push(
+          fetchFeed({ limit: 200 })
+            .then(backendItems => mergeItems(backendItems.map(toLocalItem)))
+            .catch(() => {}), // backend offline → silent fallback
+        )
+      }
+
+      await Promise.allSettled(tasks)
       qc.invalidateQueries({ queryKey: ['feed'] })
     } finally {
       setIsRefreshing(false)

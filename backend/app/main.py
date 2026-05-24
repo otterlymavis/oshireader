@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api import credentials, feed, watch_terms
+from app.api import credentials, feed, push, watch_terms
 from app.database import Base, SessionLocal, engine, get_db
 from app.ingestion.scheduler import poll_once, scheduler, start_scheduler
 from app.models import Match, SourceItem, WatchTerm
@@ -39,6 +39,7 @@ app.add_middleware(
 app.include_router(watch_terms.router)
 app.include_router(feed.router)
 app.include_router(credentials.router)
+app.include_router(push.router)
 
 
 @app.get("/api/health")

@@ -5,6 +5,13 @@ from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JS
 from app.database import Base
 
 
+class PushToken(Base):
+    __tablename__ = "push_tokens"
+
+    token = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class WatchTerm(Base):
     __tablename__ = "watch_terms"
 

@@ -91,3 +91,17 @@ export const fetchCredentials = (): Promise<Credential[]> =>
 export const checkHealth = (): Promise<{ status: string }> =>
   fetch(`${API_BASE}/api/health`).then(json<{ status: string }>)
 
+// ── Push tokens ───────────────────────────────────────────────────────────
+
+export const registerPushToken = (token: string): Promise<{ ok: boolean }> =>
+  fetch(`${API_BASE}/api/push-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  }).then(json<{ ok: boolean }>)
+
+export const unregisterPushToken = (token: string): Promise<{ ok: boolean }> =>
+  fetch(`${API_BASE}/api/push-token/${encodeURIComponent(token)}`, {
+    method: 'DELETE',
+  }).then(json<{ ok: boolean }>)
+
