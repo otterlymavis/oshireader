@@ -21,7 +21,7 @@ import {
   type WatchTerm,
 } from '../localDb'
 import { scrapeAll } from '../scraper'
-import { requestNotificationPermission, registerDevicePushToken, unregisterDevicePushToken } from '../notifications'
+import { requestNotificationPermission } from '../notifications'
 import { useSettings } from '../hooks/useSettings'
 import { useTheme } from '../ThemeContext'
 import { useLang } from '../LangContext'
@@ -522,37 +522,12 @@ export default function SettingsScreen() {
 
           {/* Auto-translate */}
           <Pressable
-            style={s.toggleRow}
+            style={[s.toggleRow, s.rowLast]}
             onPress={() => saveSettings({ ...settings, autoTranslate: !settings.autoTranslate })}
           >
             <Text style={s.rowLabel}>🌐 {t('autoTranslate')}</Text>
             <View style={[s.toggleTrack, settings.autoTranslate && s.toggleTrackOn]}>
               <View style={[s.toggleThumb, settings.autoTranslate && s.toggleThumbOn]} />
-            </View>
-          </Pressable>
-
-          {/* Backend feed + push notifications */}
-          <Pressable
-            style={[s.toggleRow, s.rowLast]}
-            onPress={async () => {
-              const next = !settings.useBackendFeed
-              await saveSettings({ ...settings, useBackendFeed: next })
-              if (next) {
-                const granted = await requestNotificationPermission()
-                if (granted) await registerDevicePushToken()
-              } else {
-                await unregisterDevicePushToken()
-              }
-            }}
-          >
-            <View style={{ flex: 1, marginRight: 12 }}>
-              <Text style={s.rowLabel}>🖥️ Use backend feed</Text>
-              <Text style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
-                Fetch from server on refresh + push notifications
-              </Text>
-            </View>
-            <View style={[s.toggleTrack, settings.useBackendFeed && s.toggleTrackOn]}>
-              <View style={[s.toggleThumb, settings.useBackendFeed && s.toggleThumbOn]} />
             </View>
           </Pressable>
         </View>

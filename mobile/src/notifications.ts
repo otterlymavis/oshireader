@@ -1,10 +1,8 @@
 import * as Notifications from 'expo-notifications'
 import * as BackgroundFetch from 'expo-background-fetch'
 import * as TaskManager from 'expo-task-manager'
-import Constants from 'expo-constants'
 import { getTerms, mergeItems } from './localDb'
 import { scrapeAll } from './scraper'
-import { registerPushToken, unregisterPushToken } from './api'
 
 const TASK = 'otterpia-bg-fetch'
 
@@ -46,48 +44,6 @@ TaskManager.defineTask(TASK, async () => {
 export async function requestNotificationPermission(): Promise<boolean> {
   const { status } = await Notifications.requestPermissionsAsync()
   return status === 'granted'
-}
-
-/**
- * Get this device's Expo push token.
- * Returns null if unavailable (Expo Go dev client, simulator, etc.).
- */
-export async function getDevicePushToken(): Promise<string | null> {
-  try {
-    const projectId =
-      Constants.expoConfig?.extra?.eas?.projectId as string | undefined
-    const result = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined,
-    )
-    return result.data
-  } catch {
-    return null
-  }
-}
-
-/**
- * Register this device with the backend so it receives push notifications.
- * Safe to call multiple times — the backend deduplicates by token.
- */
-export async function registerDevicePushToken(): Promise<void> {
-  try {
-    const { status } = await Notifications.getPermissionsAsync()
-    if (status !== 'granted') return
-    const token = await getDevicePushToken()
-    if (token) await registerPushToken(token)
-  } catch {
-    // Non-fatal — push is best-effort
-  }
-}
-
-/**
- * Unregister this device from backend push notifications.
- */
-export async function unregisterDevicePushToken(): Promise<void> {
-  try {
-    const token = await getDevicePushToken()
-    if (token) await unregisterPushToken(token)
-  } catch {}
 }
 
 export async function setupBackgroundFetch(): Promise<void> {
