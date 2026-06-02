@@ -68,6 +68,7 @@ struct ReaderView: View {
                         .foregroundColor(theme.colors.primary)
                         .cornerRadius(8)
                 }
+                .accessibilityIdentifier("reader.modeToggleButton")
                 
                 Spacer()
                 

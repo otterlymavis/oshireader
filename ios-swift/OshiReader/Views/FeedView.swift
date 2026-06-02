@@ -35,6 +35,12 @@ struct FeedView: View {
         
         if let platform = selectedPlatform {
             result = result.filter { item in
+                if platform == "mdpr" {
+                    return item.platform == "mdpr" || item.platform == "news:mdpr"
+                }
+                if platform == "yahoonews" {
+                    return item.platform == "yahoonews" || item.platform == "news:yahoo_ent"
+                }
                 if platform == "news" {
                     return item.platform == "news" || item.platform.hasPrefix("news:")
                 }
@@ -561,10 +567,20 @@ struct FilterPanel: View {
                         .textCase(.uppercase)
                     
                     HStack(spacing: 8) {
-                        FilterButton(text: "📄 " + i18n.t("allInfo"), isSelected: mediaFilter == "all", theme: theme) {
+                        FilterButton(
+                            text: "📄 " + i18n.t("allInfo"),
+                            isSelected: mediaFilter == "all",
+                            theme: theme,
+                            accessibilityId: "filter.allInfoButton"
+                        ) {
                             mediaFilter = "all"
                         }
-                        FilterButton(text: "📹 " + i18n.t("mediaOnly"), isSelected: mediaFilter == "media_only", theme: theme) {
+                        FilterButton(
+                            text: "📹 " + i18n.t("mediaOnly"),
+                            isSelected: mediaFilter == "media_only",
+                            theme: theme,
+                            accessibilityId: "filter.mediaOnlyButton"
+                        ) {
                             mediaFilter = "media_only"
                         }
                     }
@@ -618,6 +634,7 @@ struct FilterButton: View {
     let text: String
     let isSelected: Bool
     let theme: ThemeManager
+    var accessibilityId: String? = nil
     let action: () -> Void
     
     var body: some View {
@@ -630,7 +647,7 @@ struct FilterButton: View {
                 .foregroundColor(isSelected ? .white : theme.colors.textSub)
                 .cornerRadius(999)
         }
-        .accessibilityIdentifier("filter.option.\(text)")
+        .accessibilityIdentifier(accessibilityId ?? "filter.option.\(text)")
     }
 }
 

@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import UserNotifications
 @testable import OshiReader
 
 final class OshiReaderTests: XCTestCase {
@@ -39,6 +40,9 @@ final class OshiReaderTests: XCTestCase {
         
         XCTAssertEqual(db.terms.first?.is_active, false)
         XCTAssertEqual(db.terms.first?.collection_mode, "all_info")
+
+        db.updateTerm(id: term.id, notifyOnNew: true)
+        XCTAssertEqual(db.terms.first?.notify_on_new, true)
         
         // 3. Delete watch term
         db.deleteTerm(id: term.id)
@@ -107,6 +111,82 @@ final class OshiReaderTests: XCTestCase {
         let added2 = db.mergeItems(newItems: [item2])
         XCTAssertEqual(added2, 1)
         XCTAssertEqual(db.feedItems.count, 2)
+    }
+
+    @MainActor
+    func testNotificationManagerSchedulesTestNotificationAfterAuthorization() async throws {
+        let center = MockNotificationCenter(status: .notDetermined, grantsAuthorization: true)
+        let manager = NotificationManager(center: center)
+
+        try await manager.sendTestNotification()
+
+        XCTAssertEqual(center.authorizationRequestCount, 1)
+        XCTAssertEqual(center.requests.count, 1)
+        XCTAssertEqual(center.requests.first?.content.title, "OshiReader")
+        XCTAssertEqual(center.requests.first?.content.body, "Notifications are ready.")
+        XCTAssertNotNil(center.requests.first?.trigger)
+    }
+
+    func testAPNSDeviceTokenStringUsesLowercaseHex() throws {
+        let data = Data([0x00, 0x0f, 0xa1, 0xff])
+        XCTAssertEqual(NotificationManager.deviceTokenString(data), "000fa1ff")
+    }
+
+    @MainActor
+    func testPerTermNotificationsOnlyScheduleForEnabledTerms() async throws {
+        let center = MockNotificationCenter(status: .authorized)
+        let manager = NotificationManager(center: center)
+        let nowString = ISO8601DateFormatter().string(from: Date())
+
+        let enabledTerm = WatchTerm(id: "enabled", keyword: "Enabled Oshi", notify_on_new: true)
+        let disabledTerm = WatchTerm(id: "disabled", keyword: "Muted Oshi", notify_on_new: false)
+        let items = [
+            FeedItem(
+                id: "youtube:enabled-1", platform: "youtube", url: "https://youtube.com/1",
+                title: "Enabled first", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video", published_at: nowString, watch_term_keyword: enabledTerm.keyword,
+                fetched_at: nowString
+            ),
+            FeedItem(
+                id: "note:enabled-2", platform: "note", url: "https://note.com/2",
+                title: "Enabled second", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: nowString, watch_term_keyword: enabledTerm.keyword,
+                fetched_at: nowString
+            ),
+            FeedItem(
+                id: "tver:muted", platform: "tver", url: "https://tver.jp/episodes/3",
+                title: "Muted", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video", published_at: nowString, watch_term_keyword: disabledTerm.keyword,
+                fetched_at: nowString
+            )
+        ]
+
+        await manager.notifyForNewItems(items, terms: [enabledTerm, disabledTerm])
+
+        XCTAssertEqual(center.requests.count, 1)
+        XCTAssertEqual(center.requests.first?.content.title, "New items for Enabled Oshi")
+        XCTAssertEqual(center.requests.first?.content.body, "2 new items found.")
+        XCTAssertNil(center.requests.first?.trigger)
+    }
+
+    func testMergeItemsOnlyNotifiesForNewItems() throws {
+        let nowString = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "youtube:notify-once",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=notify-once",
+            title: "Notify once",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: nowString,
+            watch_term_keyword: "Notify Oshi",
+            fetched_at: nowString
+        )
+
+        XCTAssertEqual(db.mergeItems(newItems: [item]), 1)
+        XCTAssertEqual(db.mergeItems(newItems: [item]), 0)
     }
     
     // MARK: - Feature 3: Feed Querying & Filters (Strict matches, platform toggles, days)
@@ -335,5 +415,33 @@ final class OshiReaderTests: XCTestCase {
             
             XCTAssertEqual(targetLangCode, expectedTargetCode, "Language code mapping should match Google Translate expectations.")
         }
+    }
+}
+
+private final class MockNotificationCenter: NotificationCenterClient {
+    private(set) var status: UNAuthorizationStatus
+    private let grantsAuthorization: Bool
+    private(set) var authorizationRequestCount = 0
+    private(set) var requests: [UNNotificationRequest] = []
+
+    init(status: UNAuthorizationStatus, grantsAuthorization: Bool = true) {
+        self.status = status
+        self.grantsAuthorization = grantsAuthorization
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        status
+    }
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        authorizationRequestCount += 1
+        if grantsAuthorization {
+            status = .authorized
+        }
+        return grantsAuthorization
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        requests.append(request)
     }
 }

@@ -5,8 +5,20 @@ class Settings(BaseSettings):
     youtube_api_key: str = ""
     database_url: str = "sqlite:///./otterpia.db"
     poll_interval_minutes: int = 15
+    admin_api_token: str = ""
+    cors_allow_origins: str = ""
+    apns_team_id: str = ""
+    apns_key_id: str = ""
+    apns_private_key: str = ""
+    apns_private_key_path: str = ""
+    apns_topic: str = "com.otterpia.oshireader"
+    apns_use_sandbox: bool = True
 
     model_config = {"env_file": ".env"}
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
 
 
 settings = Settings()

@@ -11,6 +11,7 @@ class WatchTermCreate(BaseModel):
     aliases: list[str] = []
     language_hint: Optional[str] = None
     collection_mode: Literal["all_info", "media_only"] = "all_info"
+    notify_on_new: bool = False
 
 
 class WatchTermUpdate(BaseModel):
@@ -19,6 +20,7 @@ class WatchTermUpdate(BaseModel):
     language_hint: Optional[str] = None
     collection_mode: Optional[Literal["all_info", "media_only"]] = None
     is_active: Optional[bool] = None
+    notify_on_new: Optional[bool] = None
 
 
 class WatchTermOut(BaseModel):
@@ -28,6 +30,7 @@ class WatchTermOut(BaseModel):
     language_hint: Optional[str]
     collection_mode: str
     is_active: bool
+    notify_on_new: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -58,6 +61,21 @@ class CredentialOut(BaseModel):
     has_bearer_token: bool
     has_api_key: bool
     updated_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class APNSDeviceTokenUpsert(BaseModel):
+    token: str
+    environment: Literal["sandbox", "production"] = "sandbox"
+    device_id: Optional[str] = None
+
+
+class APNSDeviceTokenOut(BaseModel):
+    token: str
+    environment: str
+    device_id: Optional[str]
+    last_seen_at: Optional[datetime]
 
     model_config = {"from_attributes": True}
 

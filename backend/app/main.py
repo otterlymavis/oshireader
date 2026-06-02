@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -8,9 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api import credentials, feed, push, watch_terms
-from app.database import Base, SessionLocal, engine, get_db
-from app.ingestion.scheduler import poll_once, scheduler, start_scheduler
+from app.api import credentials, devices, feed, watch_terms
+from app.auth import require_admin_auth
+from app.config import settings
+from app.database import engine, get_db
+from app.ingestion.scheduler import queue_poll, scheduler, start_scheduler
+from app.migrations import apply_startup_migrations
 from app.models import Match, SourceItem, WatchTerm
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
@@ -20,9 +22,9 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
-    Base.metadata.create_all(bind=engine)
+    apply_startup_migrations(engine)
     start_scheduler()
-    asyncio.create_task(poll_once())
+    queue_poll()
     yield
     scheduler.shutdown()
 
@@ -31,7 +33,7 @@ app = FastAPI(title="Otterpia", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -39,7 +41,7 @@ app.add_middleware(
 app.include_router(watch_terms.router)
 app.include_router(feed.router)
 app.include_router(credentials.router)
-app.include_router(push.router)
+app.include_router(devices.router)
 
 
 @app.get("/api/health")
@@ -49,13 +51,15 @@ def health() -> dict:
 
 @app.get("/api/admin/poll")
 @app.post("/api/admin/poll")
-async def trigger_poll() -> dict:
-    asyncio.create_task(poll_once())
+async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
+    started = queue_poll()
+    if not started:
+        return {"status": "poll already running"}
     return {"status": "poll started"}
 
 
 @app.get("/api/admin/stats")
-def get_stats(db: Session = Depends(get_db)) -> dict:
+def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
     items_total = db.query(func.count(SourceItem.id)).scalar()
     matches_total = db.query(func.count(Match.id)).scalar()
     terms = db.query(WatchTerm).all()

@@ -132,6 +132,7 @@ class LocalDB: ObservableObject {
     // MARK: - Feed Items & Merging
     func mergeItems(newItems: [FeedItem]) -> Int {
         var addedCount = 0
+        var addedItems: [FeedItem] = []
         let itemKey = { (i: FeedItem) -> String in "\(i.id)::\(i.watch_term_keyword)" }
         
         let filteredNew = newItems.filter { item in
@@ -151,6 +152,7 @@ class LocalDB: ObservableObject {
             if currentMap[key] == nil {
                 currentMap[key] = item
                 addedCount += 1
+                addedItems.append(item)
             } else {
                 // Merge/update fields if needed (like title length, content, published date)
                 let existing = currentMap[key]!
@@ -180,6 +182,13 @@ class LocalDB: ObservableObject {
         runOnMain {
             self.feedItems = finalItems
             self.saveToFile(name: "feed_items", value: self.feedItems)
+        }
+
+        if !addedItems.isEmpty {
+            let terms = self.terms
+            Task {
+                await NotificationManager.shared.notifyForNewItems(addedItems, terms: terms)
+            }
         }
         
         return addedCount
@@ -240,7 +249,7 @@ class LocalDB: ObservableObject {
             }
             
             // Subscribed platforms
-            let platformKey = (item.platform == "news" || item.platform.hasPrefix("news:")) ? "news" : item.platform
+            let platformKey = normalizedPlatformKey(item.platform)
             if !subscribedPlatforms.contains(platformKey) {
                 return false
             }
@@ -446,9 +455,16 @@ class LocalDB: ObservableObject {
     func getStats() -> (total: Int, byPlatform: [String: Int]) {
         var counts = [String: Int]()
         for item in feedItems {
-            let key = (item.platform == "news" || item.platform.hasPrefix("news:")) ? "news" : item.platform
+            let key = normalizedPlatformKey(item.platform)
             counts[key] = (counts[key] ?? 0) + 1
         }
         return (feedItems.count, counts)
+    }
+
+    private func normalizedPlatformKey(_ platform: String) -> String {
+        if platform == "news:mdpr" { return "mdpr" }
+        if platform == "news:yahoo_ent" { return "yahoonews" }
+        if platform == "news" || platform.hasPrefix("news:") { return "news" }
+        return platform
     }
 }

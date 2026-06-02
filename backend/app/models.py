@@ -5,13 +5,6 @@ from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JS
 from app.database import Base
 
 
-class PushToken(Base):
-    __tablename__ = "push_tokens"
-
-    token = Column(String, primary_key=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
 class WatchTerm(Base):
     __tablename__ = "watch_terms"
 
@@ -21,6 +14,7 @@ class WatchTerm(Base):
     language_hint = Column(String)
     collection_mode = Column(String, default="all_info")  # all_info | media_only
     is_active = Column(Boolean, default=True)
+    notify_on_new = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -44,11 +38,20 @@ class SourceItem(Base):
 class PlatformCredential(Base):
     __tablename__ = "platform_credentials"
 
-    platform = Column(String, primary_key=True)  # youtube | twitter | weibo | ...
+    platform = Column(String, primary_key=True)
     bearer_token = Column(String)
     api_key = Column(String)
     api_secret = Column(String)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class APNSDeviceToken(Base):
+    __tablename__ = "apns_device_tokens"
+
+    token = Column(String, primary_key=True)
+    environment = Column(String, default="sandbox", index=True)
+    device_id = Column(String, index=True)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Match(Base):

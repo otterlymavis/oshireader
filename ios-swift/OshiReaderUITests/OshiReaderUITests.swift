@@ -30,12 +30,12 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(app.buttons["feed.refreshButton"].waitForExistence(timeout: 3))
         app.buttons["feed.refreshButton"].tap()
 
-        (firstExistingButton(containing: "Filter") ?? app.buttons["feed.filterButton"]).tap()
-        XCTAssertTrue(waitForButton(containing: "Media Only", timeout: 3) != nil)
-
-        let mediaOnlyButton = firstExistingButton(containing: "メディア") ?? firstExistingButton(containing: "Media")
-        XCTAssertNotNil(mediaOnlyButton)
-        mediaOnlyButton?.tap()
+        let filterButton = firstFeedFilterButton() ?? app.buttons["feed.filterButton"]
+        XCTAssertTrue(filterButton.waitForExistence(timeout: 3))
+        filterButton.tap()
+        let mediaOnlyButton = app.buttons["filter.mediaOnlyButton"]
+        XCTAssertTrue(mediaOnlyButton.waitForExistence(timeout: 3))
+        mediaOnlyButton.tap()
     }
 
     func testOpenReaderFromFeedAndSave() throws {
@@ -45,7 +45,7 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(headline.waitForExistence(timeout: 3))
         (firstExistingButton(containing: "UITest Oshi headline") ?? headline).tap()
 
-        let readerModeButton = waitForButton(containing: "Reader Text Mode", timeout: 5)
+        let readerModeButton = waitForButton(identifier: "reader.modeToggleButton", timeout: 5)
         XCTAssertNotNil(readerModeButton)
         readerModeButton?.tap()
     }
@@ -57,7 +57,7 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(savedTitle.waitForExistence(timeout: 3))
         (firstExistingButton(containing: "UITest saved article") ?? savedTitle).tap()
 
-        XCTAssertNotNil(waitForButton(containing: "Reader Text Mode", timeout: 5))
+        XCTAssertNotNil(waitForButton(identifier: "reader.modeToggleButton", timeout: 5))
     }
 
     func testSearchFlow() throws {
@@ -105,6 +105,14 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Data Stored on This Device"].exists)
     }
 
+    func testSettingsNotificationControls() throws {
+        tapTab(index: 4, labels: ["Settings"])
+
+        XCTAssertTrue(waitForElement(identifier: "settings.notificationStatus", timeout: 2, swipes: 4).exists)
+        XCTAssertTrue(waitForElement(identifier: "settings.enableNotificationsButton", timeout: 2, swipes: 1).exists)
+        XCTAssertTrue(waitForElement(identifier: "settings.testNotificationButton", timeout: 2, swipes: 1).exists)
+    }
+
     private func tapTab(index: Int, labels: [String]) {
         for label in labels {
             let button = app.tabBars.buttons[label]
@@ -130,6 +138,32 @@ final class OshiReaderUITests: XCTestCase {
         }
     }
 
+    private func firstFeedFilterButton() -> XCUIElement? {
+        let labels = ["Filter", "フィルター", "篩選", "筛选"]
+        let scopedButtons = app.buttons.matching(identifier: "feed.screen").allElementsBoundByIndex
+        return scopedButtons.first { button in
+            button.exists && labels.contains { button.label.localizedCaseInsensitiveContains($0) }
+        } ?? app.buttons.allElementsBoundByIndex.first { button in
+            button.exists && labels.contains { button.label.localizedCaseInsensitiveContains($0) }
+        }
+    }
+
+    private func waitForButton(identifier: String, timeout: TimeInterval) -> XCUIElement? {
+        let button = app.buttons[identifier]
+        return button.waitForExistence(timeout: timeout) ? button : nil
+    }
+
+    private func waitForAnyButton(containing texts: [String], timeout: TimeInterval) -> XCUIElement? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let button = texts.compactMap({ firstExistingButton(containing: $0) }).first {
+                return button
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return texts.compactMap { firstExistingButton(containing: $0) }.first
+    }
+
     private func waitForButton(containing text: String, timeout: TimeInterval) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -151,6 +185,19 @@ final class OshiReaderUITests: XCTestCase {
             }
         }
         return nil
+    }
+
+    private func waitForElement(identifier: String, timeout: TimeInterval, swipes: Int) -> XCUIElement {
+        let element = app.descendants(matching: .any)[identifier]
+        for attempt in 0...swipes {
+            if element.waitForExistence(timeout: timeout) {
+                return element
+            }
+            if attempt < swipes {
+                app.swipeUp()
+            }
+        }
+        return element
     }
 
     private func firstExistingTextField(labels: [String]) -> XCUIElement? {

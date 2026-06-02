@@ -61,7 +61,7 @@ struct AvatarEditorView: View {
             // Canvas Wrapper
             GeometryReader { geometry in
                 let W = geometry.size.width
-                let H = 300.0 // Fixed height matching React Native CANVAS_H = 300
+                let H = 300.0
                 let scaleFactor = W / 300.0
                 
                 ZStack {

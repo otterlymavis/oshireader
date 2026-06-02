@@ -4,20 +4,19 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 import feedparser
+import httpx
 
 from app.connectors.base import BaseConnector, SourceItemCreate
 
 log = logging.getLogger(__name__)
 
 # Curated public RSS feeds — Japanese entertainment / idol news, no login needed.
-FEEDS: list[tuple[str, str]] = [
-    ("natalie",    "https://natalie.mu/music/feed/news"),
-    ("natalie",    "https://natalie.mu/tv/feed/news"),
-    ("oricon",     "https://www.oricon.co.jp/rss/news.rss"),
-    ("mdpr",       "https://mdpr.jp/feed"),
-    ("yahoo_ent",  "https://news.yahoo.co.jp/rss/topics/entertainment.xml"),
-    ("sponichi",   "https://www.sponichi.co.jp/entertainment/rss/entertainmentAll.rdf"),
-    ("hochi",      "https://hochi.news/rss/entertainment"),
+FEEDS: list[tuple[str, str, str]] = [
+    ("news", "natalie", "https://natalie.mu/music/feed/news"),
+    ("news", "natalie", "https://natalie.mu/tv/feed/news"),
+    ("news", "oricon", "https://www.oricon.co.jp/rss/news.rss"),
+    ("news", "sponichi", "https://www.sponichi.co.jp/entertainment/rss/entertainmentAll.rdf"),
+    ("news", "hochi", "https://hochi.news/rss/entertainment"),
 ]
 
 
@@ -43,9 +42,14 @@ class RSSConnector(BaseConnector):
         kw = keyword.lower()
         results: list[SourceItemCreate] = []
 
-        async def _one(source: str, url: str) -> None:
+        async def _one(platform: str, source: str, url: str) -> None:
             try:
-                feed = await asyncio.to_thread(feedparser.parse, url)
+                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+                    resp = await client.get(url)
+                    if not resp.is_success:
+                        log.debug("RSS feed returned status=%d source=%s", resp.status_code, source)
+                        return
+                feed = await asyncio.to_thread(feedparser.parse, resp.content)
                 for entry in feed.entries:
                     title: str = entry.get("title", "")
                     summary: str = entry.get("summary", "")
@@ -62,7 +66,7 @@ class RSSConnector(BaseConnector):
                             break
                     results.append(
                         SourceItemCreate(
-                            platform=f"news:{source}",
+                            platform=platform,
                             item_id=entry.get("id") or link,
                             url=link,
                             published_at=published,
@@ -77,5 +81,5 @@ class RSSConnector(BaseConnector):
             except Exception as exc:
                 log.debug("RSS feed failed source=%s: %s", source, exc)
 
-        await asyncio.gather(*[_one(source, url) for source, url in FEEDS])
+        await asyncio.gather(*[_one(platform, source, url) for platform, source, url in FEEDS])
         return results

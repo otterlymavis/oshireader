@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.auth import require_admin_auth
 from app.database import get_db
 from app.models import PlatformCredential
 from app.schemas import CredentialOut, CredentialUpsert
@@ -13,7 +14,7 @@ SUPPORTED_PLATFORMS = ["youtube"]
 
 
 @router.get("/", response_model=list[CredentialOut])
-def list_credentials(db: Session = Depends(get_db)):
+def list_credentials(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)):
     stored = {c.platform: c for c in db.query(PlatformCredential).all()}
     result = []
     for platform in SUPPORTED_PLATFORMS:
@@ -30,7 +31,12 @@ def list_credentials(db: Session = Depends(get_db)):
 
 
 @router.put("/{platform}", response_model=CredentialOut)
-def upsert_credential(platform: str, body: CredentialUpsert, db: Session = Depends(get_db)):
+def upsert_credential(
+    platform: str,
+    body: CredentialUpsert,
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+):
     cred = db.get(PlatformCredential, platform)
     if cred is None:
         cred = PlatformCredential(platform=platform)
@@ -53,7 +59,11 @@ def upsert_credential(platform: str, body: CredentialUpsert, db: Session = Depen
 
 
 @router.delete("/{platform}", status_code=204)
-def delete_credential(platform: str, db: Session = Depends(get_db)):
+def delete_credential(
+    platform: str,
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+):
     cred = db.get(PlatformCredential, platform)
     if cred:
         db.delete(cred)

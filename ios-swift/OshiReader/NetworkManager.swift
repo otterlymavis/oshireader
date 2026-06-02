@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 struct IrasutoyaImage: Codable, Identifiable, Hashable {
     var id: String { url }
@@ -15,6 +16,29 @@ class NetworkManager {
     // MARK: - Backend URL Config
     var apiBase: String {
         return "https://otterpia-backend-production.up.railway.app"
+    }
+
+    var adminApiToken: String? {
+        if let token = UserDefaults.standard.string(forKey: "admin_api_token"),
+           !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return token
+        }
+        let envToken = ProcessInfo.processInfo.environment["OSHI_READER_ADMIN_API_TOKEN"] ?? ""
+        let trimmed = envToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var apnsEnvironment: String {
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }
+
+    private func applyAdminAuthorization(to request: inout URLRequest) {
+        guard let adminApiToken else { return }
+        request.setValue("Bearer \(adminApiToken)", forHTTPHeaderField: "Authorization")
     }
     
     // MARK: - Fetch Watch Terms
@@ -33,6 +57,7 @@ class NetworkManager {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAdminAuthorization(to: &request)
         
         let body: [String: String] = [
             "keyword": keyword,
@@ -48,15 +73,17 @@ class NetworkManager {
     }
     
     // MARK: - Update Watch Term
-    func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil) async throws -> WatchTerm {
+    func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil, notifyOnNew: Bool? = nil) async throws -> WatchTerm {
         let url = URL(string: "\(apiBase)/api/watch-terms/\(id)")!
         var request = URLRequest(url: url)
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAdminAuthorization(to: &request)
         
         var body: [String: Any] = [:]
         if let isActive = isActive { body["is_active"] = isActive }
         if let collectionMode = collectionMode { body["collection_mode"] = collectionMode }
+        if let notifyOnNew = notifyOnNew { body["notify_on_new"] = notifyOnNew }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -71,6 +98,7 @@ class NetworkManager {
         let url = URL(string: "\(apiBase)/api/watch-terms/\(id)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        applyAdminAuthorization(to: &request)
         
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
@@ -102,11 +130,36 @@ class NetworkManager {
     // MARK: - Fetch Credentials
     func fetchCredentials() async throws -> [Credential] {
         let url = URL(string: "\(apiBase)/api/credentials/")!
-        let (data, response) = try await URLSession.shared.data(from: url)
+        var request = URLRequest(url: url)
+        applyAdminAuthorization(to: &request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
         return try JSONDecoder().decode([Credential].self, from: data)
+    }
+
+    // MARK: - APNs Device Token
+    func registerAPNSDeviceToken(_ token: String) async throws {
+        let url = URL(string: "\(apiBase)/api/devices/apns-token")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let deviceId = await MainActor.run {
+            UIDevice.current.identifierForVendor?.uuidString ?? ""
+        }
+
+        let body: [String: String] = [
+            "token": token,
+            "environment": apnsEnvironment,
+            "device_id": deviceId
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
     }
     
     // MARK: - Check Health
@@ -128,6 +181,7 @@ class NetworkManager {
         let url = URL(string: "\(apiBase)/api/admin/poll")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        applyAdminAuthorization(to: &request)
         
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
@@ -245,7 +299,7 @@ class NetworkManager {
             }
             
             if !altLink.isEmpty && !thumb.isEmpty {
-                // Upscale to s400 size matching the React Native code
+                // Upscale small Blogger thumbnails for the editor picker.
                 let upscaled = thumb
                     .replacingOccurrences(of: "/s72-c/", with: "/s400-c/")
                     .replacingOccurrences(of: "/s72-c$", with: "/s400-c", options: .regularExpression)

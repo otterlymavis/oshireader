@@ -5,10 +5,12 @@ struct SettingsView: View {
     @StateObject private var theme = ThemeManager.shared
     @StateObject private var i18n = I18nManager.shared
     @StateObject private var appearance = AppearanceManager.shared
+    @StateObject private var notifications = NotificationManager.shared
     
     @State private var showingAddKeywordAlert = false
     @State private var newKeyword = ""
     @State private var newCollectionMode = "all_info"
+    @AppStorage("admin_api_token") private var adminApiToken = ""
     
     let allPlatforms = [
         ("youtube", "📹 YouTube"),
@@ -42,7 +44,11 @@ struct SettingsView: View {
                             
                             // Push notifications bell button
                             Button(action: {
-                                db.updateTerm(id: term.id, notifyOnNew: !term.notify_on_new)
+                                let next = !term.notify_on_new
+                                db.updateTerm(id: term.id, notifyOnNew: next)
+                                Task {
+                                    _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, notifyOnNew: next)
+                                }
                             }) {
                                 Image(systemName: term.notify_on_new ? "bell.fill" : "bell.slash")
                                     .foregroundColor(term.notify_on_new ? theme.colors.primary : theme.colors.textMuted)
@@ -106,6 +112,43 @@ struct SettingsView: View {
                         .tint(theme.colors.primary)
                         .accessibilityIdentifier("settings.platformToggle.\(key)")
                     }
+                }
+
+                Section(header: Text("通知")) {
+                    HStack {
+                        Label("Push Notifications", systemImage: "bell.badge")
+                        Spacer()
+                        Text(notifications.statusText)
+                            .foregroundColor(theme.colors.textMuted)
+                    }
+                    .accessibilityIdentifier("settings.notificationStatus")
+
+                    Button {
+                        Task {
+                            _ = await notifications.requestAuthorization()
+                        }
+                    } label: {
+                        Label("Enable Notifications", systemImage: "bell.badge.fill")
+                            .foregroundColor(theme.colors.primary)
+                    }
+                    .accessibilityIdentifier("settings.enableNotificationsButton")
+
+                    Button {
+                        Task {
+                            try? await notifications.sendTestNotification()
+                        }
+                    } label: {
+                        Label("Send Test Notification", systemImage: "paperplane.fill")
+                            .foregroundColor(theme.colors.primary)
+                    }
+                    .accessibilityIdentifier("settings.testNotificationButton")
+                }
+
+                Section(header: Text("Backend")) {
+                    SecureField("Admin API Token", text: $adminApiToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("settings.adminApiTokenField")
                 }
                 
                 // Section: Customizations
@@ -273,7 +316,7 @@ struct PrivacyPolicyView: View {
 
                 policySection(
                     title: "Permissions",
-                    body: "This version does not request access to location, contacts, photos, camera, microphone, Bluetooth, health data, or motion sensors."
+                    body: "This app may request notification permission when you enable alerts or send a test notification. It does not request access to location, contacts, photos, camera, microphone, Bluetooth, health data, or motion sensors."
                 )
             }
             .padding(18)

@@ -1,10 +1,9 @@
-import asyncio
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth import require_admin_auth
 from app.database import get_db
-from app.ingestion.scheduler import poll_once
+from app.ingestion.scheduler import queue_poll
 from app.models import WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
@@ -17,17 +16,26 @@ def list_terms(db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=WatchTermOut, status_code=201)
-async def create_term(body: WatchTermCreate, db: Session = Depends(get_db)):
+async def create_term(
+    body: WatchTermCreate,
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+):
     term = WatchTerm(**body.model_dump())
     db.add(term)
     db.commit()
     db.refresh(term)
-    asyncio.create_task(poll_once())
+    queue_poll()
     return term
 
 
 @router.patch("/{term_id}", response_model=WatchTermOut)
-def update_term(term_id: int, body: WatchTermUpdate, db: Session = Depends(get_db)):
+def update_term(
+    term_id: int,
+    body: WatchTermUpdate,
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+):
     term = db.get(WatchTerm, term_id)
     if not term:
         raise HTTPException(404, "Watch term not found")
@@ -39,7 +47,11 @@ def update_term(term_id: int, body: WatchTermUpdate, db: Session = Depends(get_d
 
 
 @router.delete("/{term_id}", status_code=204)
-def delete_term(term_id: int, db: Session = Depends(get_db)):
+def delete_term(
+    term_id: int,
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+):
     term = db.get(WatchTerm, term_id)
     if not term:
         raise HTTPException(404, "Watch term not found")
