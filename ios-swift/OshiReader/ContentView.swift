@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 enum OshiTab: String, CaseIterable, Identifiable {
-    case feed, saved, oshi, search, settings
+    case feed, search, saved, oshi, settings
     var id: String { rawValue }
 }
 
@@ -10,6 +10,7 @@ struct ContentView: View {
     @StateObject private var db = LocalDB.shared
     @StateObject private var theme = ThemeManager.shared
     @StateObject private var i18n = I18nManager.shared
+    @StateObject private var appearance = AppearanceManager.shared
     
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: OshiTab = .feed
@@ -23,7 +24,8 @@ struct ContentView: View {
     }
     
     var body: some View {
-        if horizontalSizeClass == .regular {
+        Group {
+            if horizontalSizeClass == .regular {
             NavigationSplitView {
                 List {
                     ForEach(OshiTab.allCases) { tab in
@@ -58,55 +60,62 @@ struct ContentView: View {
                 switch selectedTab {
                 case .feed:
                     FeedView()
+                case .search:
+                    SearchView()
                 case .saved:
                     SavedView()
                 case .oshi:
                     OshiView()
-                case .search:
-                    SearchView()
                 case .settings:
                     SettingsView()
                 }
             }
             .tint(theme.colors.primary)
             .preferredColorScheme(theme.mode == .dark ? .dark : .light)
-        } else {
+            } else {
             TabView(selection: $selectedTab) {
                 FeedView()
                     .tabItem {
                         Label(i18n.t("tabFeed"), systemImage: "house")
                     }
                     .tag(OshiTab.feed)
-                
-                SavedView()
-                    .tabItem {
-                        Label(i18n.t("tabSaved"), systemImage: "bookmark")
-                    }
-                    .tag(OshiTab.saved)
-                
-                OshiView()
-                    .tabItem {
-                        Label(i18n.t("tabOshi"), systemImage: "star")
-                    }
-                    .tag(OshiTab.oshi)
+                    .accessibilityIdentifier("tab.feed")
                 
                 SearchView()
                     .tabItem {
                         Label(i18n.t("tabSearch"), systemImage: "magnifyingglass")
                     }
                     .tag(OshiTab.search)
+                    .accessibilityIdentifier("tab.search")
+
+                SavedView()
+                    .tabItem {
+                        Label(i18n.t("tabSaved"), systemImage: "bookmark")
+                    }
+                    .tag(OshiTab.saved)
+                    .accessibilityIdentifier("tab.saved")
+                
+                OshiView()
+                    .tabItem {
+                        Label(i18n.t("tabOshi"), systemImage: "star")
+                    }
+                    .tag(OshiTab.oshi)
+                    .accessibilityIdentifier("tab.oshi")
                 
                 SettingsView()
                     .tabItem {
                         Label(i18n.t("tabSettings"), systemImage: "gearshape")
                     }
                     .tag(OshiTab.settings)
+                    .accessibilityIdentifier("tab.settings")
             }
             .tint(theme.colors.primary)
             // Ensure standard backgrounds
             .background(theme.colors.bg.ignoresSafeArea())
             .preferredColorScheme(theme.mode == .dark ? .dark : .light)
+            }
         }
+        .font(appearance.appFont)
     }
     
     private func title(for tab: OshiTab) -> String {

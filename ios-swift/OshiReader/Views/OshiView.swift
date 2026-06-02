@@ -89,6 +89,7 @@ struct OshiView: View {
             .navigationDestination(item: $showEditorKeyword) { keyword in
                 AvatarEditorView(keyword: keyword)
             }
+            .accessibilityIdentifier("oshi.screen")
         }
     }
 }
@@ -155,6 +156,7 @@ struct OshiPage: View {
                     }
                 }
                 .buttonStyle(PlainButtonStyle())
+                .accessibilityIdentifier("oshi.avatarCanvas.\(term.keyword)")
                 .frame(width: W, height: H)
                 
                 // Info Panel
@@ -203,6 +205,7 @@ struct OshiPage: View {
                         .foregroundColor(theme.colors.primary)
                         .cornerRadius(12)
                     }
+                    .accessibilityIdentifier("oshi.editButton.\(term.keyword)")
                 }
                 .padding(18)
                 .background(theme.colors.card)

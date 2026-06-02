@@ -11,10 +11,14 @@ targets:
     settings:
       base:
         INFOPLIST_FILE: OshiReader/Info.plist
-        PRODUCT_BUNDLE_IDENTIFIER: com.otterlymavis.oshireader
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CODE_SIGN_IDENTITY: "iPhone Developer"
+        PRODUCT_BUNDLE_IDENTIFIER: com.otterpia.oshireader
+        PRODUCT_NAME: OshiReader
+        DEVELOPMENT_TEAM: HX8V73S8BL
+        CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.9"
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -29,3 +33,25 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  OshiReaderUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: OshiReaderUITests
+    dependencies:
+      - target: OshiReader
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.otterlymavis.OshiReaderUITests
+
+schemes:
+  OshiReader:
+    build:
+      targets:
+        OshiReader: [run, test, profile, analyze]
+    test:
+      targets:
+        - OshiReaderTests
+        - OshiReaderUITests

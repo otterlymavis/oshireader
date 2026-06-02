@@ -14,7 +14,7 @@ class NetworkManager {
     
     // MARK: - Backend URL Config
     var apiBase: String {
-        return UserDefaults.standard.string(forKey: "api_base_url") ?? "https://otterpia-backend-production.up.railway.app"
+        return "https://otterpia-backend-production.up.railway.app"
     }
     
     // MARK: - Fetch Watch Terms

@@ -56,17 +56,26 @@ class GirlsChannelConnector(BaseConnector):
         soup = BeautifulSoup(resp.text, "lxml")
         items: list[SourceItemCreate] = []
 
-        for article in soup.select("article, .topic-item, li.topic")[:25]:
+        for article in soup.select("li.flc, article, .topic-item, li.topic")[:25]:
             a = article.select_one("a[href*='/topics/']")
             if not a:
                 continue
             href = a.get("href", "")
             url = href if href.startswith("http") else f"https://girlschannel.net{href}"
-            title = a.get_text(strip=True) or article.get_text(strip=True)[:120]
+            
+            title_el = a.select_one("p.title")
+            title = title_el.get_text(strip=True) if title_el else (a.get_text(strip=True) or article.get_text(strip=True)[:120])
 
-            date_el = article.select_one("time, .date, .time")
+            date_el = article.select_one("time, .date, .time, span.datetime")
             date_text = date_el.get_text(strip=True) if date_el else ""
             published = _parse_date(date_text)
+
+            thumb = None
+            img = article.select_one("img.img")
+            if img:
+                thumb = img.get("data-src") or img.get("src")
+                if thumb and not thumb.startswith("http"):
+                    thumb = f"https:{thumb}" if thumb.startswith("//") else None
 
             items.append(
                 SourceItemCreate(
@@ -78,7 +87,7 @@ class GirlsChannelConnector(BaseConnector):
                     title=title,
                     content_text=None,
                     author=None,
-                    thumbnail_url=None,
+                    thumbnail_url=thumb,
                     raw_payload={"keyword": keyword},
                 )
             )

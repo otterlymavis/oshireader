@@ -4,15 +4,11 @@ struct SettingsView: View {
     @StateObject private var db = LocalDB.shared
     @StateObject private var theme = ThemeManager.shared
     @StateObject private var i18n = I18nManager.shared
+    @StateObject private var appearance = AppearanceManager.shared
     
     @State private var showingAddKeywordAlert = false
     @State private var newKeyword = ""
     @State private var newCollectionMode = "all_info"
-    
-    @State private var backendUrlInput = ""
-    @State private var serverOnline = false
-    @State private var checkingHealth = false
-    @State private var triggeringPoll = false
     
     let allPlatforms = [
         ("youtube", "📹 YouTube"),
@@ -44,6 +40,18 @@ struct SettingsView: View {
                             }
                             Spacer()
                             
+                            // Push notifications bell button
+                            Button(action: {
+                                db.updateTerm(id: term.id, notifyOnNew: !term.notify_on_new)
+                            }) {
+                                Image(systemName: term.notify_on_new ? "bell.fill" : "bell.slash")
+                                    .foregroundColor(term.notify_on_new ? theme.colors.primary : theme.colors.textMuted)
+                                    .font(.title3)
+                                    .padding(.horizontal, 8)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .accessibilityIdentifier("settings.keywordBell.\(term.keyword)")
+                            
                             Toggle("", isOn: Binding(
                                 get: { term.is_active },
                                 set: { next in
@@ -55,7 +63,9 @@ struct SettingsView: View {
                                 }
                             ))
                             .tint(theme.colors.primary)
+                            .accessibilityIdentifier("settings.keywordToggle.\(term.keyword)")
                         }
+                        .accessibilityIdentifier("settings.keywordRow.\(term.keyword)")
                     }
                     .onDelete { offsets in
                         for index in offsets {
@@ -74,6 +84,7 @@ struct SettingsView: View {
                         }
                         .foregroundColor(theme.colors.primary)
                     }
+                    .accessibilityIdentifier("settings.addKeywordButton")
                 }
                 
                 // Section: Subscribed Platforms
@@ -93,6 +104,7 @@ struct SettingsView: View {
                             }
                         ))
                         .tint(theme.colors.primary)
+                        .accessibilityIdentifier("settings.platformToggle.\(key)")
                     }
                 }
                 
@@ -115,6 +127,22 @@ struct SettingsView: View {
                         Text("繁體中文").tag("zh-TW")
                         Text("简体中文").tag("zh-CN")
                     }
+
+                    Picker("Font", selection: $appearance.fontChoice) {
+                        ForEach(AppFontChoice.allCases) { choice in
+                            Text(choice.displayName).tag(choice)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("settings.fontPicker")
+
+                    Picker("Font Size", selection: $appearance.fontSizeChoice) {
+                        ForEach(AppFontSizeChoice.allCases) { choice in
+                            Text(choice.displayName).tag(choice)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("settings.fontSizePicker")
                     
                     // Wallpaper reset
                     if db.wallpaper != nil {
@@ -124,55 +152,13 @@ struct SettingsView: View {
                         }
                     }
                 }
-                
-                // Section: Backend Configuration
-                Section(header: Text("バックエンド設定")) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(i18n.t("backendUrl"))
-                            .font(.caption)
-                            .foregroundColor(theme.colors.textMuted)
-                        
-                        TextField("http://...", text: $backendUrlInput, onCommit: {
-                            UserDefaults.standard.set(backendUrlInput, forKey: "api_base_url")
-                            checkHealth()
-                        })
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .foregroundColor(theme.colors.text)
-                        .font(.system(.body, design: .monospaced))
-                    }
-                    
-                    HStack {
-                        Text("接続ステータス")
-                        Spacer()
-                        if checkingHealth {
-                            ProgressView().tint(theme.colors.primary)
-                        } else {
-                            Circle()
-                                .frame(width: 8, height: 8)
-                                .foregroundColor(serverOnline ? .green : .red)
-                            Text(serverOnline ? "オンライン" : "オフライン")
-                                .font(.caption)
-                                .foregroundColor(theme.colors.textMuted)
-                        }
-                    }
-                    
-                    Button(action: triggerPoll) {
-                        HStack {
-                            Spacer()
-                            Text(triggeringPoll ? "ポーリング中..." : "サーバーで再スクレイプ実行")
-                                .bold()
-                            Spacer()
-                        }
-                    }
-                    .foregroundColor(theme.colors.primary)
-                    .disabled(triggeringPoll)
-                }
+
 
                 Section(header: Text("プライバシー")) {
                     NavigationLink(destination: PrivacyPolicyView(theme: theme)) {
                         Label("Privacy Policy", systemImage: "hand.raised")
                     }
+                    .accessibilityIdentifier("settings.privacyPolicyLink")
                 }
                 
                 // Section: Statistics
@@ -197,6 +183,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .accessibilityIdentifier("settings.screen")
             .navigationTitle(i18n.t("settingsTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .background(theme.colors.bg)
@@ -210,6 +197,7 @@ struct SettingsView: View {
                         .padding()
                         .background(theme.colors.divider)
                         .cornerRadius(8)
+                        .accessibilityIdentifier("settings.keywordField")
                     
                     Picker("収集モード", selection: $newCollectionMode) {
                         Text("📄 全情報").tag("all_info")
@@ -222,6 +210,7 @@ struct SettingsView: View {
                             newKeyword = ""
                             showingAddKeywordAlert = false
                         }
+                        .accessibilityIdentifier("settings.cancelAddKeywordButton")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(theme.colors.divider)
@@ -241,6 +230,7 @@ struct SettingsView: View {
                             newKeyword = ""
                             showingAddKeywordAlert = false
                         }
+                        .accessibilityIdentifier("settings.confirmAddKeywordButton")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(theme.colors.primary)
@@ -251,36 +241,10 @@ struct SettingsView: View {
                     
                     Spacer()
                 }
+                .accessibilityIdentifier("settings.addKeywordSheet")
                 .padding()
                 .background(theme.colors.bg)
                 .presentationDetents([.medium])
-            }
-            .onAppear {
-                backendUrlInput = NetworkManager.shared.apiBase
-                checkHealth()
-            }
-        }
-    }
-    
-    private func checkHealth() {
-        checkingHealth = true
-        Task {
-            let online = try? await NetworkManager.shared.checkHealth()
-            DispatchQueue.main.async {
-                self.serverOnline = online ?? false
-                self.checkingHealth = false
-            }
-        }
-    }
-    
-    private func triggerPoll() {
-        triggeringPoll = true
-        Task {
-            _ = try? await NetworkManager.shared.triggerPoll()
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            DispatchQueue.main.async {
-                self.triggeringPoll = false
-                checkHealth()
             }
         }
     }
@@ -314,6 +278,7 @@ struct PrivacyPolicyView: View {
             }
             .padding(18)
         }
+        .accessibilityIdentifier("privacy.screen")
         .background(theme.colors.bg)
         .navigationTitle("Privacy Policy")
         .navigationBarTitleDisplayMode(.inline)

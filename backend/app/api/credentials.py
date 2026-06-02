@@ -9,7 +9,7 @@ from app.schemas import CredentialOut, CredentialUpsert
 
 router = APIRouter(prefix="/api/credentials", tags=["credentials"])
 
-SUPPORTED_PLATFORMS = ["youtube", "twitter"]
+SUPPORTED_PLATFORMS = ["youtube"]
 
 
 @router.get("/", response_model=list[CredentialOut])

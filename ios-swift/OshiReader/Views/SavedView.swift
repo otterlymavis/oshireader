@@ -110,14 +110,10 @@ struct SavedView: View {
                                 }
                             }
                         } else {
-                            ZStack {
-                                NavigationLink(destination: ReaderView(feedItem: page.toFeedItem())) {
-                                    EmptyView()
-                                }
-                                .opacity(0)
-                                
+                            NavigationLink(destination: ReaderView(feedItem: page.toFeedItem())) {
                                 SavedPageCard(page: page, theme: theme)
                             }
+                            .buttonStyle(PlainButtonStyle())
                             .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
@@ -134,6 +130,7 @@ struct SavedView: View {
                 .listStyle(.plain)
             }
         }
+        .accessibilityIdentifier("saved.screen")
         .navigationTitle(i18n.t("tabSaved"))
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -178,6 +175,7 @@ struct SavedPageCard: View {
         .background(theme.colors.card)
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(theme.mode == .dark ? 0.2 : 0.04), radius: 5, x: 0, y: 2)
+        .accessibilityIdentifier("saved.card.\(page.id)")
     }
     
     private func formattedDate(_ isoString: String) -> String {

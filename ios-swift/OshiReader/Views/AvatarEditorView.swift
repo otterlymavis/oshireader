@@ -46,6 +46,7 @@ struct AvatarEditorView: View {
                         .font(.title2)
                         .foregroundColor(theme.colors.primary)
                 }
+                .accessibilityIdentifier("avatar.backButton")
                 Text("✨ \(keyword)")
                     .font(.headline)
                     .foregroundColor(theme.colors.text)
@@ -151,6 +152,7 @@ struct AvatarEditorView: View {
                     }
                 }
                 .frame(width: W, height: H)
+                .accessibilityIdentifier("avatar.canvas")
             }
             .frame(height: 300)
             
@@ -174,6 +176,7 @@ struct AvatarEditorView: View {
                         }
                         .disabled(activeLayer == nil)
                         .opacity(activeLayer == nil ? 0.4 : 1.0)
+                        .accessibilityIdentifier("avatar.cropButton")
                         
                         if cropMode {
                             Button(action: { cropZoom(0.15) }) { Text("Zoom +").font(.system(size: 11)).padding(.horizontal, 10).padding(.vertical, 6).background(theme.colors.divider).cornerRadius(99) }
@@ -185,7 +188,9 @@ struct AvatarEditorView: View {
                         
                         // Scale controls
                         Button(action: { scaleLayer(0.15) }) { Text("＋").font(.system(size: 12, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
+                            .accessibilityIdentifier("avatar.scaleUpButton")
                         Button(action: { scaleLayer(-0.15) }) { Text("－").font(.system(size: 12, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
+                            .accessibilityIdentifier("avatar.scaleDownButton")
                         
                         // Rotation controls
                         Button(action: { rotateLayer(-15) }) { Text("⟲").font(.system(size: 12, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
@@ -207,6 +212,7 @@ struct AvatarEditorView: View {
                         }
                         .disabled(activeLayer == nil)
                         .opacity(activeLayer == nil ? 0.4 : 1.0)
+                        .accessibilityIdentifier("avatar.deleteLayerButton")
                     }
                     .padding(.horizontal, 12)
                 }
@@ -229,6 +235,7 @@ struct AvatarEditorView: View {
                         .cornerRadius(10)
                     }
                     .disabled(saving)
+                    .accessibilityIdentifier("avatar.saveButton")
                     
                     Button(action: {
                         Task { await applyAsWallpaper() }
@@ -265,6 +272,7 @@ struct AvatarEditorView: View {
                 .cornerRadius(10)
                 .foregroundColor(theme.colors.text)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.colors.border, lineWidth: 1))
+                .accessibilityIdentifier("avatar.stickerSearchField")
                 
                 Button(action: {
                     Task { await performSearch() }
@@ -276,6 +284,7 @@ struct AvatarEditorView: View {
                         .background(theme.colors.primary)
                         .cornerRadius(10)
                 }
+                .accessibilityIdentifier("avatar.stickerSearchButton")
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
@@ -366,6 +375,7 @@ struct AvatarEditorView: View {
                 }
             }
         }
+        .accessibilityIdentifier("avatar.screen")
         .background(theme.colors.bg)
         .navigationBarBackButtonHidden()
         .onAppear {

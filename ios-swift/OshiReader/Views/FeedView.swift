@@ -161,6 +161,7 @@ struct FeedView: View {
                         alignment: .bottom
                     )
                 }
+                .accessibilityIdentifier("feed.filterButton")
                 
                 // Horizontal platform strip
                 if !orderedPlatforms.isEmpty {
@@ -180,6 +181,7 @@ struct FeedView: View {
                                     .background(selectedPlatform == nil ? theme.colors.primary : theme.colors.divider)
                                     .cornerRadius(10)
                                 }
+                                .accessibilityIdentifier("feed.platform.all")
                                 
                                 // Individual platforms
                                 ForEach(orderedPlatforms, id: \.self) { platformId in
@@ -198,6 +200,7 @@ struct FeedView: View {
                                         .background(isSelected ? meta.accent : meta.bg)
                                         .cornerRadius(10)
                                     }
+                                    .accessibilityIdentifier("feed.platform.\(platformId)")
                                 }
                             }
                             .padding(.horizontal, 14)
@@ -214,6 +217,7 @@ struct FeedView: View {
                                 .cornerRadius(10)
                                 .padding(.trailing, 10)
                         }
+                        .accessibilityIdentifier("feed.reorderSourcesButton")
                     }
                     .background(theme.colors.card)
                     .overlay(
@@ -281,14 +285,10 @@ struct FeedView: View {
                                 .tint(theme.colors.primary)
                             }
                         } else {
-                            ZStack {
-                                NavigationLink(destination: ReaderView(feedItem: item)) {
-                                    EmptyView()
-                                }
-                                .opacity(0)
-                                
+                            NavigationLink(destination: ReaderView(feedItem: item)) {
                                 FeedCard(item: item, isSaved: db.savedPages.contains(where: { $0.id == item.id }), theme: theme)
                             }
+                            .buttonStyle(PlainButtonStyle())
                             .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
@@ -327,6 +327,7 @@ struct FeedView: View {
                     .clipShape(Circle())
                     .shadow(color: Color.black.opacity(0.25), radius: 8, x: 0, y: 3)
             }
+            .accessibilityIdentifier("feed.addCustomUrlButton")
             .padding(.trailing, 20)
             .padding(.bottom, 24)
         }
@@ -346,6 +347,7 @@ struct FeedView: View {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(theme.colors.primary)
                     }
+                    .accessibilityIdentifier("feed.refreshButton")
                 }
             }
         }
@@ -365,6 +367,7 @@ struct FeedView: View {
         .sheet(isPresented: $showReorderSheet) {
             ReorderSourcesSheet(theme: theme, i18n: i18n)
         }
+        .accessibilityIdentifier("feed.screen")
     }
     
     private var filterCount: Int {
@@ -519,6 +522,7 @@ struct FeedCard: View {
         .background(theme.colors.card)
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(theme.mode == .dark ? 0.2 : 0.04), radius: 5, x: 0, y: 2)
+        .accessibilityIdentifier("feed.card.\(item.id)")
     }
     
     private func relativeTime(from isoDate: String) -> String {
@@ -605,6 +609,7 @@ struct FilterPanel: View {
             }
             .padding(18)
         }
+        .accessibilityIdentifier("filter.sheet")
         .background(theme.colors.bg)
     }
 }
@@ -625,6 +630,7 @@ struct FilterButton: View {
                 .foregroundColor(isSelected ? .white : theme.colors.textSub)
                 .cornerRadius(999)
         }
+        .accessibilityIdentifier("filter.option.\(text)")
     }
 }
 
@@ -697,6 +703,7 @@ struct AddUrlSheet: View {
                 .cornerRadius(8)
                 .foregroundColor(theme.colors.text)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.colors.border, lineWidth: 1))
+                .accessibilityIdentifier("customUrl.titleField")
             
             TextField("https://...", text: $customUrlString)
                 .padding()
@@ -706,6 +713,7 @@ struct AddUrlSheet: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.colors.border, lineWidth: 1))
                 .keyboardType(.URL)
                 .autocapitalization(.none)
+                .accessibilityIdentifier("customUrl.urlField")
             
             Button(action: onSave) {
                 Text(i18n.t("save"))
@@ -716,6 +724,7 @@ struct AddUrlSheet: View {
                     .background(theme.colors.primary)
                     .cornerRadius(10)
             }
+            .accessibilityIdentifier("customUrl.saveButton")
             .disabled(customUrlString.isEmpty || customUrlTitle.isEmpty)
             .opacity(customUrlString.isEmpty || customUrlTitle.isEmpty ? 0.5 : 1.0)
             

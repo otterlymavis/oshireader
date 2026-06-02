@@ -26,40 +26,45 @@ class FiveChConnector(BaseConnector):
     PLATFORM = "5ch"
     SUPPORTS_MEDIA_FILTER = False
 
-    _SEARCH = "https://find.5ch.net/"
-
     async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
         if mode == "media_only":
             return []
 
-        params = {"q": keyword, "type": "thread"}
+        target_url = f"https://find.5ch.io/search?q={keyword}"
+        jina_url = f"https://r.jina.ai/{target_url}"
+        
         try:
-            async with httpx.AsyncClient(timeout=15.0, headers=HEADERS, follow_redirects=True) as client:
-                resp = await client.get(self._SEARCH, params=params)
+            async with httpx.AsyncClient(timeout=15.0, headers=HEADERS) as client:
+                resp = await client.get(jina_url)
                 if not resp.is_success:
-                    log.debug("5ch search returned %d", resp.status_code)
+                    log.debug("Jina 5ch search returned status %d", resp.status_code)
                     return []
         except Exception as exc:
-            log.debug("5ch fetch error: %s", exc)
+            log.debug("Jina 5ch fetch error: %s", exc)
             return []
 
-        soup = BeautifulSoup(resp.text, "lxml")
         items: list[SourceItemCreate] = []
-
-        # find.5ch.net search result links
-        for a in soup.select("a[href*='5ch.net/test/read.cgi']")[:25]:
-            url = a.get("href", "")
-            if not url:
-                continue
-            title = a.get_text(strip=True) or a.get("title", "")
+        seen: set[str] = set()
+        
+        # Match markdown links from Jina response: [title](url)
+        matches = re.findall(r"\[([^\]]+)\]\((https?://[^)]+/test/read\.cgi/[^)]+)\)", resp.text)
+        
+        for title, url in matches:
+            title = title.strip()
+            # Strip thread reply counts if present, e.g. "(123)"
+            title = re.sub(r"\s*\(\d+\)$", "", title)
             if not title:
-                parent = a.find_parent(["li", "div", "article"])
-                title = parent.get_text(strip=True)[:120] if parent else url
+                continue
+                
+            tid = _thread_id(url)
+            if tid in seen:
+                continue
+            seen.add(tid)
 
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
-                    item_id=_thread_id(url),
+                    item_id=tid,
                     url=url,
                     published_at=datetime.now(timezone.utc),
                     media_type="text",
@@ -70,5 +75,7 @@ class FiveChConnector(BaseConnector):
                     raw_payload={"keyword": keyword},
                 )
             )
+            if len(items) >= 25:
+                break
 
         return items

@@ -6,6 +6,53 @@ enum AppThemeMode: String, Codable, CaseIterable {
     case sepia = "sepia"
 }
 
+enum AppFontChoice: String, CaseIterable, Identifiable {
+    case normal = "normal"
+    case comicSans = "comic_sans"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .normal: return "Normal"
+        case .comicSans: return "Comic Sans"
+        }
+    }
+
+    var cssFamily: String {
+        switch self {
+        case .normal:
+            return "-apple-system, BlinkMacSystemFont, \"Helvetica Neue\", Arial, sans-serif"
+        case .comicSans:
+            return "\"Comic Sans MS\", \"Comic Sans\", ChalkboardSE-Regular, Chalkboard, cursive"
+        }
+    }
+}
+
+enum AppFontSizeChoice: String, CaseIterable, Identifiable {
+    case normal = "normal"
+    case large = "large"
+    case extraLarge = "extra_large"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .normal: return "Normal"
+        case .large: return "Large"
+        case .extraLarge: return "Extra Large"
+        }
+    }
+
+    var scale: CGFloat {
+        switch self {
+        case .normal: return 1.0
+        case .large: return 1.15
+        case .extraLarge: return 1.3
+        }
+    }
+}
+
 struct AppColors {
     let mode: AppThemeMode
     
@@ -128,5 +175,43 @@ class ThemeManager: ObservableObject {
         } else {
             return PlatformMetadata(name: platform.capitalized, icon: "🌐", accent: colors.primary, bg: colors.primaryBg, fg: colors.primary)
         }
+    }
+}
+
+class AppearanceManager: ObservableObject {
+    static let shared = AppearanceManager()
+
+    @Published var fontChoice: AppFontChoice {
+        didSet { UserDefaults.standard.set(fontChoice.rawValue, forKey: "app_font_choice") }
+    }
+
+    @Published var fontSizeChoice: AppFontSizeChoice {
+        didSet { UserDefaults.standard.set(fontSizeChoice.rawValue, forKey: "app_font_size_choice") }
+    }
+
+    private init() {
+        let storedFont = UserDefaults.standard.string(forKey: "app_font_choice") ?? AppFontChoice.normal.rawValue
+        self.fontChoice = AppFontChoice(rawValue: storedFont) ?? .normal
+
+        let storedSize = UserDefaults.standard.string(forKey: "app_font_size_choice") ?? AppFontSizeChoice.normal.rawValue
+        self.fontSizeChoice = AppFontSizeChoice(rawValue: storedSize) ?? .normal
+    }
+
+    var appFont: Font {
+        let baseSize = 17.0 * fontSizeChoice.scale
+        switch fontChoice {
+        case .normal:
+            return .system(size: baseSize)
+        case .comicSans:
+            return .custom("Comic Sans MS", size: baseSize, relativeTo: .body)
+        }
+    }
+
+    var readerFontSize: CGFloat {
+        16.0 * fontSizeChoice.scale
+    }
+
+    var readerFontFamilyCSS: String {
+        fontChoice.cssFamily
     }
 }

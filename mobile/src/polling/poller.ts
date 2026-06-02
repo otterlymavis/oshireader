@@ -2,7 +2,6 @@ import type { SQLiteDatabase } from 'expo-sqlite'
 import { getActiveWatchTerms } from '../db/watchTerms'
 import { storeItems } from '../db/feed'
 import { fetchYouTube } from '../connectors/youtube'
-import { fetchTwitter } from '../connectors/twitter'
 import type { Settings } from '../hooks/useSettings'
 
 export async function pollAll(
@@ -20,14 +19,6 @@ export async function pollAll(
         total += await storeItems(db, term.id, items)
       } catch (e) {
         errors.push(`YouTube: ${(e as Error).message}`)
-      }
-    }
-    if (settings.twitterBearerToken) {
-      try {
-        const items = await fetchTwitter(term.keyword, term.collection_mode, settings.twitterBearerToken)
-        total += await storeItems(db, term.id, items)
-      } catch (e) {
-        errors.push(`Twitter: ${(e as Error).message}`)
       }
     }
   }

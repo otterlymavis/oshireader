@@ -71,12 +71,14 @@ struct SearchView: View {
                 TextField(i18n.t("searchPlaceholder"), text: $searchQuery)
                     .foregroundColor(theme.colors.text)
                     .autocapitalization(.none)
+                    .accessibilityIdentifier("search.field")
                 
                 if !searchQuery.isEmpty {
                     Button(action: { searchQuery = "" }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(theme.colors.textMuted)
                     }
+                    .accessibilityIdentifier("search.clearButton")
                 }
             }
             .padding()
@@ -132,6 +134,7 @@ struct SearchView: View {
                                             .foregroundColor(.red)
                                     }
                                     .buttonStyle(PlainButtonStyle())
+                                    .accessibilityIdentifier("search.customUrlDelete.\(customUrl.id)")
                                 }
                                 .padding(.vertical, 4)
                                 .listRowBackground(theme.colors.card)
@@ -169,14 +172,10 @@ struct SearchView: View {
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                         } else {
-                            ZStack {
-                                NavigationLink(destination: ReaderView(feedItem: item)) {
-                                    EmptyView()
-                                }
-                                .opacity(0)
-                                
+                            NavigationLink(destination: ReaderView(feedItem: item)) {
                                 FeedCard(item: item, isSaved: db.savedPages.contains(where: { $0.id == item.id }), theme: theme)
                             }
+                            .buttonStyle(PlainButtonStyle())
                             .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
@@ -186,6 +185,7 @@ struct SearchView: View {
                 }
             }
         }
+        .accessibilityIdentifier("search.screen")
         .navigationTitle(i18n.t("tabSearch"))
         .navigationBarTitleDisplayMode(.inline)
     }

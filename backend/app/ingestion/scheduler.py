@@ -10,7 +10,6 @@ from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.rss import RSSConnector
 from app.connectors.togetter import TogetterConnector
 from app.connectors.tver import TVERConnector
-from app.connectors.twitter import TwitterConnector
 from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
 from app.models import Match, PlatformCredential, PushToken, SourceItem, WatchTerm
@@ -33,12 +32,9 @@ def _build_connectors(db) -> list[BaseConnector]:
         cred = db.get(PlatformCredential, "youtube")
         if cred:
             youtube_key = cred.api_key or ""
-    if youtube_key:
-        connectors.append(YouTubeConnector(api_key=youtube_key))
-
-    twitter_cred = db.get(PlatformCredential, "twitter")
-    if twitter_cred and twitter_cred.bearer_token:
-        connectors.append(TwitterConnector(bearer_token=twitter_cred.bearer_token))
+    
+    # Always register YouTubeConnector so it can fetch using scrape fallback if no key is set
+    connectors.append(YouTubeConnector(api_key=youtube_key))
 
     return connectors
 
