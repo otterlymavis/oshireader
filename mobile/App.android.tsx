@@ -15,7 +15,7 @@ import OshiScreen from './src/screens/OshiScreen'
 import ReaderScreen from './src/screens/ReaderScreen'
 import AvatarPickerScreen from './src/screens/AvatarPickerScreen'
 import AvatarEditorScreen from './src/screens/AvatarEditorScreen'
-import { setupBackgroundFetch } from './src/notifications'
+import { setupBackgroundTask } from './src/notifications'
 import { ThemeProvider, useTheme } from './src/ThemeContext'
 import { LangProvider, useLang } from './src/LangContext'
 
@@ -140,7 +140,7 @@ function MainTabs() {
 }
 
 function AppContent() {
-  useEffect(() => { setupBackgroundFetch() }, [])
+  useEffect(() => { setupBackgroundTask() }, [])
   const { theme, mode } = useTheme()
 
   return (

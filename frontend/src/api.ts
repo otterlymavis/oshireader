@@ -28,6 +28,13 @@ export interface FeedItem {
   matched_at: string
 }
 
+export interface AdminStats {
+  items_total: number
+  matches_total: number
+  watch_terms: Pick<WatchTerm, 'id' | 'keyword' | 'is_active'>[]
+  items_by_platform: Record<string, number>
+}
+
 const BASE = '/api'
 
 async function json<T>(res: Response): Promise<T> {
@@ -62,6 +69,12 @@ export const updateWatchTerm = (
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   }).then(json<WatchTerm>)
+
+export const fetchAdminStats = (): Promise<AdminStats> =>
+  fetch(`${BASE}/admin/stats`).then(json<AdminStats>)
+
+export const triggerPoll = (): Promise<{ status: string }> =>
+  fetch(`${BASE}/admin/poll`, { method: 'POST' }).then(json<{ status: string }>)
 
 export const fetchFeed = (params: {
   term_id?: number

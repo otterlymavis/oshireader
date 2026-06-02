@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -64,7 +67,7 @@ class TVERConnector(BaseConnector):
             log.debug("TVer __NEXT_DATA__ parse failed: %s", exc)
             return []
 
-    def _ep_to_item(self, ep: dict) -> SourceItemCreate | None:
+    def _ep_to_item(self, ep: dict) -> Optional[SourceItemCreate]:
         ep_id = ep.get("id") or ep.get("episode_id") or ep.get("episodeID")
         title = (
             ep.get("title")

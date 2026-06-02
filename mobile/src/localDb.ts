@@ -23,6 +23,11 @@ export interface FeedItem {
   fetched_at: string
 }
 
+export interface MergeItemsResult {
+  added: number
+  byPlatform: Record<string, number>
+}
+
 const TERMS_KEY = '@otterpia:terms'
 const ITEMS_KEY = '@otterpia:items'
 const HIDDEN_KEY = '@otterpia:hidden_items'
@@ -97,7 +102,7 @@ async function addHiddenKey(key: string): Promise<void> {
   await AsyncStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden]))
 }
 
-export async function mergeItems(newItems: FeedItem[]): Promise<number> {
+export async function mergeItemsDetailed(newItems: FeedItem[]): Promise<MergeItemsResult> {
   const [existing, hidden] = await Promise.all([getItems(), getHiddenKeys()])
   const itemKey = (i: FeedItem) => `${i.id}::${i.watch_term_keyword || ''}`
   const cleanedNewItems = newItems.map(normalizeFeedItem).filter(i => !isSearchPageFallback(i))
@@ -119,7 +124,12 @@ export async function mergeItems(newItems: FeedItem[]): Promise<number> {
   console.log(`[mergeItems] incoming=${newItems.length} fresh=${fresh.length} updated=${updated} byPlatform=${JSON.stringify(byPlatform)}`)
   const merged = [...fresh, ...refreshed].slice(0, MAX_ITEMS)
   await AsyncStorage.setItem(ITEMS_KEY, JSON.stringify(merged))
-  return fresh.length
+  return { added: fresh.length, byPlatform }
+}
+
+export async function mergeItems(newItems: FeedItem[]): Promise<number> {
+  const result = await mergeItemsDetailed(newItems)
+  return result.added
 }
 
 export async function deleteFeedItem(id: string, watchTermKeyword?: string): Promise<void> {

@@ -13,6 +13,8 @@ import { Ionicons } from '@expo/vector-icons'
 import { getTerms } from '../localDb'
 import { useTheme } from '../ThemeContext'
 import type { Theme } from '../theme'
+import { useResponsive } from '../hooks/useResponsive'
+import ReaderScreen from './ReaderScreen'
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name']
 
@@ -482,10 +484,16 @@ export default function SearchScreen() {
   const [keyword, setKeyword] = useState(activeTerms[0]?.keyword ?? '')
   const trimmed = keyword.trim()
   const [selectedGroup, setSelectedGroup] = useState('News')
+  const [selectedLink, setSelectedLink] = useState<SearchLink | null>(null)
+  const { isTablet } = useResponsive()
 
   useEffect(() => {
     if (!trimmed && activeTerms[0]?.keyword) setKeyword(activeTerms[0].keyword)
   }, [activeTerms, trimmed])
+
+  useEffect(() => {
+    setSelectedLink(null)
+  }, [trimmed])
 
   const grouped = useMemo(() => {
     const map = new Map<string, SearchLink[]>()
@@ -500,6 +508,10 @@ export default function SearchScreen() {
 
   const openLink = (link: SearchLink) => {
     if (!trimmed) return
+    if (isTablet) {
+      setSelectedLink(link)
+      return
+    }
     const url = link.makeUrl(trimmed)
     navigation.navigate('Reader', {
       url,
@@ -509,7 +521,7 @@ export default function SearchScreen() {
     })
   }
 
-  return (
+  const mainContent = (
     <ScrollView style={s.root} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
       <View style={s.searchBox}>
         <View style={s.inputRow}>
@@ -577,12 +589,17 @@ export default function SearchScreen() {
         </View>
         {selectedLinks.map(link => {
           const meta = GROUP_META[link.group] ?? GROUP_META.News
+          const isSelected = selectedLink?.id === link.id
           return (
             <Pressable
               key={link.id}
               disabled={!trimmed}
               onPress={() => openLink(link)}
-              style={({ pressed }) => [s.row, { opacity: !trimmed ? 0.45 : pressed ? 0.72 : 1 }]}
+              style={({ pressed }) => [
+                s.row,
+                { opacity: !trimmed ? 0.45 : pressed ? 0.72 : 1 },
+                isTablet && isSelected && { borderWidth: 2, borderColor: theme.primary }
+              ]}
             >
               <View style={[s.rowIcon, { backgroundColor: `${meta.color}1A` }]}>
                 <Ionicons name={meta.icon} size={18} color={meta.color} />
@@ -598,4 +615,37 @@ export default function SearchScreen() {
       </View>
     </ScrollView>
   )
+
+  if (isTablet) {
+    return (
+      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: theme.bg }}>
+        <View style={{ width: 380, borderRightWidth: 1, borderColor: theme.divider }}>
+          {mainContent}
+        </View>
+        <View style={{ flex: 1 }}>
+          {selectedLink && trimmed ? (
+            <ReaderScreen
+              key={`${selectedLink.id}:${trimmed}`}
+              embeddedParams={{
+                url: selectedLink.makeUrl(trimmed),
+                title: `${selectedLink.label}: ${trimmed}`,
+                id: `search:${selectedLink.id}:${encodeURIComponent(trimmed)}`,
+                platform: selectedLink.platform,
+              }}
+              isEmbedded={true}
+            />
+          ) : (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.bg }}>
+              <Ionicons name="search-outline" size={64} color={theme.textMuted} />
+              <Text style={{ marginTop: 16, color: theme.textMuted, fontSize: 15, fontWeight: '600' }}>
+                Select a search site to view results
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+    )
+  }
+
+  return mainContent
 }

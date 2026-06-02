@@ -14,7 +14,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getTerms, saveTerm, deleteTerm, updateTerm, mergeItems, type WatchTerm } from '../localDb'
 import { scrapeAll } from '../scraper'
-import { requestNotificationPermission } from '../notifications'
+import { setTermNotification, syncBackgroundTaskRegistration } from '../notifications'
 import { useTheme } from '../ThemeContext'
 import type { Theme } from '../theme'
 
@@ -83,21 +83,19 @@ export default function WatchTermsScreen() {
   })
 
   const toggle = useMutation({
-    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
-      updateTerm(id, { is_active }),
+    mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => {
+      await updateTerm(id, { is_active })
+      await syncBackgroundTaskRegistration()
+    },
     onSuccess: invalidate,
   })
 
   const toggleNotify = useMutation({
     mutationFn: async ({ id, notify_on_new }: { id: string; notify_on_new: boolean }) => {
-      if (notify_on_new) {
-        const granted = await requestNotificationPermission()
-        if (!granted) {
-          Alert.alert('通知の許可が必要です', '通知を使用するには端末の設定で通知を有効にしてください。')
-          return
-        }
+      const updated = await setTermNotification(id, notify_on_new)
+      if (!updated) {
+        Alert.alert('通知の許可が必要です', '通知を使用するには端末の設定で通知を有効にしてください。')
       }
-      await updateTerm(id, { notify_on_new })
     },
     onSuccess: invalidate,
   })
@@ -151,6 +149,9 @@ export default function WatchTermsScreen() {
             <Pressable
               style={[s.bellBtn, t.notify_on_new && s.bellBtnOn]}
               onPress={() => toggleNotify.mutate({ id: t.id, notify_on_new: !(t.notify_on_new ?? false) })}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: t.notify_on_new }}
+              accessibilityLabel={`${t.keyword} notifications`}
             >
               <Text style={s.bellIcon}>{t.notify_on_new ? '🔔' : '🔕'}</Text>
             </Pressable>

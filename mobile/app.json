@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": false,
+      "supportsTablet": true,
       "bundleIdentifier": "com.saikokandi.otterpia"
     },
     "android": {
@@ -29,7 +29,10 @@
           "savePhotosPermission": "Allow Otterpia to save images to your photo library.",
           "isAccessMediaLocationEnabled": false
         }
-      ]
+      ],
+      "expo-font",
+      "expo-sqlite",
+      "expo-background-task"
     ],
     "extra": {
       "eas": {

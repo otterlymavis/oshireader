@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass
@@ -10,10 +13,10 @@ class SourceItemCreate:
     url: str
     published_at: datetime
     media_type: str
-    author: str | None = None
-    title: str | None = None
-    content_text: str | None = None
-    thumbnail_url: str | None = None
+    author: Optional[str] = None
+    title: Optional[str] = None
+    content_text: Optional[str] = None
+    thumbnail_url: Optional[str] = None
     raw_payload: dict = field(default_factory=dict)
 
     @property

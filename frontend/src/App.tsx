@@ -2,9 +2,12 @@ import { useState } from 'react'
 import { WatchTermForm } from './components/WatchTermForm'
 import { WatchTermList } from './components/WatchTermList'
 import { Feed } from './components/Feed'
+import { AdminPanel } from './components/AdminPanel'
 
 export default function App() {
   const [selectedTerm, setSelectedTerm] = useState<number | null>(null)
+  const [platform, setPlatform] = useState('')
+  const [mediaType, setMediaType] = useState('')
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -26,7 +29,13 @@ export default function App() {
         </aside>
 
         <main className="flex-1 min-w-0">
-          <Feed termId={selectedTerm} />
+          <AdminPanel
+            platform={platform}
+            mediaType={mediaType}
+            onPlatformChange={setPlatform}
+            onMediaTypeChange={setMediaType}
+          />
+          <Feed termId={selectedTerm} platform={platform} mediaType={mediaType} />
         </main>
       </div>
     </div>

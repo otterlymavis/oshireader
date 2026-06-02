@@ -1,0 +1,31 @@
+name: OshiReader
+options:
+  bundleIdPrefix: com.otterlymavis
+targets:
+  OshiReader:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: OshiReader
+    settings:
+      base:
+        INFOPLIST_FILE: OshiReader/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.otterlymavis.oshireader
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_IDENTITY: "iPhone Developer"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+  OshiReaderTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: OshiReaderTests
+    dependencies:
+      - target: OshiReader
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES

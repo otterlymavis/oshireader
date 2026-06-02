@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -12,9 +15,9 @@ router = APIRouter(prefix="/api/feed", tags=["feed"])
 
 @router.get("/", response_model=list[FeedItemOut])
 def get_feed(
-    term_id: int | None = Query(None),
-    platform: str | None = Query(None),
-    media_type: str | None = Query(None),
+    term_id: Optional[int] = Query(None),
+    platform: Optional[str] = Query(None),
+    media_type: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     db: Session = Depends(get_db),

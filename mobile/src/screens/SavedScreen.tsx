@@ -1,12 +1,15 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getSaved, removeSaved, removeContentCache } from '../localDb'
+import { Ionicons } from '@expo/vector-icons'
+import { getSaved, removeSaved, removeContentCache, type FeedItem } from '../localDb'
 import { useTheme } from '../ThemeContext'
 import { useLang } from '../LangContext'
 import { timeAgoI18n } from '../i18n'
 import type { Theme } from '../theme'
+import { useResponsive } from '../hooks/useResponsive'
+import ReaderScreen from './ReaderScreen'
 
 function makeStyles(t: Theme) {
   return StyleSheet.create({
@@ -38,6 +41,8 @@ export default function SavedScreen() {
   const s = useMemo(() => makeStyles(theme), [theme])
   const qc = useQueryClient()
   const navigation = useNavigation<any>()
+  const { isTablet } = useResponsive()
+  const [selectedPage, setSelectedPage] = useState<any | null>(null)
   const { data: saved = [] } = useQuery({ queryKey: ['saved'], queryFn: getSaved })
 
   function platformLabel(platform: string): string {
@@ -52,7 +57,7 @@ export default function SavedScreen() {
     return map[platform] ?? platform
   }
 
-  return (
+  const mainListContent = (
     <View style={s.root}>
       {saved.length === 0 ? (
         <View style={s.empty}>
@@ -68,8 +73,15 @@ export default function SavedScreen() {
           ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
           renderItem={({ item }) => (
             <Pressable
-              style={({ pressed }) => [s.card, pressed && { opacity: 0.8 }]}
-              onPress={() => navigation.navigate('Reader', {
+              style={({ pressed }) => [
+                s.card,
+                pressed && { opacity: 0.8 },
+                isTablet && selectedPage?.id === item.id && {
+                  borderWidth: 2,
+                  borderColor: theme.primary,
+                }
+              ]}
+              onPress={isTablet ? () => setSelectedPage(item) : () => navigation.navigate('Reader', {
                 url: item.url,
                 title: item.title ?? '',
                 id: item.id,
@@ -89,6 +101,9 @@ export default function SavedScreen() {
                   onPress={() => {
                     removeSaved(item.id)
                     removeContentCache(item.id)
+                    if (selectedPage?.id === item.id) {
+                      setSelectedPage(null)
+                    }
                     qc.invalidateQueries({ queryKey: ['saved'] })
                   }}
                 >
@@ -101,4 +116,37 @@ export default function SavedScreen() {
       )}
     </View>
   )
+
+  if (isTablet) {
+    return (
+      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: theme.bg }}>
+        <View style={{ width: 380, borderRightWidth: 1, borderColor: theme.divider }}>
+          {mainListContent}
+        </View>
+        <View style={{ flex: 1 }}>
+          {selectedPage ? (
+            <ReaderScreen
+              key={selectedPage.id}
+              embeddedParams={{
+                url: selectedPage.url,
+                title: selectedPage.title ?? '',
+                id: selectedPage.id,
+                platform: selectedPage.platform,
+              }}
+              isEmbedded={true}
+            />
+          ) : (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.bg }}>
+              <Ionicons name="bookmark-outline" size={64} color={theme.textMuted} />
+              <Text style={{ marginTop: 16, color: theme.textMuted, fontSize: 15, fontWeight: '600' }}>
+                Select a saved article to read
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+    )
+  }
+
+  return mainListContent
 }

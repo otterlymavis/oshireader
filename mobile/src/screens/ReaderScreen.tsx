@@ -858,16 +858,32 @@ function makeStyles(t: Theme) {
   })
 }
 
-export default function ReaderScreen() {
+export interface ReaderScreenProps {
+  embeddedParams?: ReaderParams
+  isEmbedded?: boolean
+}
+
+export default function ReaderScreen({ embeddedParams, isEmbedded = false }: ReaderScreenProps = {}) {
   const navigation = useNavigation()
   const route = useRoute<any>()
-  const { url, title, id, platform } = route.params as ReaderParams
-  const readerUrl = useMemo(() => readerUrlForPlatform(url, platform), [platform, url])
-  const isFiveChPage = platform === '5ch'
-
   const { theme, mode } = useTheme()
   const { t, lang } = useLang()
   const { settings } = useSettings()
+
+  const params = embeddedParams || (route?.params as ReaderParams | undefined)
+
+  if (!params) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.bg }}>
+        <Text style={{ color: theme.textMuted, fontSize: 15 }}>Select an article to read</Text>
+      </View>
+    )
+  }
+
+  const { url, title, id, platform } = params
+  const readerUrl = useMemo(() => readerUrlForPlatform(url, platform), [platform, url])
+  const isFiveChPage = platform === '5ch'
+
   const DEEPL_LANG: Record<string, string> = { ja: 'ja', en: 'en', 'zh-CN': 'zh', 'zh-TW': 'zh-Hant' }
   const deeplTarget = DEEPL_LANG[lang] ?? 'en'
   const GT_LANG: Record<string, string> = { ja: 'ja', en: 'en', 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW' }
@@ -1262,10 +1278,12 @@ export default function ReaderScreen() {
     <View style={s.container}>
 
       {/* ── Top bar: title + back + bookmark ── */}
-      <View style={s.topBar}>
-        <Pressable onPress={() => navigation.goBack()} style={s.topBackBtn} hitSlop={10}>
-          <Ionicons name="chevron-back" size={24} color={theme.primary} />
-        </Pressable>
+      <View style={[s.topBar, isEmbedded && { paddingTop: 10 }]}>
+        {!isEmbedded && (
+          <Pressable onPress={() => navigation.goBack()} style={s.topBackBtn} hitSlop={10}>
+            <Ionicons name="chevron-back" size={24} color={theme.primary} />
+          </Pressable>
+        )}
         <View style={s.topTitleWrap}>
           <Text style={s.topTitle} numberOfLines={2}>{title || url}</Text>
           {localContent

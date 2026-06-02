@@ -1,0 +1,473 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0AADB4A33250AC604852BABC /* OshiReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BBAB62B30911CFD45062E6 /* OshiReaderTests.swift */; };
+		15E2283EDF51A13E2895271E /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 866A42C8B01CDE66550FBC36 /* ReaderView.swift */; };
+		45853A8BCEBA615F1B1717A4 /* FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84500A11E3895A0801822A4E /* FeedView.swift */; };
+		5616A4D24B025D3B258D8EFD /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB07A4A295E6B82E88BBEB7 /* SearchView.swift */; };
+		56ECEE1891E6C7AD085796BB /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C7AB5D135169FD79851DA6 /* Theme.swift */; };
+		6272FB99110FEDA507C0F5D8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C607233A1D4F78BDDD5A7C4 /* ContentView.swift */; };
+		6969C73B8C9DA16AC4C8F726 /* I18n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75492232667474AE9C22A904 /* I18n.swift */; };
+		92793B84417591C6F67CB6B4 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14C7E2AD85F46D55CDAD349D /* Models.swift */; };
+		A0AC4C89B94E168EE1AC6027 /* OshiReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F57F75DAE62F1BBB02535FA4 /* OshiReaderApp.swift */; };
+		BB6B0B05CAB681EA2070F9FD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 281B85D31BF641436C65758B /* Assets.xcassets */; };
+		BE3D630219B70EABDAEA04BA /* NetworkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA4656BA51F509A9A84ED250 /* NetworkManager.swift */; };
+		CB45E12713243928A5088590 /* LocalDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC815F05EA634BBCAB4CCF02 /* LocalDB.swift */; };
+		D115C1D16C2F4B3BB12D84A9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = E7F3906E832E4F64A3E82C0A /* PrivacyInfo.xcprivacy */; };
+		D52495292898CC66D9765714 /* OshiView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16205C1ECDAC6AB69095DEDA /* OshiView.swift */; };
+		D8BD58B8DC06664C491F0D70 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA8B03E51A432B46649B6225 /* SettingsView.swift */; };
+		F46CEBC6E65E66A628181196 /* AvatarEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22EE2906443FC7711C23B3A /* AvatarEditorView.swift */; };
+		FB106A1DD6864D2F0B84A86E /* SavedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 170F57BD3D60F9B8037B9376 /* SavedView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		F46FDB6E07DD1595E6C4A109 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 014C1E0D44500F428608C94B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C35ABC27BEDEE333AA00BCE2;
+			remoteInfo = OshiReader;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0FB8EFA6D9E090CC83802EFF /* OshiReader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OshiReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		14C7E2AD85F46D55CDAD349D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		16205C1ECDAC6AB69095DEDA /* OshiView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiView.swift; sourceTree = "<group>"; };
+		170F57BD3D60F9B8037B9376 /* SavedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedView.swift; sourceTree = "<group>"; };
+		1DE2FB251822D2F52EAA70E7 /* OshiReaderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OshiReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		281B85D31BF641436C65758B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		49BBAB62B30911CFD45062E6 /* OshiReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiReaderTests.swift; sourceTree = "<group>"; };
+		5C607233A1D4F78BDDD5A7C4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		5FB07A4A295E6B82E88BBEB7 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		75492232667474AE9C22A904 /* I18n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = I18n.swift; sourceTree = "<group>"; };
+		84500A11E3895A0801822A4E /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedView.swift; sourceTree = "<group>"; };
+		866A42C8B01CDE66550FBC36 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
+		B3C7AB5D135169FD79851DA6 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		BA4656BA51F509A9A84ED250 /* NetworkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkManager.swift; sourceTree = "<group>"; };
+		BA8B03E51A432B46649B6225 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		C96792D04C20B7635508EF1E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		D22EE2906443FC7711C23B3A /* AvatarEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarEditorView.swift; sourceTree = "<group>"; };
+		E7F3906E832E4F64A3E82C0A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		F57F75DAE62F1BBB02535FA4 /* OshiReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiReaderApp.swift; sourceTree = "<group>"; };
+		FC815F05EA634BBCAB4CCF02 /* LocalDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDB.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		6B754EAE625CD9E292F2772E /* OshiReaderTests */ = {
+			isa = PBXGroup;
+			children = (
+				49BBAB62B30911CFD45062E6 /* OshiReaderTests.swift */,
+			);
+			path = OshiReaderTests;
+			sourceTree = "<group>";
+		};
+		C732DDAE3AF567A51275D5EC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				0FB8EFA6D9E090CC83802EFF /* OshiReader.app */,
+				1DE2FB251822D2F52EAA70E7 /* OshiReaderTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C8CC1AB8D8DC07163F23EB6C = {
+			isa = PBXGroup;
+			children = (
+				DFC8BCDAC0A7F65623D81E45 /* OshiReader */,
+				6B754EAE625CD9E292F2772E /* OshiReaderTests */,
+				C732DDAE3AF567A51275D5EC /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CD701CC0B9C12A54B0C01FBE /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				D22EE2906443FC7711C23B3A /* AvatarEditorView.swift */,
+				84500A11E3895A0801822A4E /* FeedView.swift */,
+				16205C1ECDAC6AB69095DEDA /* OshiView.swift */,
+				866A42C8B01CDE66550FBC36 /* ReaderView.swift */,
+				170F57BD3D60F9B8037B9376 /* SavedView.swift */,
+				5FB07A4A295E6B82E88BBEB7 /* SearchView.swift */,
+				BA8B03E51A432B46649B6225 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		DFC8BCDAC0A7F65623D81E45 /* OshiReader */ = {
+			isa = PBXGroup;
+			children = (
+				281B85D31BF641436C65758B /* Assets.xcassets */,
+				5C607233A1D4F78BDDD5A7C4 /* ContentView.swift */,
+				75492232667474AE9C22A904 /* I18n.swift */,
+				C96792D04C20B7635508EF1E /* Info.plist */,
+				FC815F05EA634BBCAB4CCF02 /* LocalDB.swift */,
+					14C7E2AD85F46D55CDAD349D /* Models.swift */,
+					BA4656BA51F509A9A84ED250 /* NetworkManager.swift */,
+					F57F75DAE62F1BBB02535FA4 /* OshiReaderApp.swift */,
+					E7F3906E832E4F64A3E82C0A /* PrivacyInfo.xcprivacy */,
+					B3C7AB5D135169FD79851DA6 /* Theme.swift */,
+				CD701CC0B9C12A54B0C01FBE /* Views */,
+			);
+			path = OshiReader;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BD40A6A92E5C8727CD18CBD1 /* OshiReaderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 90C8097AAF974A0C9F57A9C3 /* Build configuration list for PBXNativeTarget "OshiReaderTests" */;
+			buildPhases = (
+				0BA2B3F9E1A9C9DBE5AB4A0D /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				98F99134C5C5C82EB0100A72 /* PBXTargetDependency */,
+			);
+			name = OshiReaderTests;
+			packageProductDependencies = (
+			);
+			productName = OshiReaderTests;
+			productReference = 1DE2FB251822D2F52EAA70E7 /* OshiReaderTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		C35ABC27BEDEE333AA00BCE2 /* OshiReader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AF3C0E5C2A4B76664F9CEC32 /* Build configuration list for PBXNativeTarget "OshiReader" */;
+			buildPhases = (
+				8BCBCA1FAB00311B63262DF5 /* Sources */,
+				AD64A24A747E4D04927E879A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OshiReader;
+			packageProductDependencies = (
+			);
+			productName = OshiReader;
+			productReference = 0FB8EFA6D9E090CC83802EFF /* OshiReader.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		014C1E0D44500F428608C94B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					C35ABC27BEDEE333AA00BCE2 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 8D50B7D007BBBC4DA277D487 /* Build configuration list for PBXProject "OshiReader" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C8CC1AB8D8DC07163F23EB6C;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = C732DDAE3AF567A51275D5EC /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C35ABC27BEDEE333AA00BCE2 /* OshiReader */,
+				BD40A6A92E5C8727CD18CBD1 /* OshiReaderTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AD64A24A747E4D04927E879A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+				files = (
+					BB6B0B05CAB681EA2070F9FD /* Assets.xcassets in Resources */,
+					D115C1D16C2F4B3BB12D84A9 /* PrivacyInfo.xcprivacy in Resources */,
+				);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0BA2B3F9E1A9C9DBE5AB4A0D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0AADB4A33250AC604852BABC /* OshiReaderTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8BCBCA1FAB00311B63262DF5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F46CEBC6E65E66A628181196 /* AvatarEditorView.swift in Sources */,
+				6272FB99110FEDA507C0F5D8 /* ContentView.swift in Sources */,
+				45853A8BCEBA615F1B1717A4 /* FeedView.swift in Sources */,
+				6969C73B8C9DA16AC4C8F726 /* I18n.swift in Sources */,
+				CB45E12713243928A5088590 /* LocalDB.swift in Sources */,
+				92793B84417591C6F67CB6B4 /* Models.swift in Sources */,
+				BE3D630219B70EABDAEA04BA /* NetworkManager.swift in Sources */,
+				A0AC4C89B94E168EE1AC6027 /* OshiReaderApp.swift in Sources */,
+				D52495292898CC66D9765714 /* OshiView.swift in Sources */,
+				15E2283EDF51A13E2895271E /* ReaderView.swift in Sources */,
+				FB106A1DD6864D2F0B84A86E /* SavedView.swift in Sources */,
+				5616A4D24B025D3B258D8EFD /* SearchView.swift in Sources */,
+				D8BD58B8DC06664C491F0D70 /* SettingsView.swift in Sources */,
+				56ECEE1891E6C7AD085796BB /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		98F99134C5C5C82EB0100A72 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C35ABC27BEDEE333AA00BCE2 /* OshiReader */;
+			targetProxy = F46FDB6E07DD1595E6C4A109 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4DB48E053906545C660A4B2C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterlymavis.OshiReaderTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OshiReader.app/OshiReader";
+			};
+			name = Debug;
+		};
+		A4FAC9608DEA9BE6590E2B77 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReader/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterlymavis.oshireader;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B7351CD9A5C32BD1288FD5D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReader/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterlymavis.oshireader;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DFBB345E1CF71D8AF2033F5A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		F2C8A33C3B48B0B619A887B8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		FD06E40A906BFB7D6D6E8968 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterlymavis.OshiReaderTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OshiReader.app/OshiReader";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		8D50B7D007BBBC4DA277D487 /* Build configuration list for PBXProject "OshiReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DFBB345E1CF71D8AF2033F5A /* Debug */,
+				F2C8A33C3B48B0B619A887B8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		90C8097AAF974A0C9F57A9C3 /* Build configuration list for PBXNativeTarget "OshiReaderTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4DB48E053906545C660A4B2C /* Debug */,
+				FD06E40A906BFB7D6D6E8968 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AF3C0E5C2A4B76664F9CEC32 /* Build configuration list for PBXNativeTarget "OshiReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A4FAC9608DEA9BE6590E2B77 /* Debug */,
+				B7351CD9A5C32BD1288FD5D5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 014C1E0D44500F428608C94B /* Project object */;
+}

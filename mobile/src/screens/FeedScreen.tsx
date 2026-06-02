@@ -24,6 +24,8 @@ import { useTheme } from '../ThemeContext'
 import { useLang } from '../LangContext'
 import type { Theme } from '../theme'
 import { STANDARD_STYLE, type ColorStyle } from '../styleConstants'
+import { useResponsive } from '../hooks/useResponsive'
+import ReaderScreen from './ReaderScreen'
 
 function makeStyles(t: Theme) {
   return StyleSheet.create({
@@ -131,6 +133,8 @@ export default function FeedScreen() {
   const qc = useQueryClient()
   const navigation = useNavigation()
   const { t } = useLang()
+  const { isTablet } = useResponsive()
+  const [selectedItem, setSelectedItem] = useState<FeedItem | null>(null)
   const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null)
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null)
   const [mediaFilter, setMediaFilter] = useState<'all' | 'media_only'>('all')
@@ -253,13 +257,16 @@ export default function FeedScreen() {
         style: 'destructive',
         onPress: async () => {
           await deleteFeedItem(item.id, item.watch_term_keyword)
+          if (selectedItem?.id === item.id) {
+            setSelectedItem(null)
+          }
           qc.invalidateQueries({ queryKey: ['feed'] })
         },
       },
     ])
-  }, [qc, t])
+  }, [qc, t, selectedItem])
 
-  const inner = (
+  const mainListContent = (
     <View style={[s.container, wallpaper && { backgroundColor: 'transparent' }]}>
       <Pressable style={s.filterBar} onPress={() => setFiltersOpen(v => !v)}>
         <View style={s.filterBarLeft}>
@@ -419,16 +426,30 @@ export default function FeedScreen() {
           data={displayFeed}
           keyExtractor={(fi) => `${fi.id}::${fi.watch_term_keyword || ''}`}
           contentContainerStyle={s.list}
-          renderItem={({ item }) => (
-            <FeedCard
-              feedItem={item}
-              isSaved={savedIds.has(item.id)}
-              onToggleSave={() => {
-                toggleSaved(item).then(() => qc.invalidateQueries({ queryKey: ['saved'] }))
-              }}
-              onDelete={() => handleDeleteItem(item)}
-            />
-          )}
+          renderItem={({ item }) => {
+            const isSelected = selectedItem?.id === item.id
+            return (
+              <View
+                style={[
+                  isSelected && isTablet && {
+                    borderRadius: 16,
+                    borderWidth: 2,
+                    borderColor: theme.primary,
+                  }
+                ]}
+              >
+                <FeedCard
+                  feedItem={item}
+                  isSaved={savedIds.has(item.id)}
+                  onToggleSave={() => {
+                    toggleSaved(item).then(() => qc.invalidateQueries({ queryKey: ['saved'] }))
+                  }}
+                  onDelete={() => handleDeleteItem(item)}
+                  onPress={isTablet ? () => setSelectedItem(item) : undefined}
+                />
+              </View>
+            )
+          }}
           onRefresh={handleRefresh}
           refreshing={isRefreshing}
           ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
@@ -469,17 +490,48 @@ export default function FeedScreen() {
     </View>
   )
 
-  if (wallpaper) {
+  const listPane = wallpaper ? (
+    <ImageBackground
+      source={{ uri: wallpaper }}
+      style={s.container}
+      imageStyle={{ opacity: 0.18, resizeMode: 'cover' }}
+    >
+      {mainListContent}
+    </ImageBackground>
+  ) : (
+    mainListContent
+  )
+
+  if (isTablet) {
     return (
-      <ImageBackground
-        source={{ uri: wallpaper }}
-        style={s.container}
-        imageStyle={{ opacity: 0.18, resizeMode: 'cover' }}
-      >
-        {inner}
-      </ImageBackground>
+      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: theme.bg }}>
+        <View style={{ width: 380, borderRightWidth: 1, borderColor: theme.divider }}>
+          {listPane}
+        </View>
+        <View style={{ flex: 1 }}>
+          {selectedItem ? (
+            <ReaderScreen
+              key={selectedItem.id}
+              embeddedParams={{
+                url: selectedItem.url,
+                title: selectedItem.title ?? '',
+                id: selectedItem.id,
+                platform: selectedItem.platform,
+              }}
+              isEmbedded={true}
+            />
+          ) : (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.bg }}>
+              <Ionicons name="book-outline" size={64} color={theme.textMuted} />
+              <Text style={{ marginTop: 16, color: theme.textMuted, fontSize: 15, fontWeight: '600' }}>
+                Select an article to read
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
     )
   }
 
-  return inner
+  return listPane
 }

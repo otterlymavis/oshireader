@@ -21,7 +21,7 @@ import {
   type WatchTerm,
 } from '../localDb'
 import { scrapeAll } from '../scraper'
-import { requestNotificationPermission } from '../notifications'
+import { setTermNotification, syncBackgroundTaskRegistration } from '../notifications'
 import { useSettings } from '../hooks/useSettings'
 import { useTheme } from '../ThemeContext'
 import { useLang } from '../LangContext'
@@ -269,21 +269,19 @@ export default function SettingsScreen() {
   })
 
   const toggleActive = useMutation({
-    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
-      updateTerm(id, { is_active }),
+    mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => {
+      await updateTerm(id, { is_active })
+      await syncBackgroundTaskRegistration()
+    },
     onSuccess: invalidate,
   })
 
   const toggleNotify = useMutation({
     mutationFn: async ({ id, notify_on_new }: { id: string; notify_on_new: boolean }) => {
-      if (notify_on_new) {
-        const granted = await requestNotificationPermission()
-        if (!granted) {
-          Alert.alert(t('notifPermTitle'), t('notifPermBody'))
-          return
-        }
+      const updated = await setTermNotification(id, notify_on_new)
+      if (!updated) {
+        Alert.alert(t('notifPermTitle'), t('notifPermBody'))
       }
-      await updateTerm(id, { notify_on_new })
     },
     onSuccess: invalidate,
   })
@@ -366,6 +364,9 @@ export default function SettingsScreen() {
                 <Pressable
                   style={[s.bellBtn, term.notify_on_new && s.bellBtnOn]}
                   onPress={() => toggleNotify.mutate({ id: term.id, notify_on_new: !term.notify_on_new })}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: term.notify_on_new }}
+                  accessibilityLabel={`${term.keyword} notifications`}
                 >
                   <Text style={s.bellIcon}>{term.notify_on_new ? '🔔' : '🔕'}</Text>
                 </Pressable>

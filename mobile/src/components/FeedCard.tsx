@@ -21,6 +21,7 @@ interface Props {
   isSaved?: boolean
   onToggleSave?: () => void
   onDelete?: () => void
+  onPress?: () => void
 }
 
 function makeStyles(t: Theme) {
@@ -55,7 +56,7 @@ function makeStyles(t: Theme) {
   })
 }
 
-export function FeedCard({ feedItem: item, isSaved = false, onToggleSave, onDelete }: Props) {
+export function FeedCard({ feedItem: item, isSaved = false, onToggleSave, onDelete, onPress }: Props) {
   const { theme, style } = useTheme()
   const { t } = useLang()
   const s = useMemo(() => makeStyles(theme), [theme])
@@ -76,12 +77,12 @@ export function FeedCard({ feedItem: item, isSaved = false, onToggleSave, onDele
   return (
     <Pressable
       style={({ pressed }) => [s.card, pressed && s.pressed]}
-      onPress={() => navigation.navigate('Reader', {
+      onPress={onPress ?? (() => navigation.navigate('Reader', {
         url: item.url,
         title: item.title ?? '',
         id: item.id,
         platform: item.platform,
-      })}
+      }))}
     >
       <View style={[s.accent, { backgroundColor: accentColor, width: 5 }]} />
       <View style={s.inner}>

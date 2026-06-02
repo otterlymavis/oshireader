@@ -1,10 +1,24 @@
 import * as Notifications from 'expo-notifications'
-import * as BackgroundFetch from 'expo-background-fetch'
+import * as BackgroundTask from 'expo-background-task'
 import * as TaskManager from 'expo-task-manager'
-import { getTerms, mergeItems } from './localDb'
+import { getTerms, mergeItemsDetailed, updateTerm } from './localDb'
 import { scrapeAll } from './scraper'
 
-const TASK = 'otterpia-bg-fetch'
+const LEGACY_TASK = 'otterpia-bg-fetch'
+const TASK = 'otterpia-bg-task'
+const SOURCE_LABELS: Record<string, string> = {
+  youtube: 'YouTube',
+  niconico: 'NicoNico',
+  tver: 'TVer',
+  note: 'Note',
+  girlschannel: 'GirlsChannel',
+  '5ch': '5ch',
+  togetter: 'Togetter',
+  news: 'News',
+  yahoonews: 'Yahoo News',
+  mdpr: 'Modelpress',
+  custom: 'Custom URLs',
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -24,20 +38,21 @@ TaskManager.defineTask(TASK, async () => {
 
     for (const term of watching) {
       const items = await scrapeAll(term.keyword, term.collection_mode)
-      const added = await mergeItems(items)
+      const { added, byPlatform } = await mergeItemsDetailed(items)
       if (added > 0) {
+        const sources = formatSources(byPlatform)
         await Notifications.scheduleNotificationAsync({
           content: {
             title: `New results for "${term.keyword}"`,
-            body: `${added} new article${added === 1 ? '' : 's'} found`,
+            body: `${added} new result${added === 1 ? '' : 's'} from ${sources}`,
           },
           trigger: null,
         })
       }
     }
-    return BackgroundFetch.BackgroundFetchResult.NewData
+    return BackgroundTask.BackgroundTaskResult.Success
   } catch {
-    return BackgroundFetch.BackgroundFetchResult.Failed
+    return BackgroundTask.BackgroundTaskResult.Failed
   }
 })
 
@@ -46,20 +61,49 @@ export async function requestNotificationPermission(): Promise<boolean> {
   return status === 'granted'
 }
 
-export async function setupBackgroundFetch(): Promise<void> {
+export async function setTermNotification(id: string, notifyOnNew: boolean): Promise<boolean> {
+  if (notifyOnNew) {
+    const granted = await requestNotificationPermission()
+    if (!granted) return false
+  }
+
+  await updateTerm(id, { notify_on_new: notifyOnNew })
+  await syncBackgroundTaskRegistration()
+  return true
+}
+
+export async function syncBackgroundTaskRegistration(): Promise<void> {
   try {
-    const status = await BackgroundFetch.getStatusAsync()
-    if (
-      status === BackgroundFetch.BackgroundFetchStatus.Restricted ||
-      status === BackgroundFetch.BackgroundFetchStatus.Denied
-    ) return
+    if (await TaskManager.isTaskRegisteredAsync(LEGACY_TASK)) {
+      await TaskManager.unregisterTaskAsync(LEGACY_TASK)
+    }
+
+    const status = await BackgroundTask.getStatusAsync()
+    if (status === BackgroundTask.BackgroundTaskStatus.Restricted) return
+
+    const terms = await getTerms()
+    const shouldRegister = terms.some(t => t.is_active && t.notify_on_new)
     const isRegistered = await TaskManager.isTaskRegisteredAsync(TASK)
-    if (!isRegistered) {
-      await BackgroundFetch.registerTaskAsync(TASK, {
-        minimumInterval: 60 * 15,
-        stopOnTerminate: false,
-        startOnBoot: true,
+
+    if (shouldRegister && !isRegistered) {
+      await BackgroundTask.registerTaskAsync(TASK, {
+        minimumInterval: 15,
       })
+    } else if (!shouldRegister && isRegistered) {
+      await BackgroundTask.unregisterTaskAsync(TASK)
     }
   } catch { /* unavailable in Expo Go and simulators */ }
+}
+
+export const setupBackgroundTask = syncBackgroundTaskRegistration
+
+function formatSources(byPlatform: Record<string, number>): string {
+  const sources = Object.entries(byPlatform)
+    .filter(([, count]) => count > 0)
+    .sort(([, a], [, b]) => b - a)
+    .map(([platform]) => SOURCE_LABELS[platform] ?? platform)
+
+  if (sources.length === 0) return 'any source'
+  if (sources.length <= 3) return sources.join(', ')
+  return `${sources.slice(0, 3).join(', ')} and ${sources.length - 3} more`
 }
