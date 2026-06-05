@@ -444,6 +444,7 @@ struct FeedView: View {
     }
     
     private func refreshFeed() async {
+        guard !isRefreshing else { return }
         isRefreshing = true
         // 0. Bidirectional term sync
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)

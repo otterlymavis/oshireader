@@ -193,6 +193,7 @@ struct SettingsView: View {
                     .onDelete { offsets in
                         for index in offsets {
                             let term = db.terms[index]
+                            if addingAliasForId == term.id { addingAliasForId = nil }
                             db.deleteTerm(id: term.id)
                             Task {
                                 _ = try? await NetworkManager.shared.deleteWatchTerm(id: term.id)
