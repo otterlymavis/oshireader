@@ -80,7 +80,7 @@ class NetworkManager {
         guard let backendTerms = try? await fetchWatchTerms() else { return }
         let backendKeywords = Set(backendTerms.map { $0.keyword })
         for term in localTerms where !backendKeywords.contains(term.keyword) {
-            if let serverTerm = try? await createWatchTerm(keyword: term.keyword, collectionMode: term.collection_mode) {
+            if let serverTerm = try? await createWatchTerm(keyword: term.keyword, collectionMode: term.collection_mode, aliases: term.aliases) {
                 LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm)
             }
         }
@@ -103,7 +103,7 @@ class NetworkManager {
     }
     
     // MARK: - Create Watch Term
-    func createWatchTerm(keyword: String, collectionMode: String) async throws -> WatchTerm {
+    func createWatchTerm(keyword: String, collectionMode: String, aliases: [String] = []) async throws -> WatchTerm {
         if isUITesting {
             return WatchTerm(keyword: keyword, collection_mode: collectionMode)
         }
@@ -113,11 +113,12 @@ class NetworkManager {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         applyAdminAuthorization(to: &request)
-        
-        let body: [String: String] = [
+
+        var body: [String: Any] = [
             "keyword": keyword,
             "collection_mode": collectionMode
         ]
+        if !aliases.isEmpty { body["aliases"] = aliases }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let (data, response) = try await URLSession.shared.data(for: request)
