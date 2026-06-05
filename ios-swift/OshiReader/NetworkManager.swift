@@ -18,7 +18,7 @@ class NetworkManager {
     }
     
     // MARK: - Backend URL Config
-    private let fallbackProductionAPIBase = "https://otterpia-backend-production.up.railway.app"
+    private let fallbackProductionAPIBase = "https://oshireader.onrender.com"
 
     var apiBase: String {
         configuredBundleValue(forKey: "OshiReaderAPIBaseURL") ?? fallbackProductionAPIBase
