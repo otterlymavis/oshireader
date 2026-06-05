@@ -244,13 +244,25 @@ class AppearanceManager: ObservableObject {
         self.fontSizeChoice = AppFontSizeChoice(rawValue: storedSize) ?? .normal
     }
 
+    // Maps the user's size choice to a DynamicTypeSize so every semantic font
+    // (.subheadline, .caption, .headline, etc.) scales correctly throughout the app.
+    var preferredDynamicTypeSize: DynamicTypeSize {
+        switch fontSizeChoice {
+        case .normal:     return .large      // iOS system default
+        case .large:      return .xLarge
+        case .extraLarge: return .xxLarge
+        }
+    }
+
+    // appFont is only applied to text that has no explicit .font() modifier.
+    // Size scaling is handled by preferredDynamicTypeSize, so we use semantic
+    // sizes here to avoid double-scaling.
     var appFont: Font {
-        let baseSize = 17.0 * fontSizeChoice.scale
         switch fontChoice {
         case .normal:
-            return .system(size: baseSize)
+            return .body
         case .comicSans:
-            return .custom("Comic Sans MS", size: baseSize, relativeTo: .body)
+            return .custom("Comic Sans MS", size: 17.0, relativeTo: .body)
         }
     }
 

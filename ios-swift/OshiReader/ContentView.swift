@@ -107,6 +107,7 @@ struct ContentView: View {
             }
         }
         .font(appearance.appFont)
+        .environment(\.dynamicTypeSize, appearance.preferredDynamicTypeSize)
     }
 
     private func sidebarRowContent(for tab: OshiTab) -> some View {
