@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -106,14 +107,18 @@ async def _poll_once_unlocked() -> None:
                             continue
                         new_count = 0
                         ids = [raw.composite_id for raw in items]
+                        now = datetime.now(timezone.utc)
 
-                        # Two bulk queries replace N per-item round-trips.
-                        existing_source_ids = {
-                            r[0]
-                            for r in db.query(SourceItem.id)
+                        # Fetch existing ids AND their stored published_at so we can
+                        # fix bad dates (fetch-time placeholders) when the connector
+                        # now returns a real publication date.
+                        existing_items: dict[str, datetime] = {
+                            r[0]: r[1]
+                            for r in db.query(SourceItem.id, SourceItem.published_at)
                             .filter(SourceItem.id.in_(ids))
                             .all()
                         }
+                        existing_source_ids = set(existing_items.keys())
                         existing_match_ids = {
                             r[0]
                             for r in db.query(Match.source_item_id)
@@ -142,6 +147,21 @@ async def _poll_once_unlocked() -> None:
                                     )
                                 )
                                 existing_source_ids.add(raw.composite_id)
+                            else:
+                                # Heal bad dates: if the connector now returns a real
+                                # date (>5 min old) that differs from what's stored,
+                                # update published_at so sorting becomes correct.
+                                stored = existing_items.get(raw.composite_id)
+                                new_pub = raw.published_at
+                                if stored is not None and new_pub is not None:
+                                    new_aware = new_pub if new_pub.tzinfo else new_pub.replace(tzinfo=timezone.utc)
+                                    stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
+                                    new_age = (now - new_aware).total_seconds()
+                                    diff = abs((new_aware - stored_aware).total_seconds())
+                                    if new_age > 300 and diff > 300:
+                                        db.query(SourceItem).filter(
+                                            SourceItem.id == raw.composite_id
+                                        ).update({"published_at": new_aware})
                             if raw.composite_id not in existing_match_ids:
                                 db.add(Match(watch_term_id=term.id, source_item_id=raw.composite_id))
                                 existing_match_ids.add(raw.composite_id)
