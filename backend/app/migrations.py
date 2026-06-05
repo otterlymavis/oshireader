@@ -81,3 +81,42 @@ def apply_startup_migrations(engine: Engine) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_watch_terms_keyword"
             " ON watch_terms (keyword)"
         ))
+
+    # One-time cleanup: remove source_items where published_at ≈ matched_at
+    # (within 60 s) for platforms whose date parsers previously fell back to
+    # datetime.now().  They will be re-fetched with real dates on next poll.
+    _purge_bad_date_items(engine, platforms=("tver", "togetter", "youtube"))
+
+
+def _purge_bad_date_items(engine: Engine, platforms: tuple[str, ...]) -> None:
+    """Delete source_items (and their matches) whose published_at was set to
+    the fetch time rather than the real article date.  Identified by
+    |published_at - match.created_at| < 60 seconds."""
+    placeholders = ", ".join(f"'{p}'" for p in platforms)
+    if engine.dialect.name == "postgresql":
+        epoch_diff = "ABS(EXTRACT(EPOCH FROM (si.published_at - m.created_at)))"
+    else:
+        epoch_diff = "ABS((JULIANDAY(si.published_at) - JULIANDAY(m.created_at)) * 86400)"
+
+    with engine.begin() as conn:
+        result = conn.execute(text(f"""
+            SELECT COUNT(*) FROM source_items si
+            JOIN matches m ON m.source_item_id = si.id
+            WHERE si.platform IN ({placeholders})
+            AND {epoch_diff} < 60
+        """))
+        bad_count = result.scalar() or 0
+        if bad_count == 0:
+            return
+        log.info("Purging %d bad-date source items for %s", bad_count, platforms)
+        conn.execute(text(f"""
+            DELETE FROM matches WHERE source_item_id IN (
+                SELECT si.id FROM source_items si
+                JOIN matches m ON m.source_item_id = si.id
+                WHERE si.platform IN ({placeholders})
+                AND {epoch_diff} < 60
+            )
+        """))
+        conn.execute(text(
+            "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
+        ))
