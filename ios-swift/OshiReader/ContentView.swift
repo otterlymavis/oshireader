@@ -107,7 +107,9 @@ struct ContentView: View {
             }
         }
         .font(appearance.appFont)
-        .environment(\.dynamicTypeSize, appearance.preferredDynamicTypeSize)
+        .ifLet(appearance.dynamicTypeSizeOverride) { view, size in
+            view.environment(\.dynamicTypeSize, size)
+        }
     }
 
     private func sidebarRowContent(for tab: OshiTab) -> some View {
@@ -151,6 +153,17 @@ struct ContentView: View {
         case .oshi: return "star"
         case .search: return "magnifyingglass"
         case .settings: return "gearshape"
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func ifLet<T>(_ value: T?, transform: (Self, T) -> some View) -> some View {
+        if let value {
+            transform(self, value)
+        } else {
+            self
         }
     }
 }

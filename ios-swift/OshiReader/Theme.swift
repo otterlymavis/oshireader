@@ -244,11 +244,11 @@ class AppearanceManager: ObservableObject {
         self.fontSizeChoice = AppFontSizeChoice(rawValue: storedSize) ?? .normal
     }
 
-    // Maps the user's size choice to a DynamicTypeSize so every semantic font
-    // (.subheadline, .caption, .headline, etc.) scales correctly throughout the app.
-    var preferredDynamicTypeSize: DynamicTypeSize {
+    // Returns a DynamicTypeSize override when the user has chosen a larger-than-system
+    // font size. nil for Normal — leaves the iOS accessibility setting untouched.
+    var dynamicTypeSizeOverride: DynamicTypeSize? {
         switch fontSizeChoice {
-        case .normal:     return .large      // iOS system default
+        case .normal:     return nil         // respect whatever iOS has set
         case .large:      return .xLarge
         case .extraLarge: return .xxLarge
         }
