@@ -1,277 +1,524 @@
 import SwiftUI
+import UIKit
 import WebKit
+
+struct ReaderImageAction: Identifiable {
+    let id = UUID()
+    let url: URL
+    let alt: String?
+}
 
 struct ReaderView: View {
     let feedItem: FeedItem
-    
+
     @StateObject private var db = LocalDB.shared
     @StateObject private var theme = ThemeManager.shared
     @StateObject private var i18n = I18nManager.shared
-    
+    @StateObject private var appearance = AppearanceManager.shared
+
     @State private var readerMode = true
     @State private var readerTheme: AppThemeMode = .light
     @State private var fontSize: CGFloat = 16.0
     @State private var isTranslated = false
-    
-    @Environment(\.dismiss) private var dismiss
-    
+    @State private var imageAction: ReaderImageAction?
+    @State private var saveImageStatus = ""
+    @State private var showingSaveImageStatus = false
+
     var targetUrl: URL? {
-        guard let originalUrl = URL(string: feedItem.url) else { return nil }
+        guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform),
+              let originalUrl = URL(string: normalized) else { return nil }
         if isTranslated {
             let targetLang: String
             switch i18n.lang {
             case "ja": targetLang = "ja"
             case "en": targetLang = "en"
-            case "zh-CN": targetLang = "zh"
-            case "zh-TW": targetLang = "zh-Hant"
+            case "zh-CN": targetLang = "zh-CN"
+            case "zh-TW": targetLang = "zh-TW"
             default: targetLang = "en"
             }
-            if let escapedUrl = feedItem.url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+            if let escapedUrl = originalUrl.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
                let transUrl = URL(string: "https://translate.google.com/translate?sl=auto&tl=\(targetLang)&u=\(escapedUrl)") {
                 return transUrl
             }
         }
         return originalUrl
     }
-    
+
     var isSaved: Bool {
         db.savedPages.contains(where: { $0.id == feedItem.id })
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
-            // Custom article reader or webview
             if let url = targetUrl {
                 WebViewHelper(
                     url: url,
+                    cacheId: feedItem.id,
                     themeMode: readerTheme,
                     fontSize: fontSize,
-                    readerMode: readerMode
+                    readerMode: readerMode,
+                    onImageAction: { imageAction = $0 }
                 )
                 .background(bgColor)
             } else {
                 Text("Invalid URL")
                     .foregroundColor(theme.colors.textMuted)
             }
-            
-            // Bottom control bar (visible in ReaderMode)
-            HStack {
-                // Reader mode toggle
-                Button(action: { readerMode.toggle() }) {
-                    Label(readerMode ? i18n.t("readerModeText") : i18n.t("readerModeWeb"),
-                          systemImage: readerMode ? "doc.plaintext" : "globe")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(theme.colors.divider)
-                        .foregroundColor(theme.colors.primary)
-                        .cornerRadius(8)
-                }
-                .accessibilityIdentifier("reader.modeToggleButton")
-                
-                Spacer()
-                
-                if readerMode {
-                    // Font Size adjustments
-                    HStack(spacing: 12) {
-                        Button(action: { fontSize = max(12.0, fontSize - 2.0) }) {
-                            Text("A-")
-                                .font(.subheadline)
-                                .foregroundColor(theme.colors.textSub)
-                        }
-                        
-                        Text("\(Int(fontSize))")
-                            .font(.caption)
-                            .foregroundColor(theme.colors.textMuted)
-                        
-                        Button(action: { fontSize = min(28.0, fontSize + 2.0) }) {
-                            Text("A+")
-                                .font(.subheadline)
-                                .foregroundColor(theme.colors.textSub)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(theme.colors.divider)
-                    .cornerRadius(8)
-                }
-                
-                Spacer()
-                
-                // Theme picker
-                Picker("Theme", selection: $readerTheme) {
-                    Image(systemName: "sun.max.fill").tag(AppThemeMode.light)
-                    Image(systemName: "moon.fill").tag(AppThemeMode.dark)
-                    Image(systemName: "doc.text.magnifyingglass").tag(AppThemeMode.sepia)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 100)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(theme.colors.card)
-            .overlay(
-                Rectangle()
-                    .frame(height: 0.5)
-                    .foregroundColor(theme.colors.divider),
-                alignment: .top
-            )
+
+            readerControlBar
         }
         .background(bgColor)
         .navigationTitle(feedItem.title ?? "Reader")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // Translation Toggle
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
+                Button {
                     isTranslated.toggle()
-                }) {
+                } label: {
                     Image(systemName: "translate")
                         .foregroundColor(isTranslated ? theme.colors.primary : theme.colors.textMuted)
                 }
+                .accessibilityIdentifier("reader.translateButton")
             }
-            
-            // Bookmark Toggle
+
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
+                Button {
                     _ = db.toggleSaved(item: feedItem)
-                }) {
+                } label: {
                     Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                         .foregroundColor(theme.colors.primary)
                 }
+                .accessibilityIdentifier("reader.bookmarkButton")
             }
-            
-            // Safari Share Link
+
             ToolbarItem(placement: .navigationBarTrailing) {
                 if let url = URL(string: feedItem.url) {
                     ShareLink(item: url) {
                         Image(systemName: "square.and.arrow.up")
                             .foregroundColor(theme.colors.primary)
                     }
+                    .accessibilityIdentifier("reader.shareButton")
                 }
             }
         }
+        .confirmationDialog("Image", isPresented: Binding(
+            get: { imageAction != nil },
+            set: { isPresented in
+                if !isPresented {
+                    imageAction = nil
+                }
+            }
+        )) {
+            if let action = imageAction {
+                ShareLink(item: action.url) {
+                    Label("Share Image", systemImage: "square.and.arrow.up")
+                }
+                Button("Save Image") {
+                    saveImage(action.url)
+                }
+                Button("Open Image") {
+                    UIApplication.shared.open(action.url)
+                }
+            }
+        }
+        .alert("Image", isPresented: $showingSaveImageStatus) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveImageStatus)
+        }
         .onAppear {
-            // Initialize readerTheme with app theme mode
-            self.readerTheme = theme.mode
+            readerTheme = theme.mode
+            fontSize = appearance.readerFontSize
+            if UserDefaults.standard.bool(forKey: "auto_translate_reader") {
+                isTranslated = true
+            }
         }
     }
-    
+
+    private var readerControlBar: some View {
+        HStack {
+            Button(action: { readerMode.toggle() }) {
+                Label(readerMode ? i18n.t("readerModeText") : i18n.t("readerModeWeb"),
+                      systemImage: readerMode ? "doc.plaintext" : "globe")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(theme.colors.divider)
+                    .foregroundColor(theme.colors.primary)
+                    .cornerRadius(8)
+            }
+            .accessibilityIdentifier("reader.modeToggleButton")
+
+            Spacer()
+
+            if readerMode {
+                HStack(spacing: 12) {
+                    Button(action: { fontSize = max(12.0, fontSize - 2.0) }) {
+                        Text("A-")
+                            .font(.subheadline)
+                            .foregroundColor(theme.colors.textSub)
+                    }
+
+                    Text("\(Int(fontSize))")
+                        .font(.caption)
+                        .foregroundColor(theme.colors.textMuted)
+
+                    Button(action: { fontSize = min(28.0, fontSize + 2.0) }) {
+                        Text("A+")
+                            .font(.subheadline)
+                            .foregroundColor(theme.colors.textSub)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(theme.colors.divider)
+                .cornerRadius(8)
+            }
+
+            Spacer()
+
+            Picker("Theme", selection: $readerTheme) {
+                Image(systemName: "sun.max.fill").tag(AppThemeMode.light)
+                Image(systemName: "moon.fill").tag(AppThemeMode.dark)
+                Image(systemName: "doc.text.magnifyingglass").tag(AppThemeMode.sepia)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 100)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(theme.colors.card)
+        .overlay(Rectangle().frame(height: 0.5).foregroundColor(theme.colors.divider), alignment: .top)
+    }
+
     private var bgColor: Color {
         switch readerTheme {
         case .light: return Color.white
-        case .dark:  return Color(red: 0.08, green: 0.08, blue: 0.1)
+        case .dark: return Color(red: 0.08, green: 0.08, blue: 0.1)
         case .sepia: return Color(red: 0.96, green: 0.93, blue: 0.86)
+        }
+    }
+
+    private func saveImage(_ url: URL) {
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                guard let image = UIImage(data: data) else {
+                    await MainActor.run {
+                        saveImageStatus = "Could not read this image."
+                        showingSaveImageStatus = true
+                    }
+                    return
+                }
+                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                await MainActor.run {
+                    saveImageStatus = "Saved to Photos."
+                    showingSaveImageStatus = true
+                }
+            } catch {
+                await MainActor.run {
+                    saveImageStatus = "Could not save this image."
+                    showingSaveImageStatus = true
+                }
+            }
         }
     }
 }
 
-// MARK: - WebView Helper Wrapper
 struct WebViewHelper: UIViewRepresentable {
     let url: URL
+    let cacheId: String
     let themeMode: AppThemeMode
     let fontSize: CGFloat
     let readerMode: Bool
-    
-    func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
-        webView.navigationDelegate = context.coordinator
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        return webView
-    }
-    
-    func updateUIView(_ uiView: WKWebView, context: Context) {
-        if uiView.url == nil || (uiView.url?.absoluteString != url.absoluteString && !uiView.isLoading) {
-            let request = URLRequest(url: url)
-            uiView.load(request)
-        } else {
-            let js = styleInjectionJS()
-            uiView.evaluateJavaScript(js, completionHandler: nil)
-        }
-    }
-    
+    let onImageAction: (ReaderImageAction) -> Void
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
-    
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(context.coordinator, name: "oshireader")
+        configuration.userContentController.addUserScript(WKUserScript(source: readerInjectedJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        return webView
+    }
+
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.parent = self
+        if uiView.url == nil || (uiView.url?.absoluteString != url.absoluteString && !uiView.isLoading) {
+            uiView.load(URLRequest(url: url))
+        } else {
+            uiView.evaluateJavaScript(styleInjectionJS(), completionHandler: nil)
+        }
+    }
+
     private func styleInjectionJS() -> String {
         let bgColorHex: String
         let textColorHex: String
-        
+        let linkHex: String
+
         switch themeMode {
         case .light:
             bgColorHex = "#ffffff"
             textColorHex = "#1a1a1a"
+            linkHex = "#7C3AED"
         case .dark:
             bgColorHex = "#121215"
             textColorHex = "#e5e5e7"
+            linkHex = "#A78BFA"
         case .sepia:
             bgColorHex = "#f5ebd6"
             textColorHex = "#38250f"
+            linkHex = "#8f5a00"
         }
-        
-        var js = """
-        var style = document.getElementById('oshireader-injected-style');
-        if (!style) {
-            style = document.createElement('style');
-            style.id = 'oshireader-injected-style';
-            document.head.appendChild(style);
-        }
-        """
-        
+
+        let readerCSS: String
         if readerMode {
-            js += """
-            style.innerHTML = `
-                body {
-                    background-color: \(bgColorHex) !important;
-                    color: \(textColorHex) !important;
-                    font-size: \(fontSize)px !important;
-                    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif !important;
-                    line-height: 1.6 !important;
-                    padding: 16px !important;
-                    max-width: 680px !important;
-                    margin: 0 auto !important;
-                }
-                header, footer, nav, aside, iframe, .sidebar, .ads, .comment, #header, #footer, #sidebar, .header, .footer, .ad, .adsense, .header-container, .footer-container {
-                    display: none !important;
-                }
-                img {
-                    max-width: 100% !important;
-                    height: auto !important;
-                    border-radius: 8px !important;
-                    margin: 8px 0 !important;
-                }
-                a {
-                    color: #7C3AED !important;
-                }
-            `;
+            readerCSS = """
+            body {
+                background-color: \(bgColorHex) !important;
+                color: \(textColorHex) !important;
+                font-size: \(fontSize)px !important;
+                font-family: \(AppearanceManager.shared.readerFontFamilyCSS) !important;
+                line-height: 1.75 !important;
+                padding: 16px !important;
+                max-width: 760px !important;
+                margin: 0 auto !important;
+                word-break: break-word !important;
+            }
+            nav, header, footer, aside, iframe, [role=navigation], [role=banner], [role=contentinfo],
+            .sidebar, .ad, .ads, .adbox, .ad_box, .ad_area, .adsbygoogle, .advert, .advertisement,
+            .banner, .sponsor, .sponsored, .promotion, [data-ad], [data-ad-unit], [data-google-query-id],
+            [id*="ad-"], [id^="ad_"], [id*="_ad_"], [id*="ads"], [class*=" ad-"], [class^="ad-"],
+            [class*=" ads"], [class*="_ad_"], [class*="advert"], [class*="banner"], [class*="sponsor"] {
+                display: none !important;
+                visibility: hidden !important;
+                max-height: 0 !important;
+                overflow: hidden !important;
+            }
+            img, video { max-width: 100% !important; height: auto !important; border-radius: 8px !important; }
+            pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
+            a { color: \(linkHex) !important; }
             """
         } else {
-            // Native web view: just background inject override
-            js += """
-            style.innerHTML = `
-                body {
-                    background-color: \(bgColorHex) !important;
-                    color: \(textColorHex) !important;
-                }
-            `;
+            readerCSS = """
+            body {
+                background-color: \(bgColorHex) !important;
+                color: \(textColorHex) !important;
+            }
             """
         }
-        return js
+
+        return """
+        (function() {
+            var style = document.getElementById('oshireader-injected-style');
+            if (!style) {
+                style = document.createElement('style');
+                style.id = 'oshireader-injected-style';
+                document.head.appendChild(style);
+            }
+            style.innerHTML = `\(readerCSS)`;
+        })();
+        """
     }
-    
-    class Coordinator: NSObject, WKNavigationDelegate {
+
+    class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: WebViewHelper
-        
+
         init(_ parent: WebViewHelper) {
             self.parent = parent
         }
-        
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            let js = parent.styleInjectionJS()
-            webView.evaluateJavaScript(js, completionHandler: nil)
+            webView.evaluateJavaScript(parent.styleInjectionJS(), completionHandler: nil)
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, _ in
+                guard let html = result as? String, !html.isEmpty else { return }
+                LocalDB.shared.saveContentCache(id: self.parent.cacheId, html: html)
+            }
         }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            loadCachedPage(in: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            loadCachedPage(in: webView)
+        }
+
+        private func loadCachedPage(in webView: WKWebView) {
+            guard let html = LocalDB.shared.getContentCache(id: parent.cacheId) else { return }
+            webView.loadHTMLString(html, baseURL: parent.url)
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url else {
+                decisionHandler(.allow)
+                return
+            }
+            if shouldBlockReaderRequest(url.absoluteString) {
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "oshireader",
+                  let body = message.body as? [String: Any],
+                  body["type"] as? String == "image-action",
+                  let rawUrl = body["url"] as? String,
+                  let url = URL(string: rawUrl) else { return }
+            parent.onImageAction(ReaderImageAction(url: url, alt: body["alt"] as? String))
+        }
+    }
+}
+
+private func normalizedReaderUrl(_ rawUrl: String, platform: String) -> String? {
+    let stripped = stripTrackingParams(rawUrl)
+    if platform == "5ch" {
+        return normalize5chReaderUrl(stripped)
+    }
+    if platform == "oricon", let article = stripped.match(#"/(?:news|article)/(\d+)"#) {
+        return "https://www.oricon.co.jp/news/\(article)/full/"
+    }
+    return stripped
+}
+
+private func stripTrackingParams(_ rawUrl: String) -> String {
+    guard var components = URLComponents(string: rawUrl) else { return rawUrl }
+    let blockedPrefixes = ["utm_"]
+    let blockedKeys = Set(["fbclid", "gclid", "yclid", "mc_cid", "mc_eid", "igshid", "ref"])
+    components.queryItems = components.queryItems?.filter { item in
+        let key = item.name.lowercased()
+        return !blockedKeys.contains(key) && !blockedPrefixes.contains(where: { key.hasPrefix($0) })
+    }
+    return components.url?.absoluteString ?? rawUrl
+}
+
+private func normalize5chReaderUrl(_ rawUrl: String) -> String {
+    guard let url = URL(string: rawUrl), let host = url.host else { return rawUrl }
+    let isItest = host.range(of: #"^itest\.5ch\.(net|io)$"#, options: .regularExpression) != nil
+    let isFiveCh = host.range(of: #"(^|\.)5ch\.(net|io)$"#, options: .regularExpression) != nil
+    guard isItest || isFiveCh else { return rawUrl }
+
+    if isItest, let match = url.path.match(#"^/([^/]+)/test/read\.cgi/([^/]+)/(\d{9,})"#) {
+        let parts = match.components(separatedBy: "|")
+        if parts.count == 3 {
+            return "https://itest.5ch.io/\(parts[0])/test/read.cgi/\(parts[1])/\(parts[2])/"
+        }
+    }
+
+    guard let match = url.path.match(#"/test/read\.cgi/([^/]+)/(\d{9,})"#) else { return rawUrl }
+    let parts = match.components(separatedBy: "|")
+    guard parts.count == 2 else { return rawUrl }
+    let server = host.components(separatedBy: ".").first ?? ""
+    guard !server.isEmpty, !["www", "itest", "find", "dig"].contains(server.lowercased()) else { return rawUrl }
+    return "https://itest.5ch.io/\(server)/test/read.cgi/\(parts[0])/\(parts[1])/"
+}
+
+private func shouldBlockReaderRequest(_ rawUrl: String) -> Bool {
+    if rawUrl.range(of: #"^(about:|data:|blob:|file:|mailto:|tel:)"#, options: [.regularExpression, .caseInsensitive]) != nil {
+        return false
+    }
+    return rawUrl.range(
+        of: #"(2mdn|doubleclick|googlesyndication|googleadservices|adservice\.google|googletagmanager|google-analytics|analytics\.yahoo|yjtag\.yahoo|yads\.c\.yimg|ad\.yahoo|ad-stir|ad-generation|admatrix|adingo|fam-ad|fluct|genieessp|gmossp|i-mobile|im-apps|impact-ad|microad|nend|popin|taboola|outbrain|/adserver[/.?_-]|/ads?[/.?_-]|/advert|/banner|/sponsor|/promoted)"#,
+        options: [.regularExpression, .caseInsensitive]
+    ) != nil
+}
+
+private let readerInjectedJS = """
+(function () {
+  if (window.__OSHIREADER_IMAGE_ACTIONS__) return true;
+  window.__OSHIREADER_IMAGE_ACTIONS__ = true;
+
+  function absoluteUrl(value) {
+    if (!value) return '';
+    try { return new URL(value, document.baseURI).toString(); } catch (e) { return String(value); }
+  }
+  function srcFromSrcset(value) {
+    if (!value) return '';
+    var parts = String(value).split(',').map(function(part) { return part.trim().split(/\\s+/)[0]; }).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : '';
+  }
+  function imageCandidate(target) {
+    var el = target;
+    var depth = 0;
+    while (el && el.nodeType === 1 && depth < 8) {
+      var tag = (el.tagName || '').toUpperCase();
+      if (tag === 'IMG') {
+        return {
+          url: el.currentSrc || el.src || el.getAttribute('src') || el.getAttribute('data-src') || el.getAttribute('data-original') || el.getAttribute('data-lazy-src') || srcFromSrcset(el.getAttribute('srcset') || el.getAttribute('data-srcset')),
+          alt: el.getAttribute('alt') || el.getAttribute('title') || document.title || ''
+        };
+      }
+      var bg = '';
+      try {
+        var style = window.getComputedStyle(el);
+        var match = style && style.backgroundImage && style.backgroundImage.match(/url\\((["']?)(.*?)\\1\\)/);
+        bg = match ? match[2] : '';
+      } catch (e) {}
+      if (bg && bg !== 'none') return { url: bg, alt: el.getAttribute('aria-label') || el.getAttribute('title') || document.title || '' };
+      el = el.parentElement;
+      depth++;
+    }
+    return null;
+  }
+  function postImage(target) {
+    var found = imageCandidate(target);
+    if (!found) return false;
+    var imageUrl = absoluteUrl(found.url);
+    if (!/^https?:\\/\\//i.test(imageUrl)) return false;
+    window.webkit.messageHandlers.oshireader.postMessage({ type: 'image-action', url: imageUrl, alt: found.alt || '' });
+    return true;
+  }
+
+  document.addEventListener('click', function(event) {
+    var el = event.target;
+    var depth = 0;
+    while (el && el.nodeType === 1 && depth < 6) {
+      if ((el.tagName || '').toUpperCase() === 'IMG') {
+        if (postImage(el)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      el = el.parentElement;
+      depth++;
+    }
+  }, true);
+
+  document.addEventListener('contextmenu', function(event) {
+    if (postImage(event.target)) event.preventDefault();
+  }, true);
+  return true;
+})();
+true;
+"""
+
+private extension String {
+    func match(_ pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: self, range: NSRange(startIndex..., in: self)) else {
+            return nil
+        }
+        if match.numberOfRanges == 1 {
+            return String(self[Range(match.range(at: 0), in: self)!])
+        }
+        var captures = [String]()
+        for index in 1..<match.numberOfRanges {
+            guard let range = Range(match.range(at: index), in: self) else { continue }
+            captures.append(String(self[range]))
+        }
+        return captures.joined(separator: "|")
     }
 }

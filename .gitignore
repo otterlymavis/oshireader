@@ -16,6 +16,7 @@ mobile/tmp_*.json
 
 # General
 *.pyc
+.DS_Store
 .env
 .claude/
 settings.local.json

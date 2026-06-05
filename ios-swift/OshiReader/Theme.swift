@@ -6,6 +6,20 @@ enum AppThemeMode: String, Codable, CaseIterable {
     case sepia = "sepia"
 }
 
+enum AppColorStyle: String, CaseIterable, Identifiable {
+    case colourful = "colourful"
+    case standard = "standard"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .colourful: return "Colourful"
+        case .standard: return "Standard"
+        }
+    }
+}
+
 enum AppFontChoice: String, CaseIterable, Identifiable {
     case normal = "normal"
     case comicSans = "comic_sans"
@@ -98,16 +112,16 @@ struct AppColors {
     
     var primary: Color {
         switch mode {
-        case .light: return Color(red: 0.49, green: 0.23, blue: 0.93) // Violet (#7C3AED)
-        case .dark:  return Color(red: 0.65, green: 0.55, blue: 0.98) // Violet Light (#A78BFA)
+        case .light: return Color(red: 0.72, green: 0.52, blue: 0.65) // Opera mauve (#B784A7)
+        case .dark:  return Color(red: 0.82, green: 0.64, blue: 0.76) // Light opera mauve
         case .sepia: return Color(red: 0.58, green: 0.35, blue: 0.0)  // Golden brown
         }
     }
     
     var primaryBg: Color {
         switch mode {
-        case .light: return Color(red: 0.95, green: 0.91, blue: 1.0)
-        case .dark:  return Color(red: 0.19, green: 0.18, blue: 0.51)
+        case .light: return Color(red: 0.98, green: 0.93, blue: 0.96)
+        case .dark:  return Color(red: 0.28, green: 0.18, blue: 0.24)
         case .sepia: return Color(red: 0.93, green: 0.88, blue: 0.78)
         }
     }
@@ -142,12 +156,49 @@ struct PlatformMetadata {
 }
 
 class ThemeManager: ObservableObject {
-    @Published var mode: AppThemeMode = .light
+    @Published var mode: AppThemeMode = .light {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "app_theme_mode") }
+    }
+
+    @Published var style: AppColorStyle {
+        didSet { UserDefaults.standard.set(style.rawValue, forKey: "app_color_style") }
+    }
     
     static let shared = ThemeManager()
+
+    private init() {
+        let storedMode = UserDefaults.standard.string(forKey: "app_theme_mode") ?? AppThemeMode.light.rawValue
+        self.mode = AppThemeMode(rawValue: storedMode) ?? .light
+        let storedStyle = UserDefaults.standard.string(forKey: "app_color_style") ?? AppColorStyle.colourful.rawValue
+        self.style = AppColorStyle(rawValue: storedStyle) ?? .colourful
+    }
     
     var colors: AppColors {
         return AppColors(mode: mode)
+    }
+
+    var standardAccent: Color {
+        switch mode {
+        case .light: return Color(red: 0.72, green: 0.52, blue: 0.65)
+        case .dark: return Color(red: 0.82, green: 0.64, blue: 0.76)
+        case .sepia: return Color(red: 0.58, green: 0.35, blue: 0.0)
+        }
+    }
+
+    var standardBadgeBg: Color {
+        switch mode {
+        case .light: return Color(red: 0.95, green: 0.94, blue: 0.98)
+        case .dark: return Color(red: 0.19, green: 0.18, blue: 0.24)
+        case .sepia: return Color(red: 0.93, green: 0.88, blue: 0.78)
+        }
+    }
+
+    var standardBadgeFg: Color {
+        switch mode {
+        case .light: return Color(red: 0.28, green: 0.25, blue: 0.36)
+        case .dark: return Color(red: 0.83, green: 0.82, blue: 0.9)
+        case .sepia: return Color(red: 0.35, green: 0.25, blue: 0.12)
+        }
     }
     
     func metadata(for platform: String) -> PlatformMetadata {
@@ -162,6 +213,10 @@ class ThemeManager: ObservableObject {
             return PlatformMetadata(name: "YahooNews", icon: "🇯🇵", accent: Color(red: 0.86, green: 0.0, blue: 0.0), bg: Color(red: 1.0, green: 0.92, blue: 0.92), fg: Color(red: 0.86, green: 0.0, blue: 0.0))
         } else if p == "mdpr" {
             return PlatformMetadata(name: "ModelPress", icon: "💅", accent: Color.pink, bg: Color(red: 1.0, green: 0.9, blue: 0.95), fg: Color.pink)
+        } else if p == "oricon" {
+            return PlatformMetadata(name: "Oricon", icon: "🎤", accent: Color(red: 0.86, green: 0.12, blue: 0.22), bg: Color(red: 1.0, green: 0.92, blue: 0.94), fg: Color(red: 0.86, green: 0.12, blue: 0.22))
+        } else if p == "twitter" {
+            return PlatformMetadata(name: "X", icon: "𝕏", accent: Color.black, bg: Color.gray.opacity(0.16), fg: Color.primary)
         } else if p == "5ch" {
             return PlatformMetadata(name: "5ch", icon: "💬", accent: Color.orange, bg: Color(red: 1.0, green: 0.95, blue: 0.9), fg: Color.orange)
         } else if p == "girlschannel" {

@@ -22,6 +22,12 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>OshiReader saves images you choose from the reader into your Photos library.</string>
+	<key>OshiReaderAPIBaseURL</key>
+	<string>$(OSHIREADER_API_BASE_URL)</string>
+	<key>OshiReaderEnvironment</key>
+	<string>$(OSHIREADER_ENVIRONMENT)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

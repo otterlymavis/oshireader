@@ -132,6 +132,11 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(NotificationManager.deviceTokenString(data), "000fa1ff")
     }
 
+    func testDebugSchemeUsesLocalBackendConfiguration() throws {
+        XCTAssertEqual(NetworkManager.shared.environmentName, "Local")
+        XCTAssertEqual(NetworkManager.shared.apiBase, "http://127.0.0.1:8000")
+    }
+
     @MainActor
     func testPerTermNotificationsOnlyScheduleForEnabledTerms() async throws {
         let center = MockNotificationCenter(status: .authorized)

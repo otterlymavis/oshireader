@@ -114,6 +114,15 @@ final class OshiReaderUITests: XCTestCase {
     }
 
     private func tapTab(index: Int, labels: [String]) {
+        let tabIdentifiers = ["tab.feed", "tab.search", "tab.saved", "tab.oshi", "tab.settings"]
+        if tabIdentifiers.indices.contains(index) {
+            let tabElement = app.descendants(matching: .any)[tabIdentifiers[index]]
+            if tabElement.waitForExistence(timeout: 1) {
+                tabElement.tap()
+                return
+            }
+        }
+
         for label in labels {
             let button = app.tabBars.buttons[label]
             if button.waitForExistence(timeout: 1) {

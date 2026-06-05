@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-enum OshiTab: String, CaseIterable, Identifiable {
+enum OshiTab: String, CaseIterable, Identifiable, Hashable {
     case feed, search, saved, oshi, settings
     var id: String { rawValue }
 }
@@ -32,23 +32,14 @@ struct ContentView: View {
                         Button(action: {
                             selectedTab = tab
                         }) {
-                            HStack {
-                                Image(systemName: icon(for: tab))
-                                    .font(.title3)
-                                    .foregroundColor(selectedTab == tab ? .white : theme.colors.primary)
-                                    .frame(width: 28)
-                                Text(title(for: tab))
-                                    .font(.body)
-                                    .fontWeight(selectedTab == tab ? .bold : .medium)
-                                    .foregroundColor(selectedTab == tab ? .white : theme.colors.text)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(selectedTab == tab ? theme.colors.primary : Color.clear)
-                            .cornerRadius(10)
+                            sidebarRowContent(for: tab)
                         }
-                        .buttonStyle(PlainButtonStyle())
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(title(for: tab))
+                        .accessibilityIdentifier("tab.\(tab.rawValue)")
+                        .accessibilityAction {
+                            selectedTab = tab
+                        }
                         .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -116,6 +107,30 @@ struct ContentView: View {
             }
         }
         .font(appearance.appFont)
+    }
+
+    private func sidebarRowContent(for tab: OshiTab) -> some View {
+        let isSelected = selectedTab == tab
+
+        return HStack {
+            Image(systemName: icon(for: tab))
+                .font(.title3)
+                .frame(width: 28)
+            Text(title(for: tab))
+                .font(.body)
+                .fontWeight(isSelected ? .bold : .medium)
+            Spacer()
+        }
+        .foregroundColor(isSelected ? .white : theme.colors.text)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? theme.colors.primary : Color.clear)
+        .cornerRadius(10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedTab = tab
+        }
     }
     
     private func title(for tab: OshiTab) -> String {

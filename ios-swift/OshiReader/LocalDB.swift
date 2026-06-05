@@ -39,8 +39,16 @@ class LocalDB: ObservableObject {
         self.subscribedPlatforms = loadFromFile(name: "subscribed_platforms", defaultValue: [
             "youtube", "niconico", "tver", "note",
             "girlschannel", "5ch", "togetter", "news", "custom",
-            "yahoonews", "mdpr"
+            "yahoonews", "mdpr", "oricon", "twitter"
         ])
+        var didAddMissingPlatforms = false
+        for platform in ["oricon", "twitter"] where !self.subscribedPlatforms.contains(platform) {
+            self.subscribedPlatforms.append(platform)
+            didAddMissingPlatforms = true
+        }
+        if didAddMissingPlatforms {
+            saveToFile(name: "subscribed_platforms", value: self.subscribedPlatforms)
+        }
         self.wallpaper = UserDefaults.standard.string(forKey: "wallpaper_url")
         self.sourcesOrder = UserDefaults.standard.stringArray(forKey: "sources_order")
         self.oshiAvatars = loadFromFile(name: "oshi_avatars", defaultValue: [:])
@@ -315,10 +323,13 @@ class LocalDB: ObservableObject {
     
     // MARK: - Custom URLs
     func addCustomUrl(url: String, title: String) {
-        let id = "custom:\(url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.prefix(60) ?? "")"
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") ? trimmed : "https://\(trimmed)"
+        let id = "custom:\(normalized.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.prefix(60) ?? "")"
         runOnMain {
             if self.customUrls.contains(where: { $0.id == id }) { return }
-            let entry = CustomUrl(id: id, url: url, title: title.trimmingCharacters(in: .whitespacesAndNewlines), added_at: ISO8601DateFormatter().string(from: Date()))
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let entry = CustomUrl(id: id, url: normalized, title: trimmedTitle.isEmpty ? nil : trimmedTitle, added_at: ISO8601DateFormatter().string(from: Date()))
             self.customUrls.insert(entry, at: 0)
             self.saveToFile(name: "custom_urls", value: self.customUrls)
         }
@@ -328,6 +339,47 @@ class LocalDB: ObservableObject {
         runOnMain {
             self.customUrls.removeAll(where: { $0.id == id })
             self.saveToFile(name: "custom_urls", value: self.customUrls)
+        }
+    }
+
+    // MARK: - Data Reset
+    func clearAllData() {
+        let fileNames = [
+            "terms",
+            "feed_items",
+            "saved_pages",
+            "custom_urls",
+            "subscribed_platforms",
+            "oshi_avatars",
+            "oshi_compositions",
+            "hidden_items"
+        ]
+
+        runOnMain {
+            self.terms = []
+            self.feedItems = []
+            self.savedPages = []
+            self.customUrls = []
+            self.subscribedPlatforms = [
+                "youtube", "niconico", "tver", "note",
+                "girlschannel", "5ch", "togetter", "news", "custom",
+                "yahoonews", "mdpr", "oricon", "twitter"
+            ]
+            self.wallpaper = nil
+            self.sourcesOrder = nil
+            self.oshiAvatars = [:]
+            self.compositions = [:]
+            self.hiddenItems = []
+
+            for name in fileNames {
+                let url = self.fileURL(for: name)
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+            UserDefaults.standard.removeObject(forKey: "wallpaper_url")
+            UserDefaults.standard.removeObject(forKey: "sources_order")
+            self.saveToFile(name: "subscribed_platforms", value: self.subscribedPlatforms)
         }
     }
     

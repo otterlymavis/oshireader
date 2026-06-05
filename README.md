@@ -41,7 +41,7 @@ Backend settings are loaded from environment variables or `backend/.env`.
 | `APNS_KEY_ID` | empty | Apple APNs auth key ID. |
 | `APNS_PRIVATE_KEY` | empty | APNs `.p8` private key text. Use escaped `\n` line breaks if storing in one environment variable. |
 | `APNS_PRIVATE_KEY_PATH` | empty | Alternative path to the APNs `.p8` private key file. |
-| `APNS_TOPIC` | `com.otterpia.oshireader` | APNs topic, usually the iOS bundle identifier. |
+| `APNS_TOPIC` | `com.otterpia.oshireader.plus` | APNs topic, usually the iOS bundle identifier. |
 | `APNS_USE_SANDBOX` | `true` | Use APNs sandbox host for development builds. Set to `false` for production tokens. |
 
 When `ADMIN_API_TOKEN` is set, protected requests must include:
@@ -64,7 +64,15 @@ open OshiReader.xcodeproj
 
 Select a simulator or device in Xcode and run the `OshiReader` scheme.
 
-The backend URL is configured in `ios-swift/OshiReader/NetworkManager.swift`.
+The app is a universal iPhone and iPad build. Use schemes to choose the backend environment:
+
+| Scheme | Configuration | Backend |
+|---|---|---|
+| `OshiReader Local` | `Debug` | `http://127.0.0.1:8000` |
+| `OshiReader Staging` | `Staging` | production URL until a staging backend is deployed |
+| `OshiReader Production` | `Release` | `https://otterpia-backend-production.up.railway.app` |
+
+The backend URL is injected through `OshiReaderAPIBaseURL` in `Info.plist`, with values generated from `ios-swift/project.yml`.
 
 Remote push notifications use APNs. The Swift app registers its APNs device token after notification permission is granted, then posts that token to `/api/devices/apns-token`. The backend sends remote notifications for new matches only when the watch term has notifications enabled.
 

@@ -8,9 +8,13 @@ struct SettingsView: View {
     @StateObject private var notifications = NotificationManager.shared
     
     @State private var showingAddKeywordAlert = false
+    @State private var showingClearAllAlert = false
     @State private var newKeyword = ""
     @State private var newCollectionMode = "all_info"
     @AppStorage("admin_api_token") private var adminApiToken = ""
+    @AppStorage("youtube_api_key") private var youtubeApiKey = ""
+    @AppStorage("twitter_bearer_token") private var twitterBearerToken = ""
+    @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     
     let allPlatforms = [
         ("youtube", "📹 YouTube"),
@@ -22,7 +26,9 @@ struct SettingsView: View {
         ("togetter", "🐧 Togetter"),
         ("news", "📰 General News"),
         ("yahoonews", "🇯🇵 YahooNews"),
-        ("mdpr", "💅 ModelPress")
+        ("mdpr", "💅 ModelPress"),
+        ("oricon", "🎤 Oricon"),
+        ("twitter", "𝕏 X")
     ]
     
     var body: some View {
@@ -32,15 +38,56 @@ struct SettingsView: View {
                 Section(header: Text(i18n.t("watchTerms"))) {
                     ForEach(db.terms) { term in
                         HStack {
+                            NavigationLink(destination: AvatarEditorView(keyword: term.keyword)) {
+                                ZStack {
+                                    Circle()
+                                        .fill(theme.colors.divider)
+                                        .frame(width: 38, height: 38)
+                                    if let avatar = db.oshiAvatars[term.keyword], let url = URL(string: avatar) {
+                                        AsyncImage(url: url) { image in
+                                            image
+                                                .resizable()
+                                                .aspectRatio(contentMode: .fill)
+                                        } placeholder: {
+                                            Text("🎨")
+                                        }
+                                        .frame(width: 38, height: 38)
+                                        .clipShape(Circle())
+                                    } else {
+                                        Text("🎨")
+                                            .font(.body)
+                                    }
+                                }
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .accessibilityIdentifier("settings.keywordAvatar.\(term.keyword)")
+
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(term.keyword)
-                                    .font(.headline)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
                                     .foregroundColor(theme.colors.text)
-                                Text(term.collection_mode == "media_only" ? "📹 メディアのみ" : "📄 全情報")
-                                    .font(.caption)
-                                    .foregroundColor(theme.colors.textMuted)
                             }
                             Spacer()
+
+                            Button {
+                                let next = term.collection_mode == "all_info" ? "media_only" : "all_info"
+                                db.updateTerm(id: term.id, collectionMode: next)
+                                Task {
+                                    _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, collectionMode: next)
+                                }
+                            } label: {
+                                Text(term.collection_mode == "media_only" ? "📹" : "📄")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(theme.colors.divider)
+                                    .foregroundColor(theme.colors.textSub)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .accessibilityIdentifier("settings.keywordMode.\(term.keyword)")
                             
                             // Push notifications bell button
                             Button(action: {
@@ -52,7 +99,7 @@ struct SettingsView: View {
                             }) {
                                 Image(systemName: term.notify_on_new ? "bell.fill" : "bell.slash")
                                     .foregroundColor(term.notify_on_new ? theme.colors.primary : theme.colors.textMuted)
-                                    .font(.title3)
+                                    .font(.body)
                                     .padding(.horizontal, 8)
                             }
                             .buttonStyle(PlainButtonStyle())
@@ -150,6 +197,34 @@ struct SettingsView: View {
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("settings.adminApiTokenField")
                 }
+
+                Section(header: Text("API Keys")) {
+                    SecureField("YouTube API Key", text: $youtubeApiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onSubmit {
+                            Task { try? await NetworkManager.shared.updateCredential(platform: "youtube", apiKey: youtubeApiKey.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        }
+                        .onDisappear {
+                            Task { try? await NetworkManager.shared.updateCredential(platform: "youtube", apiKey: youtubeApiKey.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        }
+                        .accessibilityIdentifier("settings.youtubeApiKeyField")
+
+                    SecureField("X Bearer Token", text: $twitterBearerToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onSubmit {
+                            Task { try? await NetworkManager.shared.updateCredential(platform: "twitter", bearerToken: twitterBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        }
+                        .onDisappear {
+                            Task { try? await NetworkManager.shared.updateCredential(platform: "twitter", bearerToken: twitterBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        }
+                        .accessibilityIdentifier("settings.twitterBearerTokenField")
+
+                    Toggle("Auto Translate Reader", isOn: $autoTranslateReader)
+                        .tint(theme.colors.primary)
+                        .accessibilityIdentifier("settings.autoTranslateToggle")
+                }
                 
                 // Section: Customizations
                 Section(header: Text("テーマとカスタマイズ")) {
@@ -159,6 +234,14 @@ struct SettingsView: View {
                         Text("ダーク").tag(AppThemeMode.dark)
                     }
                     .pickerStyle(.segmented)
+
+                    Picker("Style", selection: $theme.style) {
+                        ForEach(AppColorStyle.allCases) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("settings.colorStylePicker")
                     
                     // Language selection
                     Picker(i18n.t("language"), selection: Binding(
@@ -203,6 +286,15 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier("settings.privacyPolicyLink")
                 }
+
+                Section(header: Text("データ")) {
+                    Button(role: .destructive) {
+                        showingClearAllAlert = true
+                    } label: {
+                        Label("Clear All Data", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("settings.clearAllDataButton")
+                }
                 
                 // Section: Statistics
                 let stats = db.getStats()
@@ -226,6 +318,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .font(.system(size: 13))
             .accessibilityIdentifier("settings.screen")
             .navigationTitle(i18n.t("settingsTitle"))
             .navigationBarTitleDisplayMode(.inline)
@@ -288,6 +381,14 @@ struct SettingsView: View {
                 .padding()
                 .background(theme.colors.bg)
                 .presentationDetents([.medium])
+            }
+            .alert("Clear All Data?", isPresented: $showingClearAllAlert) {
+                Button(i18n.t("cancel"), role: .cancel) {}
+                Button(i18n.t("delete"), role: .destructive) {
+                    db.clearAllData()
+                }
+            } message: {
+                Text("This removes keywords, feed items, saved pages, custom URLs, avatars, hidden items, wallpaper, and source order from this device.")
             }
         }
     }
