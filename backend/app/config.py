@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     youtube_api_key: str = ""
+    twitter_bearer_token: str = ""
     database_url: str = "sqlite:///./otterpia.db"
     poll_interval_minutes: int = 15
     admin_api_token: str = ""
@@ -11,7 +12,7 @@ class Settings(BaseSettings):
     apns_key_id: str = ""
     apns_private_key: str = ""
     apns_private_key_path: str = ""
-    apns_topic: str = "com.otterpia.oshireader"
+    apns_topic: str = "com.otterpia.oshireader.plus"
     apns_use_sandbox: bool = True
 
     model_config = {"env_file": ".env"}
