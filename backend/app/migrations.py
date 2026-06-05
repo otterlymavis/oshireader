@@ -1,13 +1,32 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import Engine, inspect, text
+from sqlalchemy.orm import Session
 
 from app import models as _models  # noqa: F401
-from app.database import Base
+from app.database import Base, SessionLocal
 
 log = logging.getLogger(__name__)
+
+
+def _migration_applied(slug: str) -> bool:
+    db: Session = SessionLocal()
+    try:
+        return db.get(_models.MigrationLog, slug) is not None
+    finally:
+        db.close()
+
+
+def _record_migration(slug: str) -> None:
+    db: Session = SessionLocal()
+    try:
+        db.add(_models.MigrationLog(id=slug, applied_at=datetime.now(timezone.utc)))
+        db.commit()
+    finally:
+        db.close()
 
 
 def _column_names(engine: Engine, table_name: str) -> set[str]:
@@ -81,11 +100,22 @@ def apply_startup_migrations(engine: Engine) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_watch_terms_keyword"
             " ON watch_terms (keyword)"
         ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_matches_created_at"
+            " ON matches (created_at)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_matches_watch_term_id"
+            " ON matches (watch_term_id)"
+        ))
 
-    # One-time cleanup: remove source_items where published_at ≈ matched_at
+    # One-time cleanup (guarded): remove source_items where published_at ≈ matched_at
     # (within 60 s) for platforms whose date parsers previously fell back to
     # datetime.now().  They will be re-fetched with real dates on next poll.
-    _purge_bad_date_items(engine, platforms=("tver", "togetter", "youtube"))
+    PURGE_SLUG = "purge_bad_dates_v1"
+    if not _migration_applied(PURGE_SLUG):
+        _purge_bad_date_items(engine, platforms=("tver", "togetter", "youtube"))
+        _record_migration(PURGE_SLUG)
 
 
 def _purge_bad_date_items(engine: Engine, platforms: tuple[str, ...]) -> None:

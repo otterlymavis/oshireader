@@ -211,8 +211,54 @@ async def _poll_once_unlocked() -> None:
                         )
                         db.rollback()
 
+        # Prune: keep at most 200 items per (platform, watch_term) to
+        # prevent unbounded DB growth.  Community platforms (5ch, girlschannel)
+        # are excluded — their threads are rare and long-lived.
+        _prune_old_items(db)
+
     finally:
         db.close()
+
+
+def _prune_old_items(db) -> None:
+    """Delete the oldest matches beyond 200 per (platform, watch_term) pair."""
+    KEEP = 200
+    SKIP_PLATFORMS = {"5ch", "girlschannel", "togetter"}
+    try:
+        pairs = (
+            db.query(SourceItem.platform, Match.watch_term_id)
+            .join(Match, Match.source_item_id == SourceItem.id)
+            .filter(~SourceItem.platform.in_(SKIP_PLATFORMS))
+            .distinct()
+            .all()
+        )
+        pruned = 0
+        for platform, term_id in pairs:
+            excess = (
+                db.query(Match.id)
+                .join(SourceItem, SourceItem.id == Match.source_item_id)
+                .filter(SourceItem.platform == platform, Match.watch_term_id == term_id)
+                .order_by(SourceItem.published_at.desc())
+                .offset(KEEP)
+                .all()
+            )
+            if excess:
+                ids = [r[0] for r in excess]
+                db.query(Match).filter(Match.id.in_(ids)).delete(synchronize_session=False)
+                pruned += len(ids)
+        if pruned:
+            db.commit()
+            # Remove source_items no longer referenced by any match
+            db.execute(
+                __import__("sqlalchemy").text(
+                    "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
+                )
+            )
+            db.commit()
+            log.info("Pruned %d old match records", pruned)
+    except Exception as exc:
+        log.warning("Prune failed: %s", exc)
+        db.rollback()
 
 
 def start_scheduler() -> None:

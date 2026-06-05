@@ -6,6 +6,13 @@ def _utcnow() -> datetime:
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 
+
+class MigrationLog(Base):
+    """Tracks one-time migrations so they never re-run on subsequent boots."""
+    __tablename__ = "migration_log"
+    id = Column(String, primary_key=True)  # migration name / slug
+    applied_at = Column(DateTime, default=_utcnow)
+
 from app.database import Base
 
 
