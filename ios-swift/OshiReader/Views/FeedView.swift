@@ -421,7 +421,8 @@ struct FeedView: View {
         // 2. Fetch fresh feed items — use 90 days on first load (empty cache) for richer history,
         //    30 days on subsequent refreshes to stay fast.
         let fetchDays = db.feedItems.isEmpty ? 90 : 30
-        if let freshItems = try? await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays) {
+        let freshItems = (try? await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays)) ?? []
+        if !freshItems.isEmpty {
             _ = db.mergeItems(newItems: freshItems)
         }
 
@@ -433,14 +434,19 @@ struct FeedView: View {
             }
         }
 
-        // 3. Local fallback scrapers run in parallel per active keyword.
-        let activeTerms = db.terms.filter { $0.is_active }
-        await withTaskGroup(of: [FeedItem].self) { group in
-            for term in activeTerms {
-                group.addTask { await NetworkManager.shared.scrapeLocalFallbacks(keyword: term.keyword) }
-            }
-            for await items in group where !items.isEmpty {
-                _ = db.mergeItems(newItems: items)
+        // 3. Local fallback scrapers — only run when the backend returned nothing
+        //    (Render spin-down / offline). When the backend is healthy it already
+        //    scrapes the same sources; running local scrapers on top creates
+        //    duplicates because they generate different item IDs for the same articles.
+        if freshItems.isEmpty {
+            let activeTerms = db.terms.filter { $0.is_active }
+            await withTaskGroup(of: [FeedItem].self) { group in
+                for term in activeTerms {
+                    group.addTask { await NetworkManager.shared.scrapeLocalFallbacks(keyword: term.keyword) }
+                }
+                for await items in group where !items.isEmpty {
+                    _ = db.mergeItems(newItems: items)
+                }
             }
         }
 
