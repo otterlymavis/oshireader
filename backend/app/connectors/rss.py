@@ -6,7 +6,7 @@ from email.utils import parsedate_to_datetime
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate
+from app.connectors.base import BaseConnector, SourceItemCreate, parse_feed_date
 
 log = logging.getLogger(__name__)
 
@@ -17,17 +17,6 @@ FEEDS: list[tuple[str, str, str]] = [
     ("news", "sponichi", "https://www.sponichi.co.jp/entertainment/rss/entertainmentAll.rdf"),
     ("news", "hochi", "https://hochi.news/rss/entertainment"),
 ]
-
-
-def _parse_date(entry: feedparser.FeedParserDict) -> datetime:
-    for attr in ("published_parsed", "updated_parsed"):
-        t = getattr(entry, attr, None)
-        if t:
-            try:
-                return datetime(*t[:6], tzinfo=timezone.utc)
-            except Exception:
-                pass
-    return datetime.now(timezone.utc)
 
 
 class RSSConnector(BaseConnector):
@@ -57,7 +46,7 @@ class RSSConnector(BaseConnector):
                         continue
                     if kw not in title.lower() and kw not in summary.lower():
                         continue
-                    published = _parse_date(entry)
+                    published = parse_feed_date(entry)
                     thumb = None
                     for enc in entry.get("enclosures", []):
                         if enc.get("type", "").startswith("image"):

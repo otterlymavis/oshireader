@@ -1,3 +1,4 @@
+import Photos
 import SwiftUI
 import UIKit
 import WebKit
@@ -207,6 +208,14 @@ struct ReaderView: View {
                 guard let image = UIImage(data: data) else {
                     await MainActor.run {
                         saveImageStatus = "Could not read this image."
+                        showingSaveImageStatus = true
+                    }
+                    return
+                }
+                let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+                guard auth == .authorized || auth == .limited else {
+                    await MainActor.run {
+                        saveImageStatus = "Photos access is required to save images."
                         showingSaveImageStatus = true
                     }
                     return

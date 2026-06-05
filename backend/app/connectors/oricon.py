@@ -9,20 +9,9 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate
+from app.connectors.base import BaseConnector, SourceItemCreate, parse_feed_date
 
 log = logging.getLogger(__name__)
-
-
-def _parse_gnews_date(entry: feedparser.FeedParserDict) -> datetime:
-    for attr in ("published_parsed", "updated_parsed"):
-        t = getattr(entry, attr, None)
-        if t:
-            try:
-                return datetime(*t[:6], tzinfo=timezone.utc)
-            except Exception:
-                pass
-    return datetime.now(timezone.utc)
 
 
 def _clean_title(value: str) -> str:
@@ -69,7 +58,7 @@ class OriconConnector(BaseConnector):
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=_parse_gnews_date(entry),
+                    published_at=parse_feed_date(entry),
                     media_type="article",
                     author="ORICON NEWS",
                     title=title,

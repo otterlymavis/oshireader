@@ -9,20 +9,9 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate
+from app.connectors.base import BaseConnector, SourceItemCreate, parse_feed_date
 
 log = logging.getLogger(__name__)
-
-
-def _parse_date(entry: feedparser.FeedParserDict) -> datetime:
-    for attr in ("published_parsed", "updated_parsed"):
-        t = getattr(entry, attr, None)
-        if t:
-            try:
-                return datetime(*t[:6], tzinfo=timezone.utc)
-            except Exception:
-                pass
-    return datetime.now(timezone.utc)
 
 
 class FiveChConnector(BaseConnector):
@@ -65,7 +54,7 @@ class FiveChConnector(BaseConnector):
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=_parse_date(entry),
+                    published_at=parse_feed_date(entry),
                     media_type="text",
                     title=title,
                     content_text=entry.get("summary") or None,
