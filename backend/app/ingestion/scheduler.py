@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import text as sa_text
 
 from app.apns import send_new_match_notifications
 from app.config import settings
@@ -249,11 +250,9 @@ def _prune_old_items(db) -> None:
         if pruned:
             db.commit()
             # Remove source_items no longer referenced by any match
-            db.execute(
-                __import__("sqlalchemy").text(
-                    "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
-                )
-            )
+            db.execute(sa_text(
+                "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
+            ))
             db.commit()
             log.info("Pruned %d old match records", pruned)
     except Exception as exc:

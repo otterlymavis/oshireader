@@ -42,7 +42,7 @@ class LocalDB: ObservableObject {
             "yahoonews", "mdpr", "oricon", "twitter"
         ])
         var didAddMissingPlatforms = false
-        for platform in ["oricon", "twitter", "mdpr", "yahoonews", "togetter"] where !self.subscribedPlatforms.contains(platform) {
+        for platform in ["oricon", "twitter", "mdpr", "yahoonews", "togetter", "niconico", "girlschannel"] where !self.subscribedPlatforms.contains(platform) {
             self.subscribedPlatforms.append(platform)
             didAddMissingPlatforms = true
         }
