@@ -179,40 +179,20 @@ struct AvatarEditorView: View {
                         .accessibilityIdentifier("avatar.cropButton")
                         
                         if cropMode {
-                            Button(action: { cropZoom(0.15) }) { Text("Zoom +").font(.system(size: 11)).padding(.horizontal, 10).padding(.vertical, 6).background(theme.colors.divider).cornerRadius(99) }
-                            Button(action: { cropZoom(-0.15) }) { Text("Zoom -").font(.system(size: 11)).padding(.horizontal, 10).padding(.vertical, 6).background(theme.colors.divider).cornerRadius(99) }
-                            Button(action: { resetCrop() }) { Text("Fit").font(.system(size: 11)).padding(.horizontal, 10).padding(.vertical, 6).background(theme.colors.divider).cornerRadius(99) }
+                            toolbarBtn("Zoom +", needsSelection: false) { cropZoom(0.15) }
+                            toolbarBtn("Zoom -", needsSelection: false) { cropZoom(-0.15) }
+                            toolbarBtn("Fit",    needsSelection: false) { resetCrop() }
                         }
-                        
+
                         Divider().frame(height: 16)
-                        
-                        // Scale controls
-                        Button(action: { scaleLayer(0.15) }) { Text("＋").font(.system(size: 12, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
-                            .accessibilityIdentifier("avatar.scaleUpButton")
-                        Button(action: { scaleLayer(-0.15) }) { Text("－").font(.system(size: 12, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
-                            .accessibilityIdentifier("avatar.scaleDownButton")
-                        
-                        // Rotation controls
-                        Button(action: { rotateLayer(-15) }) { Text("⟲").font(.system(size: 12, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
-                        Button(action: { rotateLayer(15) }) { Text("⟳").font(.system(size: 12, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
-                        
-                        // Z-Index ordering
-                        Button(action: { bringForward() }) { Text("↑前").font(.system(size: 11, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
-                        Button(action: { sendBack() }) { Text("↓後").font(.system(size: 11, weight: .bold)).padding(.horizontal, 12).padding(.vertical, 6).background(theme.colors.divider).foregroundColor(theme.colors.text).cornerRadius(99) }.disabled(activeLayer == nil).opacity(activeLayer == nil ? 0.4 : 1.0)
-                        
-                        // Delete layer
-                        Button(action: { deleteSelected() }) {
-                            Text("削除")
-                                .font(.system(size: 11, weight: .bold))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color(red: 1.0, green: 0.9, blue: 0.9))
-                                .foregroundColor(.red)
-                                .cornerRadius(99)
-                        }
-                        .disabled(activeLayer == nil)
-                        .opacity(activeLayer == nil ? 0.4 : 1.0)
-                        .accessibilityIdentifier("avatar.deleteLayerButton")
+
+                        toolbarBtn("＋", a11y: "avatar.scaleUpButton",   size: 12) { scaleLayer(0.15) }
+                        toolbarBtn("－", a11y: "avatar.scaleDownButton",  size: 12) { scaleLayer(-0.15) }
+                        toolbarBtn("⟲", size: 12) { rotateLayer(-15) }
+                        toolbarBtn("⟳", size: 12) { rotateLayer(15) }
+                        toolbarBtn("↑前") { bringForward() }
+                        toolbarBtn("↓後") { sendBack() }
+                        toolbarBtn("削除", a11y: "avatar.deleteLayerButton", destructive: true) { deleteSelected() }
                     }
                     .padding(.horizontal, 12)
                 }
@@ -492,7 +472,6 @@ struct AvatarEditorView: View {
             db.setOshiAvatar(keyword: keyword, imageUrl: topLayer.imageUrl)
         }
         
-        try? await Task.sleep(nanoseconds: 500_000_000)
         saving = false
         dismiss()
     }
@@ -528,14 +507,39 @@ struct AvatarEditorView: View {
         guard !searchQuery.isEmpty else { return }
         activeCategory = "__search__"
         searchingStickers = true
-        
+
         do {
             stickers = try await NetworkManager.shared.searchIrasutoya(query: searchQuery)
         } catch {
             print("Stickers search error: \(error)")
             stickers = []
         }
-        
+
         searchingStickers = false
+    }
+
+    // MARK: - Toolbar Button Helper
+
+    @ViewBuilder
+    private func toolbarBtn(
+        _ label: String,
+        a11y: String? = nil,
+        size: CGFloat = 11,
+        destructive: Bool = false,
+        needsSelection: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: size, weight: .bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(destructive ? Color(red: 1.0, green: 0.9, blue: 0.9) : theme.colors.divider)
+                .foregroundColor(destructive ? .red : theme.colors.text)
+                .cornerRadius(99)
+        }
+        .disabled(needsSelection && activeLayer == nil)
+        .opacity(needsSelection && activeLayer == nil ? 0.4 : 1.0)
+        .accessibilityIdentifier(a11y ?? "")
     }
 }

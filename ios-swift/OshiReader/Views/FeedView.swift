@@ -186,7 +186,7 @@ struct FeedView: View {
                                     let meta = theme.metadata(for: platformId)
                                     let isSelected = selectedPlatform == platformId
                                     let bg = theme.style == .standard
-                                        ? (isSelected ? theme.standardAccent : theme.standardBadgeBg)
+                                        ? (isSelected ? theme.colors.primary : theme.standardBadgeBg)
                                         : (isSelected ? meta.accent : meta.bg)
                                     let fg = theme.style == .standard
                                         ? (isSelected ? Color.white : theme.standardBadgeFg)

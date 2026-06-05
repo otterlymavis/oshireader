@@ -177,14 +177,6 @@ class ThemeManager: ObservableObject {
         return AppColors(mode: mode)
     }
 
-    var standardAccent: Color {
-        switch mode {
-        case .light: return Color(red: 0.72, green: 0.52, blue: 0.65)
-        case .dark: return Color(red: 0.82, green: 0.64, blue: 0.76)
-        case .sepia: return Color(red: 0.58, green: 0.35, blue: 0.0)
-        }
-    }
-
     var standardBadgeBg: Color {
         switch mode {
         case .light: return Color(red: 0.95, green: 0.94, blue: 0.98)
