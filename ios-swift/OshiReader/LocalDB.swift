@@ -284,6 +284,13 @@ class LocalDB: ObservableObject {
             return true
         }
         .sorted(by: { $0.published_at > $1.published_at })
+        .reduce(into: ([FeedItem](), Set<String>())) { acc, item in
+            // When no keyword filter, deduplicate by URL — the same article can be
+            // stored once per matching watch term; only the first (most recent) copy
+            // is shown. When filtering by a specific keyword, all matches are shown.
+            guard keyword == nil else { acc.0.append(item); return }
+            if acc.1.insert(item.url).inserted { acc.0.append(item) }
+        }.0
     }
     
     private func matchesKeyword(item: FeedItem, kw: String) -> Bool {
