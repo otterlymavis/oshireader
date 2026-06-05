@@ -114,6 +114,13 @@ class LocalDB: ObservableObject {
         }
     }
 
+    func addTermFromBackend(_ term: WatchTerm) {
+        runOnMain {
+            self.terms.insert(term, at: 0)
+            self.saveToFile(name: "terms", value: self.terms)
+        }
+    }
+
     func replaceTerm(localId: String, with serverTerm: WatchTerm) {
         runOnMain {
             if let idx = self.terms.firstIndex(where: { $0.id == localId }) {

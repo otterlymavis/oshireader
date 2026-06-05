@@ -96,7 +96,7 @@ class NetworkManager {
         let localKeywords = Set(LocalDB.shared.terms.map { $0.keyword })
         var added = false
         for term in backendTerms where !localKeywords.contains(term.keyword) {
-            LocalDB.shared.saveTerm(keyword: term.keyword, collectionMode: term.collection_mode)
+            LocalDB.shared.addTermFromBackend(term)
             added = true
         }
         return added

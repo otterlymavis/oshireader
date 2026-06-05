@@ -395,7 +395,7 @@ struct FeedView: View {
                 let pulledNew = await NetworkManager.shared.syncTermsFromBackend()
                 // Refresh feed when: no cached items and we have terms (either pre-existing
                 // or just pulled from the backend)
-                if db.feedItems.isEmpty, !db.terms.isEmpty || pulledNew {
+                if db.feedItems.isEmpty, (!db.terms.isEmpty || pulledNew) {
                     await refreshFeed()
                 }
             }
@@ -412,8 +412,9 @@ struct FeedView: View {
     
     private func refreshFeed() async {
         isRefreshing = true
-        // 0. Sync local watch terms to backend (handles database resets)
+        // 0. Bidirectional term sync: push local→backend and pull backend→local
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+        await NetworkManager.shared.syncTermsFromBackend()
         // 1. Trigger backend poll
         _ = try? await NetworkManager.shared.triggerPoll()
         
@@ -850,20 +851,25 @@ struct ReorderSourcesSheet: View {
                 List {
                     ForEach(platforms, id: \.self) { pId in
                         let meta = theme.metadata(for: pId)
-                        HStack {
+                        HStack(spacing: 8) {
                             Text(meta.icon)
+                                .font(.system(size: 16))
                             Text(meta.name)
+                                .font(.subheadline)
                                 .foregroundColor(theme.colors.text)
                             Spacer()
                             Image(systemName: "line.3.horizontal")
+                                .font(.subheadline)
                                 .foregroundColor(theme.colors.textMuted)
                         }
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     }
                     .onMove { indices, newOffset in
                         platforms.move(fromOffsets: indices, toOffset: newOffset)
                     }
                 }
                 .listStyle(.plain)
+                .environment(\.defaultMinListRowHeight, 36)
                 
                 Button(action: {
                     db.setSourcesOrder(order: platforms)
@@ -873,11 +879,12 @@ struct ReorderSourcesSheet: View {
                         .bold()
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .padding()
+                        .padding(.vertical, 12)
                         .background(theme.colors.primary)
                         .cornerRadius(10)
-                        .padding()
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             }
             .navigationTitle("Reorder Sources")
             .navigationBarTitleDisplayMode(.inline)
