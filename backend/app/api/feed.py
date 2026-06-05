@@ -37,8 +37,11 @@ def get_feed(
     )
     if since is not None:
         aware_since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since
+        # Filter by when the item was *stored* (matched_at), not published_at.
+        # Items with broadcast dates earlier in the day but fetched after last sync
+        # must still appear (e.g. TVer episodes with midnight broadcast dates).
         q = q.filter(
-            or_(SourceItem.published_at > aware_since,
+            or_(Match.created_at > aware_since,
                 SourceItem.platform.in_(_TIMELESS_PLATFORMS))
         )
     elif days > 0:
