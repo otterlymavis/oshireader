@@ -193,17 +193,23 @@ class LocalDB: ObservableObject {
         
         let sorted = currentMap.values.sorted(by: { $0.published_at > $1.published_at })
         let finalItems = Array(sorted.prefix(600)) // Replicate MAX_ITEMS = 600
-        
+
+        // Only notify for items that survived the cap — avoids pinging for articles
+        // that were immediately evicted as too old.
+        if !addedItems.isEmpty {
+            let survivedKeys = Set(finalItems.map { itemKey($0) })
+            let notifyItems = addedItems.filter { survivedKeys.contains(itemKey($0)) }
+            if !notifyItems.isEmpty {
+                let terms = self.terms
+                Task {
+                    await NotificationManager.shared.notifyForNewItems(notifyItems, terms: terms)
+                }
+            }
+        }
+
         runOnMain {
             self.feedItems = finalItems
             self.saveToFile(name: "feed_items", value: self.feedItems)
-        }
-
-        if !addedItems.isEmpty {
-            let terms = self.terms
-            Task {
-                await NotificationManager.shared.notifyForNewItems(addedItems, terms: terms)
-            }
         }
         
         return addedCount

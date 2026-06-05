@@ -48,9 +48,10 @@ class TogetterConnector(BaseConnector):
             if not title:
                 continue
 
-            # Try to find an image inside the same container
             parent = a.find_parent(["li", "div", "article"])
             thumb = None
+            published = datetime.now(timezone.utc)
+
             if parent:
                 img = parent.select_one("img[src]")
                 if img:
@@ -58,12 +59,21 @@ class TogetterConnector(BaseConnector):
                     if src.startswith("http"):
                         thumb = src
 
+                time_el = parent.select_one("time[datetime]")
+                if time_el:
+                    dt_str = (time_el.get("datetime") or "").strip()
+                    try:
+                        parsed = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                        published = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+                    except (ValueError, AttributeError):
+                        pass
+
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=togetter_id,
                     url=url,
-                    published_at=datetime.now(timezone.utc),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     thumbnail_url=thumb,
