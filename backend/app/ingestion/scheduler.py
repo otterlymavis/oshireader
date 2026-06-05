@@ -161,7 +161,16 @@ async def _poll_once_unlocked() -> None:
                                     if new_age > 300 and diff > 300:
                                         db.query(SourceItem).filter(
                                             SourceItem.id == raw.composite_id
-                                        ).update({"published_at": new_aware})
+                                        ).update(
+                                            {"published_at": new_aware},
+                                            synchronize_session=False,
+                                        )
+                                        log.info(
+                                            "healed published_at for %s: %s → %s",
+                                            raw.composite_id,
+                                            stored_aware.isoformat(),
+                                            new_aware.isoformat(),
+                                        )
                             if raw.composite_id not in existing_match_ids:
                                 db.add(Match(watch_term_id=term.id, source_item_id=raw.composite_id))
                                 existing_match_ids.add(raw.composite_id)
