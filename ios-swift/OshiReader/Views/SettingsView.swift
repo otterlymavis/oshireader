@@ -28,7 +28,8 @@ struct SettingsView: View {
         ("yahoonews", "🇯🇵 YahooNews"),
         ("mdpr", "💅 ModelPress"),
         ("oricon", "🎤 Oricon"),
-        ("twitter", "𝕏 X")
+        ("twitter", "𝕏 X"),
+        ("custom", "🌐 Custom Feeds")
     ]
     
     var body: some View {

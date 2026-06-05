@@ -9,7 +9,13 @@ struct OshiView: View {
     @State private var showEditorKeyword: String? = nil
     
     var sortedTerms: [WatchTerm] {
-        return db.terms.sorted(by: { $0.created_at < $1.created_at })
+        db.terms.sorted(by: { $0.created_at < $1.created_at })
+    }
+
+    var feedCountsByKeyword: [String: Int] {
+        db.feedItems.reduce(into: [:]) { counts, item in
+            counts[item.watch_term_keyword, default: 0] += 1
+        }
     }
     
     var body: some View {
@@ -58,7 +64,7 @@ struct OshiView: View {
                         TabView(selection: $activePage) {
                             ForEach(0..<sortedTerms.count, id: \.self) { idx in
                                 let term = sortedTerms[idx]
-                                let count = db.feedItems.filter({ $0.watch_term_keyword == term.keyword }).count
+                                let count = feedCountsByKeyword[term.keyword, default: 0]
                                 let layers = db.compositions[term.keyword] ?? []
                                 
                                 OshiPage(term: term, count: count, layers: layers, theme: theme, i18n: i18n) {

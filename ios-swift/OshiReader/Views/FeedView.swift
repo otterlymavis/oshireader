@@ -423,23 +423,26 @@ struct FeedView: View {
             _ = db.mergeItems(newItems: freshItems)
         }
 
-        // 2b. Fetch each subscribed source explicitly so a noisy source cannot crowd out others.
-        var fetchedPlatforms = Set<String>()
-        for platform in db.subscribedPlatforms where platform != "custom" {
-            guard fetchedPlatforms.insert(platform).inserted else { continue }
-            await fetchBackendPlatform(platform)
-        }
-        
-        // 3. Trigger local fallback scrapers for active keywords (news, NicoNico, YahooNews, MDPR, Oricon)
-        let activeTerms = db.terms.filter { $0.is_active }
-        for term in activeTerms {
-            let localItems = await NetworkManager.shared.scrapeLocalFallbacks(keyword: term.keyword)
-            if !localItems.isEmpty {
-                _ = db.mergeItems(newItems: localItems)
+        // 2b. Fetch each subscribed source in parallel so a noisy source cannot crowd out others.
+        let platformsToFetch = Array(Set(db.subscribedPlatforms.filter { $0 != "custom" }))
+        await withTaskGroup(of: Void.self) { group in
+            for platform in platformsToFetch {
+                group.addTask { await self.fetchBackendPlatform(platform) }
             }
         }
 
-        // 4. Refresh custom URL cards just like the Android/master app.
+        // 3. Local fallback scrapers run in parallel per active keyword.
+        let activeTerms = db.terms.filter { $0.is_active }
+        await withTaskGroup(of: [FeedItem].self) { group in
+            for term in activeTerms {
+                group.addTask { await NetworkManager.shared.scrapeLocalFallbacks(keyword: term.keyword) }
+            }
+            for await items in group where !items.isEmpty {
+                _ = db.mergeItems(newItems: items)
+            }
+        }
+
+        // 4. Refresh custom URL cards.
         let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
         if !customItems.isEmpty {
             _ = db.mergeItems(newItems: customItems)
