@@ -1,13 +1,33 @@
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
 
 from app.connectors.base import BaseConnector, SourceItemCreate
 
 log = logging.getLogger(__name__)
+
+
+def _parse_youtube_relative(text: str) -> Optional[datetime]:
+    """Convert YouTube relative timestamps ('2 days ago', '3ヶ月前') to UTC datetimes."""
+    if not text:
+        return None
+    now = datetime.now(timezone.utc)
+    m = re.search(r'(\d+)\s*(second|minute|hour|day|week|month|year|秒|分|時間|日|週間?|ヶ月|か月|年)', text.lower())
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    if unit in ('second', '秒'):      return now - timedelta(seconds=n)
+    if unit in ('minute', '分'):      return now - timedelta(minutes=n)
+    if unit in ('hour', '時間'):      return now - timedelta(hours=n)
+    if unit in ('day', '日'):         return now - timedelta(days=n)
+    if unit in ('week', '週', '週間'): return now - timedelta(weeks=n)
+    if unit in ('month', 'ヶ月', 'か月'): return now - timedelta(days=n * 30)
+    if unit in ('year', '年'):        return now - timedelta(days=n * 365)
+    return None
 
 
 class YouTubeConnector(BaseConnector):
@@ -114,12 +134,15 @@ class YouTubeConnector(BaseConnector):
                     if thumbnails:
                         thumb = thumbnails[0].get("url")
 
+                    rel_text = vr.get("publishedTimeText", {}).get("simpleText", "")
+                    published_at = _parse_youtube_relative(rel_text) or datetime.now(timezone.utc)
+
                     items.append(
                         SourceItemCreate(
                             platform=self.PLATFORM,
                             item_id=str(vid_id),
                             url=f"https://www.youtube.com/watch?v={vid_id}",
-                            published_at=datetime.now(timezone.utc),  # Scrape date fallback
+                            published_at=published_at,
                             media_type="video",
                             author=str(channel) if channel else None,
                             title=str(title) if title else None,

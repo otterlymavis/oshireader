@@ -170,7 +170,7 @@ class NetworkManager {
     }
     
     // MARK: - Fetch Feed
-    func fetchFeed(termId: Int? = nil, platform: String? = nil, limit: Int = 50, days: Int = 30) async throws -> [FeedItem] {
+    func fetchFeed(termId: Int? = nil, platform: String? = nil, limit: Int = 50, days: Int = 30, since: String? = nil) async throws -> [FeedItem] {
         if isUITesting {
             return []
         }
@@ -178,8 +178,12 @@ class NetworkManager {
         var components = URLComponents(string: "\(apiBase)/api/feed/")!
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "limit", value: String(limit)),
-            URLQueryItem(name: "days", value: String(days)),
         ]
+        if let since = since {
+            queryItems.append(URLQueryItem(name: "since", value: since))
+        } else {
+            queryItems.append(URLQueryItem(name: "days", value: String(days)))
+        }
         if let termId = termId {
             queryItems.append(URLQueryItem(name: "term_id", value: String(termId)))
         }

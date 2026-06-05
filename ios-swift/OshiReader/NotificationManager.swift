@@ -132,7 +132,7 @@ final class NotificationManager: ObservableObject {
             content.sound = .default
 
             let request = UNNotificationRequest(
-                identifier: "oshireader-new-\(keyword)-\(UUID().uuidString)",
+                identifier: "oshireader-new-\(keyword)",
                 content: content,
                 trigger: nil
             )

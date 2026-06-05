@@ -23,6 +23,7 @@ struct SearchView: View {
     @State private var selectedGroup = "News"
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedItem: FeedItem? = nil
+    @FocusState private var fieldFocused: Bool
 
     private var activeTerms: [WatchTerm] {
         db.terms.filter(\.is_active)
@@ -113,6 +114,7 @@ struct SearchView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
         }
+        .scrollDismissesKeyboard(.interactively)
         .accessibilityIdentifier("search.screen")
         .background(theme.colors.bg)
         .navigationTitle(i18n.t("tabSearch"))
@@ -131,6 +133,8 @@ struct SearchView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
+                    .focused($fieldFocused)
+                    .onSubmit { fieldFocused = false }
                     .accessibilityIdentifier("search.keywordField")
 
                 if !keyword.isEmpty {
@@ -163,6 +167,7 @@ struct SearchView: View {
                             theme: theme
                         ) {
                             keyword = term.keyword
+                            fieldFocused = false
                         }
                     }
                 }

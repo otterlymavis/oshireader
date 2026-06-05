@@ -12,6 +12,7 @@ struct FeedView: View {
     
     @State private var isRefreshing = false
     @State private var hasLoadedOnce = false
+    @State private var displayedCount: Int = 20
     @State private var showFilterSheet = false
     @State private var showAddUrlSheet = false
     @State private var showReorderSheet = false
@@ -30,22 +31,30 @@ struct FeedView: View {
         (label: "months6", days: 180)
     ]
     
-    // Derived filtered list of items
+    private var savedItemIds: Set<String> {
+        Set(db.savedPages.map(\.id))
+    }
+
+    // Full filtered list (all matching items)
     var filteredItems: [FeedItem] {
         var result = db.queryFeed(keyword: selectedKeyword, days: daysFilter)
-        
         if let platform = selectedPlatform {
-            result = result.filter { item in
-                matchesPlatform(item, platformId: platform)
-            }
+            result = result.filter { matchesPlatform($0, platformId: platform) }
         }
-        
         if mediaFilter == "media_only" {
             let mediaPlatforms: Set<String> = ["youtube", "niconico", "tver"]
             result = result.filter { $0.media_type == "video" || mediaPlatforms.contains($0.platform) }
         }
-        
         return result
+    }
+
+    // Page-limited slice shown in the list
+    var visibleItems: [FeedItem] {
+        Array(filteredItems.prefix(displayedCount))
+    }
+
+    private var canLoadMore: Bool {
+        displayedCount < min(filteredItems.count, 100)
     }
     
     var orderedPlatforms: [String] {
@@ -261,64 +270,79 @@ struct FeedView: View {
                     }
                     Spacer()
                 } else {
-                    List(filteredItems) { item in
-                        if horizontalSizeClass == .regular {
-                            Button(action: {
-                                selectedItem = item
-                            }) {
-                                FeedCard(item: item, isSaved: db.savedPages.contains(where: { $0.id == item.id }), theme: theme)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(theme.colors.primary, lineWidth: selectedItem?.id == item.id ? 2 : 0)
-                                    )
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
-                                    if selectedItem?.id == item.id {
-                                        selectedItem = nil
+                    List {
+                        ForEach(visibleItems) { item in
+                            if horizontalSizeClass == .regular {
+                                Button(action: { selectedItem = item }) {
+                                    FeedCard(item: item, isSaved: savedItemIds.contains(item.id), theme: theme)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(theme.colors.primary, lineWidth: selectedItem?.id == item.id ? 2 : 0)
+                                        )
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
+                                        if selectedItem?.id == item.id { selectedItem = nil }
+                                    } label: {
+                                        Label(i18n.t("delete"), systemImage: "trash")
                                     }
-                                } label: {
-                                    Label(i18n.t("delete"), systemImage: "trash")
+                                }
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    Button {
+                                        _ = db.toggleSaved(item: item)
+                                    } label: {
+                                        Label(savedItemIds.contains(item.id) ? "Unsave" : "Save",
+                                              systemImage: savedItemIds.contains(item.id) ? "bookmark.slash" : "bookmark")
+                                    }
+                                    .tint(theme.colors.primary)
+                                }
+                            } else {
+                                NavigationLink(destination: ReaderView(feedItem: item)) {
+                                    FeedCard(item: item, isSaved: savedItemIds.contains(item.id), theme: theme)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
+                                    } label: {
+                                        Label(i18n.t("delete"), systemImage: "trash")
+                                    }
+                                }
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    Button {
+                                        _ = db.toggleSaved(item: item)
+                                    } label: {
+                                        Label(savedItemIds.contains(item.id) ? "Unsave" : "Save",
+                                              systemImage: savedItemIds.contains(item.id) ? "bookmark.slash" : "bookmark")
+                                    }
+                                    .tint(theme.colors.primary)
                                 }
                             }
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                Button {
-                                    _ = db.toggleSaved(item: item)
-                                } label: {
-                                    Label(db.savedPages.contains(where: { $0.id == item.id }) ? "Unsave" : "Save",
-                                          systemImage: db.savedPages.contains(where: { $0.id == item.id }) ? "bookmark.slash" : "bookmark")
+                        }
+
+                        if canLoadMore {
+                            Button {
+                                displayedCount = min(displayedCount + 20, 100)
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Text("Load more (\(min(filteredItems.count, 100) - displayedCount) remaining)")
+                                        .font(.subheadline)
+                                        .foregroundColor(theme.colors.primary)
+                                    Spacer()
                                 }
-                                .tint(theme.colors.primary)
+                                .padding(.vertical, 12)
                             }
-                        } else {
-                            NavigationLink(destination: ReaderView(feedItem: item)) {
-                                FeedCard(item: item, isSaved: db.savedPages.contains(where: { $0.id == item.id }), theme: theme)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
-                                } label: {
-                                    Label(i18n.t("delete"), systemImage: "trash")
-                                }
-                            }
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                Button {
-                                    _ = db.toggleSaved(item: item)
-                                } label: {
-                                    Label(db.savedPages.contains(where: { $0.id == item.id }) ? "Unsave" : "Save",
-                                          systemImage: db.savedPages.contains(where: { $0.id == item.id }) ? "bookmark.slash" : "bookmark")
-                                }
-                                .tint(theme.colors.primary)
-                            }
                         }
                     }
                     .listStyle(.plain)
@@ -372,7 +396,7 @@ struct FeedView: View {
                 Task {
                     let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
                     if !customItems.isEmpty {
-                        _ = db.mergeItems(newItems: customItems)
+                        _ = await db.mergeItems(newItems: customItems)
                     }
                 }
                 customUrlString = ""
@@ -385,6 +409,10 @@ struct FeedView: View {
             ReorderSourcesSheet(theme: theme, i18n: i18n)
         }
         .accessibilityIdentifier("feed.screen")
+        .onChange(of: selectedKeyword) { _ in displayedCount = 20 }
+        .onChange(of: selectedPlatform) { _ in displayedCount = 20 }
+        .onChange(of: daysFilter) { _ in displayedCount = 20 }
+        .onChange(of: mediaFilter) { _ in displayedCount = 20 }
         .onAppear {
             guard !hasLoadedOnce else { return }
             hasLoadedOnce = true
@@ -412,32 +440,42 @@ struct FeedView: View {
     
     private func refreshFeed() async {
         isRefreshing = true
-        // 0. Bidirectional term sync: push local→backend and pull backend→local
+        // 0. Bidirectional term sync
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
         await NetworkManager.shared.syncTermsFromBackend()
-        // 1. Trigger backend poll
-        _ = try? await NetworkManager.shared.triggerPoll()
-        
-        // 2. Fetch fresh feed items — use 90 days on first load (empty cache) for richer history,
-        //    30 days on subsequent refreshes to stay fast.
+
+        // 1. Determine what to fetch.
+        //    First load (empty cache): fetch 90 days of history.
+        //    Subsequent refreshes: ask only for items newer than the latest we have,
+        //    so the backend never re-sends articles we already cached.
+        let latestSince: String? = {
+            guard !db.feedItems.isEmpty else { return nil }
+            guard let maxDate = db.feedItems.compactMap({ parseISO8601Date($0.published_at) }).max() else { return nil }
+            let fmt = ISO8601DateFormatter()
+            fmt.formatOptions = [.withInternetDateTime]
+            return fmt.string(from: maxDate)
+        }()
         let fetchDays = db.feedItems.isEmpty ? 90 : 30
-        let freshItems = (try? await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays)) ?? []
+
+        let freshItems: [FeedItem]
+        if let since = latestSince {
+            freshItems = (try? await NetworkManager.shared.fetchFeed(limit: 200, since: since)) ?? []
+        } else {
+            freshItems = (try? await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays)) ?? []
+        }
         if !freshItems.isEmpty {
-            _ = db.mergeItems(newItems: freshItems)
+            _ = await db.mergeItems(newItems: freshItems)
         }
 
-        // 2b. Fetch each subscribed source in parallel so a noisy source cannot crowd out others.
+        // 2. Fetch each subscribed platform in parallel (also uses since when available)
         let platformsToFetch = Array(Set(db.subscribedPlatforms.filter { $0 != "custom" }))
         await withTaskGroup(of: Void.self) { group in
             for platform in platformsToFetch {
-                group.addTask { await self.fetchBackendPlatform(platform) }
+                group.addTask { await self.fetchBackendPlatform(platform, since: latestSince) }
             }
         }
 
-        // 3. Local fallback scrapers — only run when the backend returned nothing
-        //    (Render spin-down / offline). When the backend is healthy it already
-        //    scrapes the same sources; running local scrapers on top creates
-        //    duplicates because they generate different item IDs for the same articles.
+        // 3. Local fallback scrapers — only when backend returned nothing (offline/spin-down)
         if freshItems.isEmpty {
             let activeTerms = db.terms.filter { $0.is_active }
             await withTaskGroup(of: [FeedItem].self) { group in
@@ -445,26 +483,26 @@ struct FeedView: View {
                     group.addTask { await NetworkManager.shared.scrapeLocalFallbacks(keyword: term.keyword) }
                 }
                 for await items in group where !items.isEmpty {
-                    _ = db.mergeItems(newItems: items)
+                    _ = await db.mergeItems(newItems: items)
                 }
             }
         }
 
-        // 4. Refresh custom URL cards.
+        // 4. Refresh custom URL cards
         let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
         if !customItems.isEmpty {
-            _ = db.mergeItems(newItems: customItems)
+            _ = await db.mergeItems(newItems: customItems)
         }
-        
+
         isRefreshing = false
     }
 
-    private func fetchBackendPlatform(_ platformId: String) async {
+    private func fetchBackendPlatform(_ platformId: String, since: String? = nil) async {
         let backendPlatforms = backendPlatformKeys(for: platformId)
         for backendPlatform in backendPlatforms {
-            if let items = try? await NetworkManager.shared.fetchFeed(platform: backendPlatform, limit: 60),
+            if let items = try? await NetworkManager.shared.fetchFeed(platform: backendPlatform, limit: 60, since: since),
                !items.isEmpty {
-                _ = db.mergeItems(newItems: items)
+                _ = await db.mergeItems(newItems: items)
             }
         }
     }

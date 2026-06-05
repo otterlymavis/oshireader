@@ -53,7 +53,8 @@ class NicoNicoConnector(BaseConnector):
             start_time = raw.get("startTime")
             if start_time:
                 try:
-                    published = datetime.fromisoformat(str(start_time))
+                    dt = datetime.fromisoformat(str(start_time).replace("Z", "+00:00"))
+                    published = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
                 except ValueError:
                     pass
             items.append(

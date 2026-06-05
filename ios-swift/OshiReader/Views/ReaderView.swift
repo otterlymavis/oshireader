@@ -24,6 +24,8 @@ struct ReaderView: View {
     @State private var imageAction: ReaderImageAction?
     @State private var saveImageStatus = ""
     @State private var showingSaveImageStatus = false
+    @State private var saveAllImagesCounter = 0
+    @State private var isSavingAllImages = false
 
     var targetUrl: URL? {
         guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform),
@@ -58,7 +60,9 @@ struct ReaderView: View {
                     themeMode: readerTheme,
                     fontSize: fontSize,
                     readerMode: readerMode,
-                    onImageAction: { imageAction = $0 }
+                    saveAllImagesCounter: saveAllImagesCounter,
+                    onImageAction: { imageAction = $0 },
+                    onSaveAllImages: { urls in saveAllImages(urls) }
                 )
                 .background(bgColor)
             } else {
@@ -90,6 +94,21 @@ struct ReaderView: View {
                         .foregroundColor(theme.colors.primary)
                 }
                 .accessibilityIdentifier("reader.bookmarkButton")
+            }
+
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if isSavingAllImages {
+                    ProgressView().tint(theme.colors.primary)
+                } else {
+                    Button {
+                        isSavingAllImages = true
+                        saveAllImagesCounter += 1
+                    } label: {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .foregroundColor(theme.colors.primary)
+                    }
+                    .accessibilityIdentifier("reader.saveAllImagesButton")
+                }
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -220,7 +239,9 @@ struct ReaderView: View {
                     }
                     return
                 }
-                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                }
                 await MainActor.run {
                     saveImageStatus = "Saved to Photos."
                     showingSaveImageStatus = true
@@ -233,6 +254,51 @@ struct ReaderView: View {
             }
         }
     }
+
+    private func saveAllImages(_ urls: [URL]) {
+        guard !urls.isEmpty else {
+            isSavingAllImages = false
+            saveImageStatus = "No large images found on this page."
+            showingSaveImageStatus = true
+            return
+        }
+        Task {
+            let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard auth == .authorized || auth == .limited else {
+                await MainActor.run {
+                    isSavingAllImages = false
+                    saveImageStatus = "Photos access is required to save images."
+                    showingSaveImageStatus = true
+                }
+                return
+            }
+            var saved = 0
+            await withTaskGroup(of: Bool.self) { group in
+                for url in urls {
+                    group.addTask {
+                        guard let (data, _) = try? await URLSession.shared.data(from: url),
+                              let image = UIImage(data: data) else { return false }
+                        do {
+                            try await PHPhotoLibrary.shared().performChanges {
+                                PHAssetChangeRequest.creationRequestForAsset(from: image)
+                            }
+                            return true
+                        } catch {
+                            return false
+                        }
+                    }
+                }
+                for await ok in group where ok { saved += 1 }
+            }
+            await MainActor.run {
+                isSavingAllImages = false
+                saveImageStatus = saved > 0
+                    ? "Saved \(saved) image\(saved == 1 ? "" : "s") to Photos."
+                    : "No images could be saved."
+                showingSaveImageStatus = true
+            }
+        }
+    }
 }
 
 struct WebViewHelper: UIViewRepresentable {
@@ -241,7 +307,9 @@ struct WebViewHelper: UIViewRepresentable {
     let themeMode: AppThemeMode
     let fontSize: CGFloat
     let readerMode: Bool
+    let saveAllImagesCounter: Int
     let onImageAction: (ReaderImageAction) -> Void
+    let onSaveAllImages: (([URL]) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -267,6 +335,16 @@ struct WebViewHelper: UIViewRepresentable {
             uiView.load(URLRequest(url: url))
         } else {
             uiView.evaluateJavaScript(styleInjectionJS(), completionHandler: nil)
+        }
+        if saveAllImagesCounter != context.coordinator.lastSaveAllCounter {
+            context.coordinator.lastSaveAllCounter = saveAllImagesCounter
+            let callback = onSaveAllImages
+            uiView.evaluateJavaScript("(function(){ if(!window.__oshiCollectImages) return false; window.__oshiCollectImages(); return true; })()") { result, _ in
+                // If the function wasn't injected yet (page still loading), reset the spinner
+                if let ran = result as? Bool, !ran {
+                    DispatchQueue.main.async { callback?([]) }
+                }
+            }
         }
     }
 
@@ -342,6 +420,7 @@ struct WebViewHelper: UIViewRepresentable {
 
     class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: WebViewHelper
+        var lastSaveAllCounter = 0
 
         init(_ parent: WebViewHelper) {
             self.parent = parent
@@ -383,10 +462,16 @@ struct WebViewHelper: UIViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "oshireader",
                   let body = message.body as? [String: Any],
-                  body["type"] as? String == "image-action",
-                  let rawUrl = body["url"] as? String,
-                  let url = URL(string: rawUrl) else { return }
-            parent.onImageAction(ReaderImageAction(url: url, alt: body["alt"] as? String))
+                  let type = body["type"] as? String else { return }
+            if type == "image-action",
+               let rawUrl = body["url"] as? String,
+               let url = URL(string: rawUrl) {
+                parent.onImageAction(ReaderImageAction(url: url, alt: body["alt"] as? String))
+            } else if type == "all-images",
+                      let rawUrls = body["urls"] as? [String] {
+                let urls = rawUrls.compactMap { URL(string: $0) }
+                DispatchQueue.main.async { self.parent.onSaveAllImages?(urls) }
+            }
         }
     }
 }
@@ -489,6 +574,33 @@ private let readerInjectedJS = """
     window.webkit.messageHandlers.oshireader.postMessage({ type: 'image-action', url: imageUrl, alt: found.alt || '' });
     return true;
   }
+
+  window.__oshiCollectImages = function() {
+    var seen = new Set();
+    var urls = [];
+    var imgs = document.querySelectorAll('img');
+    imgs.forEach(function(img) {
+      var url = img.currentSrc || img.src || img.getAttribute('data-src') ||
+                img.getAttribute('data-original') || img.getAttribute('data-lazy-src') ||
+                srcFromSrcset(img.getAttribute('srcset') || img.getAttribute('data-srcset') || '');
+      url = absoluteUrl(url);
+      if (!url || !/^https?:\\/\\//i.test(url)) return;
+      if (seen.has(url)) return;
+
+      // Exclude images that are too small to be article photos
+      var w = img.naturalWidth || img.width || 0;
+      var h = img.naturalHeight || img.height || 0;
+      if (w > 0 && h > 0 && (w < 300 || h < 200)) return;
+
+      // Exclude by URL pattern: thumbnails, icons, avatars, logos, tracking pixels
+      var lower = url.toLowerCase().replace(/\\?.*$/, '');
+      if (/\\/(thumb(nail)?s?|icon|avatar|profile|logo|favicon|placeholder|sprite|emoji|badge|sticker|banner|ad)[_\\-./#]|[_\\-](thumb|icon|avatar|logo|small|xs|sm|tiny|mini)[._]|\\b1x1\\b|\\/1\\/1\\.|pixel|beacon/.test(lower)) return;
+
+      seen.add(url);
+      urls.push(url);
+    });
+    window.webkit.messageHandlers.oshireader.postMessage({ type: 'all-images', urls: urls });
+  };
 
   document.addEventListener('click', function(event) {
     var el = event.target;

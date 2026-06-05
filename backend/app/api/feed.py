@@ -20,17 +20,23 @@ def get_feed(
     media_type: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
-    days: int = Query(30, ge=1, le=365),
+    days: int = Query(30, ge=0, le=365),
+    since: Optional[datetime] = Query(None),
     db: Session = Depends(get_db),
 ):
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     q = (
         db.query(Match, SourceItem, WatchTerm)
         .join(SourceItem, Match.source_item_id == SourceItem.id)
         .join(WatchTerm, Match.watch_term_id == WatchTerm.id)
-        .filter(SourceItem.published_at >= cutoff)
         .order_by(SourceItem.published_at.desc())
     )
+    if since is not None:
+        # Caller knows exactly what it has — only return genuinely newer items
+        aware_since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since
+        q = q.filter(SourceItem.published_at > aware_since)
+    elif days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        q = q.filter(SourceItem.published_at >= cutoff)
     if term_id is not None:
         q = q.filter(Match.watch_term_id == term_id)
     if platform:

@@ -151,6 +151,7 @@ class LocalDB: ObservableObject {
     }
     
     // MARK: - Feed Items & Merging
+    @MainActor
     func mergeItems(newItems: [FeedItem]) -> Int {
         var addedCount = 0
         var addedItems: [FeedItem] = []
@@ -213,11 +214,8 @@ class LocalDB: ObservableObject {
             }
         }
 
-        runOnMain {
-            self.feedItems = finalItems
-            self.saveToFile(name: "feed_items", value: self.feedItems)
-        }
-        
+        self.feedItems = finalItems
+        self.saveToFile(name: "feed_items", value: self.feedItems)
         return addedCount
     }
     
@@ -235,9 +233,10 @@ class LocalDB: ObservableObject {
     // MARK: - Query Feed (Filtering)
     func queryFeed(keyword: String?, days: Int) -> [FeedItem] {
         let now = Date()
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: now)
+        // days == 0 means "All Time" — no cutoff applied
+        let cutoffDate = days > 0 ? Calendar.current.date(byAdding: .day, value: -days, to: now) : nil
         let formatter = ISO8601DateFormatter()
-        let cutoffString = cutoffDate != nil ? formatter.string(from: cutoffDate!) : nil
+        let cutoffString = cutoffDate.map { formatter.string(from: $0) }
         
         let strictKeywordPlatforms = Set(["mdpr", "news", "tver"])
         

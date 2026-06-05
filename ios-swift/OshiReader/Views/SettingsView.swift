@@ -166,29 +166,38 @@ struct SettingsView: View {
                         Label("Push Notifications", systemImage: "bell.badge")
                         Spacer()
                         Text(notifications.statusText)
-                            .foregroundColor(theme.colors.textMuted)
+                            .foregroundColor(notifications.canScheduleNotifications ? theme.colors.primary : theme.colors.textMuted)
                     }
                     .accessibilityIdentifier("settings.notificationStatus")
 
-                    Button {
-                        Task {
-                            _ = await notifications.requestAuthorization()
+                    switch notifications.authorizationStatus {
+                    case .notDetermined:
+                        Button {
+                            Task { _ = await notifications.requestAuthorization() }
+                        } label: {
+                            Label("Enable Notifications", systemImage: "bell.badge.fill")
+                                .foregroundColor(theme.colors.primary)
                         }
-                    } label: {
-                        Label("Enable Notifications", systemImage: "bell.badge.fill")
-                            .foregroundColor(theme.colors.primary)
-                    }
-                    .accessibilityIdentifier("settings.enableNotificationsButton")
-
-                    Button {
-                        Task {
-                            try? await notifications.sendTestNotification()
+                        .accessibilityIdentifier("settings.enableNotificationsButton")
+                    case .denied:
+                        Button {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Label("Open iOS Settings", systemImage: "gear")
+                                .foregroundColor(theme.colors.primary)
                         }
-                    } label: {
-                        Label("Send Test Notification", systemImage: "paperplane.fill")
-                            .foregroundColor(theme.colors.primary)
+                        .accessibilityIdentifier("settings.openSettingsButton")
+                    default:
+                        Button {
+                            Task { try? await notifications.sendTestNotification() }
+                        } label: {
+                            Label("Send Test Notification", systemImage: "paperplane.fill")
+                                .foregroundColor(theme.colors.primary)
+                        }
+                        .accessibilityIdentifier("settings.testNotificationButton")
                     }
-                    .accessibilityIdentifier("settings.testNotificationButton")
                 }
 
                 Section(header: Text(i18n.t("readerSection"))) {

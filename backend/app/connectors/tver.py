@@ -12,6 +12,23 @@ from app.connectors.base import BaseConnector, SourceItemCreate
 
 log = logging.getLogger(__name__)
 
+def _parse_tver_date(content: dict) -> Optional[datetime]:
+    # Unix timestamps (seconds) — most reliable
+    for key in ("publishedAt", "publish_start", "deliveryStartAt", "broadcastDate", "airDate"):
+        val = content.get(key)
+        if isinstance(val, (int, float)) and val > 0:
+            try:
+                return datetime.fromtimestamp(val, tz=timezone.utc)
+            except (OSError, OverflowError):
+                pass
+        if isinstance(val, str) and val:
+            try:
+                return datetime.fromisoformat(val.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+    return None
+
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept-Language": "ja,en;q=0.9",
@@ -130,12 +147,15 @@ class TVERConnector(BaseConnector):
                     author = content.get("broadcasterName") or content.get("productionProviderName")
                     description = content.get("description") or content.get("episodeDescription")
 
+                    # Try API timestamp fields before falling back to now()
+                    published_at = _parse_tver_date(content) or datetime.now(timezone.utc)
+
                     items.append(
                         SourceItemCreate(
                             platform=self.PLATFORM,
                             item_id=str(ep_id),
                             url=url,
-                            published_at=datetime.now(timezone.utc),
+                            published_at=published_at,
                             media_type="video",
                             title=str(title),
                             thumbnail_url=thumb,
