@@ -389,10 +389,13 @@ struct FeedView: View {
             guard !hasLoadedOnce else { return }
             hasLoadedOnce = true
             Task {
-                // Always sync terms silently so backend has them after any DB reset
+                // Push local terms to backend (handles post-DB-reset state)
                 await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
-                // Full refresh only when there is no cached data to show
-                if db.feedItems.isEmpty, !db.terms.isEmpty {
+                // Pull backend terms that aren't local yet (fresh install / multi-device)
+                let pulledNew = await NetworkManager.shared.syncTermsFromBackend()
+                // Refresh feed when: no cached items and we have terms (either pre-existing
+                // or just pulled from the backend)
+                if db.feedItems.isEmpty, !db.terms.isEmpty || pulledNew {
                     await refreshFeed()
                 }
             }

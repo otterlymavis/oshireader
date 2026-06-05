@@ -85,6 +85,22 @@ class NetworkManager {
             }
         }
     }
+
+    // MARK: - Sync Backend Terms to Local
+    // Pulls any backend watch terms that are absent locally (e.g. fresh install where another
+    // device/session already registered terms).  Returns true if new terms were added.
+    @discardableResult
+    func syncTermsFromBackend() async -> Bool {
+        guard !isUITesting else { return false }
+        guard let backendTerms = try? await fetchWatchTerms() else { return false }
+        let localKeywords = Set(LocalDB.shared.terms.map { $0.keyword })
+        var added = false
+        for term in backendTerms where !localKeywords.contains(term.keyword) {
+            LocalDB.shared.saveTerm(keyword: term.keyword, collectionMode: term.collection_mode)
+            added = true
+        }
+        return added
+    }
     
     // MARK: - Create Watch Term
     func createWatchTerm(keyword: String, collectionMode: String) async throws -> WatchTerm {

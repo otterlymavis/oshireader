@@ -42,7 +42,7 @@ class LocalDB: ObservableObject {
             "yahoonews", "mdpr", "oricon", "twitter"
         ])
         var didAddMissingPlatforms = false
-        for platform in ["oricon", "twitter"] where !self.subscribedPlatforms.contains(platform) {
+        for platform in ["oricon", "twitter", "mdpr", "yahoonews", "togetter"] where !self.subscribedPlatforms.contains(platform) {
             self.subscribedPlatforms.append(platform)
             didAddMissingPlatforms = true
         }
@@ -469,15 +469,8 @@ class LocalDB: ObservableObject {
             self.oshiAvatars = [:]
             self.compositions = [term.keyword: [layer]]
             self.hiddenItems = []
-
-            self.saveToFile(name: "terms", value: self.terms)
-            self.saveToFile(name: "feed_items", value: self.feedItems)
-            self.saveToFile(name: "saved_pages", value: self.savedPages)
-            self.saveToFile(name: "custom_urls", value: self.customUrls)
-            self.saveToFile(name: "subscribed_platforms", value: self.subscribedPlatforms)
-            self.saveToFile(name: "oshi_avatars", value: self.oshiAvatars)
-            self.saveToFile(name: "oshi_compositions", value: self.compositions)
-            self.saveToFile(name: "hidden_items", value: Array(self.hiddenItems))
+            // Do NOT persist fixture data — only seed in-memory so nothing stains the
+            // container after the test process exits.
             UserDefaults.standard.removeObject(forKey: "wallpaper_url")
             UserDefaults.standard.removeObject(forKey: "sources_order")
         }
