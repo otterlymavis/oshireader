@@ -59,6 +59,23 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
 
 
 
+@app.get("/api/admin/test-fetch")
+async def test_fetch(_: None = Depends(require_admin_auth)) -> dict:
+    """Run one keyword through every connector and report item counts + errors."""
+    import asyncio
+    from app.ingestion.scheduler import _build_connectors, _fetch_one
+    db_sess = __import__("app.database", fromlist=["SessionLocal"]).SessionLocal()
+    try:
+        connectors = _build_connectors(db_sess)
+        keyword = "吉沢亮"
+        results = await asyncio.gather(
+            *[_fetch_one(c, keyword, "all_info") for c in connectors]
+        )
+        return {c.PLATFORM: len(r) for c, r in zip(connectors, results)}
+    finally:
+        db_sess.close()
+
+
 @app.get("/api/admin/stats")
 def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
     items_total = db.query(func.count(SourceItem.id)).scalar()
