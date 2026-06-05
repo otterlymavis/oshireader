@@ -578,6 +578,8 @@ class NetworkManager {
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.yahoo.co.jp", platform: "yahoonews", tagKeyword: tag) }
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mdpr.jp", platform: "mdpr", tagKeyword: tag) }
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "oricon.co.jp", platform: "oricon", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "girlschannel.net", platform: "girlschannel", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "5ch.net", platform: "5ch", tagKeyword: tag) }
 
             var all = [FeedItem]()
             for await items in group {

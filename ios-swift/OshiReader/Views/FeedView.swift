@@ -489,6 +489,8 @@ struct FeedView: View {
 
         // 3. Local fallback scrapers — only when backend returned nothing (offline/spin-down)
         if freshItems.isEmpty {
+            // Kick the backend scheduler so fresh data is ready on the next pull.
+            Task { try? await NetworkManager.shared.triggerPoll() }
             let activeTerms = db.terms.filter { $0.is_active }
             await withTaskGroup(of: [FeedItem].self) { group in
                 for term in activeTerms {
