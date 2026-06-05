@@ -13,8 +13,10 @@ from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.niconico import NicoNicoConnector
 from app.connectors.note import NoteConnector
+from app.connectors.oricon import OriconConnector
 from app.connectors.rss import RSSConnector
 from app.connectors.togetter import TogetterConnector
+from app.connectors.twitter import TwitterConnector
 from app.connectors.tver import TVERConnector
 from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.youtube import YouTubeConnector
@@ -35,6 +37,7 @@ def _build_connectors(db) -> list[BaseConnector]:
         ModelPressConnector(),
         NicoNicoConnector(),
         NoteConnector(),
+        OriconConnector(),
         TogetterConnector(),
         TVERConnector(),
         YahooNewsConnector(),
@@ -48,6 +51,13 @@ def _build_connectors(db) -> list[BaseConnector]:
     
     # Always register YouTubeConnector so it can fetch using scrape fallback if no key is set
     connectors.append(YouTubeConnector(api_key=youtube_key))
+
+    twitter_bearer = settings.twitter_bearer_token
+    if not twitter_bearer:
+        cred = db.get(PlatformCredential, "twitter")
+        if cred:
+            twitter_bearer = cred.bearer_token or ""
+    connectors.append(TwitterConnector(bearer_token=twitter_bearer))
 
     return connectors
 
@@ -110,6 +120,7 @@ async def _poll_once_unlocked() -> None:
                                         raw_payload=raw.raw_payload,
                                     )
                                 )
+                                db.flush()  # ensure SourceItem is in DB before Match FK references it
                             match_exists = (
                                 db.query(Match)
                                 .filter_by(watch_term_id=term.id, source_item_id=raw.composite_id)
