@@ -11,7 +11,6 @@ struct SettingsView: View {
     @State private var showingClearAllAlert = false
     @State private var newKeyword = ""
     @State private var newCollectionMode = "all_info"
-    @AppStorage("admin_api_token") private var adminApiToken = ""
     @AppStorage("youtube_api_key") private var youtubeApiKey = ""
     @AppStorage("twitter_bearer_token") private var twitterBearerToken = ""
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
@@ -192,13 +191,6 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings.testNotificationButton")
                 }
 
-                Section(header: Text("Backend")) {
-                    SecureField("Admin API Token", text: $adminApiToken)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("settings.adminApiTokenField")
-                }
-
                 Section(header: Text("API Keys")) {
                     SecureField("YouTube API Key", text: $youtubeApiKey)
                         .textInputAutocapitalization(.never)
@@ -298,27 +290,6 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings.clearAllDataButton")
                 }
                 
-                // Section: Statistics
-                let stats = db.getStats()
-                Section(header: Text(i18n.t("stats"))) {
-                    HStack {
-                        Text("記事総数")
-                        Spacer()
-                        Text("\(stats.total) 件")
-                            .bold()
-                            .foregroundColor(theme.colors.textSub)
-                    }
-                    
-                    ForEach(stats.byPlatform.sorted(by: { $0.key < $1.key }), id: \.key) { key, count in
-                        let meta = theme.metadata(for: key)
-                        HStack {
-                            Text("\(meta.icon) \(meta.name)")
-                            Spacer()
-                            Text("\(count) 件")
-                                .foregroundColor(theme.colors.textMuted)
-                        }
-                    }
-                }
             }
             .font(.system(size: 13))
             .accessibilityIdentifier("settings.screen")
@@ -404,7 +375,7 @@ struct PrivacyPolicyView: View {
             VStack(alignment: .leading, spacing: 18) {
                 policySection(
                     title: "Data Stored on This Device",
-                    body: "Oshi Reader stores watch keywords, feed items, saved pages, custom URLs, display settings, wallpaper choices, and avatar compositions locally on this device."
+                    body: "Oshi Reader stores watch keywords, feed items, saved pages, custom URLs, display settings, wallpaper choices, avatar compositions, and cached article HTML for offline reading — all locally on this device."
                 )
 
                 policySection(
@@ -414,12 +385,12 @@ struct PrivacyPolicyView: View {
 
                 policySection(
                     title: "Tracking and Advertising",
-                    body: "This app does not use advertising identifiers, App Tracking Transparency, third-party ad SDKs, or data broker tracking. Data is used to provide feed, reader, search, translation, and customization features."
+                    body: "This app does not use advertising identifiers, App Tracking Transparency, third-party ad SDKs, or data broker tracking. Data is used solely to provide feed, reader, search, translation, and customization features."
                 )
 
                 policySection(
                     title: "Permissions",
-                    body: "This app may request notification permission when you enable alerts or send a test notification. It does not request access to location, contacts, photos, camera, microphone, Bluetooth, health data, or motion sensors."
+                    body: "Notifications: requested when you enable keyword alerts or send a test notification.\n\nPhoto Library: requested when you save an image from the article reader to your Photos.\n\nThis app does not request access to location, contacts, camera, microphone, Bluetooth, health data, or motion sensors."
                 )
             }
             .padding(18)
