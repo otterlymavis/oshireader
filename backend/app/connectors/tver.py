@@ -83,14 +83,14 @@ class TVERConnector(BaseConnector):
                 result = resp.json().get("result", {})
                 return result.get("platform_uid"), result.get("platform_token")
         except Exception as exc:
-            log.debug("TVer create token failed: %s", exc)
+            log.warning("TVer create token failed: %s", exc)
         return None, None
 
     async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
         async with httpx.AsyncClient(timeout=15.0, headers=HEADERS) as client:
             uid, token = await self._create_platform_token(client)
             if not uid or not token:
-                log.debug("Could not obtain TVer platform tokens")
+                log.warning("Could not obtain TVer platform tokens")
                 return []
 
             params = {
@@ -115,10 +115,10 @@ class TVERConnector(BaseConnector):
                     }
                 )
                 if not resp.is_success:
-                    log.debug("TVer search API returned status %d", resp.status_code)
+                    log.warning("TVer search API returned status %d", resp.status_code)
                     return []
             except Exception as exc:
-                log.debug("TVer search API request failed: %s", exc)
+                log.warning("TVer search API request failed: %s", exc)
                 return []
 
             try:
@@ -138,7 +138,7 @@ class TVERConnector(BaseConnector):
                 else:
                     episodes = data.get("contents") or data.get("rows") or []
             except Exception as exc:
-                log.debug("TVer response JSON parse failed: %s", exc)
+                log.warning("TVer response JSON parse failed: %s", exc)
                 return []
 
             items: list[SourceItemCreate] = []
@@ -193,6 +193,6 @@ class TVERConnector(BaseConnector):
                         )
                     )
                 except Exception as exc:
-                    log.debug("Error parsing TVer episode item: %s", exc)
+                    log.warning("Error parsing TVer episode item: %s", exc)
                     
             return items

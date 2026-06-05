@@ -42,11 +42,11 @@ class NoteConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=_SEARCH_HEADERS) as client:
                 resp = await client.get("https://note.com/api/v2/searches", params=params)
                 if not resp.is_success:
-                    log.debug("Note search API returned status=%d", resp.status_code)
+                    log.warning("Note search API returned status=%d", resp.status_code)
                     return []
             data = resp.json()
         except Exception as exc:
-            log.debug("Note search API failed: %s", exc)
+            log.warning("Note search API failed: %s", exc)
             return []
 
         notes = (
@@ -102,11 +102,11 @@ class NoteConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
-                    log.debug("Note hashtag RSS returned status=%d", resp.status_code)
+                    log.warning("Note hashtag RSS returned status=%d", resp.status_code)
                     return []
             feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
-            log.debug("Note hashtag RSS failed: %s", exc)
+            log.warning("Note hashtag RSS failed: %s", exc)
             return []
 
         items: list[SourceItemCreate] = []

@@ -35,7 +35,7 @@ class RSSConnector(BaseConnector):
                 async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
                     resp = await client.get(url)
                     if not resp.is_success:
-                        log.debug("RSS feed returned status=%d source=%s", resp.status_code, source)
+                        log.warning("RSS feed returned status=%d source=%s", resp.status_code, source)
                         return
                 feed = await asyncio.to_thread(feedparser.parse, resp.content)
                 for entry in feed.entries:
@@ -67,7 +67,7 @@ class RSSConnector(BaseConnector):
                         )
                     )
             except Exception as exc:
-                log.debug("RSS feed failed source=%s: %s", source, exc)
+                log.warning("RSS feed failed source=%s: %s", source, exc)
 
         await asyncio.gather(*[_one(platform, source, url) for platform, source, url in FEEDS])
         return results

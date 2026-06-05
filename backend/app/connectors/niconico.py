@@ -37,11 +37,11 @@ class NicoNicoConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(self._SEARCH_URL, params=params, headers={"Accept": "application/json"})
                 if not resp.is_success:
-                    log.debug("NicoNico snapshot API returned status %d", resp.status_code)
+                    log.warning("NicoNico snapshot API returned status %d", resp.status_code)
                     return []
                 data = resp.json()
         except Exception as exc:
-            log.debug("NicoNico API fetch error: %s", exc)
+            log.warning("NicoNico API fetch error: %s", exc)
             return []
 
         items: list[SourceItemCreate] = []
@@ -83,7 +83,7 @@ class NicoNicoConnector(BaseConnector):
                     return []
             feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
-            log.debug("NicoNico Google News fallback error: %s", exc)
+            log.warning("NicoNico Google News fallback error: %s", exc)
             return []
 
         items: list[SourceItemCreate] = []

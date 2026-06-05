@@ -29,10 +29,10 @@ class TogetterConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=15.0, headers=HEADERS, follow_redirects=True) as client:
                 resp = await client.get(self._SEARCH, params=params)
                 if not resp.is_success:
-                    log.debug("Togetter search returned %d", resp.status_code)
+                    log.warning("Togetter search returned %d", resp.status_code)
                     return []
         except Exception as exc:
-            log.debug("Togetter fetch error: %s", exc)
+            log.warning("Togetter fetch error: %s", exc)
             return []
 
         soup = BeautifulSoup(resp.text, "lxml")

@@ -33,11 +33,11 @@ class OriconConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
-                    log.debug("Oricon via Google News returned status %d", resp.status_code)
+                    log.warning("Oricon via Google News returned status %d", resp.status_code)
                     return []
             feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
-            log.debug("Oricon Google News fetch error: %s", exc)
+            log.warning("Oricon Google News fetch error: %s", exc)
             return []
 
         items: list[SourceItemCreate] = []

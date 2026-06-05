@@ -34,11 +34,11 @@ class ModelPressConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
-                    log.debug("MDPR via Google News returned status %d", resp.status_code)
+                    log.warning("MDPR via Google News returned status %d", resp.status_code)
                     return []
             feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
-            log.debug("MDPR Google News fetch error: %s", exc)
+            log.warning("MDPR Google News fetch error: %s", exc)
             return []
 
         items: list[SourceItemCreate] = []
