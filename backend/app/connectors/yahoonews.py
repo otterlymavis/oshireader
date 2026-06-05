@@ -33,9 +33,10 @@ class YahooNewsConnector(BaseConnector):
         if not stripped:
             return []
 
-        items = await self._fetch_jina(stripped)
+        # RSS first — it carries real publish dates; Jina only as fallback (no dates available)
+        items = await self._fetch_gnews_rss(stripped)
         if not items:
-            items = await self._fetch_gnews_rss(stripped)
+            items = await self._fetch_jina(stripped)
         return items
 
     async def _fetch_jina(self, keyword: str) -> list[SourceItemCreate]:

@@ -602,7 +602,7 @@ struct FeedCard: View {
                         .font(.caption)
                 }
                 
-                Text(relativeTime(from: item.fetched_at))
+                Text(relativeTime(from: item.published_at))
                     .font(.caption2)
                     .foregroundColor(theme.colors.textMuted)
             }
