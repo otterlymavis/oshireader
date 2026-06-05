@@ -13,7 +13,7 @@ class WatchTerm(Base):
     __tablename__ = "watch_terms"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    keyword = Column(String, nullable=False)
+    keyword = Column(String, nullable=False, unique=True)
     aliases = Column(JSON, default=list)
     language_hint = Column(String)
     collection_mode = Column(String, default="all_info")  # all_info | media_only

@@ -326,10 +326,15 @@ struct SettingsView: View {
                         .cornerRadius(10)
                         
                         Button("追加") {
-                            guard !newKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                            let savedTerm = db.saveTerm(keyword: newKeyword, collectionMode: newCollectionMode)
-                            
-                            // Send to backend in background
+                            let trimmed = newKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            guard !db.terms.contains(where: { $0.keyword == trimmed }) else {
+                                newKeyword = ""
+                                showingAddKeywordAlert = false
+                                return
+                            }
+                            let savedTerm = db.saveTerm(keyword: trimmed, collectionMode: newCollectionMode)
+
                             Task {
                                 if let serverTerm = try? await NetworkManager.shared.createWatchTerm(keyword: savedTerm.keyword, collectionMode: savedTerm.collection_mode) {
                                     db.replaceTerm(localId: savedTerm.id, with: serverTerm)

@@ -77,3 +77,7 @@ def apply_startup_migrations(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS ix_matches_source_item_id"
             " ON matches (source_item_id)"
         ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_watch_terms_keyword"
+            " ON watch_terms (keyword)"
+        ))

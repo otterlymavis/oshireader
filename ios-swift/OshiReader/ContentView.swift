@@ -131,9 +131,6 @@ struct ContentView: View {
         .background(isSelected ? theme.colors.primary : Color.clear)
         .cornerRadius(10)
         .contentShape(Rectangle())
-        .onTapGesture {
-            selectedTab = tab
-        }
     }
     
     private func title(for tab: OshiTab) -> String {
