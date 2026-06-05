@@ -492,7 +492,12 @@ struct FeedView: View {
             let activeTerms = db.terms.filter { $0.is_active }
             await withTaskGroup(of: [FeedItem].self) { group in
                 for term in activeTerms {
-                    group.addTask { await NetworkManager.shared.scrapeLocalFallbacks(keyword: term.keyword) }
+                    let searchTerms = [term.keyword] + term.aliases
+                    for searchTerm in searchTerms {
+                        group.addTask {
+                            await NetworkManager.shared.scrapeLocalFallbacks(keyword: searchTerm, tagKeyword: term.keyword)
+                        }
+                    }
                 }
                 for await items in group where !items.isEmpty {
                     _ = await db.mergeItems(newItems: items)

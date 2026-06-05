@@ -417,10 +417,11 @@ class NetworkManager {
     }
     
     // MARK: - Local RSS Parsing Fallback
-    func scrapeRSSFallback(keyword: String) async -> [FeedItem] {
+    func scrapeRSSFallback(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
         var results = [FeedItem]()
+        let tag = tagKeyword ?? keyword
         let nowString = ISO8601DateFormatter().string(from: Date())
-        
+
         // NHK general RSS
         if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml"),
            let nhkItems = try? await parseRss(url: nhkUrl) {
@@ -438,13 +439,13 @@ class NetworkManager {
                         thumbnail_url: nil,
                         media_type: "article",
                         published_at: item.pubDate ?? nowString,
-                        watch_term_keyword: keyword,
+                        watch_term_keyword: tag,
                         fetched_at: nowString
                     ))
                 }
             }
         }
-        
+
         // Google News RSS search
         let encodedKeyword = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
         if let gnewsUrl = URL(string: "https://news.google.com/rss/search?q=\(encodedKeyword)&hl=ja&gl=JP&ceid=JP%3Aja"),
@@ -461,12 +462,12 @@ class NetworkManager {
                     thumbnail_url: nil,
                     media_type: "article",
                     published_at: item.pubDate ?? nowString,
-                    watch_term_keyword: keyword,
+                    watch_term_keyword: tag,
                     fetched_at: nowString
                 ))
             }
         }
-        
+
         return results
     }
 
@@ -569,13 +570,14 @@ class NetworkManager {
     }
     
     // MARK: - Consolidated Local Fallback (runs all platform scrapers in parallel)
-    func scrapeLocalFallbacks(keyword: String) async -> [FeedItem] {
+    func scrapeLocalFallbacks(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
+        let tag = tagKeyword ?? keyword
         return await withTaskGroup(of: [FeedItem].self) { group in
-            group.addTask { await self.scrapeRSSFallback(keyword: keyword) }
-            group.addTask { await self.scrapeNiconicoRSS(keyword: keyword) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.yahoo.co.jp", platform: "yahoonews") }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mdpr.jp", platform: "mdpr") }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "oricon.co.jp", platform: "oricon") }
+            group.addTask { await self.scrapeRSSFallback(keyword: keyword, tagKeyword: tag) }
+            group.addTask { await self.scrapeNiconicoRSS(keyword: keyword, tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.yahoo.co.jp", platform: "yahoonews", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mdpr.jp", platform: "mdpr", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "oricon.co.jp", platform: "oricon", tagKeyword: tag) }
 
             var all = [FeedItem]()
             for await items in group {
@@ -586,16 +588,17 @@ class NetworkManager {
     }
 
     // MARK: - NicoNico via Google News (tag RSS returns 403)
-    func scrapeNiconicoRSS(keyword: String) async -> [FeedItem] {
-        return await scrapeGoogleNewsSite(keyword: keyword, site: "nicovideo.jp", platform: "niconico")
+    func scrapeNiconicoRSS(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
+        return await scrapeGoogleNewsSite(keyword: keyword, site: "nicovideo.jp", platform: "niconico", tagKeyword: tagKeyword)
     }
 
     // MARK: - Google News Site Filter RSS
-    func scrapeGoogleNewsSite(keyword: String, site: String, platform: String) async -> [FeedItem] {
+    func scrapeGoogleNewsSite(keyword: String, site: String, platform: String, tagKeyword: String? = nil) async -> [FeedItem] {
         let query = "\(keyword) site:\(site)"
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         guard let url = URL(string: "https://news.google.com/rss/search?q=\(encoded)&hl=ja&gl=JP&ceid=JP%3Aja") else { return [] }
 
+        let tag = tagKeyword ?? keyword
         let nowString = ISO8601DateFormatter().string(from: Date())
 
         guard let items = try? await parseRss(url: url) else { return [] }
@@ -613,7 +616,7 @@ class NetworkManager {
                 thumbnail_url: nil,
                 media_type: "article",
                 published_at: item.pubDate ?? nowString,
-                watch_term_keyword: keyword,
+                watch_term_keyword: tag,
                 fetched_at: nowString
             )
         }
