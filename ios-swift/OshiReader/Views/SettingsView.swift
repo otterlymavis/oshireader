@@ -141,7 +141,7 @@ struct SettingsView: View {
                 }
                 
                 // Section: Subscribed Platforms
-                Section(header: Text("配信プラットフォーム設定")) {
+                Section(header: Text(i18n.t("platformSettings"))) {
                     ForEach(allPlatforms, id: \.0) { key, label in
                         let isSubscribed = db.subscribedPlatforms.contains(key)
                         Toggle(label, isOn: Binding(
@@ -161,7 +161,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Section(header: Text("通知")) {
+                Section(header: Text(i18n.t("notificationsSection"))) {
                     HStack {
                         Label("Push Notifications", systemImage: "bell.badge")
                         Spacer()
@@ -191,7 +191,13 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings.testNotificationButton")
                 }
 
-                Section(header: Text("API Keys")) {
+                Section(header: Text(i18n.t("readerSection"))) {
+                    Toggle(i18n.t("autoTranslate"), isOn: $autoTranslateReader)
+                        .tint(theme.colors.primary)
+                        .accessibilityIdentifier("settings.autoTranslateToggle")
+                }
+
+                Section(header: Text(i18n.t("credentialsSection"))) {
                     SecureField("YouTube API Key", text: $youtubeApiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -213,19 +219,14 @@ struct SettingsView: View {
                             Task { try? await NetworkManager.shared.updateCredential(platform: "twitter", bearerToken: twitterBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)) }
                         }
                         .accessibilityIdentifier("settings.twitterBearerTokenField")
-
-                    Toggle("Auto Translate Reader", isOn: $autoTranslateReader)
-                        .tint(theme.colors.primary)
-                        .accessibilityIdentifier("settings.autoTranslateToggle")
                 }
                 
                 // Section: Customizations
-                Section(header: Text("テーマとカスタマイズ")) {
-                    // Theme picker
-                    Picker("アプリテーマ", selection: $theme.mode) {
-                        Text("ライト").tag(AppThemeMode.light)
-                        Text("ダーク").tag(AppThemeMode.dark)
-                        Text("セピア").tag(AppThemeMode.sepia)
+                Section(header: Text(i18n.t("appearanceSection"))) {
+                    Picker(i18n.t("appTheme"), selection: $theme.mode) {
+                        Text(i18n.t("themeLight")).tag(AppThemeMode.light)
+                        Text(i18n.t("themeDark")).tag(AppThemeMode.dark)
+                        Text(i18n.t("themeSepia")).tag(AppThemeMode.sepia)
                     }
                     .pickerStyle(.segmented)
 
@@ -274,14 +275,14 @@ struct SettingsView: View {
                 }
 
 
-                Section(header: Text("プライバシー")) {
+                Section(header: Text(i18n.t("privacySection"))) {
                     NavigationLink(destination: PrivacyPolicyView(theme: theme)) {
                         Label("Privacy Policy", systemImage: "hand.raised")
                     }
                     .accessibilityIdentifier("settings.privacyPolicyLink")
                 }
 
-                Section(header: Text("データ")) {
+                Section(header: Text(i18n.t("dataSection"))) {
                     Button(role: .destructive) {
                         showingClearAllAlert = true
                     } label: {
@@ -308,14 +309,14 @@ struct SettingsView: View {
                         .cornerRadius(8)
                         .accessibilityIdentifier("settings.keywordField")
                     
-                    Picker("収集モード", selection: $newCollectionMode) {
-                        Text("📄 全情報").tag("all_info")
-                        Text("📹 メディアのみ").tag("media_only")
+                    Picker(i18n.t("collectionMode"), selection: $newCollectionMode) {
+                        Text("📄 " + i18n.t("allInfo")).tag("all_info")
+                        Text("📹 " + i18n.t("mediaOnly")).tag("media_only")
                     }
                     .pickerStyle(.segmented)
                     
                     HStack(spacing: 10) {
-                        Button("キャンセル") {
+                        Button(i18n.t("cancel")) {
                             newKeyword = ""
                             showingAddKeywordAlert = false
                         }
@@ -325,7 +326,7 @@ struct SettingsView: View {
                         .background(theme.colors.divider)
                         .cornerRadius(10)
                         
-                        Button("追加") {
+                        Button(i18n.t("add")) {
                             let trimmed = newKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !trimmed.isEmpty else { return }
                             guard !db.terms.contains(where: { $0.keyword == trimmed }) else {

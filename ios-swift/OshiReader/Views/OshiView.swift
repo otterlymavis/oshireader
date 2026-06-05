@@ -40,12 +40,12 @@ struct OshiView: View {
                     VStack(spacing: 0) {
                         // Static Header
                         HStack {
-                            Text("推しリスト ✨")
+                            Text(i18n.t("oshiListTitle"))
                                 .font(.title2)
                                 .fontWeight(.bold)
                                 .foregroundColor(theme.colors.text)
                             Spacer()
-                            Text("\(sortedTerms.count)人の推しを追跡中")
+                            Text(i18n.tFormat("oshiTrackingCount", sortedTerms.count))
                                 .font(.caption)
                                 .foregroundColor(theme.colors.textMuted)
                         }
@@ -127,7 +127,7 @@ struct OshiPage: View {
                             VStack(spacing: 8) {
                                 Text("🎨")
                                     .font(.system(size: 56))
-                                Text("タップしてアバターを作成")
+                                Text(i18n.t("tapToAddToCanvas"))
                                     .font(.system(size: 13, weight: .bold))
                                     .foregroundColor(theme.colors.primary)
                             }
@@ -183,7 +183,7 @@ struct OshiPage: View {
                                 .foregroundColor(theme.colors.primary)
                                 .cornerRadius(99)
                             
-                            Text(term.collection_mode == "media_only" ? "📹 メディア" : "📄 全情報")
+                            Text(term.collection_mode == "media_only" ? "📹 " + i18n.t("mediaOnly") : "📄 " + i18n.t("allInfo"))
                                 .font(.system(size: 12, weight: .medium))
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 3)

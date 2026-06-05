@@ -272,11 +272,195 @@ class I18nManager: ObservableObject {
             "ja": "いらすとやで検索...",
             "zh-TW": "搜尋貼紙...",
             "zh-CN": "搜索贴纸..."
+        ],
+
+        // MARK: - Settings section headers
+        "platformSettings": [
+            "en": "Source Platforms",
+            "ja": "配信プラットフォーム設定",
+            "zh-TW": "訂閱平台",
+            "zh-CN": "订阅平台"
+        ],
+        "notificationsSection": [
+            "en": "Notifications",
+            "ja": "通知",
+            "zh-TW": "通知",
+            "zh-CN": "通知"
+        ],
+        "appearanceSection": [
+            "en": "Theme & Appearance",
+            "ja": "テーマとカスタマイズ",
+            "zh-TW": "外觀設定",
+            "zh-CN": "外观设置"
+        ],
+        "readerSection": [
+            "en": "Reader",
+            "ja": "リーダー",
+            "zh-TW": "閱讀器",
+            "zh-CN": "阅读器"
+        ],
+        "credentialsSection": [
+            "en": "API Credentials",
+            "ja": "API設定",
+            "zh-TW": "API設定",
+            "zh-CN": "API设置"
+        ],
+        "privacySection": [
+            "en": "Privacy",
+            "ja": "プライバシー",
+            "zh-TW": "隱私",
+            "zh-CN": "隐私"
+        ],
+        "dataSection": [
+            "en": "Data",
+            "ja": "データ",
+            "zh-TW": "資料",
+            "zh-CN": "数据"
+        ],
+
+        // MARK: - Settings controls
+        "appTheme": [
+            "en": "App Theme",
+            "ja": "アプリテーマ",
+            "zh-TW": "主題",
+            "zh-CN": "主题"
+        ],
+        "themeLight": [
+            "en": "Light",
+            "ja": "ライト",
+            "zh-TW": "淺色",
+            "zh-CN": "浅色"
+        ],
+        "themeDark": [
+            "en": "Dark",
+            "ja": "ダーク",
+            "zh-TW": "深色",
+            "zh-CN": "深色"
+        ],
+        "themeSepia": [
+            "en": "Sepia",
+            "ja": "セピア",
+            "zh-TW": "復古",
+            "zh-CN": "复古"
+        ],
+        "collectionMode": [
+            "en": "Collection Mode",
+            "ja": "収集モード",
+            "zh-TW": "收集模式",
+            "zh-CN": "收集模式"
+        ],
+        "add": [
+            "en": "Add",
+            "ja": "追加",
+            "zh-TW": "新增",
+            "zh-CN": "添加"
+        ],
+        "autoTranslate": [
+            "en": "Auto Translate Articles",
+            "ja": "記事を自動翻訳",
+            "zh-TW": "自動翻譯文章",
+            "zh-CN": "自动翻译文章"
+        ],
+
+        // MARK: - OshiView
+        "oshiListTitle": [
+            "en": "My Oshi ✨",
+            "ja": "推しリスト ✨",
+            "zh-TW": "推清單 ✨",
+            "zh-CN": "推清单 ✨"
+        ],
+        "oshiTrackingCount": [
+            "en": "%d tracked",
+            "ja": "%d人の推しを追跡中",
+            "zh-TW": "追蹤中：%d",
+            "zh-CN": "追踪中：%d"
+        ],
+        "tapToAddToCanvas": [
+            "en": "Tap an image below to add to canvas",
+            "ja": "下の画像をタップしてキャンバスに追加",
+            "zh-TW": "點擊下方圖片加入畫布",
+            "zh-CN": "点击下方图片添加到画布"
+        ],
+
+        // MARK: - AvatarEditorView
+        "saveAvatar": [
+            "en": "💾 Save",
+            "ja": "💾 保存",
+            "zh-TW": "💾 儲存",
+            "zh-CN": "💾 保存"
+        ],
+        "setAsWallpaper": [
+            "en": "🌸 Set Wallpaper",
+            "ja": "🌸 壁紙にする",
+            "zh-TW": "🌸 設為壁紙",
+            "zh-CN": "🌸 设为壁纸"
+        ],
+        "noStickersFound": [
+            "en": "No stickers found",
+            "ja": "イラストが見つかりません",
+            "zh-TW": "找不到貼圖",
+            "zh-CN": "找不到贴图"
+        ],
+        "layerForward": [
+            "en": "↑Fwd",
+            "ja": "↑前",
+            "zh-TW": "↑前",
+            "zh-CN": "↑前"
+        ],
+        "layerBack": [
+            "en": "↓Back",
+            "ja": "↓後",
+            "zh-TW": "↓後",
+            "zh-CN": "↓后"
+        ],
+
+        // MARK: - SavedView
+        "savedSelectArticle": [
+            "en": "Select a saved article",
+            "ja": "保存した記事を選択してください",
+            "zh-TW": "請選擇已儲存的文章",
+            "zh-CN": "请选择已保存的文章"
+        ],
+        "savedEmptyTitle": [
+            "en": "No Saved Articles",
+            "ja": "ブックマークがありません",
+            "zh-TW": "尚無儲存文章",
+            "zh-CN": "暂无保存文章"
+        ],
+        "savedEmptyBody": [
+            "en": "Save articles from your feed to read them here, even offline.",
+            "ja": "フィードから気になる記事を保存すると、ここにオフラインでも読めるように表示されます。",
+            "zh-TW": "從動態儲存文章，可在此離線閱讀。",
+            "zh-CN": "从动态保存文章，可在此离线阅读。"
+        ],
+
+        // MARK: - FeedView / SearchView empty states
+        "feedSelectArticle": [
+            "en": "Select an article from your feed",
+            "ja": "フィードから記事を選択してください",
+            "zh-TW": "請從動態選擇文章",
+            "zh-CN": "请从动态选择文章"
+        ],
+        "noCustomUrlsAdded": [
+            "en": "No custom URLs added yet",
+            "ja": "カスタムURLが登録されていません",
+            "zh-TW": "尚未新增自訂網址",
+            "zh-CN": "尚未添加自定义网址"
+        ],
+        "searchSelectArticle": [
+            "en": "Select a search result to read",
+            "ja": "検索リンクから記事を選択してください",
+            "zh-TW": "請選擇搜尋結果閱讀",
+            "zh-CN": "请选择搜索结果阅读"
         ]
     ]
-    
+
     func t(_ key: String) -> String {
         guard let item = translations[key] else { return key }
         return item[lang] ?? item["en"] ?? key
+    }
+
+    func tFormat(_ key: String, _ value: Int) -> String {
+        t(key).replacingOccurrences(of: "%d", with: String(value))
     }
 }

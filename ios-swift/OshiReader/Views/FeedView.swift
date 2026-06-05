@@ -92,7 +92,7 @@ struct FeedView: View {
                             VStack(spacing: 16) {
                                 Text("📖")
                                     .font(.system(size: 64))
-                                Text("フィードから記事を選択してください")
+                                Text(i18n.t("feedSelectArticle"))
                                     .font(.headline)
                                     .foregroundColor(theme.colors.textSub)
                             }

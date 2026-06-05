@@ -48,7 +48,7 @@ struct SavedView: View {
                             VStack(spacing: 16) {
                                 Text("📂")
                                     .font(.system(size: 64))
-                                Text("保存した記事を選択してください")
+                                Text(i18n.t("savedSelectArticle"))
                                     .font(.headline)
                                     .foregroundColor(theme.colors.textSub)
                             }
@@ -72,10 +72,10 @@ struct SavedView: View {
                 VStack(spacing: 12) {
                     Text("📂")
                         .font(.system(size: 48))
-                    Text(i18n.t("tabSaved") + "がありません")
+                    Text(i18n.t("savedEmptyTitle"))
                         .font(.headline)
                         .foregroundColor(theme.colors.textSub)
-                    Text("フィードから気になる記事を保存すると、\nここにオフラインでも読めるように表示されます。")
+                    Text(i18n.t("savedEmptyBody"))
                         .font(.caption)
                         .foregroundColor(theme.colors.textMuted)
                         .multilineTextAlignment(.center)

@@ -75,7 +75,7 @@ struct AvatarEditorView: View {
                             Text("(˶ᵔ ᵕ ᵔ˶)")
                                 .font(.title3)
                                 .foregroundColor(theme.colors.textMuted)
-                            Text("下の画像をタップしてキャンバスに追加")
+                            Text(i18n.t("tapToAddToCanvas"))
                                 .font(.caption2)
                                 .foregroundColor(theme.colors.textMuted)
                         }
@@ -190,9 +190,9 @@ struct AvatarEditorView: View {
                         toolbarBtn("－", a11y: "avatar.scaleDownButton",  size: 12) { scaleLayer(-0.15) }
                         toolbarBtn("⟲", size: 12) { rotateLayer(-15) }
                         toolbarBtn("⟳", size: 12) { rotateLayer(15) }
-                        toolbarBtn("↑前") { bringForward() }
-                        toolbarBtn("↓後") { sendBack() }
-                        toolbarBtn("削除", a11y: "avatar.deleteLayerButton", destructive: true) { deleteSelected() }
+                        toolbarBtn(i18n.t("layerForward")) { bringForward() }
+                        toolbarBtn(i18n.t("layerBack")) { sendBack() }
+                        toolbarBtn(i18n.t("delete"), a11y: "avatar.deleteLayerButton", destructive: true) { deleteSelected() }
                     }
                     .padding(.horizontal, 12)
                 }
@@ -205,7 +205,7 @@ struct AvatarEditorView: View {
                     }) {
                         HStack {
                             Image(systemName: "checkmark")
-                            Text(saving ? "..." : "💾 保存")
+                            Text(saving ? "..." : i18n.t("saveAvatar"))
                         }
                         .bold()
                         .foregroundColor(.white)
@@ -220,7 +220,7 @@ struct AvatarEditorView: View {
                     Button(action: {
                         Task { await applyAsWallpaper() }
                     }) {
-                        Text("🌸 壁紙にする")
+                        Text(i18n.t("setAsWallpaper"))
                             .bold()
                             .foregroundColor(theme.colors.primary)
                             .frame(maxWidth: .infinity)
@@ -302,7 +302,7 @@ struct AvatarEditorView: View {
                     Spacer()
                     Text("(´• ω •`)")
                         .font(.largeTitle)
-                    Text("イラストが見つかりません")
+                    Text(i18n.t("noStickersFound"))
                         .font(.subheadline)
                         .foregroundColor(theme.colors.textMuted)
                     Spacer()

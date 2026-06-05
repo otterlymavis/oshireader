@@ -221,7 +221,7 @@ struct SearchView: View {
             }
 
             if selectedLinks.isEmpty {
-                Text("カスタムURLが登録されていません")
+                Text(i18n.t("noCustomUrlsAdded"))
                     .font(.system(size: 13))
                     .foregroundColor(theme.colors.textMuted)
                     .padding(.vertical, 10)
@@ -306,7 +306,7 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 58, weight: .light))
                 .foregroundColor(theme.colors.textMuted)
-            Text("検索リンクから記事を選択してください")
+            Text(i18n.t("searchSelectArticle"))
                 .font(.headline)
                 .foregroundColor(theme.colors.textSub)
         }
