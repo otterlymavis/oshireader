@@ -390,6 +390,15 @@ class LocalDB: ObservableObject {
                     try? FileManager.default.removeItem(at: url)
                 }
             }
+            // Delete all content cache files (cache_*.json) written by saveContentCache.
+            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            if let contents = try? FileManager.default.contentsOfDirectory(
+                at: docsDir, includingPropertiesForKeys: nil
+            ) {
+                for cacheUrl in contents where cacheUrl.lastPathComponent.hasPrefix("cache_") {
+                    try? FileManager.default.removeItem(at: cacheUrl)
+                }
+            }
             UserDefaults.standard.removeObject(forKey: "wallpaper_url")
             UserDefaults.standard.removeObject(forKey: "sources_order")
             self.saveToFile(name: "subscribed_platforms", value: self.subscribedPlatforms)

@@ -484,7 +484,7 @@ private let staticSearchLinks: [SearchLink] = [
         "https://s.weibo.com/weibo?q=\($0.urlQueryEscaped)"
     },
     SearchLink(id: "5ch", group: "Community", label: "5ch", domain: "find.5ch.net", platform: "5ch") {
-        "https://find.5ch.io/search?q=\($0.urlQueryEscaped)"
+        "https://find.5ch.net/search?q=\($0.urlQueryEscaped)"
     },
     SearchLink(id: "girlschannel", group: "Community", label: "GirlsChannel", domain: "girlschannel.net", platform: "girlschannel") {
         "https://girlschannel.net/topics/search/?q=\($0.urlQueryEscaped)"
