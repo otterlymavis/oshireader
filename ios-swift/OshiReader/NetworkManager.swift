@@ -554,46 +554,9 @@ class NetworkManager {
         }
     }
 
-    // MARK: - NicoNico Tag RSS
+    // MARK: - NicoNico via Google News (tag RSS returns 403)
     func scrapeNiconicoRSS(keyword: String) async -> [FeedItem] {
-        let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
-        guard let url = URL(string: "https://www.nicovideo.jp/tag/\(encoded)?sort=f&rss=2.0") else { return [] }
-
-        let nowString = ISO8601DateFormatter().string(from: Date())
-
-        do {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 12
-            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return [] }
-
-            let parser = XMLParser(data: data)
-            let delegate = RSSParserDelegate()
-            parser.delegate = delegate
-            parser.parse()
-
-            return delegate.items.compactMap { item in
-                guard !item.link.isEmpty else { return nil }
-                let contentId = URL(string: item.link)?.lastPathComponent ?? stableIdHash(item.link)
-                return FeedItem(
-                    id: "niconico:\(contentId)",
-                    platform: "niconico",
-                    url: item.link,
-                    title: item.title.isEmpty ? nil : item.title,
-                    content_text: item.description.isEmpty ? nil : item.description,
-                    author: nil,
-                    thumbnail_url: item.thumbnailUrl,
-                    media_type: "video",
-                    published_at: item.pubDate ?? nowString,
-                    watch_term_keyword: keyword,
-                    fetched_at: nowString
-                )
-            }
-        } catch {
-            return []
-        }
+        return await scrapeGoogleNewsSite(keyword: keyword, site: "nicovideo.jp", platform: "niconico")
     }
 
     // MARK: - Google News Site Filter RSS
