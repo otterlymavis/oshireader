@@ -309,7 +309,10 @@ class NetworkManager {
                 return translatedText.isEmpty ? text : translatedText
             }
         } catch {
+            #if DEBUG
             print("Translation failed: \(error)")
+            #endif
+
         }
         return text
     }
@@ -501,7 +504,10 @@ class NetworkManager {
                 description = extractMetaDescription(from: html)
             }
         } catch {
+            #if DEBUG
             print("Custom URL scrape failed for \(entry.url): \(error)")
+            #endif
+
         }
 
         return FeedItem(

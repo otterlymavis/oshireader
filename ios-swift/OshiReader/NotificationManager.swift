@@ -139,7 +139,10 @@ final class NotificationManager: ObservableObject {
             do {
                 try await center.add(request)
             } catch {
+                #if DEBUG
                 print("Notification scheduling failed for \(keyword): \(error)")
+                #endif
+
             }
         }
     }

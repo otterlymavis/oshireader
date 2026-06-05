@@ -499,7 +499,10 @@ struct AvatarEditorView: View {
                 stickers = try await NetworkManager.shared.getPopularIrasutoya()
             }
         } catch {
+            #if DEBUG
             print("Stickers load error: \(error)")
+            #endif
+
             stickers = []
         }
         
@@ -514,7 +517,10 @@ struct AvatarEditorView: View {
         do {
             stickers = try await NetworkManager.shared.searchIrasutoya(query: searchQuery)
         } catch {
+            #if DEBUG
             print("Stickers search error: \(error)")
+            #endif
+
             stickers = []
         }
 

@@ -64,7 +64,10 @@ class LocalDB: ObservableObject {
             let data = try Data(contentsOf: url)
             return try decoder.decode(T.self, from: data)
         } catch {
+            #if DEBUG
             print("Error loading \(name): \(error)")
+            #endif
+
             return defaultValue
         }
     }
@@ -76,7 +79,10 @@ class LocalDB: ObservableObject {
                 let data = try self.encoder.encode(value)
                 try data.write(to: url, options: [.atomic])
             } catch {
+                #if DEBUG
                 print("Error saving \(name): \(error)")
+                #endif
+
             }
         }
     }

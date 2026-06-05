@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     apns_private_key: str = ""
     apns_private_key_path: str = ""
     apns_topic: str = "com.otterpia.oshireader.plus"
-    apns_use_sandbox: bool = True
+    apns_use_sandbox: bool = False  # set APNS_USE_SANDBOX=true for local dev / TestFlight
 
     model_config = {"env_file": ".env"}
 
