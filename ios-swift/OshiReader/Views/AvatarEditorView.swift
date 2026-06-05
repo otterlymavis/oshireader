@@ -36,7 +36,11 @@ struct AvatarEditorView: View {
     ]
     
     private let baseSize: Double = 90.0
-    
+
+    private var activeLayer: AvatarLayer? {
+        layers.first(where: { $0.id == selectedId })
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header Bar
@@ -157,7 +161,6 @@ struct AvatarEditorView: View {
             .frame(height: 300)
             
             // Layer Controls Panel
-            let activeLayer = layers.first(where: { $0.id == selectedId })
             VStack(spacing: 8) {
                 // Toolbar rows
                 ScrollView(.horizontal, showsIndicators: false) {
