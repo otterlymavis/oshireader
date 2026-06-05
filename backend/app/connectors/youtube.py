@@ -16,7 +16,7 @@ def _parse_youtube_relative(text: str) -> Optional[datetime]:
     if not text:
         return None
     now = datetime.now(timezone.utc)
-    m = re.search(r'(\d+)\s*(second|minute|hour|day|week|month|year|秒|分|時間|日|週間?|ヶ月|か月|年)', text.lower())
+    m = re.search(r'(\d+)[\s 　]*(second|minute|hour|day|week|month|year|秒|分|時間|日|週間?|週|ヶ月|か月|年)', text.lower())
     if not m:
         return None
     n, unit = int(m.group(1)), m.group(2)
@@ -95,7 +95,7 @@ class YouTubeConnector(BaseConnector):
                 return []
 
         # Find ytInitialData JSON inside HTML
-        m = re.search(r"ytInitialData\s*=\s*({.+?});", resp.text)
+        m = re.search(r"ytInitialData\s*=\s*({.+?});", resp.text, re.S)
         if not m:
             log.warning("ytInitialData not found in YouTube search scrape response")
             return []

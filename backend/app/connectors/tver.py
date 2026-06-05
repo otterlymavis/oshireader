@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -26,6 +27,33 @@ def _parse_tver_date(content: dict) -> Optional[datetime]:
                 return datetime.fromisoformat(val.replace("Z", "+00:00"))
             except ValueError:
                 pass
+
+    # Parse broadcastDateLabel: "6月5日(金)放送分", "5月29日(金) 18:29", "2021年放送"
+    label = content.get("broadcastDateLabel") or ""
+    if label:
+        now = datetime.now(timezone.utc)
+        # Year-only: "2021年放送"
+        year_m = re.match(r'^(\d{4})年', label)
+        if year_m:
+            return datetime(int(year_m.group(1)), 6, 1, tzinfo=timezone.utc)
+        # Month/day with optional time: "6月5日(金)放送分" or "5月29日(金) 18:29"
+        md_m = re.search(r'(\d+)月(\d+)日', label)
+        if md_m:
+            month, day = int(md_m.group(1)), int(md_m.group(2))
+            hour, minute = 0, 0
+            time_m = re.search(r'(\d+):(\d+)', label)
+            if time_m:
+                hour, minute = int(time_m.group(1)), int(time_m.group(2))
+            year = now.year
+            try:
+                dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+                # If date is more than 7 days in the future it's from last year
+                if dt > now + timedelta(days=7):
+                    dt = dt.replace(year=year - 1)
+                return dt
+            except ValueError:
+                pass
+
     return None
 
 
