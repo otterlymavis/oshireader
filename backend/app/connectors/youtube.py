@@ -1,12 +1,15 @@
+import asyncio
 import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import quote
 
+import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate
+from app.connectors.base import BaseConnector, SourceItemCreate, parse_feed_date
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +163,50 @@ class YouTubeConnector(BaseConnector):
 
         return items
 
+    async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
+        """Last-resort fallback: Google News RSS filtered to youtube.com.
+        Works from cloud IPs where direct YouTube scraping is blocked."""
+        encoded = quote(f"{keyword} site:youtube.com")
+        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    log.warning("YouTube Google News fallback returned status %d", resp.status_code)
+                    return []
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+        except Exception as exc:
+            log.warning("YouTube Google News fallback error: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            link = entry.get("link", "")
+            if not link:
+                continue
+            item_id = entry.get("id") or link
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            title = (entry.get("title") or "").strip()
+            if not title:
+                continue
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=item_id,
+                    url=link,
+                    published_at=parse_feed_date(entry),
+                    media_type="video",
+                    title=title,
+                    content_text=entry.get("summary") or None,
+                    thumbnail_url=None,
+                    raw_payload={"source": "google_news", "keyword": keyword},
+                )
+            )
+        return items
+
     async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
         # Always try API first if credential is provided
         if self.api_key:
@@ -170,7 +217,11 @@ class YouTubeConnector(BaseConnector):
 
         # Scrape fallback
         try:
-            return await self._fetch_scrape(keyword)
+            items = await self._fetch_scrape(keyword)
+            if items:
+                return items
         except Exception as e:
             log.warning("YouTube scrape fetch failed. Error: %s", e)
-            return []
+
+        # Google News fallback — works from cloud IPs when direct scraping is blocked
+        return await self._fetch_gnews(keyword)
