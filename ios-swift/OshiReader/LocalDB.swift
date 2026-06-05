@@ -268,9 +268,11 @@ class LocalDB: ObservableObject {
                 }
             }
             
-            // Strict keyword matching logic
+            // Strict keyword matching logic — pass if primary keyword OR any alias appears in content
             if strictKeywordPlatforms.contains(item.platform), !item.watch_term_keyword.isEmpty {
-                if !matchesKeyword(item: item, kw: item.watch_term_keyword) {
+                let term = terms.first(where: { $0.keyword == item.watch_term_keyword })
+                let candidates = [item.watch_term_keyword] + (term?.aliases ?? [])
+                if !candidates.contains(where: { matchesKeyword(item: item, kw: $0) }) {
                     return false
                 }
             }

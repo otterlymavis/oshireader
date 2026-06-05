@@ -40,7 +40,7 @@ class YahooNewsConnector(BaseConnector):
         return items
 
     async def _fetch_jina(self, keyword: str) -> list[SourceItemCreate]:
-        """Primary: r.jina.ai proxy returns Yahoo News results as markdown."""
+        """Fallback: r.jina.ai proxy returns Yahoo News results as markdown (no publish dates)."""
         encoded = quote(keyword)
         url = f"https://r.jina.ai/https://news.yahoo.co.jp/search?p={encoded}"
         try:

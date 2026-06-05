@@ -525,16 +525,7 @@ struct FeedView: View {
     }
 
     private func backendPlatformKeys(for platformId: String) -> [String] {
-        switch platformId {
-        case "news":
-            return ["news", "news:mdpr", "news:yahoo_ent"]
-        case "mdpr":
-            return ["mdpr", "news:mdpr"]
-        case "yahoonews":
-            return ["yahoonews", "news:yahoo_ent"]
-        default:
-            return [platformId]
-        }
+        return [platformId]
     }
 
     private func hasItems(for platformId: String) -> Bool {
