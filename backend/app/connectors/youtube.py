@@ -40,11 +40,13 @@ class YouTubeConnector(BaseConnector):
         self.api_key = api_key
 
     async def _fetch_api(self, keyword: str) -> list[SourceItemCreate]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
         params = {
             "part": "snippet",
             "q": keyword,
             "type": "video",
             "order": "date",
+            "publishedAfter": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "maxResults": 25,
             "key": self.api_key,
         }
@@ -111,6 +113,7 @@ class YouTubeConnector(BaseConnector):
             log.warning("Failed to parse ytInitialData JSON: %s", e)
             return []
 
+        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
         items: list[SourceItemCreate] = []
         for content in contents:
             item_section = content.get("itemSectionRenderer", {})
@@ -123,12 +126,12 @@ class YouTubeConnector(BaseConnector):
 
                     title = vr.get("title", {}).get("runs", [{}])[0].get("text")
                     channel = vr.get("ownerText", {}).get("runs", [{}])[0].get("text")
-                    
+
                     desc = ""
                     snippets = vr.get("detailedMetadataSnippets", [])
                     if snippets:
                         desc = snippets[0].get("snippetText", {}).get("runs", [{}])[0].get("text", "")
-                    
+
                     thumb = None
                     thumbnails = vr.get("thumbnail", {}).get("thumbnails", [])
                     if thumbnails:
@@ -136,6 +139,9 @@ class YouTubeConnector(BaseConnector):
 
                     rel_text = vr.get("publishedTimeText", {}).get("simpleText", "")
                     published_at = _parse_youtube_relative(rel_text) or datetime.now(timezone.utc)
+
+                    if published_at < cutoff:
+                        continue
 
                     items.append(
                         SourceItemCreate(
