@@ -172,7 +172,7 @@ struct FeedView: View {
                                         Text("🌐")
                                             .font(.system(size: 18))
                                         Text(i18n.t("all"))
-                                            .font(.system(size: 9, weight: selectedPlatform == nil ? .bold : .medium))
+                                            .font(.system(size: 11, weight: selectedPlatform == nil ? .bold : .medium))
                                             .foregroundColor(selectedPlatform == nil ? .white : theme.colors.textMuted)
                                     }
                                     .frame(width: 58, height: 58)
@@ -203,7 +203,7 @@ struct FeedView: View {
                                             Text(meta.icon)
                                                 .font(.system(size: 18))
                                             Text(meta.name)
-                                                .font(.system(size: 9, weight: isSelected ? .bold : .medium))
+                                                .font(.system(size: 11, weight: isSelected ? .bold : .medium))
                                                 .foregroundColor(fg)
                                                 .lineLimit(1)
                                         }
@@ -530,7 +530,7 @@ struct FeedCard: View {
                     Text(meta.icon)
                         .font(.caption)
                     Text(meta.name)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
@@ -540,7 +540,7 @@ struct FeedCard: View {
                 
                 if !item.watch_term_keyword.isEmpty {
                     Text(item.watch_term_keyword)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
                         .background(theme.colors.divider)

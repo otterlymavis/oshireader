@@ -149,7 +149,7 @@ struct SavedPageCard: View {
                     Text(meta.icon)
                         .font(.caption)
                     Text(meta.name)
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
