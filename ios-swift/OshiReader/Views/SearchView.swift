@@ -250,6 +250,7 @@ struct SearchView: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .simultaneousGesture(TapGesture().onEnded { fieldFocused = false })
         .accessibilityIdentifier("search.link.\(link.id)")
     }
 
@@ -257,6 +258,7 @@ struct SearchView: View {
         let disabled = linkRequiresKeyword(link) && trimmedKeyword.isEmpty
 
         return Button {
+            fieldFocused = false
             open(link)
         } label: {
             searchLinkRowContent(link)
