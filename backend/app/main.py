@@ -58,6 +58,39 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
     return {"status": "poll started"}
 
 
+@app.get("/api/admin/test-fetch")
+async def test_fetch() -> dict:
+    import httpx, feedparser
+    from urllib.parse import quote
+    results: dict = {}
+    kw = "星野源"
+    enc = quote(f"{kw} site:mdpr.jp")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(f"https://news.google.com/rss/search?q={enc}&hl=ja&gl=JP&ceid=JP%3Aja")
+            results["gnews_status"] = r.status_code
+            results["gnews_entries"] = len(feedparser.parse(r.content).entries) if r.is_success else 0
+    except Exception as e:
+        results["gnews_error"] = str(e)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get("https://togetter.com/search", params={"q": kw})
+            results["togetter_status"] = r.status_code
+            results["togetter_len"] = len(r.text)
+    except Exception as e:
+        results["togetter_error"] = str(e)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get("https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search",
+                            params={"q": kw, "targets": "title", "fields": "contentId", "_limit": "5"},
+                            headers={"Accept": "application/json"})
+            results["nico_status"] = r.status_code
+            results["nico_count"] = len(r.json().get("data", [])) if r.is_success else 0
+    except Exception as e:
+        results["nico_error"] = str(e)
+    return results
+
+
 @app.get("/api/admin/stats")
 def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
     items_total = db.query(func.count(SourceItem.id)).scalar()
