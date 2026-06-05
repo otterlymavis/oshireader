@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/feed", tags=["feed"])
 
 # These platforms host long-lived threads / community content — skip date filters
 # so they always reach the client (mirrors the iOS app's skipCutoff logic).
-_TIMELESS_PLATFORMS = ("5ch", "girlschannel")
+_TIMELESS_PLATFORMS = ("5ch", "girlschannel", "togetter")
 
 
 @router.get("/", response_model=list[FeedItemOut])

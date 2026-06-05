@@ -39,10 +39,13 @@ def update_term(
     term = db.get(WatchTerm, term_id)
     if not term:
         raise HTTPException(404, "Watch term not found")
-    for k, v in body.model_dump(exclude_none=True).items():
+    updates = body.model_dump(exclude_none=True)
+    for k, v in updates.items():
         setattr(term, k, v)
     db.commit()
     db.refresh(term)
+    if "aliases" in updates:
+        queue_poll()
     return term
 
 
