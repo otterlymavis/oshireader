@@ -12,10 +12,32 @@ class NetworkManager {
     static let shared = NetworkManager()
     
     private init() {}
+
+    private var isUITesting: Bool {
+        ProcessInfo.processInfo.arguments.contains("--uitesting")
+    }
     
     // MARK: - Backend URL Config
+    private let fallbackProductionAPIBase = "https://otterpia-backend-production.up.railway.app"
+
     var apiBase: String {
-        return "https://otterpia-backend-production.up.railway.app"
+        configuredBundleValue(forKey: "OshiReaderAPIBaseURL") ?? fallbackProductionAPIBase
+    }
+
+    var environmentName: String {
+        configuredBundleValue(forKey: "OshiReaderEnvironment") ?? "Production"
+    }
+
+    private func configuredBundleValue(forKey key: String) -> String? {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String else {
+            return nil
+        }
+
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else {
+            return nil
+        }
+        return trimmed
     }
 
     var adminApiToken: String? {
@@ -50,9 +72,26 @@ class NetworkManager {
         }
         return try JSONDecoder().decode([WatchTerm].self, from: data)
     }
+
+    // MARK: - Sync Local Terms to Backend
+    // Pushes any local watch terms that are missing from the backend (e.g. after a database reset).
+    func syncWatchTermsToBackend(localTerms: [WatchTerm]) async {
+        guard !isUITesting, !localTerms.isEmpty else { return }
+        guard let backendTerms = try? await fetchWatchTerms() else { return }
+        let backendKeywords = Set(backendTerms.map { $0.keyword })
+        for term in localTerms where !backendKeywords.contains(term.keyword) {
+            if let serverTerm = try? await createWatchTerm(keyword: term.keyword, collectionMode: term.collection_mode) {
+                LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm)
+            }
+        }
+    }
     
     // MARK: - Create Watch Term
     func createWatchTerm(keyword: String, collectionMode: String) async throws -> WatchTerm {
+        if isUITesting {
+            return WatchTerm(keyword: keyword, collection_mode: collectionMode)
+        }
+
         let url = URL(string: "\(apiBase)/api/watch-terms/")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -74,6 +113,10 @@ class NetworkManager {
     
     // MARK: - Update Watch Term
     func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil, notifyOnNew: Bool? = nil) async throws -> WatchTerm {
+        if isUITesting {
+            throw URLError(.cancelled)
+        }
+
         let url = URL(string: "\(apiBase)/api/watch-terms/\(id)")!
         var request = URLRequest(url: url)
         request.httpMethod = "PATCH"
@@ -95,6 +138,10 @@ class NetworkManager {
     
     // MARK: - Delete Watch Term
     func deleteWatchTerm(id: String) async throws {
+        if isUITesting {
+            return
+        }
+
         let url = URL(string: "\(apiBase)/api/watch-terms/\(id)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
@@ -108,6 +155,10 @@ class NetworkManager {
     
     // MARK: - Fetch Feed
     func fetchFeed(termId: Int? = nil, platform: String? = nil, limit: Int = 50) async throws -> [FeedItem] {
+        if isUITesting {
+            return []
+        }
+
         var components = URLComponents(string: "\(apiBase)/api/feed/")!
         var queryItems: [URLQueryItem] = [URLQueryItem(name: "limit", value: String(limit))]
         if let termId = termId {
@@ -137,6 +188,29 @@ class NetworkManager {
             throw URLError(.badServerResponse)
         }
         return try JSONDecoder().decode([Credential].self, from: data)
+    }
+
+    func updateCredential(platform: String, apiKey: String? = nil, bearerToken: String? = nil) async throws -> Credential {
+        let url = URL(string: "\(apiBase)/api/credentials/\(platform)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAdminAuthorization(to: &request)
+
+        var body = [String: String]()
+        if let apiKey {
+            body["api_key"] = apiKey
+        }
+        if let bearerToken {
+            body["bearer_token"] = bearerToken
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(Credential.self, from: data)
     }
 
     // MARK: - APNs Device Token
@@ -178,6 +252,10 @@ class NetworkManager {
     
     // MARK: - Trigger Scraper Polling
     func triggerPoll() async throws {
+        if isUITesting {
+            return
+        }
+
         let url = URL(string: "\(apiBase)/api/admin/poll")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -363,7 +441,199 @@ class NetworkManager {
         
         return results
     }
+
+    // MARK: - Custom URL Scraping
+    func scrapeCustomUrls(_ urls: [CustomUrl]) async -> [FeedItem] {
+        guard !urls.isEmpty else { return [] }
+
+        return await withTaskGroup(of: FeedItem?.self) { group in
+            for entry in urls {
+                group.addTask {
+                    await self.scrapeCustomUrl(entry)
+                }
+            }
+
+            var results = [FeedItem]()
+            for await item in group {
+                if let item {
+                    results.append(item)
+                }
+            }
+            return results
+        }
+    }
+
+    private func scrapeCustomUrl(_ entry: CustomUrl) async -> FeedItem? {
+        let normalized = normalizedCustomUrl(entry.url)
+        guard let url = URL(string: normalized) else { return nil }
+
+        let nowString = ISO8601DateFormatter().string(from: Date())
+        var title = entry.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var description: String?
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 12
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .shiftJIS) {
+                title = extractTagContent(named: "title", from: html) ?? title
+                description = extractMetaDescription(from: html)
+            }
+        } catch {
+            print("Custom URL scrape failed for \(entry.url): \(error)")
+        }
+
+        return FeedItem(
+            id: entry.id,
+            platform: "custom",
+            url: normalized,
+            title: title?.isEmpty == false ? title : normalized,
+            content_text: description?.isEmpty == false ? description : nil,
+            author: URL(string: normalized)?.host,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: entry.added_at,
+            watch_term_keyword: "",
+            fetched_at: nowString
+        )
+    }
+
+    private func normalizedCustomUrl(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+            return trimmed
+        }
+        return "https://\(trimmed)"
+    }
+
+    private func extractTagContent(named tag: String, from html: String) -> String? {
+        let pattern = #"<\#(tag)[^>]*>([^<]{1,240})</\#(tag)>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let range = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+        return cleanDisplayText(String(html[range]))
+    }
+
+    private func extractMetaDescription(from html: String) -> String? {
+        let patterns = [
+            #"<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,360})["'][^>]*>"#,
+            #"<meta[^>]+content=["']([^"']{1,360})["'][^>]+name=["']description["'][^>]*>"#,
+            #"<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']{1,360})["'][^>]*>"#,
+            #"<meta[^>]+content=["']([^"']{1,360})["'][^>]+property=["']og:description["'][^>]*>"#
+        ]
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+                  let range = Range(match.range(at: 1), in: html) else {
+                continue
+            }
+            return cleanDisplayText(String(html[range]))
+        }
+        return nil
+    }
     
+    // MARK: - Consolidated Local Fallback (runs all platform scrapers in parallel)
+    func scrapeLocalFallbacks(keyword: String) async -> [FeedItem] {
+        return await withTaskGroup(of: [FeedItem].self) { group in
+            group.addTask { await self.scrapeRSSFallback(keyword: keyword) }
+            group.addTask { await self.scrapeNiconicoRSS(keyword: keyword) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.yahoo.co.jp", platform: "yahoonews") }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mdpr.jp", platform: "mdpr") }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "oricon.co.jp", platform: "oricon") }
+
+            var all = [FeedItem]()
+            for await items in group {
+                all.append(contentsOf: items)
+            }
+            return all
+        }
+    }
+
+    // MARK: - NicoNico Tag RSS
+    func scrapeNiconicoRSS(keyword: String) async -> [FeedItem] {
+        let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
+        guard let url = URL(string: "https://www.nicovideo.jp/tag/\(encoded)?sort=f&rss=2.0") else { return [] }
+
+        let nowString = ISO8601DateFormatter().string(from: Date())
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 12
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return [] }
+
+            let parser = XMLParser(data: data)
+            let delegate = RSSParserDelegate()
+            parser.delegate = delegate
+            parser.parse()
+
+            return delegate.items.compactMap { item in
+                guard !item.link.isEmpty else { return nil }
+                let contentId = URL(string: item.link)?.lastPathComponent ?? stableIdHash(item.link)
+                return FeedItem(
+                    id: "niconico:\(contentId)",
+                    platform: "niconico",
+                    url: item.link,
+                    title: item.title.isEmpty ? nil : item.title,
+                    content_text: item.description.isEmpty ? nil : item.description,
+                    author: nil,
+                    thumbnail_url: item.thumbnailUrl,
+                    media_type: "video",
+                    published_at: item.pubDate ?? nowString,
+                    watch_term_keyword: keyword,
+                    fetched_at: nowString
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
+    // MARK: - Google News Site Filter RSS
+    func scrapeGoogleNewsSite(keyword: String, site: String, platform: String) async -> [FeedItem] {
+        let query = "\(keyword) site:\(site)"
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        guard let url = URL(string: "https://news.google.com/rss/search?q=\(encoded)&hl=ja&gl=JP&ceid=JP%3Aja") else { return [] }
+
+        let nowString = ISO8601DateFormatter().string(from: Date())
+
+        guard let items = try? await parseRss(url: url) else { return [] }
+
+        return items.compactMap { item in
+            guard !item.link.isEmpty else { return nil }
+            let cleanedTitle = cleanNewsTitle(item.title)
+            return FeedItem(
+                id: "\(platform):gnews:\(stableIdHash(item.link))",
+                platform: platform,
+                url: item.link,
+                title: cleanedTitle.isEmpty ? nil : cleanedTitle,
+                content_text: item.description.isEmpty ? nil : item.description,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: item.pubDate ?? nowString,
+                watch_term_keyword: keyword,
+                fetched_at: nowString
+            )
+        }
+    }
+
+    private func stableIdHash(_ input: String) -> String {
+        var v: UInt64 = 14695981039346656037
+        for b in input.utf8 {
+            v ^= UInt64(b)
+            v = v &* 1099511628211
+        }
+        return String(v)
+    }
+
     private func parseRss(url: URL) async throws -> [RssItem] {
         let (data, _) = try await URLSession.shared.data(from: url)
         let parser = XMLParser(data: data)
@@ -400,18 +670,20 @@ struct RssItem {
     var link: String = ""
     var description: String = ""
     var pubDate: String? = nil
+    var thumbnailUrl: String? = nil
 }
 
 class RSSParserDelegate: NSObject, XMLParserDelegate {
     var items = [RssItem]()
     private var currentElement = ""
     private var currentItem: RssItem? = nil
-    
+
     private var currentTitle = ""
     private var currentLink = ""
     private var currentDescription = ""
     private var currentPubDate = ""
-    
+    private var currentThumbnailUrl: String? = nil
+
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
         currentElement = elementName
         if elementName == "item" || elementName == "entry" {
@@ -420,6 +692,20 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
             currentLink = ""
             currentDescription = ""
             currentPubDate = ""
+            currentThumbnailUrl = nil
+        }
+        if currentItem != nil {
+            if elementName == "media:thumbnail" || elementName == "media:content" {
+                if let url = attributeDict["url"], currentThumbnailUrl == nil {
+                    currentThumbnailUrl = url
+                }
+            }
+            if elementName == "enclosure",
+               let url = attributeDict["url"],
+               attributeDict["type"]?.hasPrefix("image") == true,
+               currentThumbnailUrl == nil {
+                currentThumbnailUrl = url
+            }
         }
     }
     
@@ -447,6 +733,7 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
                 item.title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
                 item.link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
                 item.description = currentDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                item.thumbnailUrl = currentThumbnailUrl
                 
                 // Try to parse pubDate into ISO8601
                 let dateString = currentPubDate.trimmingCharacters(in: .whitespacesAndNewlines)

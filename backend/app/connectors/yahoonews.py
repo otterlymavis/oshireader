@@ -31,7 +31,7 @@ class YahooNewsConnector(BaseConnector):
         if not encoded:
             return []
 
-        url = f"https://r.jina.ai/http://https://news.yahoo.co.jp/search?p={encoded}"
+        url = f"https://r.jina.ai/https://news.yahoo.co.jp/search?p={encoded}"
         try:
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 resp = await client.get(url)

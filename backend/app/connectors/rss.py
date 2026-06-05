@@ -14,7 +14,6 @@ log = logging.getLogger(__name__)
 FEEDS: list[tuple[str, str, str]] = [
     ("news", "natalie", "https://natalie.mu/music/feed/news"),
     ("news", "natalie", "https://natalie.mu/tv/feed/news"),
-    ("news", "oricon", "https://www.oricon.co.jp/rss/news.rss"),
     ("news", "sponichi", "https://www.sponichi.co.jp/entertainment/rss/entertainmentAll.rdf"),
     ("news", "hochi", "https://hochi.news/rss/entertainment"),
 ]

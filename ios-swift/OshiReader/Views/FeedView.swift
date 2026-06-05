@@ -11,6 +11,7 @@ struct FeedView: View {
     @State private var daysFilter: Int = 30
     
     @State private var isRefreshing = false
+    @State private var hasLoadedOnce = false
     @State private var showFilterSheet = false
     @State private var showAddUrlSheet = false
     @State private var showReorderSheet = false
@@ -35,16 +36,7 @@ struct FeedView: View {
         
         if let platform = selectedPlatform {
             result = result.filter { item in
-                if platform == "mdpr" {
-                    return item.platform == "mdpr" || item.platform == "news:mdpr"
-                }
-                if platform == "yahoonews" {
-                    return item.platform == "yahoonews" || item.platform == "news:yahoo_ent"
-                }
-                if platform == "news" {
-                    return item.platform == "news" || item.platform.hasPrefix("news:")
-                }
-                return item.platform == platform
+                matchesPlatform(item, platformId: platform)
             }
         }
         
@@ -193,17 +185,30 @@ struct FeedView: View {
                                 ForEach(orderedPlatforms, id: \.self) { platformId in
                                     let meta = theme.metadata(for: platformId)
                                     let isSelected = selectedPlatform == platformId
-                                    Button(action: { selectedPlatform = isSelected ? nil : platformId }) {
+                                    let bg = theme.style == .standard
+                                        ? (isSelected ? theme.standardAccent : theme.standardBadgeBg)
+                                        : (isSelected ? meta.accent : meta.bg)
+                                    let fg = theme.style == .standard
+                                        ? (isSelected ? Color.white : theme.standardBadgeFg)
+                                        : (isSelected ? Color.white : meta.fg)
+                                    Button(action: {
+                                        selectedPlatform = isSelected ? nil : platformId
+                                        if !isSelected && !hasItems(for: platformId) {
+                                            Task {
+                                                await fetchBackendPlatform(platformId)
+                                            }
+                                        }
+                                    }) {
                                         VStack(spacing: 3) {
                                             Text(meta.icon)
                                                 .font(.system(size: 18))
                                             Text(meta.name)
                                                 .font(.system(size: 9, weight: isSelected ? .bold : .medium))
-                                                .foregroundColor(isSelected ? .white : meta.fg)
+                                                .foregroundColor(fg)
                                                 .lineLimit(1)
                                         }
                                         .frame(width: 58, height: 58)
-                                        .background(isSelected ? meta.accent : meta.bg)
+                                        .background(bg)
                                         .cornerRadius(10)
                                     }
                                     .accessibilityIdentifier("feed.platform.\(platformId)")
@@ -364,6 +369,12 @@ struct FeedView: View {
         .sheet(isPresented: $showAddUrlSheet) {
             AddUrlSheet(customUrlString: $customUrlString, customUrlTitle: $customUrlTitle, theme: theme, i18n: i18n) {
                 db.addCustomUrl(url: customUrlString, title: customUrlTitle)
+                Task {
+                    let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
+                    if !customItems.isEmpty {
+                        _ = db.mergeItems(newItems: customItems)
+                    }
+                }
                 customUrlString = ""
                 customUrlTitle = ""
                 showAddUrlSheet = false
@@ -374,6 +385,18 @@ struct FeedView: View {
             ReorderSourcesSheet(theme: theme, i18n: i18n)
         }
         .accessibilityIdentifier("feed.screen")
+        .onAppear {
+            guard !hasLoadedOnce else { return }
+            hasLoadedOnce = true
+            Task {
+                // Always sync terms silently so backend has them after any DB reset
+                await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+                // Full refresh only when there is no cached data to show
+                if db.feedItems.isEmpty, !db.terms.isEmpty {
+                    await refreshFeed()
+                }
+            }
+        }
     }
     
     private var filterCount: Int {
@@ -386,24 +409,79 @@ struct FeedView: View {
     
     private func refreshFeed() async {
         isRefreshing = true
+        // 0. Sync local watch terms to backend (handles database resets)
+        await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
         // 1. Trigger backend poll
         _ = try? await NetworkManager.shared.triggerPoll()
         
         // 2. Fetch fresh feed items from backend
-        if let freshItems = try? await NetworkManager.shared.fetchFeed(limit: 80) {
+        if let freshItems = try? await NetworkManager.shared.fetchFeed(limit: 120) {
             _ = db.mergeItems(newItems: freshItems)
         }
+
+        // 2b. Fetch each subscribed source explicitly so a noisy source cannot crowd out others.
+        var fetchedPlatforms = Set<String>()
+        for platform in db.subscribedPlatforms where platform != "custom" {
+            guard fetchedPlatforms.insert(platform).inserted else { continue }
+            await fetchBackendPlatform(platform)
+        }
         
-        // 3. Trigger RSS fallback scrapers locally for active keywords
+        // 3. Trigger local fallback scrapers for active keywords (news, NicoNico, YahooNews, MDPR, Oricon)
         let activeTerms = db.terms.filter { $0.is_active }
         for term in activeTerms {
-            let localItems = await NetworkManager.shared.scrapeRSSFallback(keyword: term.keyword)
+            let localItems = await NetworkManager.shared.scrapeLocalFallbacks(keyword: term.keyword)
             if !localItems.isEmpty {
                 _ = db.mergeItems(newItems: localItems)
             }
         }
+
+        // 4. Refresh custom URL cards just like the Android/master app.
+        let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
+        if !customItems.isEmpty {
+            _ = db.mergeItems(newItems: customItems)
+        }
         
         isRefreshing = false
+    }
+
+    private func fetchBackendPlatform(_ platformId: String) async {
+        let backendPlatforms = backendPlatformKeys(for: platformId)
+        for backendPlatform in backendPlatforms {
+            if let items = try? await NetworkManager.shared.fetchFeed(platform: backendPlatform, limit: 60),
+               !items.isEmpty {
+                _ = db.mergeItems(newItems: items)
+            }
+        }
+    }
+
+    private func backendPlatformKeys(for platformId: String) -> [String] {
+        switch platformId {
+        case "news":
+            return ["news", "news:mdpr", "news:yahoo_ent"]
+        case "mdpr":
+            return ["mdpr", "news:mdpr"]
+        case "yahoonews":
+            return ["yahoonews", "news:yahoo_ent"]
+        default:
+            return [platformId]
+        }
+    }
+
+    private func hasItems(for platformId: String) -> Bool {
+        db.feedItems.contains { matchesPlatform($0, platformId: platformId) }
+    }
+
+    private func matchesPlatform(_ item: FeedItem, platformId: String) -> Bool {
+        if platformId == "mdpr" {
+            return item.platform == "mdpr" || item.platform == "news:mdpr"
+        }
+        if platformId == "yahoonews" {
+            return item.platform == "yahoonews" || item.platform == "news:yahoo_ent"
+        }
+        if platformId == "news" {
+            return item.platform == "news" || item.platform.hasPrefix("news:")
+        }
+        return item.platform == platformId
     }
 }
 
@@ -434,6 +512,9 @@ struct FeedCard: View {
     
     var body: some View {
         let meta = theme.metadata(for: item.platform)
+        let badgeBg = theme.style == .standard ? theme.standardBadgeBg : meta.bg
+        let badgeFg = theme.style == .standard ? theme.standardBadgeFg : meta.fg
+        let titleColor = theme.style == .standard ? theme.colors.text : meta.fg
         
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center) {
@@ -446,8 +527,8 @@ struct FeedCard: View {
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .background(meta.bg)
-                .foregroundColor(meta.fg)
+                .background(badgeBg)
+                .foregroundColor(badgeFg)
                 .cornerRadius(6)
                 
                 if !item.watch_term_keyword.isEmpty {
@@ -479,7 +560,7 @@ struct FeedCard: View {
                         Text(title)
                             .font(.subheadline)
                             .fontWeight(.bold)
-                            .foregroundColor(theme.colors.text)
+                            .foregroundColor(titleColor)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
@@ -742,8 +823,8 @@ struct AddUrlSheet: View {
                     .cornerRadius(10)
             }
             .accessibilityIdentifier("customUrl.saveButton")
-            .disabled(customUrlString.isEmpty || customUrlTitle.isEmpty)
-            .opacity(customUrlString.isEmpty || customUrlTitle.isEmpty ? 0.5 : 1.0)
+            .disabled(customUrlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .opacity(customUrlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1.0)
             
             Spacer()
         }
