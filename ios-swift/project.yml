@@ -22,7 +22,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: OshiReader/OshiReader.entitlements
         MARKETING_VERSION: 1.0.0
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 2
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.9"
         GENERATE_INFOPLIST_FILE: NO
@@ -124,7 +124,7 @@ schemes:
   OshiReader Production:
     build:
       targets:
-        OshiReader: [run, test, profile, analyze]
+        OshiReader: [run, test, profile, analyze, archive]
     test:
       targets:
         - OshiReaderTests

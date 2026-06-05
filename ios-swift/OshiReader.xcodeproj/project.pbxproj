@@ -47,7 +47,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		0FB8EFA6D9E090CC83802EFF /* OshiReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OshiReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0FB8EFA6D9E090CC83802EFF /* OshiReader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OshiReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		14C7E2AD85F46D55CDAD349D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		16205C1ECDAC6AB69095DEDA /* OshiView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiView.swift; sourceTree = "<group>"; };
 		170F57BD3D60F9B8037B9376 /* SavedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedView.swift; sourceTree = "<group>"; };
@@ -59,7 +59,7 @@
 		5CC07FF11F19D7FE9B1FAE96 /* OshiReaderUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiReaderUITests.swift; sourceTree = "<group>"; };
 		5FB07A4A295E6B82E88BBEB7 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		75492232667474AE9C22A904 /* I18n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = I18n.swift; sourceTree = "<group>"; };
-		7757DA33C395BD65387A4309 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		7757DA33C395BD65387A4309 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		84500A11E3895A0801822A4E /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedView.swift; sourceTree = "<group>"; };
 		866A42C8B01CDE66550FBC36 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
 		970DE2739F781561F643F1C3 /* OshiReaderUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OshiReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -217,6 +217,7 @@
 						ProvisioningStyle = Automatic;
 					};
 					C35ABC27BEDEE333AA00BCE2 = {
+						DevelopmentTeam = D8H3TBWH7P;
 						ProvisioningStyle = Automatic;
 					};
 					D868994E180CE582833E7AA4 = {
@@ -427,7 +428,7 @@
 				CODE_SIGN_ENTITLEMENTS = OshiReader/OshiReader.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = D8H3TBWH7P;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OshiReader/Info.plist;
@@ -454,7 +455,7 @@
 				CODE_SIGN_ENTITLEMENTS = OshiReader/OshiReader.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = D8H3TBWH7P;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OshiReader/Info.plist;
@@ -481,7 +482,7 @@
 				CODE_SIGN_ENTITLEMENTS = OshiReader/OshiReader.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = D8H3TBWH7P;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OshiReader/Info.plist;
