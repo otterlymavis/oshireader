@@ -20,9 +20,10 @@ def get_feed(
     media_type: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
+    days: int = Query(30, ge=1, le=365),
     db: Session = Depends(get_db),
 ):
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     q = (
         db.query(Match, SourceItem, WatchTerm)
         .join(SourceItem, Match.source_item_id == SourceItem.id)

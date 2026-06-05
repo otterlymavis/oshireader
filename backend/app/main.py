@@ -49,7 +49,6 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/api/admin/poll")
 @app.post("/api/admin/poll")
 async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
     started = queue_poll()

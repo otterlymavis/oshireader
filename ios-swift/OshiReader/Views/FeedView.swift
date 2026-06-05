@@ -418,8 +418,10 @@ struct FeedView: View {
         // 1. Trigger backend poll
         _ = try? await NetworkManager.shared.triggerPoll()
         
-        // 2. Fetch fresh feed items from backend
-        if let freshItems = try? await NetworkManager.shared.fetchFeed(limit: 120) {
+        // 2. Fetch fresh feed items — use 90 days on first load (empty cache) for richer history,
+        //    30 days on subsequent refreshes to stay fast.
+        let fetchDays = db.feedItems.isEmpty ? 90 : 30
+        if let freshItems = try? await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays) {
             _ = db.mergeItems(newItems: freshItems)
         }
 
