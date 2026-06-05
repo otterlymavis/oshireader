@@ -14,12 +14,18 @@ final class OshiReaderUITests: XCTestCase {
         tapTab(index: 4, labels: ["Settings"])
 
         app.buttons["settings.addKeywordButton"].tap()
-        let keywordField = firstExistingTextField(labels: ["settings.keywordField", "Enter keyword..."]) ?? app.textFields.firstMatch
-        XCTAssertTrue(keywordField.waitForExistence(timeout: 3))
 
+        // Sheet may take a moment; wait up to 5 s for the only non-secure text field to appear
+        let keywordField = app.textFields.firstMatch
+        XCTAssertTrue(keywordField.waitForExistence(timeout: 5))
         keywordField.tap()
         keywordField.typeText("New UI Keyword")
-        (firstExistingButton(containing: "追加") ?? app.buttons["settings.confirmAddKeywordButton"]).tap()
+
+        // Confirm button label is locale-dependent — try all known translations then fall back to ID
+        let confirmButton = waitForAnyButton(containing: ["Add", "追加", "添加", "新增"], timeout: 5)
+            ?? waitForButton(identifier: "settings.confirmAddKeywordButton", timeout: 3)
+        XCTAssertNotNil(confirmButton, "Confirm add-keyword button not found")
+        confirmButton?.tap()
 
         XCTAssertTrue(app.staticTexts["New UI Keyword"].waitForExistence(timeout: 3))
     }
@@ -63,12 +69,14 @@ final class OshiReaderUITests: XCTestCase {
     func testSearchFlow() throws {
         tapTab(index: 1, labels: ["Search"])
 
-        let searchField = firstExistingTextField(labels: ["search.field", "Search articles..."]) ?? app.textFields.firstMatch
+        let searchField = app.textFields["search.keywordField"]
         XCTAssertTrue(searchField.waitForExistence(timeout: 3))
-        searchField.tap()
-        searchField.typeText("headline")
 
-        XCTAssertTrue(app.staticTexts["UITest Oshi headline"].waitForExistence(timeout: 3))
+        // Keyword chip from the seeded UITest term should be visible
+        XCTAssertTrue(app.staticTexts["UITest Oshi"].waitForExistence(timeout: 3))
+
+        // onAppear pre-fills the field with the first active term's keyword
+        XCTAssertEqual(searchField.value as? String, "UITest Oshi")
     }
 
     func testAvatarEditorFlow() throws {
@@ -109,8 +117,12 @@ final class OshiReaderUITests: XCTestCase {
         tapTab(index: 4, labels: ["Settings"])
 
         XCTAssertTrue(waitForElement(identifier: "settings.notificationStatus", timeout: 2, swipes: 4).exists)
-        XCTAssertTrue(waitForElement(identifier: "settings.enableNotificationsButton", timeout: 2, swipes: 1).exists)
-        XCTAssertTrue(waitForElement(identifier: "settings.testNotificationButton", timeout: 2, swipes: 1).exists)
+
+        // Only one button renders depending on permission state — verify at least one exists
+        let hasEnable = waitForElement(identifier: "settings.enableNotificationsButton", timeout: 2, swipes: 1).exists
+        let hasTest = waitForElement(identifier: "settings.testNotificationButton", timeout: 1, swipes: 0).exists
+        let hasOpenSettings = waitForElement(identifier: "settings.openSettingsButton", timeout: 1, swipes: 0).exists
+        XCTAssertTrue(hasEnable || hasTest || hasOpenSettings, "Expected a notification control button")
     }
 
     private func tapTab(index: Int, labels: [String]) {

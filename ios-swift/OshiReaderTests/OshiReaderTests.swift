@@ -3,6 +3,7 @@ import SwiftUI
 import UserNotifications
 @testable import OshiReader
 
+@MainActor
 final class OshiReaderTests: XCTestCase {
     
     private var db: LocalDB!
