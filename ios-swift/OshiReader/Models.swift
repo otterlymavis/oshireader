@@ -1,13 +1,20 @@
 import Foundation
 
 func parseISO8601Date(_ value: String) -> Date? {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = formatter.date(from: value) {
-        return date
+    let iso = ISO8601DateFormatter()
+    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = iso.date(from: value) { return date }
+    iso.formatOptions = [.withInternetDateTime]
+    if let date = iso.date(from: value) { return date }
+    // Naive datetime (no timezone) from older backend rows — treat as UTC
+    let df = DateFormatter()
+    df.locale = Locale(identifier: "en_US_POSIX")
+    df.timeZone = TimeZone(identifier: "UTC")
+    for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"] {
+        df.dateFormat = format
+        if let date = df.date(from: value) { return date }
     }
-    formatter.formatOptions = [.withInternetDateTime]
-    return formatter.date(from: value)
+    return nil
 }
 
 func cleanDisplayText(_ value: String?) -> String? {

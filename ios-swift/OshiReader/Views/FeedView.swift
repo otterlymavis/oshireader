@@ -628,7 +628,7 @@ struct FeedCard: View {
     }
     
     private func relativeTime(from isoDate: String) -> String {
-        guard let date = parseISO8601Date(isoDate) else { return isoDate }
+        guard let date = parseISO8601Date(isoDate) else { return "" }
         
         let formatter2 = RelativeDateTimeFormatter()
         formatter2.unitsStyle = .abbreviated
