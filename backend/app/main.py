@@ -59,28 +59,45 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
 
 
 @app.get("/api/admin/test-fetch")
-async def test_fetch() -> dict:
-    from app.connectors.mdpr import ModelPressConnector
+async def test_fetch(db: Session = Depends(get_db)) -> dict:
+    from datetime import datetime, timezone
     from app.connectors.togetter import TogetterConnector
-    from app.connectors.yahoonews import YahooNewsConnector
-    from app.connectors.niconico import NicoNicoConnector
-    from app.connectors.rss import RSSConnector
-    kw = "星野源"
+    from app.models import SourceItem as SI, Match, WatchTerm
     results: dict = {}
-    for name, cls in [
-        ("mdpr", ModelPressConnector),
-        ("togetter", TogetterConnector),
-        ("yahoonews", YahooNewsConnector),
-        ("niconico", NicoNicoConnector),
-        ("rss", RSSConnector),
-    ]:
+    # 1. Fetch from togetter
+    try:
+        items = await TogetterConnector().fetch("星野源", "all_info")
+        results["togetter_fetched"] = len(items)
+    except Exception as e:
+        results["togetter_fetch_error"] = str(e)
+        return results
+    # 2. Try to write first item to DB
+    if items:
+        raw = items[0]
+        results["item_id"] = raw.composite_id
         try:
-            items = await cls().fetch(kw, "all_info")
-            results[name] = len(items)
-            if items:
-                results[f"{name}_sample"] = items[0].title or ""
+            existing = db.get(SI, raw.composite_id)
+            results["already_exists"] = existing is not None
+            if not existing:
+                db.add(SI(
+                    id=raw.composite_id,
+                    platform=raw.platform,
+                    item_id=raw.item_id,
+                    url=raw.url,
+                    published_at=raw.published_at,
+                    media_type=raw.media_type,
+                    title=raw.title,
+                    content_text=raw.content_text,
+                    author=raw.author,
+                    thumbnail_url=raw.thumbnail_url,
+                ))
+                db.commit()
+                results["write"] = "ok"
         except Exception as e:
-            results[name] = f"ERROR: {e}"
+            db.rollback()
+            results["write_error"] = str(e)
+    # 3. Check counts
+    results["db_items_total"] = db.query(func.count(SI.id)).scalar()
     return results
 
 
