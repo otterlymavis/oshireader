@@ -162,8 +162,8 @@ class I18nManager: ObservableObject {
         "oshiEmpty": [
             "en": "Add your Oshi!",
             "ja": "推しを追加しよう！",
-            "zh-TW": "推しを追加しよう！",
-            "zh-CN": "推しを追加しよう！"
+            "zh-TW": "新增你的推吧！",
+            "zh-CN": "添加你的推吧！"
         ],
         "oshiEmptyBody": [
             "en": "Register a keyword in Settings and profile canvas will appear here.",

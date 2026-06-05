@@ -233,6 +233,7 @@ struct SettingsView: View {
                     Picker("アプリテーマ", selection: $theme.mode) {
                         Text("ライト").tag(AppThemeMode.light)
                         Text("ダーク").tag(AppThemeMode.dark)
+                        Text("セピア").tag(AppThemeMode.sepia)
                     }
                     .pickerStyle(.segmented)
 

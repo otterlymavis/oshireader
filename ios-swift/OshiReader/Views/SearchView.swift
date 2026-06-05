@@ -126,7 +126,7 @@ struct SearchView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(theme.colors.textMuted)
 
-                TextField("Keyword", text: $keyword)
+                TextField(i18n.t("keyword"), text: $keyword)
                     .foregroundColor(theme.colors.text)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -477,10 +477,10 @@ private let staticSearchLinks: [SearchLink] = [
     SearchLink(id: "twitterviewer", group: "Social", label: "Twitter Viewer", domain: "twitterviewer.net", platform: "twitter") {
         "https://twitterviewer.net/search?q=\($0.urlQueryEscaped)"
     },
-    SearchLink(id: "tiktok", group: "Social", label: "TikTok", domain: "tiktok.com", platform: "twitter") {
+    SearchLink(id: "tiktok", group: "Social", label: "TikTok", domain: "tiktok.com", platform: "custom") {
         "https://www.tiktok.com/search?q=\($0.urlQueryEscaped)"
     },
-    SearchLink(id: "weibo", group: "Social", label: "Weibo", domain: "s.weibo.com", platform: "twitter") {
+    SearchLink(id: "weibo", group: "Social", label: "Weibo", domain: "s.weibo.com", platform: "custom") {
         "https://s.weibo.com/weibo?q=\($0.urlQueryEscaped)"
     },
     SearchLink(id: "5ch", group: "Community", label: "5ch", domain: "find.5ch.net", platform: "5ch") {
@@ -516,9 +516,6 @@ private let staticSearchLinks: [SearchLink] = [
     SearchLink(id: "animate", group: "Shopping", label: "Animate Online", domain: "animate-onlineshop.jp", platform: "custom") {
         "https://www.animate-onlineshop.jp/products/list.php?mode=search&smt=\($0.urlQueryEscaped)"
     },
-    SearchLink(id: "custom-google-site", group: "Custom", label: "Custom site search", domain: "google.co.jp", platform: "custom") {
-        "https://www.google.co.jp/search?q=\($0.urlQueryEscaped)"
-    }
 ]
 
 private extension String {
