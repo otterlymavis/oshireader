@@ -92,6 +92,15 @@ def _search_terms_for(term: WatchTerm) -> list[str]:
     return searches
 
 
+async def _fetch_one(connector: BaseConnector, search_term: str, mode: str) -> list:
+    """Run a single connector fetch; return [] on any error."""
+    try:
+        return await connector.fetch(search_term, mode)
+    except Exception as exc:
+        log.warning("fetch error connector=%s term=%r: %s", connector.PLATFORM, search_term, exc)
+        return []
+
+
 async def _poll_once_unlocked() -> None:
     db = SessionLocal()
     try:
@@ -100,11 +109,14 @@ async def _poll_once_unlocked() -> None:
 
         for term in terms:
             for search_term in _search_terms_for(term):
-                for connector in connectors:
+                # Fetch all connectors in parallel — pure I/O, no DB contention.
+                all_results = await asyncio.gather(
+                    *[_fetch_one(c, search_term, term.collection_mode) for c in connectors]
+                )
+                for connector, items in zip(connectors, all_results):
+                    if not items:
+                        continue
                     try:
-                        items = await connector.fetch(search_term, term.collection_mode)
-                        if not items:
-                            continue
                         new_count = 0
                         ids = [raw.composite_id for raw in items]
                         now = datetime.now(timezone.utc)

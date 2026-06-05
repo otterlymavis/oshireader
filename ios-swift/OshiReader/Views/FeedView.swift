@@ -411,7 +411,12 @@ struct FeedView: View {
         .accessibilityIdentifier("feed.screen")
         .onChange(of: selectedKeyword) { _ in displayedCount = 20 }
         .onChange(of: selectedPlatform) { _ in displayedCount = 20 }
-        .onChange(of: daysFilter) { _ in displayedCount = 20 }
+        .onChange(of: daysFilter) { newDays in
+            displayedCount = 20
+            if newDays == 0 {
+                Task { await refreshFeed() }
+            }
+        }
         .onChange(of: mediaFilter) { _ in displayedCount = 20 }
         .onAppear {
             guard !hasLoadedOnce else { return }
@@ -448,7 +453,11 @@ struct FeedView: View {
         //    First load (empty cache): fetch 90 days of history.
         //    Subsequent refreshes: ask only for items newer than the latest we have,
         //    so the backend never re-sends articles we already cached.
+        // When user has "All Time" selected, bypass the since-optimisation and
+        // fetch the full history so they actually see old items.
+        let wantsFullHistory = daysFilter == 0
         let latestSince: String? = {
+            guard !wantsFullHistory else { return nil }
             guard !db.feedItems.isEmpty else { return nil }
             // Use fetched_at (reliable grab time) not published_at — bad-date items
             // with published_at=now() would otherwise block older legit content.
@@ -457,7 +466,10 @@ struct FeedView: View {
             fmt.formatOptions = [.withInternetDateTime]
             return fmt.string(from: maxDate)
         }()
-        let fetchDays = db.feedItems.isEmpty ? 90 : 30
+        let fetchDays: Int = {
+            if wantsFullHistory { return 0 }
+            return db.feedItems.isEmpty ? 90 : 30
+        }()
 
         let freshItems: [FeedItem]
         if let since = latestSince {
