@@ -60,44 +60,52 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
 
 @app.get("/api/admin/test-fetch")
 async def test_fetch(db: Session = Depends(get_db)) -> dict:
-    from datetime import datetime, timezone
     from app.connectors.togetter import TogetterConnector
     from app.models import SourceItem as SI, Match, WatchTerm
     results: dict = {}
-    # 1. Fetch from togetter
+    kw = "星野源"
+    # 1. Fetch
     try:
-        items = await TogetterConnector().fetch("星野源", "all_info")
-        results["togetter_fetched"] = len(items)
+        items = await TogetterConnector().fetch(kw, "all_info")
+        results["fetched"] = len(items)
     except Exception as e:
-        results["togetter_fetch_error"] = str(e)
+        results["fetch_error"] = str(e)
         return results
-    # 2. Try to write first item to DB
-    if items:
-        raw = items[0]
-        results["item_id"] = raw.composite_id
-        try:
-            existing = db.get(SI, raw.composite_id)
-            results["already_exists"] = existing is not None
-            if not existing:
-                db.add(SI(
-                    id=raw.composite_id,
-                    platform=raw.platform,
-                    item_id=raw.item_id,
-                    url=raw.url,
-                    published_at=raw.published_at,
-                    media_type=raw.media_type,
-                    title=raw.title,
-                    content_text=raw.content_text,
-                    author=raw.author,
-                    thumbnail_url=raw.thumbnail_url,
-                ))
+    if not items:
+        return results
+    raw = items[0]
+    results["item_id"] = raw.composite_id
+    # 2. Ensure SourceItem exists
+    try:
+        if not db.get(SI, raw.composite_id):
+            db.add(SI(id=raw.composite_id, platform=raw.platform, item_id=raw.item_id,
+                      url=raw.url, published_at=raw.published_at, media_type=raw.media_type,
+                      title=raw.title, content_text=raw.content_text))
+            db.commit()
+            results["source_item_write"] = "created"
+        else:
+            results["source_item_write"] = "already_existed"
+    except Exception as e:
+        db.rollback()
+        results["source_item_error"] = str(e)
+        return results
+    # 3. Try to create a Match record
+    try:
+        term = db.query(WatchTerm).filter_by(keyword=kw).first()
+        results["term_id"] = term.id if term else None
+        if term:
+            match_exists = db.query(Match).filter_by(watch_term_id=term.id, source_item_id=raw.composite_id).first()
+            if not match_exists:
+                db.add(Match(watch_term_id=term.id, source_item_id=raw.composite_id))
                 db.commit()
-                results["write"] = "ok"
-        except Exception as e:
-            db.rollback()
-            results["write_error"] = str(e)
-    # 3. Check counts
-    results["db_items_total"] = db.query(func.count(SI.id)).scalar()
+                results["match_write"] = "created"
+            else:
+                results["match_write"] = "already_existed"
+    except Exception as e:
+        db.rollback()
+        results["match_error"] = str(e)
+    results["items_total"] = db.query(func.count(SI.id)).scalar()
+    results["matches_total"] = db.query(func.count(Match.id)).scalar()
     return results
 
 
