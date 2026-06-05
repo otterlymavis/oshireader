@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -11,6 +12,10 @@ from app.models import Match, SourceItem, WatchTerm
 from app.schemas import FeedItemOut, SourceItemOut
 
 router = APIRouter(prefix="/api/feed", tags=["feed"])
+
+# These platforms host long-lived threads / community content — skip date filters
+# so they always reach the client (mirrors the iOS app's skipCutoff logic).
+_TIMELESS_PLATFORMS = ("5ch", "girlschannel")
 
 
 @router.get("/", response_model=list[FeedItemOut])
@@ -31,12 +36,17 @@ def get_feed(
         .order_by(SourceItem.published_at.desc())
     )
     if since is not None:
-        # Caller knows exactly what it has — only return genuinely newer items
         aware_since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since
-        q = q.filter(SourceItem.published_at > aware_since)
+        q = q.filter(
+            or_(SourceItem.published_at > aware_since,
+                SourceItem.platform.in_(_TIMELESS_PLATFORMS))
+        )
     elif days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        q = q.filter(SourceItem.published_at >= cutoff)
+        q = q.filter(
+            or_(SourceItem.published_at >= cutoff,
+                SourceItem.platform.in_(_TIMELESS_PLATFORMS))
+        )
     if term_id is not None:
         q = q.filter(Match.watch_term_id == term_id)
     if platform:

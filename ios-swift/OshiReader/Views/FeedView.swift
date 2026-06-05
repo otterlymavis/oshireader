@@ -450,7 +450,9 @@ struct FeedView: View {
         //    so the backend never re-sends articles we already cached.
         let latestSince: String? = {
             guard !db.feedItems.isEmpty else { return nil }
-            guard let maxDate = db.feedItems.compactMap({ parseISO8601Date($0.published_at) }).max() else { return nil }
+            // Use fetched_at (reliable grab time) not published_at — bad-date items
+            // with published_at=now() would otherwise block older legit content.
+            guard let maxDate = db.feedItems.compactMap({ parseISO8601Date($0.fetched_at) }).max() else { return nil }
             let fmt = ISO8601DateFormatter()
             fmt.formatOptions = [.withInternetDateTime]
             return fmt.string(from: maxDate)
