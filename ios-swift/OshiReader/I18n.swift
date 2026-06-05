@@ -17,7 +17,7 @@ class I18nManager: ObservableObject {
     private let translations: [String: [String: String]] = [
         "appTitle": [
             "en": "OshiReader+",
-            "ja": "OshiReader+",
+            "ja": "推しリーダー+",
             "zh-TW": "OshiReader+",
             "zh-CN": "OshiReader+"
         ],
