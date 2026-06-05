@@ -65,3 +65,15 @@ def apply_startup_migrations(engine: Engine) -> None:
             "created_at": "TIMESTAMP",
         },
     )
+    _add_missing_columns(
+        engine,
+        "platform_credentials",
+        {
+            "updated_at": "TIMESTAMP",
+        },
+    )
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_matches_source_item_id"
+            " ON matches (source_item_id)"
+        ))

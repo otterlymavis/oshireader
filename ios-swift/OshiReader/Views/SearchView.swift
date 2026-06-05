@@ -54,7 +54,7 @@ struct SearchView: View {
             SearchLink(
                 id: entry.id,
                 group: "Custom",
-                label: entry.title?.isEmpty == false ? entry.title! : entry.url,
+                label: entry.title.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } ?? entry.url,
                 domain: URL(string: entry.url)?.host ?? entry.url,
                 platform: "custom",
                 makeUrl: { _ in entry.url }

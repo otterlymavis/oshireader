@@ -102,9 +102,30 @@ async def _poll_once_unlocked() -> None:
                 for connector in connectors:
                     try:
                         items = await connector.fetch(search_term, term.collection_mode)
+                        if not items:
+                            continue
                         new_count = 0
+                        ids = [raw.composite_id for raw in items]
+
+                        # Two bulk queries replace N per-item round-trips.
+                        existing_source_ids = {
+                            r[0]
+                            for r in db.query(SourceItem.id)
+                            .filter(SourceItem.id.in_(ids))
+                            .all()
+                        }
+                        existing_match_ids = {
+                            r[0]
+                            for r in db.query(Match.source_item_id)
+                            .filter(
+                                Match.watch_term_id == term.id,
+                                Match.source_item_id.in_(ids),
+                            )
+                            .all()
+                        }
+
                         for raw in items:
-                            if not db.get(SourceItem, raw.composite_id):
+                            if raw.composite_id not in existing_source_ids:
                                 db.add(
                                     SourceItem(
                                         id=raw.composite_id,
@@ -120,16 +141,13 @@ async def _poll_once_unlocked() -> None:
                                         raw_payload=raw.raw_payload,
                                     )
                                 )
-                                db.flush()  # ensure SourceItem is in DB before Match FK references it
-                            match_exists = (
-                                db.query(Match)
-                                .filter_by(watch_term_id=term.id, source_item_id=raw.composite_id)
-                                .first()
-                            )
-                            if not match_exists:
+                                existing_source_ids.add(raw.composite_id)
+                            if raw.composite_id not in existing_match_ids:
                                 db.add(Match(watch_term_id=term.id, source_item_id=raw.composite_id))
+                                existing_match_ids.add(raw.composite_id)
                                 new_count += 1
 
+                        db.flush()
                         db.commit()
                         if new_count:
                             await send_new_match_notifications(db, term, new_count)
