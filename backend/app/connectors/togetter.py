@@ -38,28 +38,42 @@ class TogetterConnector(BaseConnector):
         soup = BeautifulSoup(resp.text, "lxml")
         items: list[SourceItemCreate] = []
 
-        for a in soup.select("a[href^='https://togetter.com/li/']")[:25]:
+        seen_ids: set[str] = set()
+        for a in soup.select("a[href^='https://togetter.com/li/']"):
+            if len(items) >= 25:
+                break
             url = a.get("href", "")
             togetter_id = url.rstrip("/").split("/")[-1]
-            if not togetter_id:
+            if not togetter_id or togetter_id in seen_ids:
                 continue
+            seen_ids.add(togetter_id)
 
-            title = a.get_text(strip=True)
+            # The <li> is the outermost article container; <time datetime> lives there
+            li_parent = a.find_parent("li")
+            container = li_parent or a.find_parent(["div", "article"])
+
+            # Title is on the h3 inside the li, not always on this <a>
+            title = ""
+            if li_parent:
+                h3 = li_parent.find("h3")
+                if h3:
+                    title = h3.get_text(strip=True)
+            if not title:
+                title = a.get_text(strip=True)
             if not title:
                 continue
 
-            parent = a.find_parent(["li", "div", "article"])
             thumb = None
             published = datetime.now(timezone.utc)
 
-            if parent:
-                img = parent.select_one("img[src]")
+            if container:
+                img = container.select_one("img[src]")
                 if img:
                     src = img.get("src", "")
                     if src.startswith("http"):
                         thumb = src
 
-                time_el = parent.select_one("time[datetime]")
+                time_el = container.select_one("time[datetime]")
                 if time_el:
                     dt_str = (time_el.get("datetime") or "").strip()
                     try:
