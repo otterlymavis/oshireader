@@ -60,34 +60,27 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
 
 @app.get("/api/admin/test-fetch")
 async def test_fetch() -> dict:
-    import httpx, feedparser
-    from urllib.parse import quote
-    results: dict = {}
+    from app.connectors.mdpr import ModelPressConnector
+    from app.connectors.togetter import TogetterConnector
+    from app.connectors.yahoonews import YahooNewsConnector
+    from app.connectors.niconico import NicoNicoConnector
+    from app.connectors.rss import RSSConnector
     kw = "星野源"
-    enc = quote(f"{kw} site:mdpr.jp")
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get(f"https://news.google.com/rss/search?q={enc}&hl=ja&gl=JP&ceid=JP%3Aja")
-            results["gnews_status"] = r.status_code
-            results["gnews_entries"] = len(feedparser.parse(r.content).entries) if r.is_success else 0
-    except Exception as e:
-        results["gnews_error"] = str(e)
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get("https://togetter.com/search", params={"q": kw})
-            results["togetter_status"] = r.status_code
-            results["togetter_len"] = len(r.text)
-    except Exception as e:
-        results["togetter_error"] = str(e)
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get("https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search",
-                            params={"q": kw, "targets": "title", "fields": "contentId", "_limit": "5"},
-                            headers={"Accept": "application/json"})
-            results["nico_status"] = r.status_code
-            results["nico_count"] = len(r.json().get("data", [])) if r.is_success else 0
-    except Exception as e:
-        results["nico_error"] = str(e)
+    results: dict = {}
+    for name, cls in [
+        ("mdpr", ModelPressConnector),
+        ("togetter", TogetterConnector),
+        ("yahoonews", YahooNewsConnector),
+        ("niconico", NicoNicoConnector),
+        ("rss", RSSConnector),
+    ]:
+        try:
+            items = await cls().fetch(kw, "all_info")
+            results[name] = len(items)
+            if items:
+                results[f"{name}_sample"] = items[0].title or ""
+        except Exception as e:
+            results[name] = f"ERROR: {e}"
     return results
 
 
