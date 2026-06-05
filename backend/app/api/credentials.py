@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -47,7 +47,7 @@ def upsert_credential(
         cred.api_key = body.api_key or None
     if body.api_secret is not None:
         cred.api_secret = body.api_secret or None
-    cred.updated_at = datetime.utcnow()
+    cred.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(cred)
     return CredentialOut(

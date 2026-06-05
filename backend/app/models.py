@@ -1,4 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 
@@ -15,7 +19,7 @@ class WatchTerm(Base):
     collection_mode = Column(String, default="all_info")  # all_info | media_only
     is_active = Column(Boolean, default=True)
     notify_on_new = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class SourceItem(Base):
@@ -32,7 +36,7 @@ class SourceItem(Base):
     media_type = Column(String, index=True)  # video | image | text | article
     thumbnail_url = Column(String)
     raw_payload = Column(JSON)
-    fetched_at = Column(DateTime, default=datetime.utcnow)
+    fetched_at = Column(DateTime, default=_utcnow)
 
 
 class PlatformCredential(Base):
@@ -42,7 +46,7 @@ class PlatformCredential(Base):
     bearer_token = Column(String)
     api_key = Column(String)
     api_secret = Column(String)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class APNSDeviceToken(Base):
@@ -51,7 +55,7 @@ class APNSDeviceToken(Base):
     token = Column(String, primary_key=True)
     environment = Column(String, default="sandbox", index=True)
     device_id = Column(String, index=True)
-    last_seen_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_seen_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class Match(Base):
@@ -61,6 +65,6 @@ class Match(Base):
     watch_term_id = Column(Integer, ForeignKey("watch_terms.id", ondelete="CASCADE"), nullable=False)
     source_item_id = Column(String, ForeignKey("source_items.id"), nullable=False, index=True)
     confidence = Column(Float, default=1.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     __table_args__ = (UniqueConstraint("watch_term_id", "source_item_id"),)

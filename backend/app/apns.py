@@ -85,7 +85,7 @@ async def _send_one(client: httpx.AsyncClient, device: APNSDeviceToken, term: Wa
         return False
 
     if resp.status_code in {200, 201}:
-        return True
+        return False  # success — keep the token
 
     reason = None
     try:

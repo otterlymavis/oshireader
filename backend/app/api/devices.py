@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -28,7 +28,7 @@ def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)
 
     stored.environment = body.environment
     stored.device_id = body.device_id
-    stored.last_seen_at = datetime.utcnow()
+    stored.last_seen_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(stored)
     return stored
