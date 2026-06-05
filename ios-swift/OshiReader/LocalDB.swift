@@ -107,13 +107,14 @@ class LocalDB: ObservableObject {
         return term
     }
     
-    func updateTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil, notifyOnNew: Bool? = nil) {
+    func updateTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) {
         runOnMain {
             if let idx = self.terms.firstIndex(where: { $0.id == id }) {
                 var term = self.terms[idx]
                 if let isActive = isActive { term.is_active = isActive }
                 if let collectionMode = collectionMode { term.collection_mode = collectionMode }
                 if let notifyOnNew = notifyOnNew { term.notify_on_new = notifyOnNew }
+                if let aliases = aliases { term.aliases = aliases }
                 self.terms[idx] = term
                 self.saveToFile(name: "terms", value: self.terms)
             }

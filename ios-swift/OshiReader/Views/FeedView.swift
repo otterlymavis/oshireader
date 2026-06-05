@@ -466,10 +466,7 @@ struct FeedView: View {
             fmt.formatOptions = [.withInternetDateTime]
             return fmt.string(from: maxDate)
         }()
-        let fetchDays: Int = {
-            if wantsFullHistory { return 0 }
-            return db.feedItems.isEmpty ? 90 : 30
-        }()
+        let fetchDays = wantsFullHistory ? 0 : (db.feedItems.isEmpty ? 90 : 30)
 
         let freshItems: [FeedItem]
         if let since = latestSince {

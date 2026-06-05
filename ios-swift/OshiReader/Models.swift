@@ -42,18 +42,20 @@ struct WatchTerm: Identifiable, Codable, Hashable {
     var collection_mode: String // "all_info" | "media_only"
     var is_active: Bool
     var notify_on_new: Bool
+    var aliases: [String]
     let created_at: String
-    
+
     enum CodingKeys: String, CodingKey {
-        case id, keyword, collection_mode, is_active, notify_on_new, created_at
+        case id, keyword, collection_mode, is_active, notify_on_new, aliases, created_at
     }
-    
-    init(id: String = UUID().uuidString, keyword: String, collection_mode: String = "all_info", is_active: Bool = true, notify_on_new: Bool = false, created_at: String = ISO8601DateFormatter().string(from: Date())) {
+
+    init(id: String = UUID().uuidString, keyword: String, collection_mode: String = "all_info", is_active: Bool = true, notify_on_new: Bool = false, aliases: [String] = [], created_at: String = ISO8601DateFormatter().string(from: Date())) {
         self.id = id
         self.keyword = keyword
         self.collection_mode = collection_mode
         self.is_active = is_active
         self.notify_on_new = notify_on_new
+        self.aliases = aliases
         self.created_at = created_at
     }
     
@@ -71,6 +73,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         self.collection_mode = try container.decode(String.self, forKey: .collection_mode)
         self.is_active = try container.decodeIfPresent(Bool.self, forKey: .is_active) ?? true
         self.notify_on_new = try container.decodeIfPresent(Bool.self, forKey: .notify_on_new) ?? false
+        self.aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
         self.created_at = try container.decodeIfPresent(String.self, forKey: .created_at) ?? ISO8601DateFormatter().string(from: Date())
     }
 }

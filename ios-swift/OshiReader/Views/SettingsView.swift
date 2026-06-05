@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var showingClearAllAlert = false
     @State private var newKeyword = ""
     @State private var newCollectionMode = "all_info"
+    @State private var addingAliasForId: String? = nil
+    @State private var newAliasText = ""
     @AppStorage("youtube_api_key") private var youtubeApiKey = ""
     @AppStorage("twitter_bearer_token") private var twitterBearerToken = ""
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
@@ -67,6 +69,74 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                     .fontWeight(.semibold)
                                     .foregroundColor(theme.colors.text)
+                                // Alias chips
+                                if !term.aliases.isEmpty || addingAliasForId == term.id {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 4) {
+                                            ForEach(term.aliases, id: \.self) { alias in
+                                                HStack(spacing: 2) {
+                                                    Text(alias)
+                                                        .font(.caption2)
+                                                        .foregroundColor(theme.colors.textSub)
+                                                    Button {
+                                                        let updated = term.aliases.filter { $0 != alias }
+                                                        db.updateTerm(id: term.id, aliases: updated)
+                                                        Task { _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, aliases: updated) }
+                                                    } label: {
+                                                        Image(systemName: "xmark")
+                                                            .font(.system(size: 8, weight: .bold))
+                                                            .foregroundColor(theme.colors.textMuted)
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 3)
+                                                .background(theme.colors.divider)
+                                                .cornerRadius(99)
+                                            }
+                                            if addingAliasForId == term.id {
+                                                TextField(i18n.t("keyword"), text: $newAliasText)
+                                                    .font(.caption2)
+                                                    .frame(width: 80)
+                                                    .autocorrectionDisabled()
+                                                    .textInputAutocapitalization(.never)
+                                                    .submitLabel(.done)
+                                                    .onSubmit {
+                                                        let trimmed = newAliasText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                        if !trimmed.isEmpty && !term.aliases.contains(trimmed) {
+                                                            let updated = term.aliases + [trimmed]
+                                                            db.updateTerm(id: term.id, aliases: updated)
+                                                            Task { _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, aliases: updated) }
+                                                        }
+                                                        newAliasText = ""
+                                                        addingAliasForId = nil
+                                                    }
+                                            }
+                                            Button {
+                                                newAliasText = ""
+                                                addingAliasForId = addingAliasForId == term.id ? nil : term.id
+                                            } label: {
+                                                Image(systemName: addingAliasForId == term.id ? "checkmark" : "plus")
+                                                    .font(.system(size: 9, weight: .bold))
+                                                    .foregroundColor(theme.colors.primary)
+                                                    .frame(width: 20, height: 18)
+                                                    .background(theme.colors.primaryBg)
+                                                    .cornerRadius(99)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                } else {
+                                    Button {
+                                        newAliasText = ""
+                                        addingAliasForId = term.id
+                                    } label: {
+                                        Label(i18n.t("addAlias"), systemImage: "plus")
+                                            .font(.caption2)
+                                            .foregroundColor(theme.colors.textMuted)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                             Spacer()
 

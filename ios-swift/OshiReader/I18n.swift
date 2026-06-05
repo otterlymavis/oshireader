@@ -159,6 +159,12 @@ class I18nManager: ObservableObject {
             "zh-TW": "已儲存",
             "zh-CN": "已保存"
         ],
+        "addAlias": [
+            "en": "+ alias",
+            "ja": "+ 別名",
+            "zh-TW": "+ 別名",
+            "zh-CN": "+ 别名"
+        ],
         "oshiEmpty": [
             "en": "Add your Oshi!",
             "ja": "推しを追加しよう！",

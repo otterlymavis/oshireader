@@ -128,7 +128,7 @@ class NetworkManager {
     }
     
     // MARK: - Update Watch Term
-    func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil, notifyOnNew: Bool? = nil) async throws -> WatchTerm {
+    func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) async throws -> WatchTerm {
         if isUITesting {
             throw URLError(.cancelled)
         }
@@ -143,6 +143,7 @@ class NetworkManager {
         if let isActive = isActive { body["is_active"] = isActive }
         if let collectionMode = collectionMode { body["collection_mode"] = collectionMode }
         if let notifyOnNew = notifyOnNew { body["notify_on_new"] = notifyOnNew }
+        if let aliases = aliases { body["aliases"] = aliases }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let (data, response) = try await URLSession.shared.data(for: request)
