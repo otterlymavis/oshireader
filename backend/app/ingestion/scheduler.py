@@ -23,7 +23,7 @@ from app.connectors.tver import TVERConnector
 from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
-from app.models import Match, PlatformCredential, SourceItem, WatchTerm
+from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
 
 log = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -93,7 +93,7 @@ def _search_terms_for(term: WatchTerm) -> list[str]:
     return searches
 
 
-async def _fetch_one(connector: BaseConnector, search_term: str, mode: str) -> list:
+async def _fetch_one(connector: BaseConnector, search_term: str, mode: CollectionMode) -> list:
     """Run a single connector fetch; return [] on any error."""
     try:
         return await connector.fetch(search_term, mode)
@@ -112,7 +112,7 @@ async def _poll_once_unlocked() -> None:
             for search_term in _search_terms_for(term):
                 # Fetch all connectors in parallel — pure I/O, no DB contention.
                 all_results = await asyncio.gather(
-                    *[_fetch_one(c, search_term, term.collection_mode) for c in connectors]
+                    *[_fetch_one(c, search_term, CollectionMode(term.collection_mode)) for c in connectors]
                 )
                 for connector, items in zip(connectors, all_results):
                     if not items:

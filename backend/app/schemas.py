@@ -5,6 +5,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.models import CollectionMode
+
 
 def _clean_keyword(v: str) -> str:
     stripped = v.strip()
@@ -17,7 +19,7 @@ class WatchTermCreate(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
     aliases: list[str] = Field(default=[], max_length=20)
     language_hint: Optional[str] = Field(default=None, max_length=50)
-    collection_mode: Literal["all_info", "media_only"] = "all_info"
+    collection_mode: CollectionMode = CollectionMode.ALL_INFO
     notify_on_new: bool = False
 
     @field_validator("keyword", mode="before")
@@ -41,7 +43,7 @@ class WatchTermUpdate(BaseModel):
     keyword: Optional[str] = Field(default=None, min_length=1, max_length=200)
     aliases: Optional[list[str]] = Field(default=None, max_length=20)
     language_hint: Optional[str] = Field(default=None, max_length=50)
-    collection_mode: Optional[Literal["all_info", "media_only"]] = None
+    collection_mode: Optional[CollectionMode] = None
     is_active: Optional[bool] = None
     notify_on_new: Optional[bool] = None
 
@@ -79,7 +81,7 @@ class WatchTermOut(BaseModel):
     keyword: str
     aliases: list[str]
     language_hint: Optional[str]
-    collection_mode: str
+    collection_mode: CollectionMode
     is_active: bool
     notify_on_new: bool
     created_at: datetime

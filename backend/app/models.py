@@ -1,8 +1,14 @@
 from datetime import datetime, timezone
+from enum import Enum
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 
 from app.database import Base
+
+
+class CollectionMode(str, Enum):
+    ALL_INFO = "all_info"
+    MEDIA_ONLY = "media_only"
 
 
 def _utcnow() -> datetime:

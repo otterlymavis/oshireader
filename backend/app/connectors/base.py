@@ -7,6 +7,8 @@ from typing import Optional
 
 import feedparser
 
+from app.models import CollectionMode
+
 
 def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
     """Return a timezone-aware UTC datetime from a feedparser entry, falling back to now."""
@@ -43,5 +45,5 @@ class BaseConnector(ABC):
     SUPPORTS_MEDIA_FILTER: bool = False
 
     @abstractmethod
-    async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         ...
