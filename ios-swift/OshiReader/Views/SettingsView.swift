@@ -298,7 +298,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
 
-                    Picker("Style", selection: $theme.style) {
+                    Picker(i18n.t("themeStyle"), selection: $theme.style) {
                         ForEach(AppColorStyle.allCases) { style in
                             Text(style.displayName).tag(style)
                         }
@@ -317,7 +317,7 @@ struct SettingsView: View {
                         Text("简体中文").tag("zh-CN")
                     }
 
-                    Picker("Font", selection: $appearance.fontChoice) {
+                    Picker(i18n.t("font"), selection: $appearance.fontChoice) {
                         ForEach(AppFontChoice.allCases) { choice in
                             Text(choice.displayName).tag(choice)
                         }
@@ -325,7 +325,7 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("settings.fontPicker")
 
-                    Picker("Font Size", selection: $appearance.fontSizeChoice) {
+                    Picker(i18n.t("fontSize"), selection: $appearance.fontSizeChoice) {
                         ForEach(AppFontSizeChoice.allCases) { choice in
                             Text(choice.displayName).tag(choice)
                         }
@@ -345,7 +345,7 @@ struct SettingsView: View {
 
                 Section(header: Text(i18n.t("privacySection"))) {
                     NavigationLink(destination: PrivacyPolicyView(theme: theme)) {
-                        Label("Privacy Policy", systemImage: "hand.raised")
+                        Label(i18n.t("privacyPolicy"), systemImage: "hand.raised")
                     }
                     .accessibilityIdentifier("settings.privacyPolicyLink")
                 }
@@ -354,7 +354,7 @@ struct SettingsView: View {
                     Button(role: .destructive) {
                         showingClearAllAlert = true
                     } label: {
-                        Label("Clear All Data", systemImage: "trash")
+                        Label(i18n.t("clearAllData"), systemImage: "trash")
                     }
                     .accessibilityIdentifier("settings.clearAllDataButton")
                 }
@@ -429,13 +429,13 @@ struct SettingsView: View {
                 .background(theme.colors.bg)
                 .presentationDetents([.medium])
             }
-            .alert("Clear All Data?", isPresented: $showingClearAllAlert) {
+            .alert(i18n.t("clearAllDataAlert"), isPresented: $showingClearAllAlert) {
                 Button(i18n.t("cancel"), role: .cancel) {}
                 Button(i18n.t("delete"), role: .destructive) {
                     db.clearAllData()
                 }
             } message: {
-                Text("This removes keywords, feed items, saved pages, custom URLs, avatars, hidden items, wallpaper, and source order from this device.")
+                Text(i18n.t("clearAllDataMessage"))
             }
         }
     }
@@ -443,6 +443,7 @@ struct SettingsView: View {
 
 struct PrivacyPolicyView: View {
     let theme: ThemeManager
+    @StateObject private var i18n = I18nManager.shared
 
     var body: some View {
         ScrollView {
@@ -471,7 +472,7 @@ struct PrivacyPolicyView: View {
         }
         .accessibilityIdentifier("privacy.screen")
         .background(theme.colors.bg)
-        .navigationTitle("Privacy Policy")
+        .navigationTitle(i18n.t("privacyPolicy"))
         .navigationBarTitleDisplayMode(.inline)
     }
 

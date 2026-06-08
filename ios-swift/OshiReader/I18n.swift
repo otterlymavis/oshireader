@@ -460,6 +460,58 @@ class I18nManager: ObservableObject {
             "zh-CN": "请选择搜索结果阅读"
         ],
 
+        // MARK: - Common actions
+        "edit": [
+            "en": "Edit",
+            "ja": "編集",
+            "zh-TW": "編輯",
+            "zh-CN": "编辑"
+        ],
+        "privacyPolicy": [
+            "en": "Privacy Policy",
+            "ja": "プライバシーポリシー",
+            "zh-TW": "隱私政策",
+            "zh-CN": "隐私政策"
+        ],
+        "clearAllData": [
+            "en": "Clear All Data",
+            "ja": "データをすべて削除",
+            "zh-TW": "清除所有資料",
+            "zh-CN": "清除所有数据"
+        ],
+        "clearAllDataAlert": [
+            "en": "Clear All Data?",
+            "ja": "データをすべて削除しますか？",
+            "zh-TW": "清除所有資料？",
+            "zh-CN": "清除所有数据？"
+        ],
+        "clearAllDataMessage": [
+            "en": "This removes keywords, feed items, saved pages, custom URLs, avatars, hidden items, wallpaper, and source order from this device.",
+            "ja": "キーワード、フィードアイテム、保存ページ、カスタムURL、アバター、非表示アイテム、壁紙、ソース順序がこのデバイスから削除されます。",
+            "zh-TW": "將從此裝置移除關鍵字、動態項目、已儲存頁面、自訂URL、頭貼、隱藏項目、壁紙及來源順序。",
+            "zh-CN": "将从此设备移除关键词、动态项目、已保存页面、自定义URL、头像、隐藏项目、壁纸及来源顺序。"
+        ],
+
+        // MARK: - Appearance settings
+        "themeStyle": [
+            "en": "Style",
+            "ja": "スタイル",
+            "zh-TW": "樣式",
+            "zh-CN": "样式"
+        ],
+        "font": [
+            "en": "Font",
+            "ja": "フォント",
+            "zh-TW": "字體",
+            "zh-CN": "字体"
+        ],
+        "fontSize": [
+            "en": "Font Size",
+            "ja": "文字サイズ",
+            "zh-TW": "字體大小",
+            "zh-CN": "字体大小"
+        ],
+
         // MARK: - FeedView
         "feedSearchingOffline": [
             "en": "Searching offline sources…",

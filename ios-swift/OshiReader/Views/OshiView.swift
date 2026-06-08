@@ -90,7 +90,7 @@ struct OshiView: View {
                     }
                 }
             }
-            .navigationTitle("My Oshi")
+            .navigationTitle(i18n.t("oshiListTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(item: $showEditorKeyword) { keyword in
                 AvatarEditorView(keyword: keyword)
@@ -202,7 +202,7 @@ struct OshiPage: View {
                     Button(action: onEdit) {
                         HStack(spacing: 4) {
                             Text("✏️")
-                            Text("Edit")
+                            Text(i18n.t("edit"))
                         }
                         .font(.system(size: 13, weight: .bold))
                         .padding(.horizontal, 16)
