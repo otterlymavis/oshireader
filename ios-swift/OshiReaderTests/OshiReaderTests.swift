@@ -677,6 +677,34 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(failures.isEmpty, "Missing/fallback translations: \(failures.joined(separator: ", "))")
     }
 
+    func testTFormatStringSubstitution() throws {
+        let i18n = I18nManager.shared
+        let saved = i18n.lang
+        i18n.setLanguage("en")
+
+        let result = i18n.tFormat("notifNewItemsTitle", "Aiko")
+        XCTAssertEqual(result, "New items for Aiko")
+
+        i18n.setLanguage("ja")
+        let jaResult = i18n.tFormat("notifNewItemsTitle", "愛子")
+        XCTAssertEqual(jaResult, "愛子 の新着")
+
+        i18n.setLanguage(saved)
+    }
+
+    func testTSearchGroupKnownAndUnknown() throws {
+        let i18n = I18nManager.shared
+        let saved = i18n.lang
+        i18n.setLanguage("ja")
+
+        XCTAssertEqual(i18n.tSearchGroup("News"), "ニュース")
+        XCTAssertEqual(i18n.tSearchGroup("Custom"), "カスタム")
+        // Unknown group falls back to the raw group name
+        XCTAssertEqual(i18n.tSearchGroup("Nonexistent"), "Nonexistent")
+
+        i18n.setLanguage(saved)
+    }
+
     // MARK: - Persistence: malformed JSON file is silently ignored
     func testMalformedPersistenceFileLoadsEmpty() throws {
         // Write garbage to terms.json before creating a LocalDB from the same directory.
