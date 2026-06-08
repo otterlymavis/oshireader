@@ -66,10 +66,10 @@ class TestWatchTerms:
         assert data["is_active"] is True
         assert data["collection_mode"] == "all_info"
 
-    def test_create_duplicate_keyword_fails(self, client):
+    def test_create_duplicate_keyword_returns_409(self, client):
         client.post("/api/watch-terms/", json={"keyword": "dup"}, headers=_AUTH)
         resp = client.post("/api/watch-terms/", json={"keyword": "dup"}, headers=_AUTH)
-        assert resp.status_code in {400, 409, 422, 500}
+        assert resp.status_code == 409
 
     def test_list_terms_empty(self, client):
         resp = client.get("/api/watch-terms/")

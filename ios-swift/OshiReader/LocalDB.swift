@@ -175,7 +175,9 @@ class LocalDB: ObservableObject {
                 // Merge/update fields if needed (like title length, content, published date)
                 let existing = currentMap[key]!
                 let shouldReplaceTitle = (item.title?.isEmpty == false) &&
-                    (existing.title == nil || existing.title!.contains("...") || item.title!.count > existing.title!.count + 8)
+                    (existing.title == nil ||
+                     existing.title?.contains("...") == true ||
+                     (item.title?.count ?? 0) > (existing.title?.count ?? 0) + 8)
 
                 let merged = FeedItem(
                     id: existing.id,
