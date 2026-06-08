@@ -261,6 +261,78 @@ class I18nManager: ObservableObject {
             "zh-TW": "無效的網址",
             "zh-CN": "无效的链接"
         ],
+        "ok": [
+            "en": "OK",
+            "ja": "OK",
+            "zh-TW": "好",
+            "zh-CN": "好"
+        ],
+        "imageActions": [
+            "en": "Image",
+            "ja": "画像",
+            "zh-TW": "圖片",
+            "zh-CN": "图片"
+        ],
+        "shareImage": [
+            "en": "Share Image",
+            "ja": "画像を共有",
+            "zh-TW": "分享圖片",
+            "zh-CN": "分享图片"
+        ],
+        "saveImage": [
+            "en": "Save Image",
+            "ja": "画像を保存",
+            "zh-TW": "儲存圖片",
+            "zh-CN": "保存图片"
+        ],
+        "openImage": [
+            "en": "Open Image",
+            "ja": "画像を開く",
+            "zh-TW": "開啟圖片",
+            "zh-CN": "打开图片"
+        ],
+        "imageLoadError": [
+            "en": "Could not read this image.",
+            "ja": "画像を読み込めませんでした。",
+            "zh-TW": "無法讀取此圖片。",
+            "zh-CN": "无法读取此图片。"
+        ],
+        "photosAccessRequired": [
+            "en": "Photos access is required to save images.",
+            "ja": "画像を保存するには写真へのアクセスが必要です。",
+            "zh-TW": "需要相簿存取權限才能儲存圖片。",
+            "zh-CN": "需要照片访问权限才能保存图片。"
+        ],
+        "imageSavedToPhotos": [
+            "en": "Saved to Photos.",
+            "ja": "写真に保存しました。",
+            "zh-TW": "已儲存到相簿。",
+            "zh-CN": "已保存到照片。"
+        ],
+        "imageSaveError": [
+            "en": "Could not save this image.",
+            "ja": "画像を保存できませんでした。",
+            "zh-TW": "無法儲存此圖片。",
+            "zh-CN": "无法保存此图片。"
+        ],
+        "imageNoLargeImages": [
+            "en": "No large images found on this page.",
+            "ja": "このページに大きな画像が見つかりませんでした。",
+            "zh-TW": "此頁面未找到大圖片。",
+            "zh-CN": "此页面未找到大图片。"
+        ],
+        "savedImagesToPhotos": [
+            "en": "Saved %d image(s) to Photos.",
+            "ja": "%d 枚の画像を保存しました。",
+            "zh-TW": "已儲存 %d 張圖片到相簿。",
+            "zh-CN": "已保存 %d 张图片到照片。"
+        ],
+        "imageNoneSaved": [
+            "en": "No images could be saved.",
+            "ja": "画像を保存できませんでした。",
+            "zh-TW": "沒有圖片可以儲存。",
+            "zh-CN": "没有图片可以保存。"
+        ],
         "readerModeText": [
             "en": "Reader Text Mode",
             "ja": "リーダーテキスト表示",

@@ -123,7 +123,7 @@ struct ReaderView: View {
                 }
             }
         }
-        .confirmationDialog("Image", isPresented: Binding(
+        .confirmationDialog(i18n.t("imageActions"), isPresented: Binding(
             get: { imageAction != nil },
             set: { isPresented in
                 if !isPresented {
@@ -133,18 +133,18 @@ struct ReaderView: View {
         )) {
             if let action = imageAction {
                 ShareLink(item: action.url) {
-                    Label("Share Image", systemImage: "square.and.arrow.up")
+                    Label(i18n.t("shareImage"), systemImage: "square.and.arrow.up")
                 }
-                Button("Save Image") {
+                Button(i18n.t("saveImage")) {
                     saveImage(action.url)
                 }
-                Button("Open Image") {
+                Button(i18n.t("openImage")) {
                     UIApplication.shared.open(action.url)
                 }
             }
         }
-        .alert("Image", isPresented: $showingSaveImageStatus) {
-            Button("OK", role: .cancel) {}
+        .alert(i18n.t("imageActions"), isPresented: $showingSaveImageStatus) {
+            Button(i18n.t("ok"), role: .cancel) {}
         } message: {
             Text(saveImageStatus)
         }
@@ -266,7 +266,7 @@ struct ReaderView: View {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 guard let image = UIImage(data: data) else {
                     await MainActor.run {
-                        saveImageStatus = "Could not read this image."
+                        saveImageStatus = i18n.t("imageLoadError")
                         showingSaveImageStatus = true
                     }
                     return
@@ -274,7 +274,7 @@ struct ReaderView: View {
                 let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
                 guard auth == .authorized || auth == .limited else {
                     await MainActor.run {
-                        saveImageStatus = "Photos access is required to save images."
+                        saveImageStatus = i18n.t("photosAccessRequired")
                         showingSaveImageStatus = true
                     }
                     return
@@ -283,12 +283,12 @@ struct ReaderView: View {
                     PHAssetChangeRequest.creationRequestForAsset(from: image)
                 }
                 await MainActor.run {
-                    saveImageStatus = "Saved to Photos."
+                    saveImageStatus = i18n.t("imageSavedToPhotos")
                     showingSaveImageStatus = true
                 }
             } catch {
                 await MainActor.run {
-                    saveImageStatus = "Could not save this image."
+                    saveImageStatus = i18n.t("imageSaveError")
                     showingSaveImageStatus = true
                 }
             }
@@ -298,7 +298,7 @@ struct ReaderView: View {
     private func saveAllImages(_ urls: [URL]) {
         guard !urls.isEmpty else {
             isSavingAllImages = false
-            saveImageStatus = "No large images found on this page."
+            saveImageStatus = i18n.t("imageNoLargeImages")
             showingSaveImageStatus = true
             return
         }
@@ -307,7 +307,7 @@ struct ReaderView: View {
             guard auth == .authorized || auth == .limited else {
                 await MainActor.run {
                     isSavingAllImages = false
-                    saveImageStatus = "Photos access is required to save images."
+                    saveImageStatus = i18n.t("photosAccessRequired")
                     showingSaveImageStatus = true
                 }
                 return
@@ -333,8 +333,8 @@ struct ReaderView: View {
             await MainActor.run {
                 isSavingAllImages = false
                 saveImageStatus = saved > 0
-                    ? "Saved \(saved) image\(saved == 1 ? "" : "s") to Photos."
-                    : "No images could be saved."
+                    ? i18n.tFormat("savedImagesToPhotos", saved)
+                    : i18n.t("imageNoneSaved")
                 showingSaveImageStatus = true
             }
         }
