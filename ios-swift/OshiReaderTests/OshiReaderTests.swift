@@ -497,6 +497,40 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(querySub.first?.id, "tver:yesterday")
     }
     
+    // MARK: - skipDateCutoff flag: forum platforms always pass date filter
+    func testSkipDateCutoffAllowsOldForumItems() throws {
+        db.setSubscribedPlatforms(platforms: ["5ch", "togetter", "news"])
+        let fmt = ISO8601DateFormatter()
+        let old = fmt.string(from: Calendar.current.date(byAdding: .day, value: -60, to: Date())!)
+        let recent = fmt.string(from: Calendar.current.date(byAdding: .day, value: -1, to: Date())!)
+
+        // 60-day-old 5ch thread — should bypass 30-day cutoff
+        let forumItem = FeedItem(
+            id: "5ch:old-thread", platform: "5ch", url: "https://5ch.net/t/old",
+            title: "Old thread", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: old, watch_term_keyword: "Aiko", fetched_at: old
+        )
+        // 60-day-old news article — should be filtered out
+        let newsItem = FeedItem(
+            id: "news:old-article", platform: "news", url: "https://news/old",
+            title: "Aiko old news", content_text: "Aiko content", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: old, watch_term_keyword: "Aiko", fetched_at: old
+        )
+        // Recent news article — passes
+        let recentNewsItem = FeedItem(
+            id: "news:recent", platform: "news", url: "https://news/recent",
+            title: "Aiko recent", content_text: "Aiko content", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: recent, watch_term_keyword: "Aiko", fetched_at: recent
+        )
+        _ = db.mergeItems(newItems: [forumItem, newsItem, recentNewsItem])
+        _ = db.saveTerm(keyword: "Aiko") // needed for strict keyword matching on news
+
+        let results = db.queryFeed(keyword: "Aiko", days: 30)
+        XCTAssertTrue(results.contains { $0.id == "5ch:old-thread" }, "5ch item should bypass date cutoff")
+        XCTAssertFalse(results.contains { $0.id == "news:old-article" }, "Old news should be filtered by date")
+        XCTAssertTrue(results.contains { $0.id == "news:recent" }, "Recent news should pass")
+    }
+
     // MARK: - Custom platform keyword-filter bypass
     func testCustomPlatformItemsPassKeywordFilter() throws {
         // custom items have a different watch_term_keyword (e.g. "") but should appear
