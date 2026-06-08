@@ -286,7 +286,7 @@ extension NetworkManager {
     }
 
     private func parseRss(url: URL) async throws -> [RssItem] {
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await session.data(from: url)
         let parser = XMLParser(data: data)
         let delegate = RSSParserDelegate()
         parser.delegate = delegate

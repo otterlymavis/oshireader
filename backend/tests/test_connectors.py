@@ -9,6 +9,7 @@ import pytest
 
 from app.connectors.base import SourceItemCreate, parse_feed_date
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
+from app.connectors.oricon import _clean_title as _clean_oricon_title
 from app.connectors.tver import _parse_tver_date
 from app.connectors.yahoonews import _clean_markdown_title
 from app.connectors.youtube import _parse_youtube_relative
@@ -175,6 +176,20 @@ class TestParseYouTubeRelative:
         result = _parse_youtube_relative("1 day ago")
         assert result is not None
         assert result.tzinfo == timezone.utc
+
+
+class TestCleanOriconTitle:
+    def test_strips_oricon_news_suffix(self):
+        assert _clean_oricon_title("アイコが受賞 - ORICON NEWS") == "アイコが受賞"
+
+    def test_strips_japanese_variant(self):
+        assert _clean_oricon_title("新曲リリース｜オリコンニュース") == "新曲リリース｜オリコンニュース"
+
+    def test_strips_short_japanese_variant(self):
+        assert _clean_oricon_title("新曲リリース - オリコン") == "新曲リリース"
+
+    def test_plain_title_unchanged(self):
+        assert _clean_oricon_title("アイコが新アルバムを発表") == "アイコが新アルバムを発表"
 
 
 class TestCleanMdprTitle:
