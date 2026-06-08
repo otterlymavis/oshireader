@@ -118,6 +118,25 @@ class TestUpdateWatchTerm:
             client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
         mock_poll.assert_not_called()
 
+    def test_update_collection_mode(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", collection_mode="all_info")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"collection_mode": "media_only"})
+        assert resp.status_code == 200
+        assert resp.json()["collection_mode"] == "media_only"
+
+    def test_update_invalid_collection_mode_returns_422(self, client, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"collection_mode": "unknown_mode"})
+        assert resp.status_code == 422
+
     def test_update_nonexistent_returns_404(self, client):
         with patch("app.api.watch_terms.queue_poll"):
             resp = client.patch("/api/watch-terms/999999", json={"is_active": False})
