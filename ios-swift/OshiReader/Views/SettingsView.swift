@@ -222,7 +222,7 @@ struct SettingsView: View {
 
                 Section(header: Text(i18n.t("notificationsSection"))) {
                     HStack {
-                        Label("Push Notifications", systemImage: "bell.badge")
+                        Label(i18n.t("pushNotifications"), systemImage: "bell.badge")
                         Spacer()
                         Text(notifications.statusText)
                             .foregroundColor(notifications.canScheduleNotifications ? theme.colors.primary : theme.colors.textMuted)
@@ -234,7 +234,7 @@ struct SettingsView: View {
                         Button {
                             Task { _ = await notifications.requestAuthorization() }
                         } label: {
-                            Label("Enable Notifications", systemImage: "bell.badge.fill")
+                            Label(i18n.t("enableNotifications"), systemImage: "bell.badge.fill")
                                 .foregroundColor(theme.colors.primary)
                         }
                         .accessibilityIdentifier("settings.enableNotificationsButton")
@@ -244,7 +244,7 @@ struct SettingsView: View {
                                 UIApplication.shared.open(url)
                             }
                         } label: {
-                            Label("Open iOS Settings", systemImage: "gear")
+                            Label(i18n.t("openIOSSettings"), systemImage: "gear")
                                 .foregroundColor(theme.colors.primary)
                         }
                         .accessibilityIdentifier("settings.openSettingsButton")
@@ -252,7 +252,7 @@ struct SettingsView: View {
                         Button {
                             Task { try? await notifications.sendTestNotification() }
                         } label: {
-                            Label("Send Test Notification", systemImage: "paperplane.fill")
+                            Label(i18n.t("sendTestNotification"), systemImage: "paperplane.fill")
                                 .foregroundColor(theme.colors.primary)
                         }
                         .accessibilityIdentifier("settings.testNotificationButton")
@@ -266,7 +266,7 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text(i18n.t("credentialsSection"))) {
-                    SecureField("YouTube API Key", text: $youtubeApiKey)
+                    SecureField(i18n.t("youtubeApiKey"), text: $youtubeApiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .onSubmit {
@@ -277,7 +277,7 @@ struct SettingsView: View {
                         }
                         .accessibilityIdentifier("settings.youtubeApiKeyField")
 
-                    SecureField("X Bearer Token", text: $twitterBearerToken)
+                    SecureField(i18n.t("xBearerToken"), text: $twitterBearerToken)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .onSubmit {

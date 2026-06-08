@@ -31,19 +31,20 @@ final class NotificationManager: ObservableObject {
     }
 
     var statusText: String {
+        let i18n = I18nManager.shared
         switch authorizationStatus {
         case .authorized:
-            return "Enabled"
+            return i18n.t("notifStatusEnabled")
         case .provisional:
-            return "Quietly enabled"
+            return i18n.t("notifStatusProvisional")
         case .denied:
-            return "Disabled in iOS Settings"
+            return i18n.t("notifStatusDenied")
         case .ephemeral:
-            return "Temporarily enabled"
+            return i18n.t("notifStatusEphemeral")
         case .notDetermined:
-            return "Not requested"
+            return i18n.t("notifStatusNotDetermined")
         @unknown default:
-            return "Unknown"
+            return i18n.t("notifStatusUnknown")
         }
     }
 

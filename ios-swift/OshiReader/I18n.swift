@@ -383,6 +383,66 @@ class I18nManager: ObservableObject {
             "zh-TW": "通知",
             "zh-CN": "通知"
         ],
+        "pushNotifications": [
+            "en": "Push Notifications",
+            "ja": "プッシュ通知",
+            "zh-TW": "推播通知",
+            "zh-CN": "推送通知"
+        ],
+        "notifStatusEnabled": [
+            "en": "Enabled",
+            "ja": "有効",
+            "zh-TW": "已啟用",
+            "zh-CN": "已启用"
+        ],
+        "notifStatusProvisional": [
+            "en": "Quietly enabled",
+            "ja": "仮許可",
+            "zh-TW": "靜默啟用",
+            "zh-CN": "静默启用"
+        ],
+        "notifStatusDenied": [
+            "en": "Disabled in iOS Settings",
+            "ja": "iOS設定で無効",
+            "zh-TW": "已在 iOS 設定中停用",
+            "zh-CN": "已在 iOS 设置中停用"
+        ],
+        "notifStatusEphemeral": [
+            "en": "Temporarily enabled",
+            "ja": "一時的に許可",
+            "zh-TW": "暫時啟用",
+            "zh-CN": "临时启用"
+        ],
+        "notifStatusNotDetermined": [
+            "en": "Not requested",
+            "ja": "未設定",
+            "zh-TW": "未要求",
+            "zh-CN": "未请求"
+        ],
+        "notifStatusUnknown": [
+            "en": "Unknown",
+            "ja": "不明",
+            "zh-TW": "未知",
+            "zh-CN": "未知"
+        ],
+        "enableNotifications": [
+            "en": "Enable Notifications",
+            "ja": "通知を有効にする",
+            "zh-TW": "啟用通知",
+            "zh-CN": "启用通知"
+        ],
+        "openIOSSettings": [
+            "en": "Open iOS Settings",
+            "ja": "iOS設定を開く",
+            "zh-TW": "開啟 iOS 設定",
+            "zh-CN": "打开 iOS 设置"
+        ],
+        "sendTestNotification": [
+            "en": "Send Test Notification",
+            "ja": "テスト通知を送信",
+            "zh-TW": "傳送測試通知",
+            "zh-CN": "发送测试通知"
+        ],
         "appearanceSection": [
             "en": "Theme & Appearance",
             "ja": "テーマとカスタマイズ",
@@ -400,6 +460,18 @@ class I18nManager: ObservableObject {
             "ja": "API設定",
             "zh-TW": "API設定",
             "zh-CN": "API设置"
+        ],
+        "youtubeApiKey": [
+            "en": "YouTube API Key",
+            "ja": "YouTube APIキー",
+            "zh-TW": "YouTube API 金鑰",
+            "zh-CN": "YouTube API 密钥"
+        ],
+        "xBearerToken": [
+            "en": "X Bearer Token",
+            "ja": "X Bearerトークン",
+            "zh-TW": "X Bearer Token",
+            "zh-CN": "X Bearer Token"
         ],
         "privacySection": [
             "en": "Privacy",
