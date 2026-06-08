@@ -72,6 +72,12 @@ class TestCreateWatchTerm:
             client.post("/api/watch-terms/", json={"keyword": "Aiko"})
         mock_poll.assert_called_once()
 
+    def test_duplicate_keyword_returns_409(self, client):
+        with patch("app.api.watch_terms.queue_poll"):
+            client.post("/api/watch-terms/", json={"keyword": "Aiko"})
+            resp = client.post("/api/watch-terms/", json={"keyword": "Aiko"})
+        assert resp.status_code == 409
+
 
 class TestUpdateWatchTerm:
     def test_update_is_active(self, client, db_session):

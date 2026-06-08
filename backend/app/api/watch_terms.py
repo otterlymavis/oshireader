@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import require_admin_auth
@@ -23,7 +24,11 @@ async def create_term(
 ):
     term = WatchTerm(**body.model_dump())
     db.add(term)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "A watch term with this keyword already exists")
     db.refresh(term)
     queue_poll()
     return term
