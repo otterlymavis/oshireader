@@ -107,6 +107,64 @@ class TestIngestionNewItems:
         assert len(matches) == 2
 
 
+class TestIngestionNotifications:
+    @pytest.mark.asyncio
+    async def test_notify_called_when_notify_on_new_true(self, db_engine, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        connector = _mock_connector("youtube", [_make_item(item_id="new1")])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+        _, called_term, called_count = mock_notify.call_args.args
+        assert called_term.keyword == "Aiko"
+        assert called_count == 1
+
+    @pytest.mark.asyncio
+    async def test_notify_called_for_any_new_items(self, db_engine, db_session):
+        # Scheduler always delegates to send_new_match_notifications — the
+        # notify_on_new guard lives inside that function, tested separately.
+        term = WatchTerm(keyword="Aiko", notify_on_new=False)
+        db_session.add(term)
+        db_session.commit()
+
+        connector = _mock_connector("youtube", [_make_item(item_id="new2")])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notify_not_called_on_second_poll_same_items(self, db_engine, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        item = _make_item(item_id="same1")
+        connector = _mock_connector("youtube", [item])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+            await _poll_once_unlocked()  # second poll — same item, no new matches
+
+        assert mock_notify.call_count == 1  # only the first poll triggers notify
+
+
 class TestIngestionIdempotency:
     @pytest.mark.asyncio
     async def test_second_poll_no_duplicate_source_items(self, db_engine, db_session):

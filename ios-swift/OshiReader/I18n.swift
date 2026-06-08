@@ -779,4 +779,6 @@ class I18nManager: ObservableObject {
     func tFormat(_ key: String, _ value: Int) -> String {
         t(key).replacingOccurrences(of: "%d", with: String(value))
     }
+
+    var allTranslationKeys: [String] { Array(translations.keys) }
 }

@@ -622,6 +622,28 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(i18n.t("tabSaved"), "已保存")
     }
     
+    // All keys in I18n.swift must have non-empty, non-fallback values for every supported language.
+    func testAllI18nKeysHaveAllLanguages() {
+        let i18n = I18nManager.shared
+        let requiredLanguages = ["en", "ja", "zh-TW", "zh-CN"]
+        let savedLang = i18n.lang
+        let keys = i18n.allTranslationKeys
+        XCTAssertFalse(keys.isEmpty, "translations dict should not be empty")
+
+        var failures: [String] = []
+        for key in keys.sorted() {
+            for lang in requiredLanguages {
+                i18n.setLanguage(lang)
+                let value = i18n.t(key)
+                if value.isEmpty || value == key {
+                    failures.append("\(key)[\(lang)]")
+                }
+            }
+        }
+        i18n.setLanguage(savedLang)
+        XCTAssertTrue(failures.isEmpty, "Missing/fallback translations: \(failures.joined(separator: ", "))")
+    }
+
     // MARK: - Persistence: malformed JSON file is silently ignored
     func testMalformedPersistenceFileLoadsEmpty() throws {
         // Write garbage to terms.json before creating a LocalDB from the same directory.
