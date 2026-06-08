@@ -605,6 +605,36 @@ class I18nManager: ObservableObject {
             "zh-TW": "↓後",
             "zh-CN": "↓后"
         ],
+        "cropModeBtn": [
+            "en": "Crop",
+            "ja": "切り取り",
+            "zh-TW": "裁切",
+            "zh-CN": "裁剪"
+        ],
+        "moveModeBtn": [
+            "en": "Move",
+            "ja": "移動",
+            "zh-TW": "移動",
+            "zh-CN": "移动"
+        ],
+        "zoomIn": [
+            "en": "Zoom +",
+            "ja": "拡大",
+            "zh-TW": "放大",
+            "zh-CN": "放大"
+        ],
+        "zoomOut": [
+            "en": "Zoom -",
+            "ja": "縮小",
+            "zh-TW": "縮小",
+            "zh-CN": "缩小"
+        ],
+        "fitToCanvas": [
+            "en": "Fit",
+            "ja": "合わせる",
+            "zh-TW": "符合",
+            "zh-CN": "适应"
+        ],
 
         // MARK: - SavedView
         "savedSelectArticle": [

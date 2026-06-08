@@ -169,7 +169,7 @@ struct AvatarEditorView: View {
                         Button(action: {
                             if activeLayer != nil { cropMode.toggle() }
                         }) {
-                            Text(cropMode ? "Move" : "Crop")
+                            Text(cropMode ? i18n.t("moveModeBtn") : i18n.t("cropModeBtn"))
                                 .font(.system(size: 11, weight: .bold))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
@@ -182,9 +182,9 @@ struct AvatarEditorView: View {
                         .accessibilityIdentifier("avatar.cropButton")
                         
                         if cropMode {
-                            toolbarBtn("Zoom +", needsSelection: false) { cropZoom(0.15) }
-                            toolbarBtn("Zoom -", needsSelection: false) { cropZoom(-0.15) }
-                            toolbarBtn("Fit",    needsSelection: false) { resetCrop() }
+                            toolbarBtn(i18n.t("zoomIn"),      needsSelection: false) { cropZoom(0.15) }
+                            toolbarBtn(i18n.t("zoomOut"),     needsSelection: false) { cropZoom(-0.15) }
+                            toolbarBtn(i18n.t("fitToCanvas"), needsSelection: false) { resetCrop() }
                         }
 
                         Divider().frame(height: 16)
