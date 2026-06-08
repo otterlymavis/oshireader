@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth import require_admin_auth
@@ -37,6 +37,8 @@ def upsert_credential(
     _: None = Depends(require_admin_auth),
     db: Session = Depends(get_db),
 ):
+    if platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(404, f"Unknown platform: {platform!r}")
     cred = db.get(PlatformCredential, platform)
     if cred is None:
         cred = PlatformCredential(platform=platform)
@@ -64,6 +66,8 @@ def delete_credential(
     _: None = Depends(require_admin_auth),
     db: Session = Depends(get_db),
 ):
+    if platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(404, f"Unknown platform: {platform!r}")
     cred = db.get(PlatformCredential, platform)
     if cred:
         db.delete(cred)

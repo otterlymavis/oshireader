@@ -71,3 +71,13 @@ class TestDeleteCredential:
     def test_delete_nonexistent_returns_204(self, client):
         r = client.delete("/api/credentials/youtube")
         assert r.status_code == 204
+
+    def test_delete_unsupported_platform_returns_404(self, client):
+        r = client.delete("/api/credentials/notaplatform")
+        assert r.status_code == 404
+
+
+class TestUnsupportedPlatform:
+    def test_upsert_unsupported_platform_returns_404(self, client):
+        r = client.put("/api/credentials/notaplatform", json={"bearer_token": "tok"})
+        assert r.status_code == 404
