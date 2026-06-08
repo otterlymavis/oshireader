@@ -81,3 +81,17 @@ class TestUnsupportedPlatform:
     def test_upsert_unsupported_platform_returns_404(self, client):
         r = client.put("/api/credentials/notaplatform", json={"bearer_token": "tok"})
         assert r.status_code == 404
+
+
+class TestCredentialValidation:
+    def test_bearer_token_too_long_returns_422(self, client):
+        r = client.put("/api/credentials/youtube", json={"bearer_token": "x" * 501})
+        assert r.status_code == 422
+
+    def test_api_key_too_long_returns_422(self, client):
+        r = client.put("/api/credentials/youtube", json={"api_key": "k" * 501})
+        assert r.status_code == 422
+
+    def test_token_at_max_length_accepted(self, client):
+        r = client.put("/api/credentials/youtube", json={"bearer_token": "t" * 500})
+        assert r.status_code == 200

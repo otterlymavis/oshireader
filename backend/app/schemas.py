@@ -112,9 +112,9 @@ class SourceItemOut(BaseModel):
 
 
 class CredentialUpsert(BaseModel):
-    bearer_token: Optional[str] = None
-    api_key: Optional[str] = None
-    api_secret: Optional[str] = None
+    bearer_token: Optional[str] = Field(default=None, max_length=500)
+    api_key: Optional[str] = Field(default=None, max_length=500)
+    api_secret: Optional[str] = Field(default=None, max_length=500)
 
 
 class CredentialOut(BaseModel):
