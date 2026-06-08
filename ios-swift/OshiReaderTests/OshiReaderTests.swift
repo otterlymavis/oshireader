@@ -807,6 +807,85 @@ final class NetworkManagerTests: XCTestCase {
         }
     }
 
+    // createWatchTerm sends POST and decodes the returned term
+    func testCreateWatchTermSendsPostAndDecodesTerm() async throws {
+        var capturedMethod: String?
+        let expected = WatchTerm(id: "7", keyword: "Haruka", collection_mode: .allInfo)
+        let responseData = try JSONEncoder().encode(expected)
+        MockURLProtocol.handler = { req in
+            capturedMethod = req.httpMethod
+            return (responseData, Self.response(status: 200))
+        }
+
+        let created = try await NetworkManager.shared.createWatchTerm(keyword: "Haruka", collectionMode: .allInfo)
+        XCTAssertEqual(capturedMethod, "POST")
+        XCTAssertEqual(created.keyword, "Haruka")
+    }
+
+    // updateWatchTerm sends PATCH and decodes the updated term
+    func testUpdateWatchTermSendsPatchAndDecodesTerm() async throws {
+        var capturedMethod: String?
+        let updated = WatchTerm(id: "3", keyword: "Aiko", collection_mode: .mediaOnly)
+        let responseData = try JSONEncoder().encode(updated)
+        MockURLProtocol.handler = { req in
+            capturedMethod = req.httpMethod
+            return (responseData, Self.response(status: 200))
+        }
+
+        let result = try await NetworkManager.shared.updateWatchTerm(id: "3", collectionMode: .mediaOnly)
+        XCTAssertEqual(capturedMethod, "PATCH")
+        XCTAssertEqual(result.collection_mode, .mediaOnly)
+    }
+
+    // fetchFeed with backend items → decoded and mapped to FeedItem
+    func testFetchFeedDecodesBackendItems() async throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let sourceItem = SourceItem(
+            id: "youtube:test123", platform: "youtube",
+            url: "https://youtu.be/test123", published_at: now,
+            author: nil, title: "Test Video", content_text: nil,
+            media_type: "video", thumbnail_url: nil
+        )
+        let backendItem = BackendFeedItem(
+            match_id: 1, watch_term_id: 2, watch_term_keyword: "Aiko",
+            item: sourceItem, matched_at: now
+        )
+        let data = try JSONEncoder().encode([backendItem])
+        MockURLProtocol.handler = { _ in (data, Self.response(status: 200)) }
+
+        let items = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.id, "youtube:test123")
+        XCTAssertEqual(items.first?.watch_term_keyword, "Aiko")
+        XCTAssertEqual(items.first?.media_type, "video")
+    }
+
+    // fetchCredentials decodes credential list
+    func testFetchCredentialsDecodesList() async throws {
+        let creds = [
+            Credential(platform: "youtube", has_bearer_token: true, has_api_key: false, updated_at: nil),
+            Credential(platform: "twitter", has_bearer_token: false, has_api_key: false, updated_at: nil),
+        ]
+        let data = try JSONEncoder().encode(creds)
+        MockURLProtocol.handler = { _ in (data, Self.response(status: 200)) }
+
+        let result = try await NetworkManager.shared.fetchCredentials()
+        XCTAssertEqual(result.count, 2)
+        XCTAssertTrue(result.first(where: { $0.platform == "youtube" })?.has_bearer_token == true)
+    }
+
+    // registerAPNSDeviceToken sends POST and succeeds on 201
+    func testRegisterAPNSDeviceTokenSendsPost() async throws {
+        var capturedMethod: String?
+        MockURLProtocol.handler = { req in
+            capturedMethod = req.httpMethod
+            return (Data(), Self.response(status: 201))
+        }
+
+        XCTAssertNoThrow(try await NetworkManager.shared.registerAPNSDeviceToken(String(repeating: "a", count: 64)))
+        XCTAssertEqual(capturedMethod, "POST")
+    }
+
     // Platform normalization round-trip: normalize → find → same id
     func testPlatformNormalizeRoundTrip() {
         XCTAssertEqual(Platform.normalize("news:mdpr"), "mdpr")
