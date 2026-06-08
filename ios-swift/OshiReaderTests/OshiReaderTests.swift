@@ -941,6 +941,32 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(capturedMethod, "POST")
     }
 
+    // checkHealth returns true when backend says {"status":"ok"}
+    func testCheckHealthReturnsTrueOnOk() async throws {
+        let body = Data(#"{"status":"ok"}"#.utf8)
+        MockURLProtocol.handler = { _ in (body, Self.response(status: 200)) }
+
+        let healthy = try await NetworkManager.shared.checkHealth()
+        XCTAssertTrue(healthy)
+    }
+
+    // checkHealth returns false on non-200 without throwing
+    func testCheckHealthReturnsFalseOnServerError() async throws {
+        MockURLProtocol.handler = { _ in (Data(), Self.response(status: 503)) }
+
+        let healthy = try await NetworkManager.shared.checkHealth()
+        XCTAssertFalse(healthy)
+    }
+
+    // checkHealth returns false when status field is not "ok"
+    func testCheckHealthReturnsFalseOnUnexpectedStatus() async throws {
+        let body = Data(#"{"status":"degraded"}"#.utf8)
+        MockURLProtocol.handler = { _ in (body, Self.response(status: 200)) }
+
+        let healthy = try await NetworkManager.shared.checkHealth()
+        XCTAssertFalse(healthy)
+    }
+
     // Platform normalization round-trip: normalize → find → same id
     func testPlatformNormalizeRoundTrip() {
         XCTAssertEqual(Platform.normalize("news:mdpr"), "mdpr")
