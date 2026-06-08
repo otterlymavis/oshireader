@@ -611,6 +611,33 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(loaded?.last?.scale, 1.5)
     }
     
+    // MARK: - parseISO8601Date
+    func testParseISO8601DateFormats() throws {
+        // Standard ISO8601 with Z and fractional seconds (backend default)
+        let d1 = parseISO8601Date("2024-06-15T10:30:00.123456Z")
+        XCTAssertNotNil(d1)
+        XCTAssertEqual(d1?.timeIntervalSince1970 ?? 0, 1718447400.123456, accuracy: 0.001)
+
+        // Without fractional seconds
+        let d2 = parseISO8601Date("2024-06-15T10:30:00Z")
+        XCTAssertNotNil(d2)
+        XCTAssertEqual(d2?.timeIntervalSince1970 ?? 0, 1718447400, accuracy: 1)
+
+        // Timezone offset instead of Z
+        let d3 = parseISO8601Date("2024-06-15T19:30:00+09:00")
+        XCTAssertNotNil(d3)
+        XCTAssertEqual(d3?.timeIntervalSince1970 ?? 0, 1718447400, accuracy: 1)
+
+        // Naive datetime (no timezone) — treated as UTC
+        let d4 = parseISO8601Date("2024-06-15T10:30:00")
+        XCTAssertNotNil(d4)
+        XCTAssertEqual(d4?.timeIntervalSince1970 ?? 0, 1718447400, accuracy: 1)
+
+        // Invalid string returns nil without crashing
+        XCTAssertNil(parseISO8601Date("not a date"))
+        XCTAssertNil(parseISO8601Date(""))
+    }
+
     // MARK: - Feature 7: Theme metadata mapping
     func testThemeMetadata() throws {
         let manager = ThemeManager.shared

@@ -1,17 +1,32 @@
 import Foundation
 
+private enum _ISO8601Cache {
+    static let withFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    static let withoutFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    static let naiveFormatters: [DateFormatter] = {
+        ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"].map {
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(identifier: "UTC")
+            df.dateFormat = $0
+            return df
+        }
+    }()
+}
+
 func parseISO8601Date(_ value: String) -> Date? {
-    let iso = ISO8601DateFormatter()
-    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = iso.date(from: value) { return date }
-    iso.formatOptions = [.withInternetDateTime]
-    if let date = iso.date(from: value) { return date }
+    if let date = _ISO8601Cache.withFractional.date(from: value) { return date }
+    if let date = _ISO8601Cache.withoutFractional.date(from: value) { return date }
     // Naive datetime (no timezone) from older backend rows — treat as UTC
-    let df = DateFormatter()
-    df.locale = Locale(identifier: "en_US_POSIX")
-    df.timeZone = TimeZone(identifier: "UTC")
-    for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"] {
-        df.dateFormat = format
+    for df in _ISO8601Cache.naiveFormatters {
         if let date = df.date(from: value) { return date }
     }
     return nil
