@@ -47,6 +47,37 @@ final class OshiReaderTests: XCTestCase {
         db.deleteTerm(id: term.id)
         XCTAssertEqual(db.terms.count, 0)
     }
+
+    func testDeleteTermAlsoRemovesItssFeedItems() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        let term = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        let keepTerm = db.saveTerm(keyword: "Haruka", collectionMode: .allInfo)
+        _ = db.mergeItems(newItems: [
+            FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
+                     title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+            FeedItem(id: "youtube:2", platform: "youtube", url: "https://u/2",
+                     title: "Haruka video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Haruka", fetched_at: now),
+        ])
+        XCTAssertEqual(db.feedItems.count, 2)
+
+        db.deleteTerm(id: term.id)
+
+        // Aiko's items removed; Haruka's remain
+        XCTAssertEqual(db.terms.count, 1)
+        XCTAssertEqual(db.terms.first?.keyword, "Haruka")
+        XCTAssertEqual(db.feedItems.count, 1)
+        XCTAssertEqual(db.feedItems.first?.watch_term_keyword, "Haruka")
+        _ = keepTerm // suppress unused warning
+    }
+
+    func testSaveTermTrimsWhitespace() throws {
+        let term = db.saveTerm(keyword: "  Aiko  ", collectionMode: .allInfo)
+        XCTAssertEqual(term.keyword, "Aiko")
+        XCTAssertEqual(db.terms.first?.keyword, "Aiko")
+    }
     
     // MARK: - Feature 2: Feed Items merging & duplicates checking
     func testFeedItemsMerge() throws {
