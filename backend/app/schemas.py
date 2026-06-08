@@ -3,24 +3,67 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+
+
+def _clean_keyword(v: str) -> str:
+    stripped = v.strip()
+    if not stripped:
+        raise ValueError("keyword must not be blank")
+    return stripped
 
 
 class WatchTermCreate(BaseModel):
-    keyword: str
-    aliases: list[str] = []
-    language_hint: Optional[str] = None
+    keyword: str = Field(min_length=1, max_length=200)
+    aliases: list[str] = Field(default=[], max_length=20)
+    language_hint: Optional[str] = Field(default=None, max_length=50)
     collection_mode: Literal["all_info", "media_only"] = "all_info"
     notify_on_new: bool = False
 
+    @field_validator("keyword", mode="before")
+    @classmethod
+    def strip_keyword(cls, v: str) -> str:
+        return _clean_keyword(v)
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def clean_aliases(cls, v: list) -> list:
+        cleaned = [a.strip() for a in v if isinstance(a, str) and a.strip()]
+        if len(cleaned) > 20:
+            raise ValueError("aliases must not exceed 20 entries")
+        for alias in cleaned:
+            if len(alias) > 200:
+                raise ValueError("each alias must be 200 characters or fewer")
+        return cleaned
+
 
 class WatchTermUpdate(BaseModel):
-    keyword: Optional[str] = None
-    aliases: Optional[list[str]] = None
-    language_hint: Optional[str] = None
+    keyword: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    aliases: Optional[list[str]] = Field(default=None, max_length=20)
+    language_hint: Optional[str] = Field(default=None, max_length=50)
     collection_mode: Optional[Literal["all_info", "media_only"]] = None
     is_active: Optional[bool] = None
     notify_on_new: Optional[bool] = None
+
+    @field_validator("keyword", mode="before")
+    @classmethod
+    def strip_keyword(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        return _clean_keyword(v)
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def clean_aliases(cls, v: Optional[list]) -> Optional[list]:
+        if v is None:
+            return None
+        cleaned = [a.strip() for a in v if isinstance(a, str) and a.strip()]
+        if len(cleaned) > 20:
+            raise ValueError("aliases must not exceed 20 entries")
+        for alias in cleaned:
+            if len(alias) > 200:
+                raise ValueError("each alias must be 200 characters or fewer")
+        return cleaned
 
 
 def _utc(v: datetime) -> datetime:

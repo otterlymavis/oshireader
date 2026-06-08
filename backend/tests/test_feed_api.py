@@ -102,6 +102,40 @@ class TestWatchTerms:
         ts = data[0]["created_at"]
         assert ts.endswith("Z") or "+" in ts, f"created_at not UTC-aware: {ts!r}"
 
+    def test_create_blank_keyword_returns_422(self, client):
+        r = client.post("/api/watch-terms/", json={"keyword": "   "}, headers=_AUTH)
+        assert r.status_code == 422
+
+    def test_create_empty_keyword_returns_422(self, client):
+        r = client.post("/api/watch-terms/", json={"keyword": ""}, headers=_AUTH)
+        assert r.status_code == 422
+
+    def test_create_keyword_too_long_returns_422(self, client):
+        r = client.post("/api/watch-terms/", json={"keyword": "a" * 201}, headers=_AUTH)
+        assert r.status_code == 422
+
+    def test_create_strips_whitespace_from_keyword(self, client):
+        r = client.post("/api/watch-terms/", json={"keyword": "  Aiko  "}, headers=_AUTH)
+        assert r.status_code == 201
+        assert r.json()["keyword"] == "Aiko"
+
+    def test_create_too_many_aliases_returns_422(self, client):
+        r = client.post(
+            "/api/watch-terms/",
+            json={"keyword": "test", "aliases": [f"alias{i}" for i in range(21)]},
+            headers=_AUTH,
+        )
+        assert r.status_code == 422
+
+    def test_create_filters_blank_aliases(self, client):
+        r = client.post(
+            "/api/watch-terms/",
+            json={"keyword": "Miku", "aliases": ["  ", "Hatsune Miku", ""]},
+            headers=_AUTH,
+        )
+        assert r.status_code == 201
+        assert r.json()["aliases"] == ["Hatsune Miku"]
+
 
 # ---------------------------------------------------------------------------
 # /api/feed
