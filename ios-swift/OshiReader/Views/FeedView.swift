@@ -345,7 +345,7 @@ struct FeedView: View {
                                     Button {
                                         _ = db.toggleSaved(item: item)
                                     } label: {
-                                        Label(savedItemIds.contains(item.id) ? "Unsave" : "Save",
+                                        Label(savedItemIds.contains(item.id) ? i18n.t("unsave") : i18n.t("save"),
                                               systemImage: savedItemIds.contains(item.id) ? "bookmark.slash" : "bookmark")
                                     }
                                     .tint(theme.colors.primary)
@@ -369,7 +369,7 @@ struct FeedView: View {
                                     Button {
                                         _ = db.toggleSaved(item: item)
                                     } label: {
-                                        Label(savedItemIds.contains(item.id) ? "Unsave" : "Save",
+                                        Label(savedItemIds.contains(item.id) ? i18n.t("unsave") : i18n.t("save"),
                                               systemImage: savedItemIds.contains(item.id) ? "bookmark.slash" : "bookmark")
                                     }
                                     .tint(theme.colors.primary)

@@ -68,14 +68,14 @@ struct ReaderView: View {
                 )
                 .background(bgColor)
             } else {
-                Text("Invalid URL")
+                Text(i18n.t("invalidUrl"))
                     .foregroundColor(theme.colors.textMuted)
             }
 
             readerControlBar
         }
         .background(bgColor)
-        .navigationTitle(feedItem.title ?? "Reader")
+        .navigationTitle(feedItem.title ?? i18n.t("readerTitle"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {

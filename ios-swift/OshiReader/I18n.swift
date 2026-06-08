@@ -147,6 +147,12 @@ class I18nManager: ObservableObject {
             "zh-TW": "儲存",
             "zh-CN": "保存"
         ],
+        "unsave": [
+            "en": "Unsave",
+            "ja": "保存解除",
+            "zh-TW": "取消儲存",
+            "zh-CN": "取消保存"
+        ],
         "offlineSaved": [
             "en": "Saved for Offline",
             "ja": "オフライン保存済み",
@@ -242,6 +248,18 @@ class I18nManager: ObservableObject {
             "ja": "バックエンドサーバーURL",
             "zh-TW": "後台伺服器URL",
             "zh-CN": "后台服务器URL"
+        ],
+        "readerTitle": [
+            "en": "Reader",
+            "ja": "リーダー",
+            "zh-TW": "閱讀器",
+            "zh-CN": "阅读器"
+        ],
+        "invalidUrl": [
+            "en": "Invalid URL",
+            "ja": "無効なURL",
+            "zh-TW": "無效的網址",
+            "zh-CN": "无效的链接"
         ],
         "readerModeText": [
             "en": "Reader Text Mode",
