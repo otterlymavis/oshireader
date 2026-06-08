@@ -1188,6 +1188,37 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(result.collection_mode, .mediaOnly)
     }
 
+    // When `since` is provided, the URL uses since= and omits days=
+    func testFetchFeedUsedSinceWhenProvided() async throws {
+        var capturedURL: URL?
+        MockURLProtocol.handler = { req in
+            capturedURL = req.url
+            return (Data("[]".utf8), Self.response(status: 200))
+        }
+
+        let since = "2026-06-01T00:00:00+00:00"
+        _ = try await NetworkManager.shared.fetchFeed(days: 30, since: since)
+
+        let query = capturedURL?.query ?? ""
+        XCTAssertTrue(query.contains("since"), "URL must contain 'since' parameter")
+        XCTAssertFalse(query.contains("days"), "URL must NOT contain 'days' when 'since' is set")
+    }
+
+    // When `since` is nil, the URL uses days= and omits since=
+    func testFetchFeedUsesDaysWhenSinceIsNil() async throws {
+        var capturedURL: URL?
+        MockURLProtocol.handler = { req in
+            capturedURL = req.url
+            return (Data("[]".utf8), Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.fetchFeed(days: 14, since: nil)
+
+        let query = capturedURL?.query ?? ""
+        XCTAssertTrue(query.contains("days=14"), "URL must contain 'days=14'")
+        XCTAssertFalse(query.contains("since"), "URL must NOT contain 'since' when it is nil")
+    }
+
     // fetchFeed with backend items → decoded and mapped to FeedItem
     func testFetchFeedDecodesBackendItems() async throws {
         let now = ISO8601DateFormatter().string(from: Date())
