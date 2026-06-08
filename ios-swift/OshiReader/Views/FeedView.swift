@@ -256,7 +256,7 @@ struct FeedView: View {
                         ProgressView()
                             .scaleEffect(0.7)
                             .tint(theme.colors.textMuted)
-                        Text("Searching offline sources…")
+                        Text(i18n.t("feedSearchingOffline"))
                             .font(.caption)
                             .foregroundColor(theme.colors.textMuted)
                         Spacer()
@@ -276,7 +276,7 @@ struct FeedView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "wifi.slash")
                             .font(.caption2)
-                        Text(msg)
+                        Text(i18n.t(msg))
                             .font(.caption)
                         Spacer()
                         Button {
@@ -383,7 +383,7 @@ struct FeedView: View {
                             } label: {
                                 HStack {
                                     Spacer()
-                                    Text("Load more (\(min(filteredItems.count, 100) - displayedCount) remaining)")
+                                    Text(i18n.tFormat("feedLoadMoreFmt", min(filteredItems.count, 100) - displayedCount))
                                         .font(.subheadline)
                                         .foregroundColor(theme.colors.primary)
                                     Spacer()
@@ -618,19 +618,19 @@ struct FeedView: View {
         }
     }
 
-    // Returns the calm user-facing label shown in the error banner.
+    // Returns an i18n key for the error banner (resolved via i18n.t() at display time).
     private static func refreshErrorLabel(_ error: Error) -> String {
-        if error is DecodingError { return "Server response error" }
-        guard let e = error as? URLError else { return "Refresh failed" }
+        if error is DecodingError { return "errorDecode" }
+        guard let e = error as? URLError else { return "errorRefreshFailed" }
         switch e.code {
         case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:
-            return "No internet connection"
+            return "errorNoInternet"
         case .timedOut:
-            return "Connection timed out"
+            return "errorTimeout"
         case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
-            return "Server unreachable"
+            return "errorUnreachable"
         default:
-            return "Backend unavailable"
+            return "errorUnavailable"
         }
     }
 
@@ -948,12 +948,12 @@ struct AddUrlSheet: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Add Custom RSS/Web Feed")
+            Text(i18n.t("addCustomFeed"))
                 .font(.headline)
                 .foregroundColor(theme.colors.text)
                 .padding(.top, 10)
-            
-            TextField("Feed/Webpage Title...", text: $customUrlTitle)
+
+            TextField(i18n.t("feedTitlePlaceholder"), text: $customUrlTitle)
                 .padding()
                 .background(theme.colors.card)
                 .cornerRadius(8)
@@ -961,7 +961,7 @@ struct AddUrlSheet: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.colors.border, lineWidth: 1))
                 .accessibilityIdentifier("customUrl.titleField")
             
-            TextField("https://...", text: $customUrlString)
+            TextField(i18n.t("urlPlaceholder"), text: $customUrlString)
                 .padding()
                 .background(theme.colors.card)
                 .cornerRadius(8)
@@ -1040,7 +1040,7 @@ struct ReorderSourcesSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             }
-            .navigationTitle("Reorder Sources")
+            .navigationTitle(i18n.t("reorderSources"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {

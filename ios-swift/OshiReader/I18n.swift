@@ -458,6 +458,102 @@ class I18nManager: ObservableObject {
             "ja": "検索リンクから記事を選択してください",
             "zh-TW": "請選擇搜尋結果閱讀",
             "zh-CN": "请选择搜索结果阅读"
+        ],
+
+        // MARK: - FeedView
+        "feedSearchingOffline": [
+            "en": "Searching offline sources…",
+            "ja": "オフラインソースを検索中…",
+            "zh-TW": "搜尋離線來源…",
+            "zh-CN": "搜索离线来源…"
+        ],
+        "feedLoadMoreFmt": [
+            "en": "Load more (%d remaining)",
+            "ja": "もっと見る（残り%d件）",
+            "zh-TW": "載入更多（剩餘%d則）",
+            "zh-CN": "加载更多（剩余%d条）"
+        ],
+        "addCustomFeed": [
+            "en": "Add Custom RSS/Web Feed",
+            "ja": "カスタムRSS/Webフィードを追加",
+            "zh-TW": "新增自訂RSS/網頁來源",
+            "zh-CN": "添加自定义RSS/网页来源"
+        ],
+        "feedTitlePlaceholder": [
+            "en": "Feed/Webpage Title…",
+            "ja": "フィード/ページタイトル…",
+            "zh-TW": "來源/網頁標題…",
+            "zh-CN": "来源/网页标题…"
+        ],
+        "urlPlaceholder": [
+            "en": "https://…",
+            "ja": "https://…",
+            "zh-TW": "https://…",
+            "zh-CN": "https://…"
+        ],
+        "reorderSources": [
+            "en": "Reorder Sources",
+            "ja": "ソースを並び替え",
+            "zh-TW": "重新排列來源",
+            "zh-CN": "重新排列来源"
+        ],
+
+        // MARK: - Refresh error messages (keys returned by refreshErrorKey)
+        "errorNoInternet": [
+            "en": "No internet connection",
+            "ja": "インターネット接続なし",
+            "zh-TW": "無網路連線",
+            "zh-CN": "无网络连接"
+        ],
+        "errorTimeout": [
+            "en": "Connection timed out",
+            "ja": "接続タイムアウト",
+            "zh-TW": "連線逾時",
+            "zh-CN": "连接超时"
+        ],
+        "errorUnreachable": [
+            "en": "Server unreachable",
+            "ja": "サーバーに接続できません",
+            "zh-TW": "無法連接伺服器",
+            "zh-CN": "无法连接服务器"
+        ],
+        "errorUnavailable": [
+            "en": "Backend unavailable",
+            "ja": "バックエンドが利用できません",
+            "zh-TW": "後端暫時無法使用",
+            "zh-CN": "后端暂时不可用"
+        ],
+        "errorRefreshFailed": [
+            "en": "Refresh failed",
+            "ja": "更新に失敗しました",
+            "zh-TW": "更新失敗",
+            "zh-CN": "刷新失败"
+        ],
+        "errorDecode": [
+            "en": "Server response error",
+            "ja": "サーバー応答エラー",
+            "zh-TW": "伺服器回應錯誤",
+            "zh-CN": "服务器响应错误"
+        ],
+
+        // MARK: - SearchView
+        "searchSavedUrls": [
+            "en": "Saved URLs",
+            "ja": "保存済みURL",
+            "zh-TW": "已儲存的URL",
+            "zh-CN": "已保存的URL"
+        ],
+        "searchEnterKeyword": [
+            "en": "Enter keyword",
+            "ja": "キーワードを入力",
+            "zh-TW": "輸入關鍵字",
+            "zh-CN": "输入关键字"
+        ],
+        "searchAddKeywordHint": [
+            "en": "Add watch keywords in Settings, or type a keyword here.",
+            "ja": "設定で追跡キーワードを追加するか、ここでキーワードを入力してください。",
+            "zh-TW": "請在設定中新增追蹤關鍵字，或在此輸入關鍵字。",
+            "zh-CN": "请在设置中添加追踪关键词，或在此输入关键词。"
         ]
     ]
 

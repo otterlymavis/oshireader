@@ -155,7 +155,7 @@ struct SearchView: View {
             .cornerRadius(8)
 
             if activeTerms.isEmpty {
-                Text("Add watch keywords in Settings, or type a keyword here.")
+                Text(i18n.t("searchAddKeywordHint"))
                     .font(.system(size: 13))
                     .foregroundColor(theme.colors.textMuted)
             } else {
@@ -220,7 +220,7 @@ struct SearchView: View {
                     .font(.system(size: 15, weight: .bold))
                     .foregroundColor(theme.colors.text)
                 Spacer()
-                Text(selectedGroup == "Custom" ? "Saved URLs" : (trimmedKeyword.isEmpty ? "Enter keyword" : trimmedKeyword))
+                Text(selectedGroup == "Custom" ? i18n.t("searchSavedUrls") : (trimmedKeyword.isEmpty ? i18n.t("searchEnterKeyword") : trimmedKeyword))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(theme.colors.textMuted)
             }
