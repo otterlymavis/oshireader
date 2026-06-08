@@ -90,3 +90,33 @@ class TestAPNSTokenDelete:
         r = client.get("/api/devices/apns-tokens")
         listed = [d["token"] for d in r.json()]
         assert token not in listed
+
+
+class TestListAPNSTokens:
+    def test_list_empty_returns_empty(self, client):
+        r = client.get("/api/devices/apns-tokens")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_list_returns_all_tokens(self, client):
+        token1 = "a" * 64
+        token2 = "b" * 64
+        client.post("/api/devices/apns-token", json={"token": token1, "environment": "sandbox"})
+        client.post("/api/devices/apns-token", json={"token": token2, "environment": "production"})
+
+        r = client.get("/api/devices/apns-tokens")
+        assert r.status_code == 200
+        tokens = [d["token"] for d in r.json()]
+        assert token1 in tokens
+        assert token2 in tokens
+
+    def test_list_sorted_newest_first(self, client):
+        token1 = "c" * 64
+        token2 = "d" * 64
+        client.post("/api/devices/apns-token", json={"token": token1, "environment": "sandbox"})
+        client.post("/api/devices/apns-token", json={"token": token2, "environment": "sandbox"})
+
+        r = client.get("/api/devices/apns-tokens")
+        tokens = [d["token"] for d in r.json()]
+        # token2 was upserted last, so it should appear first
+        assert tokens.index(token2) < tokens.index(token1)
