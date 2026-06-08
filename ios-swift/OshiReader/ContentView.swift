@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UserNotifications
 
 enum OshiTab: String, CaseIterable, Identifiable, Hashable {
     case feed, search, saved, oshi, settings
@@ -13,6 +14,7 @@ struct ContentView: View {
     @StateObject private var appearance = AppearanceManager.shared
     
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: OshiTab = .feed
     
     init() {
@@ -109,6 +111,12 @@ struct ContentView: View {
         .font(appearance.appFont)
         .ifLet(appearance.dynamicTypeSizeOverride) { view, size in
             view.environment(\.dynamicTypeSize, size)
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                UNUserNotificationCenter.current().setBadgeCount(0)
+                UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+            }
         }
     }
 

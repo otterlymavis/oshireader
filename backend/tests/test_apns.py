@@ -1,0 +1,131 @@
+"""Tests for APNs notification dispatch logic."""
+from __future__ import annotations
+
+import pytest
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
+
+from app.apns import send_new_match_notifications
+from app.models import APNSDeviceToken, WatchTerm
+
+
+def _device(token: str, environment: str = "sandbox") -> APNSDeviceToken:
+    return APNSDeviceToken(
+        token=token,
+        environment=environment,
+        last_seen_at=datetime.now(timezone.utc),
+    )
+
+
+class TestSendNewMatchNotifications:
+    @pytest.mark.asyncio
+    async def test_skips_when_count_zero(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock()) as mock_send:
+            await send_new_match_notifications(db_session, term, 0)
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_notify_on_new_false(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=False)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock()) as mock_send:
+            await send_new_match_notifications(db_session, term, 3)
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_apns_not_configured(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=False), \
+             patch("app.apns._send_one", new=AsyncMock()) as mock_send:
+            await send_new_match_notifications(db_session, term, 5)
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_devices(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.settings") as mock_settings, \
+             patch("app.apns._send_one", new=AsyncMock()) as mock_send:
+            mock_settings.apns_use_sandbox = True
+            await send_new_match_notifications(db_session, term, 2)
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sends_to_matching_environment_device(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        device = _device("a" * 64, environment="sandbox")
+        db_session.add_all([term, device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.settings") as mock_settings, \
+             patch("app.apns._send_one", new=AsyncMock(return_value=False)) as mock_send:
+            mock_settings.apns_use_sandbox = True
+            await send_new_match_notifications(db_session, term, 3)
+
+        mock_send.assert_called_once()
+        call_args = mock_send.call_args
+        assert call_args.args[1].token == "a" * 64
+        assert call_args.args[2] == term
+        assert call_args.args[3] == 3
+
+    @pytest.mark.asyncio
+    async def test_does_not_send_to_wrong_environment(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        device = _device("b" * 64, environment="production")
+        db_session.add_all([term, device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.settings") as mock_settings, \
+             patch("app.apns._send_one", new=AsyncMock(return_value=False)) as mock_send:
+            mock_settings.apns_use_sandbox = True  # sandbox mode, but device is production
+            await send_new_match_notifications(db_session, term, 1)
+
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deletes_bad_token_device(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        device = _device("c" * 64, environment="sandbox")
+        db_session.add_all([term, device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.settings") as mock_settings, \
+             patch("app.apns._send_one", new=AsyncMock(return_value=True)):
+            mock_settings.apns_use_sandbox = True
+            await send_new_match_notifications(db_session, term, 2)
+
+        remaining = db_session.query(APNSDeviceToken).filter_by(token="c" * 64).first()
+        assert remaining is None
+
+    @pytest.mark.asyncio
+    async def test_keeps_good_token_device(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        device = _device("d" * 64, environment="sandbox")
+        db_session.add_all([term, device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.settings") as mock_settings, \
+             patch("app.apns._send_one", new=AsyncMock(return_value=False)):
+            mock_settings.apns_use_sandbox = True
+            await send_new_match_notifications(db_session, term, 1)
+
+        remaining = db_session.query(APNSDeviceToken).filter_by(token="d" * 64).first()
+        assert remaining is not None
