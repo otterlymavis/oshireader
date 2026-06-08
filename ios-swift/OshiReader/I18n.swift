@@ -822,6 +822,68 @@ class I18nManager: ObservableObject {
             "ja": "設定で追跡キーワードを追加するか、ここでキーワードを入力してください。",
             "zh-TW": "請在設定中新增追蹤關鍵字，或在此輸入關鍵字。",
             "zh-CN": "请在设置中添加追踪关键词，或在此输入关键词。"
+        ],
+
+        // MARK: - Search group names
+        "searchGroupNews": [
+            "en": "News",
+            "ja": "ニュース",
+            "zh-TW": "新聞",
+            "zh-CN": "新闻"
+        ],
+        "searchGroupEntertainment": [
+            "en": "Entertainment",
+            "ja": "エンタメ",
+            "zh-TW": "娛樂",
+            "zh-CN": "娱乐"
+        ],
+        "searchGroupMagazines": [
+            "en": "Magazines",
+            "ja": "雑誌",
+            "zh-TW": "雜誌",
+            "zh-CN": "杂志"
+        ],
+        "searchGroupVideo": [
+            "en": "Video",
+            "ja": "動画",
+            "zh-TW": "影片",
+            "zh-CN": "视频"
+        ],
+        "searchGroupWriting": [
+            "en": "Writing",
+            "ja": "ライター",
+            "zh-TW": "寫作",
+            "zh-CN": "写作"
+        ],
+        "searchGroupSocial": [
+            "en": "Social",
+            "ja": "SNS",
+            "zh-TW": "社群",
+            "zh-CN": "社交"
+        ],
+        "searchGroupCommunity": [
+            "en": "Community",
+            "ja": "コミュニティ",
+            "zh-TW": "社區",
+            "zh-CN": "社区"
+        ],
+        "searchGroupWeb": [
+            "en": "Web",
+            "ja": "ウェブ",
+            "zh-TW": "網頁",
+            "zh-CN": "网页"
+        ],
+        "searchGroupShopping": [
+            "en": "Shopping",
+            "ja": "ショッピング",
+            "zh-TW": "購物",
+            "zh-CN": "购物"
+        ],
+        "searchGroupCustom": [
+            "en": "Custom",
+            "ja": "カスタム",
+            "zh-TW": "自訂",
+            "zh-CN": "自定义"
         ]
     ]
 
@@ -836,6 +898,12 @@ class I18nManager: ObservableObject {
 
     func tFormat(_ key: String, _ value: String) -> String {
         t(key).replacingOccurrences(of: "%@", with: value)
+    }
+
+    func tSearchGroup(_ group: String) -> String {
+        let key = "searchGroup\(group)"
+        let result = t(key)
+        return result == key ? group : result
     }
 
     var allTranslationKeys: [String] { Array(translations.keys) }

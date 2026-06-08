@@ -191,7 +191,7 @@ struct SearchView: View {
                         HStack(spacing: 7) {
                             Image(systemName: meta.symbol)
                                 .font(.system(size: 14, weight: .semibold))
-                            Text(group)
+                            Text(i18n.tSearchGroup(group))
                                 .font(.system(size: 13, weight: active ? .bold : .semibold))
                             Text("\(links.count)")
                                 .font(.system(size: 12, weight: .bold))
@@ -216,7 +216,7 @@ struct SearchView: View {
     private var selectedGroupSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(selectedGroup)
+                Text(i18n.tSearchGroup(selectedGroup))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundColor(theme.colors.text)
                 Spacer()
