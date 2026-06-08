@@ -141,6 +141,23 @@ class TestWatchTerms:
 # /api/feed
 # ---------------------------------------------------------------------------
 
+class TestFeedQueryValidation:
+    def test_limit_zero_returns_422(self, client):
+        assert client.get("/api/feed/?limit=0").status_code == 422
+
+    def test_limit_negative_returns_422(self, client):
+        assert client.get("/api/feed/?limit=-1").status_code == 422
+
+    def test_limit_over_200_returns_422(self, client):
+        assert client.get("/api/feed/?limit=201").status_code == 422
+
+    def test_offset_negative_returns_422(self, client):
+        assert client.get("/api/feed/?offset=-1").status_code == 422
+
+    def test_days_over_365_returns_422(self, client):
+        assert client.get("/api/feed/?days=366").status_code == 422
+
+
 class TestFeedAPI:
     def test_feed_empty(self, client):
         resp = client.get("/api/feed/")

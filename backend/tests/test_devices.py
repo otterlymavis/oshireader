@@ -47,6 +47,20 @@ class TestAPNSTokenUpsert:
         )
         assert r.status_code == 400
 
+    def test_upsert_short_token_returns_400(self, client):
+        r = client.post(
+            "/api/devices/apns-token",
+            json={"token": "a" * 32, "environment": "sandbox"},
+        )
+        assert r.status_code == 400
+
+    def test_upsert_long_token_returns_400(self, client):
+        r = client.post(
+            "/api/devices/apns-token",
+            json={"token": "a" * 65, "environment": "sandbox"},
+        )
+        assert r.status_code == 400
+
     def test_last_seen_at_is_utc_aware(self, client):
         r = client.post(
             "/api/devices/apns-token",

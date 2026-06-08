@@ -18,7 +18,7 @@ def _normalize_token(token: str) -> str:
 @router.post("/apns-token", response_model=APNSDeviceTokenOut, status_code=201)
 def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)):
     token = _normalize_token(body.token)
-    if not token or any(ch not in "0123456789abcdef" for ch in token):
+    if not token or len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
         raise HTTPException(400, "Invalid APNs device token")
 
     stored = db.get(APNSDeviceToken, token)
