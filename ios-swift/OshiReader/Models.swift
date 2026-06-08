@@ -39,7 +39,9 @@ func cleanDisplayText(_ value: String?) -> String? {
         "&quot;": "\"",
         "&#39;": "'",
         "&apos;": "'",
-        "&nbsp;": " "
+        "&nbsp;": " ",
+        "&lt;": "<",
+        "&gt;": ">"
     ]
     for (needle, replacement) in replacements {
         text = text.replacingOccurrences(of: needle, with: replacement)

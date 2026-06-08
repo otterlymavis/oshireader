@@ -638,6 +638,33 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertNil(parseISO8601Date(""))
     }
 
+    // MARK: - cleanDisplayText
+    func testCleanDisplayTextHTMLEntities() throws {
+        XCTAssertEqual(cleanDisplayText("Fish &amp; Chips"), "Fish & Chips")
+        XCTAssertEqual(cleanDisplayText("He said &quot;hello&quot;"), "He said \"hello\"")
+        XCTAssertEqual(cleanDisplayText("It&#39;s &apos;OK&apos;"), "It's 'OK'")
+        XCTAssertEqual(cleanDisplayText("a&nbsp;b"), "a b")
+        XCTAssertEqual(cleanDisplayText("x &lt; y &gt; z"), "x < y > z")
+    }
+
+    func testCleanDisplayTextStripsHTMLTags() throws {
+        XCTAssertEqual(cleanDisplayText("<p>Hello <b>World</b></p>"), "Hello World")
+    }
+
+    func testCleanDisplayTextCollapsesWhitespace() throws {
+        XCTAssertEqual(cleanDisplayText("too   many   spaces"), "too many spaces")
+    }
+
+    func testCleanDisplayTextReturnsNilForEmptyResult() throws {
+        XCTAssertNil(cleanDisplayText("   "))
+        XCTAssertNil(cleanDisplayText("<br/>"))
+        XCTAssertNil(cleanDisplayText(nil))
+    }
+
+    func testCleanDisplayTextPreservesNormalText() throws {
+        XCTAssertEqual(cleanDisplayText("Normal text."), "Normal text.")
+    }
+
     // MARK: - Feature 7: Theme metadata mapping
     func testThemeMetadata() throws {
         let manager = ThemeManager.shared
