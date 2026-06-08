@@ -445,6 +445,62 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.feedItems.count, 0)
     }
 
+    func testDeleteFeedItemIsKeywordScoped() throws {
+        // Hiding an item under keyword "Aiko" must not hide it under keyword "Haruka"
+        let now = ISO8601DateFormatter().string(from: Date())
+        let makeItem = { (kw: String) -> FeedItem in
+            FeedItem(
+                id: "youtube:shared-vid", platform: "youtube",
+                url: "https://youtube.com/watch?v=shared-vid",
+                title: "Shared video", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video", published_at: now,
+                watch_term_keyword: kw, fetched_at: now
+            )
+        }
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.mergeItems(newItems: [makeItem("Aiko"), makeItem("Haruka")])
+        XCTAssertEqual(db.feedItems.count, 2)
+
+        db.deleteFeedItem(id: "youtube:shared-vid", watchTermKeyword: "Aiko")
+
+        // "Aiko" match is hidden, "Haruka" match survives
+        XCTAssertTrue(db.hiddenItems.contains("youtube:shared-vid::Aiko"))
+        XCTAssertFalse(db.hiddenItems.contains("youtube:shared-vid::Haruka"))
+        XCTAssertEqual(db.feedItems.count, 1)
+        XCTAssertEqual(db.feedItems.first?.watch_term_keyword, "Haruka")
+
+        // queryFeed for "Haruka" still returns the item
+        let results = db.queryFeed(keyword: "Haruka", days: 30)
+        XCTAssertEqual(results.count, 1)
+    }
+
+    func testQueryFeedDeduplicatesByUrlWhenNoKeywordFilter() throws {
+        // Same URL matched by two different watch terms — no-keyword query should deduplicate
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        let makeItem = { (kw: String) -> FeedItem in
+            FeedItem(
+                id: "youtube:dedup-vid", platform: "youtube",
+                url: "https://youtube.com/watch?v=dedup-vid",
+                title: "Dedup video", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video", published_at: now,
+                watch_term_keyword: kw, fetched_at: now
+            )
+        }
+        _ = db.mergeItems(newItems: [makeItem("Aiko"), makeItem("Haruka")])
+        XCTAssertEqual(db.feedItems.count, 2)
+
+        // No keyword → dedup by URL, only 1 result
+        let all = db.queryFeed(keyword: nil, days: 30)
+        XCTAssertEqual(all.count, 1)
+
+        // With keyword → no dedup, keyword-scoped, still 1 per keyword
+        let aikoPosts = db.queryFeed(keyword: "Aiko", days: 30)
+        XCTAssertEqual(aikoPosts.count, 1)
+        let harukaPosts = db.queryFeed(keyword: "Haruka", days: 30)
+        XCTAssertEqual(harukaPosts.count, 1)
+    }
+
     // MARK: - URL scheme security
     func testAddCustomUrlRejectsNonHttpSchemes() throws {
         db.addCustomUrl(url: "javascript:alert(1)", title: "XSS")
