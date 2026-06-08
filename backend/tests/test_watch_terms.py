@@ -118,6 +118,17 @@ class TestUpdateWatchTerm:
             client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
         mock_poll.assert_not_called()
 
+    def test_update_collection_mode_triggers_poll(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", collection_mode="all_info")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"collection_mode": "media_only"})
+        assert resp.status_code == 200
+        assert resp.json()["collection_mode"] == "media_only"
+        mock_poll.assert_called_once()
+
     def test_update_collection_mode(self, client, db_session):
         term = WatchTerm(keyword="Aiko", collection_mode="all_info")
         db_session.add(term)
@@ -127,6 +138,24 @@ class TestUpdateWatchTerm:
             resp = client.patch(f"/api/watch-terms/{term.id}", json={"collection_mode": "media_only"})
         assert resp.status_code == 200
         assert resp.json()["collection_mode"] == "media_only"
+
+    def test_reactivating_term_triggers_poll(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=False)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            client.patch(f"/api/watch-terms/{term.id}", json={"is_active": True})
+        mock_poll.assert_called_once()
+
+    def test_deactivating_term_does_not_trigger_poll(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=True)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
+        mock_poll.assert_not_called()
 
     def test_update_invalid_collection_mode_returns_422(self, client, db_session):
         term = WatchTerm(keyword="Aiko")

@@ -49,7 +49,13 @@ def update_term(
         setattr(term, k, v)
     db.commit()
     db.refresh(term)
-    if "aliases" in updates:
+    # Re-poll when changes affect what gets fetched on the next cycle.
+    should_poll = (
+        "aliases" in updates
+        or "collection_mode" in updates
+        or (updates.get("is_active") is True)
+    )
+    if should_poll:
         queue_poll()
     return term
 
