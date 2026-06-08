@@ -1,19 +1,12 @@
 from datetime import datetime, timezone
 
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+
+from app.database import Base
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
-
-
-class MigrationLog(Base):
-    """Tracks one-time migrations so they never re-run on subsequent boots."""
-    __tablename__ = "migration_log"
-    id = Column(String, primary_key=True)  # migration name / slug
-    applied_at = Column(DateTime, default=_utcnow)
-
-from app.database import Base
 
 
 class WatchTerm(Base):
@@ -75,3 +68,10 @@ class Match(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     __table_args__ = (UniqueConstraint("watch_term_id", "source_item_id"),)
+
+
+class MigrationLog(Base):
+    """Tracks one-time migrations so they never re-run on subsequent boots."""
+    __tablename__ = "migration_log"
+    id = Column(String, primary_key=True)  # migration name / slug
+    applied_at = Column(DateTime, default=_utcnow)

@@ -23,6 +23,14 @@ class WatchTermUpdate(BaseModel):
     notify_on_new: Optional[bool] = None
 
 
+def _utc(v: datetime) -> datetime:
+    return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+
+
+def _utc_opt(v: Optional[datetime]) -> Optional[datetime]:
+    return None if v is None else _utc(v)
+
+
 class WatchTermOut(BaseModel):
     id: int
     keyword: str
@@ -35,9 +43,10 @@ class WatchTermOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
-
-def _ensure_utc(v: datetime) -> datetime:
-    return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def stamp_utc(cls, v: datetime) -> datetime:
+        return _utc(v)
 
 
 class SourceItemOut(BaseModel):
@@ -56,7 +65,7 @@ class SourceItemOut(BaseModel):
     @field_validator("published_at", mode="before")
     @classmethod
     def stamp_utc(cls, v: datetime) -> datetime:
-        return _ensure_utc(v)
+        return _utc(v)
 
 
 class CredentialUpsert(BaseModel):
@@ -73,6 +82,11 @@ class CredentialOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator("updated_at", mode="before")
+    @classmethod
+    def stamp_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
+        return _utc_opt(v)
+
 
 class APNSDeviceTokenUpsert(BaseModel):
     token: str
@@ -88,7 +102,10 @@ class APNSDeviceTokenOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
-
+    @field_validator("last_seen_at", mode="before")
+    @classmethod
+    def stamp_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
+        return _utc_opt(v)
 
 
 class FeedItemOut(BaseModel):
@@ -97,3 +114,8 @@ class FeedItemOut(BaseModel):
     watch_term_keyword: str
     item: SourceItemOut
     matched_at: datetime
+
+    @field_validator("matched_at", mode="before")
+    @classmethod
+    def stamp_utc(cls, v: datetime) -> datetime:
+        return _utc(v)
