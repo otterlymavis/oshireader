@@ -262,6 +262,23 @@ class TestIngestionCollectionMode:
         assert called_mode == "all_info"
 
 
+class TestIngestionCollectionModeNullFallback:
+    @pytest.mark.asyncio
+    async def test_null_collection_mode_defaults_to_all_info(self, db_engine, db_session):
+        """WatchTerm with collection_mode=None must not crash; falls back to all_info."""
+        term = WatchTerm(keyword="Aiko")
+        term.collection_mode = None  # Simulate a legacy/corrupt DB row
+        db_session.add(term)
+        db_session.commit()
+
+        connector = _mock_connector("youtube", [])
+        await _run_poll(db_engine, [connector])
+
+        connector.fetch.assert_called_once()
+        _, called_mode = connector.fetch.call_args.args
+        assert called_mode == "all_info"
+
+
 class TestIngestionDateHealing:
     @pytest.mark.asyncio
     async def test_heals_stale_published_at(self, db_engine, db_session):

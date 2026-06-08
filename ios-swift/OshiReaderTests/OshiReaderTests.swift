@@ -497,6 +497,47 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(querySub.first?.id, "tver:yesterday")
     }
     
+    // MARK: - Custom platform keyword-filter bypass
+    func testCustomPlatformItemsPassKeywordFilter() throws {
+        // custom items have a different watch_term_keyword (e.g. "") but should appear
+        // in any keyword-filtered query because the "custom" bypass skips the kw check.
+        let now = ISO8601DateFormatter().string(from: Date())
+        let customItem = FeedItem(
+            id: "custom:rss1", platform: "custom", url: "https://myfeed.com/1",
+            title: "Custom feed entry", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now,
+            watch_term_keyword: "", fetched_at: now
+        )
+        let regularItem = FeedItem(
+            id: "youtube:v1", platform: "youtube", url: "https://yt/v1",
+            title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+        db.setSubscribedPlatforms(platforms: ["youtube", "custom"])
+        _ = db.mergeItems(newItems: [customItem, regularItem])
+
+        // Keyword filter: only "Aiko" items normally pass, but custom also passes
+        let results = db.queryFeed(keyword: "Aiko", days: 0)
+        XCTAssertTrue(results.contains { $0.id == "youtube:v1" }, "Regular item should pass keyword filter")
+        XCTAssertTrue(results.contains { $0.id == "custom:rss1" }, "Custom item should bypass keyword filter")
+    }
+
+    func testCustomPlatformHiddenWhenUnsubscribed() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let customItem = FeedItem(
+            id: "custom:rss2", platform: "custom", url: "https://myfeed.com/2",
+            title: "Custom entry", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now,
+            watch_term_keyword: "", fetched_at: now
+        )
+        db.setSubscribedPlatforms(platforms: ["youtube"]) // custom not subscribed
+        _ = db.mergeItems(newItems: [customItem])
+
+        let results = db.queryFeed(keyword: nil, days: 0)
+        XCTAssertFalse(results.contains { $0.id == "custom:rss2" }, "Custom item should be hidden when platform is unsubscribed")
+    }
+
     // MARK: - Feature 4: Saved Bookmarks
     func testSavedBookmarks() throws {
         let item = FeedItem(
