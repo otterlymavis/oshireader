@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
 
 import httpx
 from sqlalchemy.orm import Session
@@ -104,14 +104,18 @@ async def send_new_match_notifications(db: Session, term: WatchTerm, count: int)
         return
 
     environment = "sandbox" if settings.apns_use_sandbox else "production"
-    devices: Iterable[APNSDeviceToken] = (
+    devices: list[APNSDeviceToken] = (
         db.query(APNSDeviceToken)
         .filter(APNSDeviceToken.environment == environment)
         .all()
     )
+    if not devices:
+        return
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
-        for device in devices:
-            should_delete = await _send_one(client, device, term, count)
-            if should_delete:
-                db.delete(device)
+        results = await asyncio.gather(
+            *[_send_one(client, device, term, count) for device in devices]
+        )
+    for device, should_delete in zip(devices, results):
+        if should_delete:
+            db.delete(device)
     db.commit()

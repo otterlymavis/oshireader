@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class WatchTermCreate(BaseModel):
@@ -36,6 +36,10 @@ class WatchTermOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def _ensure_utc(v: datetime) -> datetime:
+    return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+
+
 class SourceItemOut(BaseModel):
     id: str
     platform: str
@@ -48,6 +52,11 @@ class SourceItemOut(BaseModel):
     thumbnail_url: Optional[str]
 
     model_config = {"from_attributes": True}
+
+    @field_validator("published_at", mode="before")
+    @classmethod
+    def stamp_utc(cls, v: datetime) -> datetime:
+        return _ensure_utc(v)
 
 
 class CredentialUpsert(BaseModel):

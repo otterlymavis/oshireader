@@ -108,6 +108,10 @@ def apply_startup_migrations(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS ix_matches_watch_term_id"
             " ON matches (watch_term_id)"
         ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_source_items_published_at"
+            " ON source_items (published_at DESC)"
+        ))
 
     # One-time cleanup (guarded): remove source_items where published_at ≈ matched_at
     # (within 60 s) for platforms whose date parsers previously fell back to
