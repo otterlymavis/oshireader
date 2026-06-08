@@ -8,8 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from app.connectors.base import SourceItemCreate, parse_feed_date
+from app.connectors.mdpr import _clean_title as _clean_mdpr_title
 from app.connectors.tver import _parse_tver_date
 from app.connectors.yahoonews import _clean_markdown_title
+from app.connectors.youtube import _parse_youtube_relative
 
 
 def _entry(**kwargs) -> SimpleNamespace:
@@ -131,6 +133,65 @@ class TestParseTverDate:
         result = _parse_tver_date({"publishedAt": 1700000000})
         assert result is not None
         assert result.tzinfo == timezone.utc
+
+
+class TestParseYouTubeRelative:
+    def _approx(self, result: datetime, expected: datetime, tolerance_sec: int = 5) -> bool:
+        return abs((result - expected).total_seconds()) <= tolerance_sec
+
+    def test_english_days_ago(self):
+        before = datetime.now(timezone.utc)
+        result = _parse_youtube_relative("2 days ago")
+        assert result is not None
+        assert self._approx(result, before - __import__("datetime").timedelta(days=2), tolerance_sec=60)
+
+    def test_english_hours_ago(self):
+        before = datetime.now(timezone.utc)
+        result = _parse_youtube_relative("3 hours ago")
+        assert result is not None
+        # within 60s of 3h ago
+        from datetime import timedelta
+        assert self._approx(result, before - timedelta(hours=3), tolerance_sec=60)
+
+    def test_japanese_days_ago(self):
+        result = _parse_youtube_relative("5日前")
+        assert result is not None
+
+    def test_japanese_months_ago(self):
+        result = _parse_youtube_relative("2ヶ月前")
+        assert result is not None
+
+    def test_japanese_weeks_ago(self):
+        result = _parse_youtube_relative("1週間前")
+        assert result is not None
+
+    def test_returns_none_for_empty_string(self):
+        assert _parse_youtube_relative("") is None
+
+    def test_returns_none_for_unrecognized_text(self):
+        assert _parse_youtube_relative("just now") is None
+
+    def test_result_is_utc_aware(self):
+        result = _parse_youtube_relative("1 day ago")
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+
+
+class TestCleanMdprTitle:
+    def test_strips_modelpress_suffix(self):
+        assert _clean_mdpr_title("アイコが新曲 - モデルプレス") == "アイコが新曲"
+
+    def test_strips_pipe_variant(self):
+        assert _clean_mdpr_title("アイコが新曲 | モデルプレス") == "アイコが新曲"
+
+    def test_trailing_whitespace_in_suffix_ignored(self):
+        assert _clean_mdpr_title("アイコ -  モデルプレス ") == "アイコ"
+
+    def test_plain_title_unchanged(self):
+        assert _clean_mdpr_title("アイコの最新情報") == "アイコの最新情報"
+
+    def test_strips_surrounding_whitespace(self):
+        assert _clean_mdpr_title("  Title  ") == "Title"
 
 
 class TestCleanMarkdownTitle:
