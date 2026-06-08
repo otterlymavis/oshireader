@@ -99,3 +99,28 @@ class TestAdminAuth:
                 headers={"Authorization": "Bearer secret123"},
             )
         assert r.status_code == 200
+
+    def test_stats_rejects_wrong_token(self, client):
+        with patch("app.auth.settings") as mock_settings:
+            mock_settings.admin_api_token = "secret123"
+            r = client.get(
+                "/api/admin/stats",
+                headers={"Authorization": "Bearer wrongtoken"},
+            )
+        assert r.status_code == 401
+
+    def test_poll_requires_auth_when_token_set(self, client):
+        with patch("app.auth.settings") as mock_settings:
+            mock_settings.admin_api_token = "secret123"
+            r = client.post("/api/admin/poll")
+        assert r.status_code == 401
+
+    def test_poll_accepts_correct_token(self, client):
+        with patch("app.auth.settings") as mock_settings, \
+             patch("app.main.queue_poll", return_value=True):
+            mock_settings.admin_api_token = "secret123"
+            r = client.post(
+                "/api/admin/poll",
+                headers={"Authorization": "Bearer secret123"},
+            )
+        assert r.status_code == 200
