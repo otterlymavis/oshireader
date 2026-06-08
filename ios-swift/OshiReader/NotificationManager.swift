@@ -19,7 +19,6 @@ final class NotificationManager: ObservableObject {
     static let shared = NotificationManager()
 
     @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
-    @Published private(set) var remoteRegistrationStatus: String = "Not registered"
 
     private let center: NotificationCenterClient
 
@@ -105,13 +104,8 @@ final class NotificationManager: ObservableObject {
         let token = Self.deviceTokenString(deviceToken)
         do {
             try await NetworkManager.shared.registerAPNSDeviceToken(token)
-            await MainActor.run {
-                remoteRegistrationStatus = "Registered"
-            }
         } catch {
-            await MainActor.run {
-                remoteRegistrationStatus = "Registration failed"
-            }
+            AppLogger.notifications.error("APNs device token registration failed: \(error.localizedDescription)")
         }
     }
 
