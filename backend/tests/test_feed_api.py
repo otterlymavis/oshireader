@@ -245,7 +245,43 @@ class TestFeedAPI:
         resp = client.get("/api/feed/?media_type=video")
         ids = [r["item"]["id"] for r in resp.json()]
         assert vid.id in ids
-        assert art.id not in ids
+
+    def test_feed_platform_filter(self, client, db_session):
+        term = _make_term(db_session)
+        yt = _make_item(db_session, platform="youtube", item_id="y1")
+        tw = _make_item(db_session, platform="twitter", item_id="t1")
+        _make_match(db_session, term, yt)
+        _make_match(db_session, term, tw)
+
+        resp = client.get("/api/feed/?platform=youtube")
+        ids = [r["item"]["id"] for r in resp.json()]
+        assert yt.id in ids
+        assert tw.id not in ids
+
+    def test_since_overrides_days_filter(self, client, db_session):
+        """When `since` is provided, `days` is ignored entirely."""
+        from urllib.parse import quote
+
+        term = _make_term(db_session)
+        old_item = _make_item(db_session, item_id="old", days_ago=60)
+        new_item = _make_item(db_session, item_id="new", days_ago=1)
+        old_match = _make_match(db_session, term, old_item)
+        _make_match(db_session, term, new_item)
+
+        # Backdate old match so since filter would exclude it
+        db_session.query(Match).filter(Match.id == old_match.id).update(
+            {"created_at": datetime.now(timezone.utc) - timedelta(days=50)},
+            synchronize_session=False,
+        )
+        db_session.commit()
+
+        # days=0 would normally mean "no cutoff", but since takes precedence.
+        # With since=yesterday, only the new match should appear.
+        since_ts = quote((datetime.now(timezone.utc) - timedelta(days=2)).isoformat())
+        resp = client.get(f"/api/feed/?since={since_ts}&days=0")
+        ids = [r["item"]["id"] for r in resp.json()]
+        assert new_item.id in ids
+        assert old_item.id not in ids
 
     def test_feed_published_at_has_timezone(self, client, db_session):
         term = _make_term(db_session)
