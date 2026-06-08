@@ -170,6 +170,73 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(merged.thumbnail_url, "https://img.example.com/1.jpg")
     }
 
+    func testMergeSearchFallbackItemsAreDropped() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        // Items whose id starts with "search:" come from local search fallbacks
+        // and must not be persisted into the feed.
+        let searchItem = FeedItem(
+            id: "search:fallback", platform: "news",
+            url: "https://example.com/search",
+            title: "search: result", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let added = db.mergeItems(newItems: [searchItem])
+        XCTAssertEqual(added, 0)
+        XCTAssertTrue(db.feedItems.isEmpty, "search: prefix items must be silently dropped")
+    }
+
+    func testMergeContentAndThumbnailBackfill() throws {
+        // When an existing item has no content_text or thumbnail_url, a later merge
+        // should fill them in from the new item (nil-coalescing fill, not replace).
+        let now = ISO8601DateFormatter().string(from: Date())
+        let base = FeedItem(
+            id: "youtube:fill-test", platform: "youtube",
+            url: "https://youtube.com/1",
+            title: "Video", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let enriched = FeedItem(
+            id: "youtube:fill-test", platform: "youtube",
+            url: "https://youtube.com/1",
+            title: "Video", content_text: "Description text", author: "Creator",
+            thumbnail_url: "https://i.ytimg.com/thumb.jpg",
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [base])
+        _ = db.mergeItems(newItems: [enriched])
+
+        let item = db.feedItems.first
+        XCTAssertEqual(item?.content_text, "Description text")
+        XCTAssertEqual(item?.author, "Creator")
+        XCTAssertEqual(item?.thumbnail_url, "https://i.ytimg.com/thumb.jpg")
+    }
+
+    func testMergeDoesNotOverwriteExistingContent() throws {
+        // Once content_text and thumbnail_url are set, they should not be cleared
+        // by a subsequent merge that brings nil values.
+        let now = ISO8601DateFormatter().string(from: Date())
+        let withContent = FeedItem(
+            id: "youtube:keep-test", platform: "youtube",
+            url: "https://youtube.com/2",
+            title: "Video", content_text: "Original description", author: nil,
+            thumbnail_url: "https://i.ytimg.com/original.jpg",
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let noContent = FeedItem(
+            id: "youtube:keep-test", platform: "youtube",
+            url: "https://youtube.com/2",
+            title: "Video", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [withContent])
+        _ = db.mergeItems(newItems: [noContent])
+
+        let item = db.feedItems.first
+        XCTAssertEqual(item?.content_text, "Original description")
+        XCTAssertEqual(item?.thumbnail_url, "https://i.ytimg.com/original.jpg")
+    }
+
     func testMergeKeepsEarlierPublishedAt() throws {
         let formatter = ISO8601DateFormatter()
         let older = formatter.string(from: Date(timeIntervalSinceNow: -3600))
