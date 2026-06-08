@@ -1254,6 +1254,48 @@ final class NetworkManagerTests: XCTestCase {
             XCTAssertTrue(error is URLError)
         }
     }
+
+    // Japanese text is returned unchanged without a network call.
+    func testTranslateToJapaneseSkipsForJapanese() async throws {
+        // Make no handler — any network call will fail with .unknown
+        let result = await NetworkManager.shared.translateToJapanese("こんにちは")
+        XCTAssertEqual(result, "こんにちは")
+    }
+
+    // Non-Japanese text makes a network call; valid response is parsed correctly.
+    func testTranslateToJapaneseReturnsParsedResult() async throws {
+        // Google Translate response: [[["こんにちは","hello",null,null,10]], ...]
+        let gtResponse = Data(#"[[["こんにちは","hello",null,null,10]],null,"en"]"#.utf8)
+        MockURLProtocol.handler = { _ in (gtResponse, Self.response(status: 200)) }
+
+        let result = await NetworkManager.shared.translateToJapanese("hello")
+        XCTAssertEqual(result, "こんにちは")
+    }
+
+    // Multi-chunk response is concatenated correctly.
+    func testTranslateToJapaneseJoinsContinuationChunks() async throws {
+        let gtResponse = Data(#"[[["ありがとう","thank",null,null,10],["ございます"," you",null,null,10]],null,"en"]"#.utf8)
+        MockURLProtocol.handler = { _ in (gtResponse, Self.response(status: 200)) }
+
+        let result = await NetworkManager.shared.translateToJapanese("thank you")
+        XCTAssertEqual(result, "ありがとうございます")
+    }
+
+    // Network failure falls back to the original text without throwing.
+    func testTranslateToJapaneseFallsBackOnNetworkError() async throws {
+        MockURLProtocol.errorHandler = { _ in URLError(.notConnectedToInternet) }
+
+        let result = await NetworkManager.shared.translateToJapanese("hello")
+        XCTAssertEqual(result, "hello")
+    }
+
+    // Malformed JSON falls back to the original text without throwing.
+    func testTranslateToJapaneseFallsBackOnBadJSON() async throws {
+        MockURLProtocol.handler = { _ in (Data("not json".utf8), Self.response(status: 200)) }
+
+        let result = await NetworkManager.shared.translateToJapanese("hello")
+        XCTAssertEqual(result, "hello")
+    }
 }
 
 // MARK: - MockURLProtocol
