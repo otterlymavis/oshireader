@@ -1,4 +1,4 @@
-"""Tests for scheduler pruning logic."""
+"""Tests for scheduler pruning logic and search-term building."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.ingestion.scheduler import _prune_old_items
+from app.ingestion.scheduler import _prune_old_items, _search_terms_for
 from app.models import Match, SourceItem, WatchTerm
 
 
@@ -132,3 +132,41 @@ class TestPruneOldItems:
         newest_id = kept_items[0].item_id
         oldest_id = kept_items[-1].item_id
         assert int(newest_id.replace("item", "")) > int(oldest_id.replace("item", ""))
+
+
+class TestSearchTermsFor:
+    def _term(self, keyword: str, aliases: list[str]) -> WatchTerm:
+        return WatchTerm(keyword=keyword, aliases=aliases)
+
+    def test_returns_primary_keyword(self):
+        term = self._term("Aiko", [])
+        result = _search_terms_for(term)
+        assert result == ["Aiko"]
+
+    def test_includes_aliases(self):
+        term = self._term("Aiko", ["相川愛子", "Aiko Chan"])
+        result = _search_terms_for(term)
+        assert result == ["Aiko", "相川愛子", "Aiko Chan"]
+
+    def test_deduplicates_case_insensitive(self):
+        # "aiko" and "Aiko" are the same after casefold — only the first survives
+        term = self._term("Aiko", ["aiko", "AIKO", "相川愛子"])
+        result = _search_terms_for(term)
+        assert result == ["Aiko", "相川愛子"]
+
+    def test_strips_whitespace_from_aliases(self):
+        term = self._term("Miku", ["  Miku Hatsune  "])
+        result = _search_terms_for(term)
+        assert "Miku Hatsune" in result
+
+    def test_ignores_empty_aliases(self):
+        term = self._term("Test", ["", "  ", "Valid"])
+        result = _search_terms_for(term)
+        assert "" not in result
+        assert "   " not in result
+        assert "Valid" in result
+
+    def test_primary_not_duplicated_when_present_as_alias(self):
+        term = self._term("Oshi", ["Oshi", "oshi", "Other"])
+        result = _search_terms_for(term)
+        assert result.count("Oshi") == 1

@@ -210,3 +210,31 @@ class TestFeedAPI:
         ids1 = {r["item"]["id"] for r in page1}
         ids2 = {r["item"]["id"] for r in page2}
         assert ids1.isdisjoint(ids2)
+
+    def test_feed_since_filter_returns_only_new_matches(self, client, db_session):
+        """The iOS app passes `since=<last_sync_time>` for incremental updates.
+        Items matched before that timestamp must be excluded."""
+        from urllib.parse import quote
+
+        term = _make_term(db_session)
+        old_item = _make_item(db_session, item_id="old_item", days_ago=5)
+        new_item = _make_item(db_session, item_id="new_item", days_ago=1)
+
+        old_match = _make_match(db_session, term, old_item)
+        _make_match(db_session, term, new_item)
+
+        # Backdate the old match's created_at so the since filter can exclude it.
+        db_session.query(Match).filter(Match.id == old_match.id).update(
+            {"created_at": datetime.now(timezone.utc) - timedelta(days=3)},
+            synchronize_session=False,
+        )
+        db_session.commit()
+
+        # since = 2 days ago — old match (3 days) excluded, new match included.
+        # URL-encode "+" so the timezone offset "+00:00" is not decoded as a space.
+        since_ts = quote((datetime.now(timezone.utc) - timedelta(days=2)).isoformat())
+        resp = client.get(f"/api/feed/?since={since_ts}")
+        assert resp.status_code == 200
+        ids = [r["item"]["id"] for r in resp.json()]
+        assert new_item.id in ids
+        assert old_item.id not in ids

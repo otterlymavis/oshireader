@@ -622,6 +622,17 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(i18n.t("tabSaved"), "已保存")
     }
     
+    // MARK: - Persistence: malformed JSON file is silently ignored
+    func testMalformedPersistenceFileLoadsEmpty() throws {
+        // Write garbage to terms.json before creating a LocalDB from the same directory.
+        let termsURL = tempDir.appendingPathComponent("terms.json")
+        try "{ this is : not [ valid json".write(to: termsURL, atomically: true, encoding: .utf8)
+
+        let freshDB = LocalDB(directory: tempDir)
+        // Must not crash; corrupt file should produce an empty collection.
+        XCTAssertEqual(freshDB.terms.count, 0)
+    }
+
     // MARK: - Feature 9: Multi-keyword source fetching, filtering, and translation targets
     func testMultiKeywordFeedAndTranslations() throws {
         // 1. Import more than 3 keywords (e.g. 4 keywords)
@@ -711,6 +722,7 @@ final class NetworkManagerTests: XCTestCase {
     override func tearDownWithError() throws {
         NetworkManager.shared.session = savedSession
         MockURLProtocol.handler = nil
+        MockURLProtocol.errorHandler = nil
         try super.tearDownWithError()
     }
 
@@ -783,6 +795,18 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertNoThrow(try await NetworkManager.shared.deleteWatchTerm(id: "99"))
     }
 
+    // Network connection error → propagated as URLError (not swallowed)
+    func testFetchWatchTermsNetworkErrorPropagates() async throws {
+        MockURLProtocol.errorHandler = { _ in URLError(.notConnectedToInternet) }
+
+        do {
+            _ = try await NetworkManager.shared.fetchWatchTerms()
+            XCTFail("Expected URLError not thrown")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .notConnectedToInternet)
+        }
+    }
+
     // Platform normalization round-trip: normalize → find → same id
     func testPlatformNormalizeRoundTrip() {
         XCTAssertEqual(Platform.normalize("news:mdpr"), "mdpr")
@@ -798,11 +822,17 @@ final class NetworkManagerTests: XCTestCase {
 
 private final class MockURLProtocol: URLProtocol {
     static var handler: ((URLRequest) -> (Data, HTTPURLResponse))?
+    // Set this to have the protocol fail with a specific error instead of calling handler.
+    static var errorHandler: ((URLRequest) -> Error)?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        if let errHandler = Self.errorHandler {
+            client?.urlProtocol(self, didFailWithError: errHandler(request))
+            return
+        }
         guard let handler = Self.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.unknown))
             return
