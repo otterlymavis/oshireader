@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -66,3 +67,35 @@ class TestAdminStats:
         data = r.json()
         assert data["items_by_platform"]["youtube"] == 2
         assert data["items_by_platform"]["twitter"] == 1
+
+
+class TestAdminPoll:
+    def test_poll_returns_started_when_not_running(self, client):
+        with patch("app.main.queue_poll", return_value=True) as mock_poll:
+            r = client.post("/api/admin/poll")
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll started"}
+        mock_poll.assert_called_once()
+
+    def test_poll_returns_already_running_when_busy(self, client):
+        with patch("app.main.queue_poll", return_value=False):
+            r = client.post("/api/admin/poll")
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll already running"}
+
+
+class TestAdminAuth:
+    def test_stats_requires_auth_when_token_set(self, client):
+        with patch("app.auth.settings") as mock_settings:
+            mock_settings.admin_api_token = "secret123"
+            r = client.get("/api/admin/stats")
+        assert r.status_code == 401
+
+    def test_stats_accepts_correct_token(self, client):
+        with patch("app.auth.settings") as mock_settings:
+            mock_settings.admin_api_token = "secret123"
+            r = client.get(
+                "/api/admin/stats",
+                headers={"Authorization": "Bearer secret123"},
+            )
+        assert r.status_code == 200
