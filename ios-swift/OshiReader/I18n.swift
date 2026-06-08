@@ -443,6 +443,30 @@ class I18nManager: ObservableObject {
             "zh-TW": "傳送測試通知",
             "zh-CN": "发送测试通知"
         ],
+        "notifTestBody": [
+            "en": "Notifications are ready.",
+            "ja": "通知の準備ができました。",
+            "zh-TW": "通知功能已就緒。",
+            "zh-CN": "通知功能已准备就绪。"
+        ],
+        "notifNewItemsTitle": [
+            "en": "New items for %@",
+            "ja": "%@ の新着",
+            "zh-TW": "%@ 的新內容",
+            "zh-CN": "%@ 的新内容"
+        ],
+        "notifNewItemsBodyOne": [
+            "en": "1 new item found.",
+            "ja": "1件の新着があります。",
+            "zh-TW": "1 個新項目。",
+            "zh-CN": "1 个新内容。"
+        ],
+        "notifNewItemsBodyMany": [
+            "en": "%d new items found.",
+            "ja": "%d件の新着があります。",
+            "zh-TW": "%d 個新項目。",
+            "zh-CN": "%d 个新内容。"
+        ],
         "appearanceSection": [
             "en": "Theme & Appearance",
             "ja": "テーマとカスタマイズ",
@@ -778,6 +802,10 @@ class I18nManager: ObservableObject {
 
     func tFormat(_ key: String, _ value: Int) -> String {
         t(key).replacingOccurrences(of: "%d", with: String(value))
+    }
+
+    func tFormat(_ key: String, _ value: String) -> String {
+        t(key).replacingOccurrences(of: "%@", with: value)
     }
 
     var allTranslationKeys: [String] { Array(translations.keys) }

@@ -75,9 +75,10 @@ final class NotificationManager: ObservableObject {
         }
         guard canScheduleNotifications else { return }
 
+        let i18n = I18nManager.shared
         let content = UNMutableNotificationContent()
         content.title = "OshiReader"
-        content.body = "Notifications are ready."
+        content.body = i18n.t("notifTestBody")
         content.sound = .default
 
         let request = UNNotificationRequest(
@@ -126,10 +127,13 @@ final class NotificationManager: ObservableObject {
             $0.watch_term_keyword
         }.mapValues(\.count)
 
+        let i18n = I18nManager.shared
         for (keyword, count) in counts where count > 0 {
             let content = UNMutableNotificationContent()
-            content.title = "New items for \(keyword)"
-            content.body = "\(count) new item\(count == 1 ? "" : "s") found."
+            content.title = i18n.tFormat("notifNewItemsTitle", keyword)
+            content.body = count == 1
+                ? i18n.t("notifNewItemsBodyOne")
+                : i18n.tFormat("notifNewItemsBodyMany", count)
             content.sound = .default
 
             let request = UNNotificationRequest(
