@@ -197,6 +197,34 @@ class TestIngestionIdempotency:
         assert db_session.query(Match).count() == 1
 
 
+class TestIngestionCollectionMode:
+    @pytest.mark.asyncio
+    async def test_collection_mode_forwarded_to_connector(self, db_engine, db_session):
+        """Poll must pass WatchTerm.collection_mode to every connector fetch call."""
+        term = WatchTerm(keyword="Aiko", collection_mode="media_only")
+        db_session.add(term)
+        db_session.commit()
+
+        connector = _mock_connector("youtube", [])
+        await _run_poll(db_engine, [connector])
+
+        connector.fetch.assert_called_once()
+        _, called_mode = connector.fetch.call_args.args
+        assert called_mode == "media_only"
+
+    @pytest.mark.asyncio
+    async def test_all_info_mode_forwarded_to_connector(self, db_engine, db_session):
+        term = WatchTerm(keyword="Aiko", collection_mode="all_info")
+        db_session.add(term)
+        db_session.commit()
+
+        connector = _mock_connector("youtube", [])
+        await _run_poll(db_engine, [connector])
+
+        _, called_mode = connector.fetch.call_args.args
+        assert called_mode == "all_info"
+
+
 class TestIngestionDateHealing:
     @pytest.mark.asyncio
     async def test_heals_stale_published_at(self, db_engine, db_session):
