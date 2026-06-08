@@ -92,6 +92,23 @@ class TestWatchTerms:
         assert resp.status_code == 204
         assert client.get("/api/watch-terms/").json() == []
 
+    def test_delete_term_cascades_to_matches(self, client, db_session):
+        """Deleting a WatchTerm must cascade-delete its Matches so the feed is empty."""
+        term = _make_term(db_session, keyword="cascade-test")
+        item = _make_item(db_session, item_id="c1")
+        _make_match(db_session, term, item)
+
+        assert len(client.get("/api/feed/").json()) == 1
+
+        client.delete(f"/api/watch-terms/{term.id}", headers=_AUTH)
+
+        # No matches should survive the cascade
+        db_session.expire_all()
+        remaining = db_session.query(Match).filter(Match.watch_term_id == term.id).count()
+        assert remaining == 0
+        # Feed should be empty
+        assert client.get("/api/feed/").json() == []
+
     def test_update_missing_term_returns_404(self, client):
         resp = client.patch("/api/watch-terms/9999", json={"keyword": "x"}, headers=_AUTH)
         assert resp.status_code == 404

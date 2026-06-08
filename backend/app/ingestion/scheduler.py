@@ -184,6 +184,13 @@ async def _poll_once_unlocked() -> None:
                                             stored_aware.isoformat(),
                                             new_aware.isoformat(),
                                         )
+
+                        # Flush source_items before inserting matches so that
+                        # SQLite's FOREIGN KEY enforcement (PRAGMA foreign_keys=ON)
+                        # can verify the source_item_id reference exists.
+                        db.flush()
+
+                        for raw in items:
                             if raw.composite_id not in existing_match_ids:
                                 db.add(Match(watch_term_id=term.id, source_item_id=raw.composite_id))
                                 existing_match_ids.add(raw.composite_id)
