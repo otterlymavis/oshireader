@@ -34,19 +34,15 @@ func parseISO8601Date(_ value: String) -> Date? {
 
 func cleanDisplayText(_ value: String?) -> String? {
     guard var text = value else { return nil }
-    let replacements = [
-        "&amp;": "&",
-        "&quot;": "\"",
-        "&#39;": "'",
-        "&apos;": "'",
-        "&nbsp;": " ",
-        "&lt;": "<",
-        "&gt;": ">"
+    // Strip HTML tags first so entity-decoded < > aren't mistaken for tags
+    text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    let replacements: [(String, String)] = [
+        ("&amp;", "&"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"),
+        ("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">")
     ]
     for (needle, replacement) in replacements {
         text = text.replacingOccurrences(of: needle, with: replacement)
     }
-    text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
     text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : trimmed

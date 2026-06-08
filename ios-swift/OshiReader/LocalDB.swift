@@ -349,7 +349,9 @@ class LocalDB: ObservableObject {
     // MARK: - Custom URLs
     func addCustomUrl(url: String, title: String) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized = trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") ? trimmed : "https://\(trimmed)"
+        // Only prepend https:// when there is no scheme (no colon before first slash)
+        let hasScheme = trimmed.range(of: #"^[a-zA-Z][a-zA-Z0-9+\-.]*://"#, options: .regularExpression) != nil
+        let normalized = hasScheme ? trimmed : "https://\(trimmed)"
         guard let scheme = URL(string: normalized)?.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
         let id = "custom:\(normalized.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.prefix(60) ?? "")"
         if customUrls.contains(where: { $0.id == id }) { return }

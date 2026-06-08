@@ -16,7 +16,7 @@ extension NetworkManager {
         let backendKeywords = Set(backendTerms.map { $0.keyword })
         for term in localTerms where !backendKeywords.contains(term.keyword) {
             if let serverTerm = try? await createWatchTerm(keyword: term.keyword, collectionMode: term.collection_mode, aliases: term.aliases) {
-                LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm)
+                await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
             }
         }
     }
@@ -26,10 +26,10 @@ extension NetworkManager {
     func syncTermsFromBackend() async -> Bool {
         guard !isUITesting else { return false }
         guard let backendTerms = try? await fetchWatchTerms() else { return false }
-        let localKeywords = Set(LocalDB.shared.terms.map { $0.keyword })
+        let localKeywords = await MainActor.run { Set(LocalDB.shared.terms.map { $0.keyword }) }
         var added = false
         for term in backendTerms where !localKeywords.contains(term.keyword) {
-            LocalDB.shared.addTermFromBackend(term)
+            await MainActor.run { LocalDB.shared.addTermFromBackend(term) }
             added = true
         }
         return added

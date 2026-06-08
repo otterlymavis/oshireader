@@ -20,7 +20,7 @@ final class OshiReaderTests: XCTestCase {
 
     override func tearDownWithError() throws {
         db = nil
-        try FileManager.default.removeItem(at: tempDir)
+        try? FileManager.default.removeItem(at: tempDir)
         try super.tearDownWithError()
     }
     
@@ -268,7 +268,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(center.authorizationRequestCount, 1)
         XCTAssertEqual(center.requests.count, 1)
         XCTAssertEqual(center.requests.first?.content.title, "OshiReader")
-        XCTAssertEqual(center.requests.first?.content.body, "Notifications are ready.")
+        XCTAssertEqual(center.requests.first?.content.body, I18nManager.shared.t("notifTestBody"))
         XCTAssertNotNil(center.requests.first?.trigger)
     }
 
@@ -314,8 +314,8 @@ final class OshiReaderTests: XCTestCase {
         await manager.notifyForNewItems(items, terms: [enabledTerm, disabledTerm])
 
         XCTAssertEqual(center.requests.count, 1)
-        XCTAssertEqual(center.requests.first?.content.title, "New items for Enabled Oshi")
-        XCTAssertEqual(center.requests.first?.content.body, "2 new items found.")
+        XCTAssertEqual(center.requests.first?.content.title, I18nManager.shared.tFormat("notifNewItemsTitle", "Enabled Oshi"))
+        XCTAssertEqual(center.requests.first?.content.body, I18nManager.shared.tFormat("notifNewItemsBodyMany", 2))
         XCTAssertNil(center.requests.first?.trigger)
     }
 
@@ -386,7 +386,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(ids.contains("oshireader-new-Oshi A"))
         XCTAssertTrue(ids.contains("oshireader-new-Oshi B"))
         let bodyA = center.requests.first(where: { $0.identifier == "oshireader-new-Oshi A" })?.content.body
-        XCTAssertEqual(bodyA, "2 new items found.")
+        XCTAssertEqual(bodyA, I18nManager.shared.tFormat("notifNewItemsBodyMany", 2))
     }
 
     @MainActor
@@ -463,17 +463,18 @@ final class OshiReaderTests: XCTestCase {
             watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now)
         )
         
+        // news uses strict keyword matching — this item has keyword "Miku" but no Miku content
         let itemStrictMismatch = FeedItem(
-            id: "tver:mismatch", platform: "tver", url: "https://u",
-            title: "Aiko show on TVer", content_text: "Only contains Aiko text", author: "TVer",
-            thumbnail_url: nil, media_type: "video", published_at: formatter.string(from: now),
+            id: "news:mismatch", platform: "news", url: "https://news.example.com/aiko",
+            title: "Aiko show article", content_text: "Only contains Aiko text", author: "News",
+            thumbnail_url: nil, media_type: "article", published_at: formatter.string(from: now),
             watch_term_keyword: "Miku", fetched_at: formatter.string(from: now)
         )
-        
+
         _ = db.mergeItems(newItems: [itemNow, itemYesterday, itemOld, itemStrictMismatch])
-        
+
         // Verifies platform subscription is active
-        db.setSubscribedPlatforms(platforms: ["youtube", "tver", "yahoonews"])
+        db.setSubscribedPlatforms(platforms: ["youtube", "tver", "yahoonews", "news"])
         
         // 1. Query for 30 days, keyword "Aiko"
         let query1 = db.queryFeed(keyword: "Aiko", days: 30)
@@ -630,6 +631,47 @@ final class OshiReaderTests: XCTestCase {
         // queryFeed for "Haruka" still returns the item
         let results = db.queryFeed(keyword: "Haruka", days: 30)
         XCTAssertEqual(results.count, 1)
+    }
+
+    func testQueryFeedFiltersYahooNewsBareUrlItems() throws {
+        // Yahoo News sometimes returns items whose title or content is a raw URL
+        // (fallback when the scraper can't extract article text). These should be
+        // excluded from queryFeed results because they offer no readable content.
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["yahoonews"])
+
+        let bareUrlTitle = FeedItem(
+            id: "yahoonews:bare-title", platform: "yahoonews",
+            url: "https://news.yahoo.co.jp/articles/abc",
+            title: "https://news.yahoo.co.jp/articles/abc",
+            content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let bareUrlContent = FeedItem(
+            id: "yahoonews:bare-content", platform: "yahoonews",
+            url: "https://news.yahoo.co.jp/articles/def",
+            title: "Yahoo News Article",
+            content_text: "https://news.yahoo.co.jp/articles/def",
+            author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let normalArticle = FeedItem(
+            id: "yahoonews:normal", platform: "yahoonews",
+            url: "https://news.yahoo.co.jp/articles/ghi",
+            title: "Aiko releases new single",
+            content_text: "Aiko announced a new song.",
+            author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+
+        _ = db.mergeItems(newItems: [bareUrlTitle, bareUrlContent, normalArticle])
+        let results = db.queryFeed(keyword: nil, days: 30)
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.id, "yahoonews:normal")
     }
 
     func testQueryFeedDeduplicatesByUrlWhenNoKeywordFilter() throws {
@@ -1143,7 +1185,8 @@ final class NetworkManagerTests: XCTestCase {
         MockURLProtocol.handler = { _ in (Data(), Self.response(status: 204)) }
 
         // deleteWatchTerm uses apiVoid with acceptRange 200...299
-        XCTAssertNoThrow(try await NetworkManager.shared.deleteWatchTerm(id: "99"))
+        do { try await NetworkManager.shared.deleteWatchTerm(id: "99") }
+        catch { XCTFail("Unexpected error: \(error)") }
     }
 
     // Network connection error → propagated as URLError (not swallowed)
@@ -1264,7 +1307,8 @@ final class NetworkManagerTests: XCTestCase {
             return (Data(), Self.response(status: 201))
         }
 
-        XCTAssertNoThrow(try await NetworkManager.shared.registerAPNSDeviceToken(String(repeating: "a", count: 64)))
+        do { try await NetworkManager.shared.registerAPNSDeviceToken(String(repeating: "a", count: 64)) }
+        catch { XCTFail("Unexpected error: \(error)") }
         XCTAssertEqual(capturedMethod, "POST")
     }
 
@@ -1336,7 +1380,8 @@ final class NetworkManagerTests: XCTestCase {
         NetworkManager.shared.setAdminApiToken("admin-secret")
         defer { NetworkManager.shared.setAdminApiToken(nil) }
 
-        XCTAssertNoThrow(try await NetworkManager.shared.triggerPoll())
+        do { try await NetworkManager.shared.triggerPoll() }
+        catch { XCTFail("Unexpected error: \(error)") }
         XCTAssertEqual(capturedMethod, "POST")
         XCTAssertEqual(capturedAuthHeader, "Bearer admin-secret")
     }
@@ -1415,7 +1460,20 @@ private final class MockURLProtocol: URLProtocol {
             client?.urlProtocol(self, didFailWithError: URLError(.unknown))
             return
         }
-        let (data, response) = handler(request)
+        // URLSession moves httpBody to httpBodyStream; drain it so handlers can read the body.
+        var req = request
+        if req.httpBody == nil, let stream = req.httpBodyStream {
+            var bodyData = Data()
+            stream.open()
+            var buf = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let n = stream.read(&buf, maxLength: buf.count)
+                if n > 0 { bodyData.append(buf, count: n) }
+            }
+            stream.close()
+            req.httpBody = bodyData
+        }
+        let (data, response) = handler(req)
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
