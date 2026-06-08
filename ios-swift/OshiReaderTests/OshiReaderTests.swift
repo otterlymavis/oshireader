@@ -1058,6 +1058,55 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertNil(Platform.find("news:mdpr"))   // canonical lookup, not raw
         XCTAssertNotNil(Platform.find("mdpr"))
     }
+
+    // updateCredential sends PUT with bearer_token body and decodes Credential
+    func testUpdateCredentialSendsPutAndDecodesCredential() async throws {
+        var capturedMethod: String?
+        var capturedBody: [String: Any]?
+        let cred = Credential(platform: "youtube", has_bearer_token: true, has_api_key: false, updated_at: nil)
+        let data = try JSONEncoder().encode(cred)
+        MockURLProtocol.handler = { req in
+            capturedMethod = req.httpMethod
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return (data, Self.response(status: 200))
+        }
+
+        let result = try await NetworkManager.shared.updateCredential(platform: "youtube", bearerToken: "tok123")
+        XCTAssertEqual(capturedMethod, "PUT")
+        XCTAssertEqual(capturedBody?["bearer_token"] as? String, "tok123")
+        XCTAssertTrue(result.has_bearer_token)
+    }
+
+    // triggerPoll sends authorized POST and succeeds on 200
+    func testTriggerPollSendsAuthorizedPost() async throws {
+        var capturedMethod: String?
+        var capturedAuthHeader: String?
+        MockURLProtocol.handler = { req in
+            capturedMethod = req.httpMethod
+            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
+            return (Data(), Self.response(status: 200))
+        }
+        NetworkManager.shared.setAdminApiToken("admin-secret")
+        defer { NetworkManager.shared.setAdminApiToken(nil) }
+
+        XCTAssertNoThrow(try await NetworkManager.shared.triggerPoll())
+        XCTAssertEqual(capturedMethod, "POST")
+        XCTAssertEqual(capturedAuthHeader, "Bearer admin-secret")
+    }
+
+    // triggerPoll propagates server error as URLError
+    func testTriggerPoll500Throws() async throws {
+        MockURLProtocol.handler = { _ in (Data(), Self.response(status: 500)) }
+
+        do {
+            try await NetworkManager.shared.triggerPoll()
+            XCTFail("Expected URLError not thrown")
+        } catch {
+            XCTAssertTrue(error is URLError)
+        }
+    }
 }
 
 // MARK: - MockURLProtocol
