@@ -18,9 +18,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        #if DEBUG
-        print("APNs registration failed: \(error)")
-        #endif
-
+        AppLogger.notifications.error("APNs registration failed: \(error.localizedDescription)")
     }
 }

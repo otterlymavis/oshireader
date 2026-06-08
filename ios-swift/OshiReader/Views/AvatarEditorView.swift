@@ -499,16 +499,13 @@ struct AvatarEditorView: View {
                 stickers = try await NetworkManager.shared.getPopularIrasutoya()
             }
         } catch {
-            #if DEBUG
-            print("Stickers load error: \(error)")
-            #endif
-
+            AppLogger.network.error("Stickers load error: \(error.localizedDescription)")
             stickers = []
         }
-        
+
         searchingStickers = false
     }
-    
+
     private func performSearch() async {
         guard !searchQuery.isEmpty else { return }
         activeCategory = "__search__"
@@ -517,10 +514,7 @@ struct AvatarEditorView: View {
         do {
             stickers = try await NetworkManager.shared.searchIrasutoya(query: searchQuery)
         } catch {
-            #if DEBUG
-            print("Stickers search error: \(error)")
-            #endif
-
+            AppLogger.network.error("Stickers search error: \(error.localizedDescription)")
             stickers = []
         }
 

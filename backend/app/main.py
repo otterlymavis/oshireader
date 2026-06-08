@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    if not settings.admin_api_token:
+        log.warning(
+            "ADMIN_API_TOKEN is not set — all admin endpoints are unauthenticated. "
+            "Set this env var before exposing the server to the internet."
+        )
     apply_startup_migrations(engine)
     start_scheduler()
     queue_poll()
