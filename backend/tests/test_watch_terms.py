@@ -33,6 +33,7 @@ class TestListWatchTerms:
         assert "初音ミク" in t["aliases"]
         assert t["notify_on_new"] is True
         assert t["is_active"] is True
+        assert t["collection_mode"] == "all_info"
 
 
 class TestCreateWatchTerm:
@@ -71,6 +72,21 @@ class TestCreateWatchTerm:
         with patch("app.api.watch_terms.queue_poll") as mock_poll:
             client.post("/api/watch-terms/", json={"keyword": "Aiko"})
         mock_poll.assert_called_once()
+
+    def test_creates_term_default_collection_mode_is_all_info(self, client):
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.post("/api/watch-terms/", json={"keyword": "Aiko"})
+        assert resp.status_code == 201
+        assert resp.json()["collection_mode"] == "all_info"
+
+    def test_creates_term_with_explicit_collection_mode(self, client):
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "collection_mode": "media_only"},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["collection_mode"] == "media_only"
 
     def test_duplicate_keyword_returns_409(self, client):
         with patch("app.api.watch_terms.queue_poll"):
