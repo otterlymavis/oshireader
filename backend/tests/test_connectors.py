@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from app.connectors.base import SourceItemCreate, parse_feed_date
+from app.connectors.tver import _parse_tver_date
+from app.connectors.yahoonews import _clean_markdown_title
 
 
 def _entry(**kwargs) -> SimpleNamespace:
@@ -70,3 +73,87 @@ class TestSourceItemCreateCompositeId:
             media_type="article",
         )
         assert item.composite_id == "news:https://example.com/article?id=42"
+
+
+class TestParseTverDate:
+    def test_unix_timestamp_int(self):
+        result = _parse_tver_date({"publishedAt": 1717200000})
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+        assert result == datetime.fromtimestamp(1717200000, tz=timezone.utc)
+
+    def test_iso_string_value(self):
+        result = _parse_tver_date({"publishedAt": "2024-06-01T10:00:00Z"})
+        assert result is not None
+        assert result == datetime(2024, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    def test_second_key_used_as_fallback(self):
+        # publishedAt is missing, deliveryStartAt has the value
+        result = _parse_tver_date({"deliveryStartAt": 1717200000})
+        assert result == datetime.fromtimestamp(1717200000, tz=timezone.utc)
+
+    def test_broadcast_date_label_year_only(self):
+        result = _parse_tver_date({"broadcastDateLabel": "2021年放送"})
+        assert result == datetime(2021, 6, 1, tzinfo=timezone.utc)
+
+    def test_broadcast_date_label_month_day(self):
+        # Pin "now" so the test is deterministic regardless of run date
+        fixed_now = datetime(2024, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+        with patch("app.connectors.tver.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromtimestamp = datetime.fromtimestamp
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _parse_tver_date({"broadcastDateLabel": "6月5日(金)放送分"})
+        assert result is not None
+        assert result.month == 6
+        assert result.day == 5
+
+    def test_broadcast_date_label_with_time(self):
+        fixed_now = datetime(2024, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+        with patch("app.connectors.tver.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromtimestamp = datetime.fromtimestamp
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _parse_tver_date({"broadcastDateLabel": "5月29日(金) 18:29"})
+        assert result is not None
+        assert result.month == 5
+        assert result.day == 29
+        assert result.hour == 18
+        assert result.minute == 29
+
+    def test_returns_none_when_no_date_fields(self):
+        result = _parse_tver_date({})
+        assert result is None
+
+    def test_result_is_utc_aware(self):
+        result = _parse_tver_date({"publishedAt": 1700000000})
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+
+
+class TestCleanMarkdownTitle:
+    def test_removes_image_markdown(self):
+        result = _clean_markdown_title("Check ![img](https://example.com/img.png) this")
+        assert result == "Check this"
+
+    def test_removes_underscores(self):
+        result = _clean_markdown_title("Hello_World")
+        assert result == "HelloWorld"
+
+    def test_collapses_whitespace(self):
+        result = _clean_markdown_title("too   many   spaces")
+        assert result == "too many spaces"
+
+    def test_strips_leading_trailing(self):
+        result = _clean_markdown_title("  trimmed  ")
+        assert result == "trimmed"
+
+    def test_plain_text_unchanged(self):
+        result = _clean_markdown_title("アイコの新曲リリース")
+        assert result == "アイコの新曲リリース"
+
+    def test_combined_cleanup(self):
+        result = _clean_markdown_title("  Hello_![x](u)  World  ")
+        assert result == "Hello World"
