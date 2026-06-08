@@ -1441,6 +1441,44 @@ final class NetworkManagerTests: XCTestCase {
     }
 }
 
+// MARK: - KeychainHelper Tests (Phase 5.4)
+
+final class KeychainHelperTests: XCTestCase {
+    private let testKey = "com.otterpia.oshireader.test.\(UUID().uuidString)"
+
+    override func tearDownWithError() throws {
+        KeychainHelper.delete(key: testKey)
+        try super.tearDownWithError()
+    }
+
+    func testWriteAndReadRoundTrip() {
+        KeychainHelper.write(key: testKey, value: "hello keychain")
+        XCTAssertEqual(KeychainHelper.read(key: testKey), "hello keychain")
+    }
+
+    func testReadReturnsNilForMissingKey() {
+        XCTAssertNil(KeychainHelper.read(key: testKey))
+    }
+
+    func testDeleteRemovesItem() {
+        KeychainHelper.write(key: testKey, value: "to-be-deleted")
+        KeychainHelper.delete(key: testKey)
+        XCTAssertNil(KeychainHelper.read(key: testKey))
+    }
+
+    func testOverwriteReplacesValue() {
+        KeychainHelper.write(key: testKey, value: "first")
+        KeychainHelper.write(key: testKey, value: "second")
+        XCTAssertEqual(KeychainHelper.read(key: testKey), "second")
+    }
+
+    func testWritesUnicodeCorrectly() {
+        let value = "🎤 アイコ 💙"
+        KeychainHelper.write(key: testKey, value: value)
+        XCTAssertEqual(KeychainHelper.read(key: testKey), value)
+    }
+}
+
 // MARK: - MockURLProtocol
 
 private final class MockURLProtocol: URLProtocol {

@@ -1,16 +1,20 @@
-"""Tests for schema UTC-stamping validators."""
+"""Tests for schema UTC-stamping validators and CollectionMode enum validation."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 import pytest
+from pydantic import ValidationError
 
+from app.models import CollectionMode
 from app.schemas import (
     APNSDeviceTokenOut,
     CredentialOut,
     FeedItemOut,
     SourceItemOut,
+    WatchTermCreate,
     WatchTermOut,
+    WatchTermUpdate,
 )
 
 
@@ -114,3 +118,34 @@ class TestFeedItemOut:
             item=self._item(), matched_at=dt,
         )
         assert obj.matched_at == dt
+
+
+class TestCollectionModeValidation:
+    def test_create_accepts_all_info_string(self):
+        obj = WatchTermCreate(keyword="k", collection_mode="all_info")
+        assert obj.collection_mode == CollectionMode.ALL_INFO
+
+    def test_create_accepts_media_only_string(self):
+        obj = WatchTermCreate(keyword="k", collection_mode="media_only")
+        assert obj.collection_mode == CollectionMode.MEDIA_ONLY
+
+    def test_create_rejects_unknown_mode(self):
+        with pytest.raises(ValidationError):
+            WatchTermCreate(keyword="k", collection_mode="unknown_mode")
+
+    def test_create_default_is_all_info(self):
+        obj = WatchTermCreate(keyword="k")
+        assert obj.collection_mode == CollectionMode.ALL_INFO
+
+    def test_update_accepts_none(self):
+        obj = WatchTermUpdate(collection_mode=None)
+        assert obj.collection_mode is None
+
+    def test_update_accepts_media_only(self):
+        obj = WatchTermUpdate(collection_mode="media_only")
+        assert obj.collection_mode == CollectionMode.MEDIA_ONLY
+
+    def test_collection_mode_equals_its_value_string(self):
+        # str enum: CollectionMode.MEDIA_ONLY == "media_only" must be True
+        assert CollectionMode.MEDIA_ONLY == "media_only"
+        assert CollectionMode.ALL_INFO == "all_info"

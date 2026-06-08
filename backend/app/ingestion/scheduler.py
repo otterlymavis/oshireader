@@ -112,7 +112,7 @@ async def _poll_once_unlocked() -> None:
             for search_term in _search_terms_for(term):
                 # Fetch all connectors in parallel — pure I/O, no DB contention.
                 all_results = await asyncio.gather(
-                    *[_fetch_one(c, search_term, CollectionMode(term.collection_mode)) for c in connectors]
+                    *[_fetch_one(c, search_term, CollectionMode(term.collection_mode or "all_info")) for c in connectors]
                 )
                 for connector, items in zip(connectors, all_results):
                     if not items:
