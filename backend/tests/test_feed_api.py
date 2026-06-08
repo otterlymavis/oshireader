@@ -289,3 +289,23 @@ class TestFeedAPI:
         ids = [r["item"]["id"] for r in resp.json()]
         assert new_item.id in ids
         assert old_item.id not in ids
+
+    def test_since_filter_timeless_platforms_always_included(self, client, db_session):
+        """Togetter/5ch/girlschannel items must survive the since filter regardless of match age."""
+        term = _make_term(db_session)
+        old_togetter = _make_item(db_session, platform="togetter", item_id="tg1", days_ago=180)
+        match = _make_match(db_session, term, old_togetter)
+
+        # Backdate the match so the since filter would normally exclude it
+        db_session.query(Match).filter(Match.id == match.id).update(
+            {"created_at": datetime.now(timezone.utc) - timedelta(days=90)},
+            synchronize_session=False,
+        )
+        db_session.commit()
+
+        from urllib.parse import quote
+        since_ts = quote((datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
+        resp = client.get(f"/api/feed/?since={since_ts}")
+        assert resp.status_code == 200
+        ids = [r["item"]["id"] for r in resp.json()]
+        assert old_togetter.id in ids, "timeless platform item must bypass the since filter"
