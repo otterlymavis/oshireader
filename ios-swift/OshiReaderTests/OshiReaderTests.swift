@@ -1026,6 +1026,61 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(freshDB.terms.count, 0)
     }
 
+    // MARK: - Content Cache
+    func testContentCacheRoundTrip() throws {
+        db.saveContentCache(id: "article-123", html: "<h1>Hello</h1>")
+        let expectation = XCTestExpectation(description: "cache write flush")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { expectation.fulfill() }
+        wait(for: [expectation], timeout: 1.0)
+        let result = db.getContentCache(id: "article-123")
+        XCTAssertEqual(result, "<h1>Hello</h1>")
+    }
+
+    func testContentCacheRemove() throws {
+        db.saveContentCache(id: "to-remove", html: "<p>content</p>")
+        let writeExp = XCTestExpectation(description: "cache write flush")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writeExp.fulfill() }
+        wait(for: [writeExp], timeout: 1.0)
+
+        db.removeContentCache(id: "to-remove")
+        let deleteExp = XCTestExpectation(description: "cache delete flush")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { deleteExp.fulfill() }
+        wait(for: [deleteExp], timeout: 1.0)
+
+        XCTAssertNil(db.getContentCache(id: "to-remove"))
+    }
+
+    func testContentCacheMissingReturnsNil() throws {
+        XCTAssertNil(db.getContentCache(id: "nonexistent-key"))
+    }
+
+    // MARK: - Stats
+    func testGetStatsCountsByPlatform() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let items = [
+            FeedItem(id: "youtube:s1", platform: "youtube", url: "https://yt/s1", title: "A",
+                     content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
+                     published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+            FeedItem(id: "youtube:s2", platform: "youtube", url: "https://yt/s2", title: "B",
+                     content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
+                     published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+            FeedItem(id: "news:s3", platform: "news", url: "https://news/s3", title: "C",
+                     content_text: nil, author: nil, thumbnail_url: nil, media_type: "article",
+                     published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+        ]
+        _ = db.mergeItems(newItems: items)
+        let stats = db.getStats()
+        XCTAssertEqual(stats.total, 3)
+        XCTAssertEqual(stats.byPlatform["youtube"], 2)
+        XCTAssertEqual(stats.byPlatform["news"], 1)
+    }
+
+    func testGetStatsEmptyDB() throws {
+        let stats = db.getStats()
+        XCTAssertEqual(stats.total, 0)
+        XCTAssertTrue(stats.byPlatform.isEmpty)
+    }
+
     // MARK: - Feature 9: Multi-keyword source fetching, filtering, and translation targets
     func testMultiKeywordFeedAndTranslations() throws {
         // 1. Import more than 3 keywords (e.g. 4 keywords)
@@ -1476,6 +1531,59 @@ final class KeychainHelperTests: XCTestCase {
         let value = "🎤 アイコ 💙"
         KeychainHelper.write(key: testKey, value: value)
         XCTAssertEqual(KeychainHelper.read(key: testKey), value)
+    }
+}
+
+// MARK: - adminApiToken Migration Tests (Phase 5.5)
+
+final class AdminApiTokenTests: XCTestCase {
+    private let keychainKey = "admin_api_token"
+    private let udKey = "admin_api_token"
+
+    override func setUp() {
+        super.setUp()
+        KeychainHelper.delete(key: keychainKey)
+        UserDefaults.standard.removeObject(forKey: udKey)
+    }
+
+    override func tearDown() {
+        KeychainHelper.delete(key: keychainKey)
+        UserDefaults.standard.removeObject(forKey: udKey)
+        super.tearDown()
+    }
+
+    func testMigratesLegacyUserDefaultsToKeychain() {
+        UserDefaults.standard.set("legacy-token", forKey: udKey)
+        let token = NetworkManager.shared.adminApiToken
+        XCTAssertEqual(token, "legacy-token")
+        XCTAssertNil(UserDefaults.standard.string(forKey: udKey), "UserDefaults entry should be removed after migration")
+        XCTAssertEqual(KeychainHelper.read(key: keychainKey), "legacy-token", "Token should now live in Keychain")
+    }
+
+    func testReadsFromKeychain() {
+        KeychainHelper.write(key: keychainKey, value: "keychain-token")
+        XCTAssertEqual(NetworkManager.shared.adminApiToken, "keychain-token")
+    }
+
+    func testReturnsNilWhenNoTokenStored() {
+        XCTAssertNil(NetworkManager.shared.adminApiToken)
+    }
+
+    func testSetTokenWritesToKeychain() {
+        NetworkManager.shared.setAdminApiToken("new-token")
+        XCTAssertEqual(KeychainHelper.read(key: keychainKey), "new-token")
+    }
+
+    func testSetTokenNilDeletesFromKeychain() {
+        KeychainHelper.write(key: keychainKey, value: "to-delete")
+        NetworkManager.shared.setAdminApiToken(nil)
+        XCTAssertNil(KeychainHelper.read(key: keychainKey))
+    }
+
+    func testSetBlankTokenDeletesFromKeychain() {
+        KeychainHelper.write(key: keychainKey, value: "to-delete")
+        NetworkManager.shared.setAdminApiToken("   ")
+        XCTAssertNil(KeychainHelper.read(key: keychainKey))
     }
 }
 
