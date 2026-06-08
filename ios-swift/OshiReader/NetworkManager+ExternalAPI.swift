@@ -20,7 +20,7 @@ extension NetworkManager {
         guard let url = URL(string: urlString) else { return text }
 
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await session.data(from: url)
             if let json = try? JSONSerialization.jsonObject(with: data) as? [Any],
                let firstArray = json.first as? [Any] {
                 var translatedText = ""
@@ -79,7 +79,7 @@ extension NetworkManager {
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             return []
         }
