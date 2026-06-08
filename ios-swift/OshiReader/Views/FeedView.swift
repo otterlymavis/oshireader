@@ -7,10 +7,13 @@ struct FeedView: View {
     
     @State private var selectedKeyword: String? = nil
     @State private var selectedPlatform: String? = nil
-    @State private var mediaFilter: String = "all" // "all" | "media_only"
+    @State private var mediaFilter: MediaFilter = .all
     @State private var daysFilter: Int = 30
     
     @State private var isRefreshing = false
+    @State private var isScrapingFallback = false
+    @State private var refreshTask: Task<Void, Never>? = nil
+    @State private var refreshErrorMessage: String? = nil
     @State private var hasLoadedOnce = false
     @State private var displayedCount: Int = 20
     @State private var showFilterSheet = false
@@ -41,9 +44,8 @@ struct FeedView: View {
         if let platform = selectedPlatform {
             result = result.filter { matchesPlatform($0, platformId: platform) }
         }
-        if mediaFilter == "media_only" {
-            let mediaPlatforms: Set<String> = ["youtube", "niconico", "tver"]
-            result = result.filter { $0.media_type == "video" || mediaPlatforms.contains($0.platform) }
+        if mediaFilter == .mediaOnly {
+            result = result.filter { $0.media_type == "video" || Platform.forRawValue($0.platform)?.isMediaPlatform == true }
         }
         return result
     }
@@ -149,7 +151,7 @@ struct FeedView: View {
                             let meta = theme.metadata(for: sp)
                             PillView(text: "\(meta.icon) \(meta.name)", bgColor: meta.bg, fgColor: meta.fg)
                         }
-                        if mediaFilter == "media_only" {
+                        if mediaFilter == .mediaOnly {
                             PillView(text: "📹 " + i18n.t("mediaOnly"), theme: theme)
                         }
                         
@@ -248,6 +250,53 @@ struct FeedView: View {
                     )
                 }
                 
+                // Fallback scraper banner — shown while offline local sources are searched
+                if isScrapingFallback {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .tint(theme.colors.textMuted)
+                        Text("Searching offline sources…")
+                            .font(.caption)
+                            .foregroundColor(theme.colors.textMuted)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(theme.colors.card)
+                    .overlay(
+                        Rectangle().frame(height: 0.5).foregroundColor(theme.colors.divider),
+                        alignment: .bottom
+                    )
+                    .accessibilityIdentifier("feed.fallbackBanner")
+                }
+
+                // Offline / error banner — shown until the next successful refresh
+                if let msg = refreshErrorMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: "wifi.slash")
+                            .font(.caption2)
+                        Text(msg)
+                            .font(.caption)
+                        Spacer()
+                        Button {
+                            refreshErrorMessage = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                        }
+                    }
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Color.orange.opacity(0.08))
+                    .overlay(
+                        Rectangle().frame(height: 0.5).foregroundColor(Color.orange.opacity(0.25)),
+                        alignment: .bottom
+                    )
+                    .accessibilityIdentifier("feed.errorBanner")
+                }
+
                 // Main Feed List
                 if isRefreshing && filteredItems.isEmpty {
                     Spacer()
@@ -374,11 +423,7 @@ struct FeedView: View {
                     ProgressView()
                         .tint(theme.colors.primary)
                 } else {
-                    Button(action: {
-                        Task {
-                            await refreshFeed()
-                        }
-                    }) {
+                    Button(action: { launchRefresh() }) {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(theme.colors.primary)
                     }
@@ -413,15 +458,13 @@ struct FeedView: View {
         .onChange(of: selectedPlatform) { _ in displayedCount = 20 }
         .onChange(of: daysFilter) { newDays in
             displayedCount = 20
-            if newDays == 0 {
-                Task { await refreshFeed() }
-            }
+            if newDays == 0 { launchRefresh() }
         }
         .onChange(of: mediaFilter) { _ in displayedCount = 20 }
         .onAppear {
             guard !hasLoadedOnce else { return }
             hasLoadedOnce = true
-            Task {
+            refreshTask = Task {
                 // Push local terms to backend (handles post-DB-reset state)
                 await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
                 // Pull backend terms that aren't local yet (fresh install / multi-device)
@@ -433,35 +476,60 @@ struct FeedView: View {
                 }
             }
         }
+        .onDisappear {
+            refreshTask?.cancel()
+        }
     }
     
+    // Cancel any in-flight task then launch a new refresh.
+    // Guards on isRefreshing so we never lose the handle to an already-running task.
+    private func launchRefresh() {
+        guard !isRefreshing else { return }
+        refreshTask?.cancel()
+        refreshTask = Task { await refreshFeed() }
+    }
+
     private var filterCount: Int {
         var count = 0
         if selectedKeyword != nil { count += 1 }
         if selectedPlatform != nil { count += 1 }
-        if mediaFilter == "media_only" { count += 1 }
+        if mediaFilter == .mediaOnly { count += 1 }
         return count
     }
     
     private func refreshFeed() async {
         guard !isRefreshing else { return }
         isRefreshing = true
+        refreshErrorMessage = nil
+        defer { isRefreshing = false; isScrapingFallback = false }
+
+        let hadBackendItems = await quickRefresh()
+        isRefreshing = false
+
+        guard !Task.isCancelled, !hadBackendItems else { return }
+        isScrapingFallback = true
+        await deepFallback()
+    }
+
+    // Syncs terms, fetches backend feed + per-platform items, and scrapes custom URLs.
+    // Returns true if the backend returned any feed items.
+    private func quickRefresh() async -> Bool {
         // 0. Bidirectional term sync
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+        guard !Task.isCancelled else { return false }
         await NetworkManager.shared.syncTermsFromBackend()
+        guard !Task.isCancelled else { return false }
 
-        // 1. Determine what to fetch.
+        // 1. Determine fetch window.
         //    First load (empty cache): fetch 90 days of history.
-        //    Subsequent refreshes: ask only for items newer than the latest we have,
-        //    so the backend never re-sends articles we already cached.
-        // When user has "All Time" selected, bypass the since-optimisation and
-        // fetch the full history so they actually see old items.
+        //    Subsequent refreshes: only items newer than the latest cached,
+        //    so the backend never re-sends articles already stored.
+        //    "All Time" filter bypasses the since-optimisation to show old items.
         let wantsFullHistory = daysFilter == 0
         let latestSince: String? = {
-            guard !wantsFullHistory else { return nil }
-            guard !db.feedItems.isEmpty else { return nil }
-            // Use fetched_at (reliable grab time) not published_at — bad-date items
-            // with published_at=now() would otherwise block older legit content.
+            guard !wantsFullHistory, !db.feedItems.isEmpty else { return nil }
+            // Use fetched_at (reliable grab time) not published_at — items with a bad
+            // published_at=now() would otherwise block older legitimate content.
             guard let maxDate = db.feedItems.compactMap({ parseISO8601Date($0.fetched_at) }).max() else { return nil }
             let fmt = ISO8601DateFormatter()
             fmt.formatOptions = [.withInternetDateTime]
@@ -469,65 +537,101 @@ struct FeedView: View {
         }()
         let fetchDays = wantsFullHistory ? 0 : (db.feedItems.isEmpty ? 90 : 30)
 
+        // 2. Main backend feed fetch
         let freshItems: [FeedItem]
-        if let since = latestSince {
-            freshItems = (try? await NetworkManager.shared.fetchFeed(limit: 200, since: since)) ?? []
-        } else {
-            freshItems = (try? await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays)) ?? []
+        do {
+            if let since = latestSince {
+                freshItems = try await NetworkManager.shared.fetchFeed(limit: 200, since: since)
+            } else {
+                freshItems = try await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays)
+            }
+        } catch {
+            AppLogger.network.error("fetchFeed failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
+            refreshErrorMessage = Self.refreshErrorLabel(error)
+            freshItems = []
         }
         if !freshItems.isEmpty {
             _ = await db.mergeItems(newItems: freshItems)
         }
+        guard !Task.isCancelled else { return !freshItems.isEmpty }
 
-        // 2. Fetch each subscribed platform in parallel (also uses since when available)
+        // 3. Per-platform fetches in parallel
         let platformsToFetch = Array(Set(db.subscribedPlatforms.filter { $0 != "custom" }))
         await withTaskGroup(of: Void.self) { group in
             for platform in platformsToFetch {
                 group.addTask { await self.fetchBackendPlatform(platform, since: latestSince) }
             }
         }
+        guard !Task.isCancelled else { return !freshItems.isEmpty }
 
-        // 3. Local fallback scrapers — only when backend returned nothing (offline/spin-down)
-        if freshItems.isEmpty {
-            // Kick the backend scheduler so fresh data is ready on the next pull.
-            Task { try? await NetworkManager.shared.triggerPoll() }
-            let activeTerms = db.terms.filter { $0.is_active }
-            await withTaskGroup(of: [FeedItem].self) { group in
-                for term in activeTerms {
-                    let searchTerms = [term.keyword] + term.aliases
-                    for searchTerm in searchTerms {
-                        group.addTask {
-                            await NetworkManager.shared.scrapeLocalFallbacks(keyword: searchTerm, tagKeyword: term.keyword)
-                        }
-                    }
-                }
-                for await items in group where !items.isEmpty {
-                    _ = await db.mergeItems(newItems: items)
-                }
-            }
-        }
-
-        // 4. Refresh custom URL cards
+        // 4. Custom URL cards
         let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
         if !customItems.isEmpty {
             _ = await db.mergeItems(newItems: customItems)
         }
 
-        isRefreshing = false
+        return !freshItems.isEmpty
     }
 
-    private func fetchBackendPlatform(_ platformId: String, since: String? = nil) async {
-        let backendPlatforms = backendPlatformKeys(for: platformId)
-        for backendPlatform in backendPlatforms {
-            if let items = try? await NetworkManager.shared.fetchFeed(platform: backendPlatform, limit: 60, since: since),
-               !items.isEmpty {
+    // Runs local RSS/scraper fallbacks when the backend returned nothing (offline / cold start).
+    // Kick the backend scheduler first so fresh data is ready on the next pull.
+    private func deepFallback() async {
+        Task { try? await NetworkManager.shared.triggerPoll() }
+        let activeTerms = db.terms.filter { $0.is_active }
+        await withTaskGroup(of: [FeedItem].self) { group in
+            for term in activeTerms {
+                let searchTerms = [term.keyword] + term.aliases
+                for searchTerm in searchTerms {
+                    group.addTask {
+                        await NetworkManager.shared.scrapeLocalFallbacks(keyword: searchTerm, tagKeyword: term.keyword)
+                    }
+                }
+            }
+            for await items in group where !items.isEmpty {
+                guard !Task.isCancelled else { break }
                 _ = await db.mergeItems(newItems: items)
             }
         }
     }
 
-    private func backendPlatformKeys(for platformId: String) -> [String] {
-        return [platformId]
+    private func fetchBackendPlatform(_ platformId: String, since: String? = nil) async {
+        do {
+            let items = try await NetworkManager.shared.fetchFeed(platform: platformId, limit: 60, since: since)
+            if !items.isEmpty {
+                _ = await db.mergeItems(newItems: items)
+            }
+        } catch {
+            AppLogger.network.warning("fetchBackendPlatform(\(platformId)) failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
+        }
+    }
+
+    // Returns a short machine-readable category string for log triage.
+    private static func refreshErrorKind(_ error: Error) -> String {
+        if error is DecodingError { return "decode" }
+        guard let e = error as? URLError else { return "unknown" }
+        switch e.code {
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed: return "offline"
+        case .timedOut: return "timeout"
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed: return "unreachable"
+        case .badServerResponse: return "server_error"
+        default: return "url_\(e.code.rawValue)"
+        }
+    }
+
+    // Returns the calm user-facing label shown in the error banner.
+    private static func refreshErrorLabel(_ error: Error) -> String {
+        if error is DecodingError { return "Server response error" }
+        guard let e = error as? URLError else { return "Refresh failed" }
+        switch e.code {
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:
+            return "No internet connection"
+        case .timedOut:
+            return "Connection timed out"
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+            return "Server unreachable"
+        default:
+            return "Backend unavailable"
+        }
     }
 
     private func hasItems(for platformId: String) -> Bool {
@@ -535,16 +639,7 @@ struct FeedView: View {
     }
 
     private func matchesPlatform(_ item: FeedItem, platformId: String) -> Bool {
-        if platformId == "mdpr" {
-            return item.platform == "mdpr" || item.platform == "news:mdpr"
-        }
-        if platformId == "yahoonews" {
-            return item.platform == "yahoonews" || item.platform == "news:yahoo_ent"
-        }
-        if platformId == "news" {
-            return item.platform == "news" || item.platform.hasPrefix("news:")
-        }
-        return item.platform == platformId
+        Platform.normalize(item.platform) == platformId
     }
 }
 
@@ -688,7 +783,7 @@ struct FeedCard: View {
 
 struct FilterPanel: View {
     @Binding var selectedKeyword: String?
-    @Binding var mediaFilter: String
+    @Binding var mediaFilter: MediaFilter
     @Binding var daysFilter: Int
     let theme: ThemeManager
     let i18n: I18nManager
@@ -713,19 +808,19 @@ struct FilterPanel: View {
                     HStack(spacing: 8) {
                         FilterButton(
                             text: "📄 " + i18n.t("allInfo"),
-                            isSelected: mediaFilter == "all",
+                            isSelected: mediaFilter == .all,
                             theme: theme,
                             accessibilityId: "filter.allInfoButton"
                         ) {
-                            mediaFilter = "all"
+                            mediaFilter = .all
                         }
                         FilterButton(
                             text: "📹 " + i18n.t("mediaOnly"),
-                            isSelected: mediaFilter == "media_only",
+                            isSelected: mediaFilter == .mediaOnly,
                             theme: theme,
                             accessibilityId: "filter.mediaOnlyButton"
                         ) {
-                            mediaFilter = "media_only"
+                            mediaFilter = .mediaOnly
                         }
                     }
                 }

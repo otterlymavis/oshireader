@@ -183,7 +183,7 @@ struct OshiPage: View {
                                 .foregroundColor(theme.colors.primary)
                                 .cornerRadius(99)
                             
-                            Text(term.collection_mode == "media_only" ? "📹 " + i18n.t("mediaOnly") : "📄 " + i18n.t("allInfo"))
+                            Text(term.collection_mode == .mediaOnly ? "📹 " + i18n.t("mediaOnly") : "📄 " + i18n.t("allInfo"))
                                 .font(.system(size: 12, weight: .medium))
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 3)

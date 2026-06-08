@@ -17,6 +17,8 @@ struct ReaderView: View {
     @StateObject private var i18n = I18nManager.shared
     @StateObject private var appearance = AppearanceManager.shared
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     @State private var readerMode = true
     @State private var readerTheme: AppThemeMode = .light
     @State private var fontSize: CGFloat = 16.0
@@ -156,60 +158,98 @@ struct ReaderView: View {
     }
 
     private var readerControlBar: some View {
-        HStack {
-            Button(action: { readerMode.toggle() }) {
-                Label(readerMode ? i18n.t("readerModeText") : i18n.t("readerModeWeb"),
-                      systemImage: readerMode ? "doc.plaintext" : "globe")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(theme.colors.divider)
-                    .foregroundColor(theme.colors.primary)
-                    .cornerRadius(8)
+        Group {
+            if horizontalSizeClass == .compact {
+                compactReaderControlBar
+            } else {
+                regularReaderControlBar
             }
-            .accessibilityIdentifier("reader.modeToggleButton")
+        }
+        .background(theme.colors.card)
+        .overlay(Rectangle().frame(height: 0.5).foregroundColor(theme.colors.divider), alignment: .top)
+    }
 
+    private var regularReaderControlBar: some View {
+        HStack(spacing: 12) {
+            readerModeButton(showTitle: true)
             Spacer()
-
-            if readerMode {
-                HStack(spacing: 12) {
-                    Button(action: { fontSize = max(12.0, fontSize - 2.0) }) {
-                        Text("A-")
-                            .font(.subheadline)
-                            .foregroundColor(theme.colors.textSub)
-                    }
-
-                    Text("\(Int(fontSize))")
-                        .font(.caption)
-                        .foregroundColor(theme.colors.textMuted)
-
-                    Button(action: { fontSize = min(28.0, fontSize + 2.0) }) {
-                        Text("A+")
-                            .font(.subheadline)
-                            .foregroundColor(theme.colors.textSub)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(theme.colors.divider)
-                .cornerRadius(8)
-            }
-
+            fontSizeControls
             Spacer()
-
-            Picker("Theme", selection: $readerTheme) {
-                Image(systemName: "sun.max.fill").tag(AppThemeMode.light)
-                Image(systemName: "moon.fill").tag(AppThemeMode.dark)
-                Image(systemName: "doc.text.magnifyingglass").tag(AppThemeMode.sepia)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 100)
+            themePicker(width: 112)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(theme.colors.card)
-        .overlay(Rectangle().frame(height: 0.5).foregroundColor(theme.colors.divider), alignment: .top)
+    }
+
+    private var compactReaderControlBar: some View {
+        HStack(spacing: 8) {
+            readerModeButton(showTitle: false)
+            Spacer(minLength: 4)
+            fontSizeControls
+                .layoutPriority(1)
+            Spacer(minLength: 4)
+            themePicker(width: 104)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private func readerModeButton(showTitle: Bool) -> some View {
+        Button(action: { readerMode.toggle() }) {
+            if showTitle {
+                Label(readerMode ? i18n.t("readerModeText") : i18n.t("readerModeWeb"),
+                      systemImage: readerMode ? "doc.plaintext" : "globe")
+            } else {
+                Image(systemName: readerMode ? "doc.plaintext" : "globe")
+            }
+        }
+        .font(.caption)
+        .fontWeight(.bold)
+        .frame(minWidth: showTitle ? nil : 38, minHeight: 34)
+        .padding(.horizontal, showTitle ? 10 : 0)
+        .padding(.vertical, showTitle ? 6 : 0)
+        .background(theme.colors.divider)
+        .foregroundColor(theme.colors.primary)
+        .cornerRadius(8)
+        .accessibilityLabel(readerMode ? i18n.t("readerModeText") : i18n.t("readerModeWeb"))
+        .accessibilityIdentifier("reader.modeToggleButton")
+    }
+
+    private var fontSizeControls: some View {
+        HStack(spacing: 10) {
+            Button(action: { fontSize = max(12.0, fontSize - 2.0) }) {
+                Text("A-")
+                    .font(.subheadline)
+                    .foregroundColor(theme.colors.textSub)
+            }
+
+            Text("\(Int(fontSize))")
+                .font(.caption)
+                .foregroundColor(theme.colors.textMuted)
+                .frame(width: 22)
+
+            Button(action: { fontSize = min(28.0, fontSize + 2.0) }) {
+                Text("A+")
+                    .font(.subheadline)
+                    .foregroundColor(theme.colors.textSub)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(theme.colors.divider)
+        .cornerRadius(8)
+        .opacity(readerMode ? 1 : 0.45)
+        .disabled(!readerMode)
+    }
+
+    private func themePicker(width: CGFloat) -> some View {
+        Picker("Theme", selection: $readerTheme) {
+            Image(systemName: "sun.max.fill").tag(AppThemeMode.light)
+            Image(systemName: "moon.fill").tag(AppThemeMode.dark)
+            Image(systemName: "doc.text.magnifyingglass").tag(AppThemeMode.sepia)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: width)
     }
 
     private var bgColor: Color {
@@ -331,7 +371,7 @@ struct WebViewHelper: UIViewRepresentable {
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
         context.coordinator.parent = self
-        if uiView.url == nil || (uiView.url?.absoluteString != url.absoluteString && !uiView.isLoading) {
+        if uiView.url == nil || uiView.url?.absoluteString != url.absoluteString {
             uiView.load(URLRequest(url: url))
         } else {
             uiView.evaluateJavaScript(styleInjectionJS(), completionHandler: nil)
@@ -450,6 +490,12 @@ struct WebViewHelper: UIViewRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url else {
                 decisionHandler(.allow)
+                return
+            }
+            let scheme = url.scheme?.lowercased() ?? ""
+            if ["mailto", "tel", "sms", "facetime", "facetime-audio"].contains(scheme) {
+                decisionHandler(.cancel)
+                UIApplication.shared.open(url)
                 return
             }
             if shouldBlockReaderRequest(url.absoluteString) {

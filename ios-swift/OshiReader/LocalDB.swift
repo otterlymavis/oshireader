@@ -1,9 +1,11 @@
 import Foundation
 import Combine
 
+@MainActor
 class LocalDB: ObservableObject {
-    static let shared = LocalDB()
-    
+    static let shared = LocalDB(directory: FileManager.default
+        .urls(for: .documentDirectory, in: .userDomainMask)[0])
+
     // Published states for views
     @Published var terms: [WatchTerm] = []
     @Published var feedItems: [FeedItem] = []
@@ -15,40 +17,35 @@ class LocalDB: ObservableObject {
     @Published var oshiAvatars: [String: String] = [:]
     @Published var compositions: [String: [AvatarLayer]] = [:]
     @Published var hiddenItems: Set<String> = []
-    
+
+    private let storeDirectory: URL
     private let queue = DispatchQueue(label: "com.otterlymavis.oshireader.db", qos: .userInitiated)
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    
-    private init() {
+
+    // Bump this whenever a migration step is added below.
+    private static let currentSchemaVersion = 1
+    private static let schemaVersionKey = "localdb_schema_version"
+
+    init(directory: URL) {
+        self.storeDirectory = directory
         loadAll()
+        runMigrationsIfNeeded()
     }
-    
+
     // MARK: - File Paths
     private func fileURL(for name: String) -> URL {
-        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        return paths[0].appendingPathComponent("\(name).json")
+        storeDirectory.appendingPathComponent("\(name).json")
     }
-    
+
     // MARK: - Load and Save Helpers
     private func loadAll() {
         self.terms = loadFromFile(name: "terms", defaultValue: [])
         self.feedItems = loadFromFile(name: "feed_items", defaultValue: [])
         self.savedPages = loadFromFile(name: "saved_pages", defaultValue: [])
         self.customUrls = loadFromFile(name: "custom_urls", defaultValue: [])
-        self.subscribedPlatforms = loadFromFile(name: "subscribed_platforms", defaultValue: [
-            "youtube", "niconico", "tver", "note",
-            "girlschannel", "5ch", "togetter", "news", "custom",
-            "yahoonews", "mdpr", "oricon", "twitter"
-        ])
-        var didAddMissingPlatforms = false
-        for platform in ["oricon", "twitter", "mdpr", "yahoonews", "togetter", "niconico", "girlschannel"] where !self.subscribedPlatforms.contains(platform) {
-            self.subscribedPlatforms.append(platform)
-            didAddMissingPlatforms = true
-        }
-        if didAddMissingPlatforms {
-            saveToFile(name: "subscribed_platforms", value: self.subscribedPlatforms)
-        }
+        let defaultPlatforms = Platform.all.filter(\.subscribedByDefault).map(\.id)
+        self.subscribedPlatforms = loadFromFile(name: "subscribed_platforms", defaultValue: defaultPlatforms)
         self.wallpaper = UserDefaults.standard.string(forKey: "wallpaper_url")
         self.sourcesOrder = UserDefaults.standard.stringArray(forKey: "sources_order")
         self.oshiAvatars = loadFromFile(name: "oshi_avatars", defaultValue: [:])
@@ -56,7 +53,34 @@ class LocalDB: ObservableObject {
         let hiddenArray: [String] = loadFromFile(name: "hidden_items", defaultValue: [])
         self.hiddenItems = Set(hiddenArray)
     }
-    
+
+    // MARK: - Schema Migrations
+    private func runMigrationsIfNeeded() {
+        let stored = UserDefaults.standard.integer(forKey: Self.schemaVersionKey)
+        guard stored < Self.currentSchemaVersion else { return }
+        for version in (stored + 1)...Self.currentSchemaVersion {
+            migrate(to: version)
+        }
+        UserDefaults.standard.set(Self.currentSchemaVersion, forKey: Self.schemaVersionKey)
+        AppLogger.persistence.info("Schema migrated from v\(stored) → v\(Self.currentSchemaVersion)")
+    }
+
+    private func migrate(to version: Int) {
+        switch version {
+        case 1:
+            // Ensure every platform defined in Platform.all is present in the subscription list.
+            // Handles installs that existed before a platform was added to the registry.
+            let allIds = Set(Platform.all.filter(\.subscribedByDefault).map(\.id))
+            let missing = allIds.subtracting(Set(subscribedPlatforms))
+            if !missing.isEmpty {
+                subscribedPlatforms.append(contentsOf: missing)
+                saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+            }
+        default:
+            AppLogger.persistence.warning("No migration handler for schema v\(version)")
+        }
+    }
+
     private func loadFromFile<T: Decodable>(name: String, defaultValue: T) -> T {
         let url = fileURL(for: name)
         guard FileManager.default.fileExists(atPath: url.path) else { return defaultValue }
@@ -64,14 +88,11 @@ class LocalDB: ObservableObject {
             let data = try Data(contentsOf: url)
             return try decoder.decode(T.self, from: data)
         } catch {
-            #if DEBUG
-            print("Error loading \(name): \(error)")
-            #endif
-
+            AppLogger.persistence.error("Failed to load \(name): \(error.localizedDescription)")
             return defaultValue
         }
     }
-    
+
     private func saveToFile<T: Encodable>(name: String, value: T) {
         let url = fileURL(for: name)
         queue.async {
@@ -79,97 +100,71 @@ class LocalDB: ObservableObject {
                 let data = try self.encoder.encode(value)
                 try data.write(to: url, options: [.atomic])
             } catch {
-                #if DEBUG
-                print("Error saving \(name): \(error)")
-                #endif
+                AppLogger.persistence.error("Failed to save \(name): \(error.localizedDescription)")
+            }
+        }
+    }
 
-            }
-        }
-    }
-    
-    private func runOnMain(_ block: @escaping () -> Void) {
-        if Thread.isMainThread {
-            block()
-        } else {
-            DispatchQueue.main.async {
-                block()
-            }
-        }
-    }
-    
     // MARK: - Watch Terms
-    func saveTerm(keyword: String, collectionMode: String = "all_info") -> WatchTerm {
+    func saveTerm(keyword: String, collectionMode: CollectionMode = .allInfo) -> WatchTerm {
         let term = WatchTerm(keyword: keyword.trimmingCharacters(in: .whitespacesAndNewlines), collection_mode: collectionMode)
-        runOnMain {
-            self.terms.insert(term, at: 0)
-            self.saveToFile(name: "terms", value: self.terms)
-        }
+        terms.insert(term, at: 0)
+        saveToFile(name: "terms", value: terms)
         return term
     }
-    
-    func updateTerm(id: String, isActive: Bool? = nil, collectionMode: String? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) {
-        runOnMain {
-            if let idx = self.terms.firstIndex(where: { $0.id == id }) {
-                var term = self.terms[idx]
-                if let isActive = isActive { term.is_active = isActive }
-                if let collectionMode = collectionMode { term.collection_mode = collectionMode }
-                if let notifyOnNew = notifyOnNew { term.notify_on_new = notifyOnNew }
-                if let aliases = aliases { term.aliases = aliases }
-                self.terms[idx] = term
-                self.saveToFile(name: "terms", value: self.terms)
-            }
+
+    func updateTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) {
+        if let idx = terms.firstIndex(where: { $0.id == id }) {
+            var term = terms[idx]
+            if let isActive { term.is_active = isActive }
+            if let collectionMode { term.collection_mode = collectionMode }
+            if let notifyOnNew { term.notify_on_new = notifyOnNew }
+            if let aliases { term.aliases = aliases }
+            terms[idx] = term
+            saveToFile(name: "terms", value: terms)
         }
     }
 
     func addTermFromBackend(_ term: WatchTerm) {
-        runOnMain {
-            self.terms.insert(term, at: 0)
-            self.saveToFile(name: "terms", value: self.terms)
-        }
+        terms.insert(term, at: 0)
+        saveToFile(name: "terms", value: terms)
     }
 
     func replaceTerm(localId: String, with serverTerm: WatchTerm) {
-        runOnMain {
-            if let idx = self.terms.firstIndex(where: { $0.id == localId }) {
-                self.terms[idx] = serverTerm
-                self.saveToFile(name: "terms", value: self.terms)
-            }
+        if let idx = terms.firstIndex(where: { $0.id == localId }) {
+            terms[idx] = serverTerm
+            saveToFile(name: "terms", value: terms)
         }
     }
-    
+
     func deleteTerm(id: String) {
-        runOnMain {
-            if let term = self.terms.firstIndex(where: { $0.id == id }) {
-                let keyword = self.terms[term].keyword
-                self.terms.remove(at: term)
-                self.saveToFile(name: "terms", value: self.terms)
-                
-                // Also clean up items containing that watch term keyword
-                self.feedItems.removeAll(where: { $0.watch_term_keyword == keyword })
-                self.saveToFile(name: "feed_items", value: self.feedItems)
-            }
+        if let idx = terms.firstIndex(where: { $0.id == id }) {
+            let keyword = terms[idx].keyword
+            terms.remove(at: idx)
+            saveToFile(name: "terms", value: terms)
+            feedItems.removeAll(where: { $0.watch_term_keyword == keyword })
+            saveToFile(name: "feed_items", value: feedItems)
         }
     }
-    
+
     // MARK: - Feed Items & Merging
-    @MainActor
     func mergeItems(newItems: [FeedItem]) -> Int {
         var addedCount = 0
         var addedItems: [FeedItem] = []
         let itemKey = { (i: FeedItem) -> String in "\(i.id)::\(i.watch_term_keyword)" }
-        
+
         let filteredNew = newItems.filter { item in
             let key = itemKey(item)
             let isHidden = self.hiddenItems.contains(key)
             let isSearchFallback = item.id.contains("search:") || item.title?.lowercased().contains("search:") == true
             return !isHidden && !isSearchFallback
         }
-        
+
         var currentMap = [String: FeedItem]()
-        for item in self.feedItems {
+        for item in feedItems {
             currentMap[itemKey(item)] = item
         }
-        
+
         for item in filteredNew {
             let key = itemKey(item)
             if currentMap[key] == nil {
@@ -181,7 +176,7 @@ class LocalDB: ObservableObject {
                 let existing = currentMap[key]!
                 let shouldReplaceTitle = (item.title?.isEmpty == false) &&
                     (existing.title == nil || existing.title!.contains("...") || item.title!.count > existing.title!.count + 8)
-                
+
                 let merged = FeedItem(
                     id: existing.id,
                     platform: existing.platform,
@@ -198,7 +193,7 @@ class LocalDB: ObservableObject {
                 currentMap[key] = merged
             }
         }
-        
+
         let sorted = currentMap.values.sorted(by: { $0.published_at > $1.published_at })
         let finalItems = Array(sorted.prefix(600)) // Replicate MAX_ITEMS = 600
 
@@ -215,50 +210,46 @@ class LocalDB: ObservableObject {
             }
         }
 
-        self.feedItems = finalItems
-        self.saveToFile(name: "feed_items", value: self.feedItems)
+        feedItems = finalItems
+        saveToFile(name: "feed_items", value: feedItems)
         return addedCount
     }
-    
+
     func deleteFeedItem(id: String, watchTermKeyword: String) {
         let key = "\(id)::\(watchTermKeyword)"
-        runOnMain {
-            self.hiddenItems.insert(key)
-            self.saveToFile(name: "hidden_items", value: Array(self.hiddenItems))
-            
-            self.feedItems.removeAll(where: { $0.id == id && $0.watch_term_keyword == watchTermKeyword })
-            self.saveToFile(name: "feed_items", value: self.feedItems)
-        }
+        hiddenItems.insert(key)
+        saveToFile(name: "hidden_items", value: Array(hiddenItems))
+        feedItems.removeAll(where: { $0.id == id && $0.watch_term_keyword == watchTermKeyword })
+        saveToFile(name: "feed_items", value: feedItems)
     }
-    
+
     // MARK: - Query Feed (Filtering)
     func queryFeed(keyword: String?, days: Int) -> [FeedItem] {
         let now = Date()
         // days == 0 means "All Time" — no cutoff applied
         let cutoffDate = days > 0 ? Calendar.current.date(byAdding: .day, value: -days, to: now) : nil
-        let formatter = ISO8601DateFormatter()
-        let cutoffString = cutoffDate.map { formatter.string(from: $0) }
-        
-        let strictKeywordPlatforms = Set(["mdpr", "news", "tver"])
-        
+
         return feedItems.filter { item in
             let key = "\(item.id)::\(item.watch_term_keyword)"
             if hiddenItems.contains(key) { return false }
-            
+
             // Search pages fallbacks
             if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return false }
-            
+
             // Bare address item (Yahoo News fallback checking)
             if item.platform == "yahoonews" && (item.title?.contains("https://") == true || item.content_text?.contains("https://") == true) {
                 return false
             }
-            
-            // Cutoff check (skip limit check for 5ch, girlschannel, togetter)
-            let skipCutoff = item.platform == "5ch" || item.platform == "girlschannel" || item.platform == "togetter"
-            if let cutoff = cutoffString, item.published_at < cutoff && !skipCutoff {
-                return false
+
+            let platformDef = Platform.forRawValue(item.platform)
+
+            // Cutoff check — use proper Date comparison so timezone-offset strings sort correctly
+            if let cutoff = cutoffDate, platformDef?.skipDateCutoff != true {
+                guard let itemDate = parseISO8601Date(item.published_at), itemDate >= cutoff else {
+                    return false
+                }
             }
-            
+
             // Keyword filter
             if let kw = keyword, !kw.isEmpty {
                 if item.platform == "custom" {
@@ -267,22 +258,22 @@ class LocalDB: ObservableObject {
                     return false
                 }
             }
-            
-            // Strict keyword matching logic — pass if primary keyword OR any alias appears in content
-            if strictKeywordPlatforms.contains(item.platform), !item.watch_term_keyword.isEmpty {
+
+            // Strict keyword matching — news-type platforms require keyword/alias to appear in content
+            if platformDef?.usesStrictKeywordMatching == true, !item.watch_term_keyword.isEmpty {
                 let term = terms.first(where: { $0.keyword == item.watch_term_keyword })
                 let candidates = [item.watch_term_keyword] + (term?.aliases ?? [])
                 if !candidates.contains(where: { matchesKeyword(item: item, kw: $0) }) {
                     return false
                 }
             }
-            
+
             // Subscribed platforms
-            let platformKey = normalizedPlatformKey(item.platform)
+            let platformKey = Platform.normalize(item.platform)
             if !subscribedPlatforms.contains(platformKey) {
                 return false
             }
-            
+
             return true
         }
         .sorted(by: { $0.published_at > $1.published_at })
@@ -294,164 +285,133 @@ class LocalDB: ObservableObject {
             if acc.1.insert(item.url).inserted { acc.0.append(item) }
         }.0
     }
-    
+
     private func matchesKeyword(item: FeedItem, kw: String) -> Bool {
         let haystack = "\(item.title ?? "") \(item.content_text ?? "")".lowercased()
         let needle = kw.lowercased()
         if needle.isEmpty { return true }
         if haystack.contains(needle) { return true }
-        
+
         let parts = kw.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         if parts.count > 1 {
             return parts.allSatisfy { haystack.contains($0.lowercased()) }
         }
         return false
     }
-    
+
     // MARK: - Bookmarks (Saved)
     func getSaved() -> [SavedPage] {
         return savedPages
     }
-    
+
     func toggleSaved(item: FeedItem) -> Bool {
-        var isSaved = false
-        runOnMain {
-            if let idx = self.savedPages.firstIndex(where: { $0.id == item.id }) {
-                self.savedPages.remove(at: idx)
-            } else {
-                let page = SavedPage(
-                    id: item.id,
-                    url: item.url,
-                    title: item.title,
-                    platform: item.platform,
-                    saved_at: ISO8601DateFormatter().string(from: Date())
-                )
-                self.savedPages.insert(page, at: 0)
-                isSaved = true
-            }
-            self.saveToFile(name: "saved_pages", value: self.savedPages)
+        if let idx = savedPages.firstIndex(where: { $0.id == item.id }) {
+            savedPages.remove(at: idx)
+            saveToFile(name: "saved_pages", value: savedPages)
+            return false
+        } else {
+            let page = SavedPage(
+                id: item.id,
+                url: item.url,
+                title: item.title,
+                platform: item.platform,
+                saved_at: ISO8601DateFormatter().string(from: Date())
+            )
+            savedPages.insert(page, at: 0)
+            saveToFile(name: "saved_pages", value: savedPages)
+            return true
         }
-        return isSaved
     }
-    
+
     func removeSaved(id: String) {
-        runOnMain {
-            self.savedPages.removeAll(where: { $0.id == id })
-            self.saveToFile(name: "saved_pages", value: self.savedPages)
-        }
+        savedPages.removeAll(where: { $0.id == id })
+        saveToFile(name: "saved_pages", value: savedPages)
     }
-    
+
     // MARK: - Subscribed Platforms
     func setSubscribedPlatforms(platforms: [String]) {
-        runOnMain {
-            self.subscribedPlatforms = platforms
-            self.saveToFile(name: "subscribed_platforms", value: self.subscribedPlatforms)
-        }
+        subscribedPlatforms = platforms
+        saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
     }
-    
+
     // MARK: - Custom URLs
     func addCustomUrl(url: String, title: String) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") ? trimmed : "https://\(trimmed)"
+        guard let scheme = URL(string: normalized)?.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
         let id = "custom:\(normalized.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.prefix(60) ?? "")"
-        runOnMain {
-            if self.customUrls.contains(where: { $0.id == id }) { return }
-            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let entry = CustomUrl(id: id, url: normalized, title: trimmedTitle.isEmpty ? nil : trimmedTitle, added_at: ISO8601DateFormatter().string(from: Date()))
-            self.customUrls.insert(entry, at: 0)
-            self.saveToFile(name: "custom_urls", value: self.customUrls)
-        }
+        if customUrls.contains(where: { $0.id == id }) { return }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = CustomUrl(id: id, url: normalized, title: trimmedTitle.isEmpty ? nil : trimmedTitle, added_at: ISO8601DateFormatter().string(from: Date()))
+        customUrls.insert(entry, at: 0)
+        saveToFile(name: "custom_urls", value: customUrls)
     }
-    
+
     func removeCustomUrl(id: String) {
-        runOnMain {
-            self.customUrls.removeAll(where: { $0.id == id })
-            self.saveToFile(name: "custom_urls", value: self.customUrls)
-        }
+        customUrls.removeAll(where: { $0.id == id })
+        saveToFile(name: "custom_urls", value: customUrls)
     }
 
     // MARK: - Data Reset
     func clearAllData() {
         let fileNames = [
-            "terms",
-            "feed_items",
-            "saved_pages",
-            "custom_urls",
-            "subscribed_platforms",
-            "oshi_avatars",
-            "oshi_compositions",
-            "hidden_items"
+            "terms", "feed_items", "saved_pages", "custom_urls",
+            "subscribed_platforms", "oshi_avatars", "oshi_compositions", "hidden_items"
         ]
+        terms = []
+        feedItems = []
+        savedPages = []
+        customUrls = []
+        subscribedPlatforms = Platform.all.filter(\.subscribedByDefault).map(\.id)
+        wallpaper = nil
+        sourcesOrder = nil
+        oshiAvatars = [:]
+        compositions = [:]
+        hiddenItems = []
 
-        runOnMain {
-            self.terms = []
-            self.feedItems = []
-            self.savedPages = []
-            self.customUrls = []
-            self.subscribedPlatforms = [
-                "youtube", "niconico", "tver", "note",
-                "girlschannel", "5ch", "togetter", "news", "custom",
-                "yahoonews", "mdpr", "oricon", "twitter"
-            ]
-            self.wallpaper = nil
-            self.sourcesOrder = nil
-            self.oshiAvatars = [:]
-            self.compositions = [:]
-            self.hiddenItems = []
-
-            for name in fileNames {
-                let url = self.fileURL(for: name)
-                if FileManager.default.fileExists(atPath: url.path) {
-                    try? FileManager.default.removeItem(at: url)
-                }
+        for name in fileNames {
+            let url = fileURL(for: name)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
             }
-            // Delete all content cache files (cache_*.json) written by saveContentCache.
-            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            if let contents = try? FileManager.default.contentsOfDirectory(
-                at: docsDir, includingPropertiesForKeys: nil
-            ) {
-                for cacheUrl in contents where cacheUrl.lastPathComponent.hasPrefix("cache_") {
-                    try? FileManager.default.removeItem(at: cacheUrl)
-                }
-            }
-            UserDefaults.standard.removeObject(forKey: "wallpaper_url")
-            UserDefaults.standard.removeObject(forKey: "sources_order")
-            self.saveToFile(name: "subscribed_platforms", value: self.subscribedPlatforms)
         }
+        // Delete all content cache files (cache_*.json) written by saveContentCache.
+        if let contents = try? FileManager.default.contentsOfDirectory(
+            at: storeDirectory, includingPropertiesForKeys: nil
+        ) {
+            for cacheUrl in contents where cacheUrl.lastPathComponent.hasPrefix("cache_") {
+                try? FileManager.default.removeItem(at: cacheUrl)
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: "wallpaper_url")
+        UserDefaults.standard.removeObject(forKey: "sources_order")
+        saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
     }
-    
+
     // MARK: - Wallpaper & Custom Order (UserDefaults)
     func setWallpaper(url: String?) {
-        runOnMain {
-            self.wallpaper = url
-            if let url = url {
-                UserDefaults.standard.set(url, forKey: "wallpaper_url")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "wallpaper_url")
-            }
+        wallpaper = url
+        if let url {
+            UserDefaults.standard.set(url, forKey: "wallpaper_url")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "wallpaper_url")
         }
     }
-    
+
     func setSourcesOrder(order: [String]) {
-        runOnMain {
-            self.sourcesOrder = order
-            UserDefaults.standard.set(order, forKey: "sources_order")
-        }
+        sourcesOrder = order
+        UserDefaults.standard.set(order, forKey: "sources_order")
     }
-    
+
     // MARK: - Oshi Avatars & Compositions
     func setOshiAvatar(keyword: String, imageUrl: String) {
-        runOnMain {
-            self.oshiAvatars[keyword] = imageUrl
-            self.saveToFile(name: "oshi_avatars", value: self.oshiAvatars)
-        }
+        oshiAvatars[keyword] = imageUrl
+        saveToFile(name: "oshi_avatars", value: oshiAvatars)
     }
-    
+
     func setOshiComposition(keyword: String, layers: [AvatarLayer]) {
-        runOnMain {
-            self.compositions[keyword] = layers
-            self.saveToFile(name: "oshi_compositions", value: self.compositions)
-        }
+        compositions[keyword] = layers
+        saveToFile(name: "oshi_compositions", value: compositions)
     }
 
     // MARK: - UI Test Fixture
@@ -459,7 +419,7 @@ class LocalDB: ObservableObject {
         guard ProcessInfo.processInfo.arguments.contains("--uitesting") else { return }
 
         let now = ISO8601DateFormatter().string(from: Date())
-        let term = WatchTerm(id: "ui-term-oshitest", keyword: "UITest Oshi", collection_mode: "all_info", is_active: true, created_at: now)
+        let term = WatchTerm(id: "ui-term-oshitest", keyword: "UITest Oshi", collection_mode: .allInfo, is_active: true, created_at: now)
         let feedItem = FeedItem(
             id: "ui-feed-reader",
             platform: "news",
@@ -495,58 +455,51 @@ class LocalDB: ObservableObject {
             zIndex: 1
         )
 
-        runOnMain {
-            self.terms = [term]
-            self.feedItems = [feedItem]
-            self.savedPages = [savedPage]
-            self.customUrls = [customUrl]
-            self.subscribedPlatforms = ["news", "youtube", "tver", "custom"]
-            self.wallpaper = nil
-            self.sourcesOrder = nil
-            self.oshiAvatars = [:]
-            self.compositions = [term.keyword: [layer]]
-            self.hiddenItems = []
-            // Do NOT persist fixture data — only seed in-memory so nothing stains the
-            // container after the test process exits.
-            UserDefaults.standard.removeObject(forKey: "wallpaper_url")
-            UserDefaults.standard.removeObject(forKey: "sources_order")
-        }
+        terms = [term]
+        feedItems = [feedItem]
+        savedPages = [savedPage]
+        customUrls = [customUrl]
+        subscribedPlatforms = ["news", "youtube", "tver", "custom"]
+        wallpaper = nil
+        sourcesOrder = nil
+        oshiAvatars = [:]
+        compositions = [term.keyword: [layer]]
+        hiddenItems = []
+        // Do NOT persist fixture data — only seed in-memory so nothing stains the
+        // container after the test process exits.
+        UserDefaults.standard.removeObject(forKey: "wallpaper_url")
+        UserDefaults.standard.removeObject(forKey: "sources_order")
     }
-    
+
     // MARK: - Content Cache (Offline Pages)
     func saveContentCache(id: String, html: String) {
         let name = "cache_\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
         saveToFile(name: name, value: html)
     }
-    
+
     func getContentCache(id: String) -> String? {
         let name = "cache_\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
         let result: String? = loadFromFile(name: name, defaultValue: nil)
         return result
     }
-    
+
     func removeContentCache(id: String) {
         let name = "cache_\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
         let url = fileURL(for: name)
-        if FileManager.default.fileExists(atPath: url.path) {
-            try? FileManager.default.removeItem(at: url)
+        queue.async {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
-    
+
     // MARK: - Stats
     func getStats() -> (total: Int, byPlatform: [String: Int]) {
         var counts = [String: Int]()
         for item in feedItems {
-            let key = normalizedPlatformKey(item.platform)
+            let key = Platform.normalize(item.platform)
             counts[key] = (counts[key] ?? 0) + 1
         }
         return (feedItems.count, counts)
-    }
-
-    private func normalizedPlatformKey(_ platform: String) -> String {
-        if platform == "news:mdpr" { return "mdpr" }
-        if platform == "news:yahoo_ent" { return "yahoonews" }
-        if platform == "news" || platform.hasPrefix("news:") { return "news" }
-        return platform
     }
 }

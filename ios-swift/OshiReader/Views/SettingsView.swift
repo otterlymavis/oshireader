@@ -10,28 +10,16 @@ struct SettingsView: View {
     @State private var showingAddKeywordAlert = false
     @State private var showingClearAllAlert = false
     @State private var newKeyword = ""
-    @State private var newCollectionMode = "all_info"
+    @State private var newCollectionMode = CollectionMode.allInfo
     @State private var addingAliasForId: String? = nil
     @State private var newAliasText = ""
     @AppStorage("youtube_api_key") private var youtubeApiKey = ""
     @AppStorage("twitter_bearer_token") private var twitterBearerToken = ""
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     
-    let allPlatforms = [
-        ("youtube", "📹 YouTube"),
-        ("niconico", "💬 NicoNico"),
-        ("tver", "📺 TVer"),
-        ("note", "📝 Note"),
-        ("girlschannel", "👭 GirlsChannel"),
-        ("5ch", "💬 5ch"),
-        ("togetter", "🐧 Togetter"),
-        ("news", "📰 General News"),
-        ("yahoonews", "🇯🇵 YahooNews"),
-        ("mdpr", "💅 ModelPress"),
-        ("oricon", "🎤 Oricon"),
-        ("twitter", "𝕏 X"),
-        ("custom", "🌐 Custom Feeds")
-    ]
+    var allPlatforms: [(String, String)] {
+        Platform.all.map { ($0.id, "\($0.icon) \($0.name)") }
+    }
     
     var body: some View {
         NavigationStack {
@@ -141,13 +129,13 @@ struct SettingsView: View {
                             Spacer()
 
                             Button {
-                                let next = term.collection_mode == "all_info" ? "media_only" : "all_info"
+                                let next: CollectionMode = term.collection_mode == .allInfo ? .mediaOnly : .allInfo
                                 db.updateTerm(id: term.id, collectionMode: next)
                                 Task {
                                     _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, collectionMode: next)
                                 }
                             } label: {
-                                Text(term.collection_mode == "media_only" ? "📹" : "📄")
+                                Text(term.collection_mode == .mediaOnly ? "📹" : "📄")
                                     .font(.caption)
                                     .fontWeight(.bold)
                                     .padding(.horizontal, 8)
@@ -390,8 +378,8 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings.keywordField")
                     
                     Picker(i18n.t("collectionMode"), selection: $newCollectionMode) {
-                        Text("📄 " + i18n.t("allInfo")).tag("all_info")
-                        Text("📹 " + i18n.t("mediaOnly")).tag("media_only")
+                        Text("📄 " + i18n.t("allInfo")).tag(CollectionMode.allInfo)
+                        Text("📹 " + i18n.t("mediaOnly")).tag(CollectionMode.mediaOnly)
                     }
                     .pickerStyle(.segmented)
                     

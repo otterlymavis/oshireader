@@ -5,42 +5,40 @@ import UserNotifications
 
 @MainActor
 final class OshiReaderTests: XCTestCase {
-    
+
+    private var tempDir: URL!
     private var db: LocalDB!
-    
+
     override func setUpWithError() throws {
         try super.setUpWithError()
-        db = LocalDB.shared
-        // Clear state before tests if needed, or work with a clean slate
-        db.terms.removeAll()
-        db.feedItems.removeAll()
-        db.savedPages.removeAll()
-        db.customUrls.removeAll()
-        db.hiddenItems.removeAll()
-        db.compositions.removeAll()
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        db = LocalDB(directory: tempDir)
         db.setSubscribedPlatforms(platforms: ["news", "tver", "youtube", "yahoonews", "custom"])
     }
-    
+
     override func tearDownWithError() throws {
         db = nil
+        try FileManager.default.removeItem(at: tempDir)
         try super.tearDownWithError()
     }
     
     // MARK: - Feature 1: Watch Keywords (Terms)
     func testWatchTerms() throws {
         // 1. Save watch term
-        let term = db.saveTerm(keyword: "Test Oshi", collectionMode: "media_only")
+        let term = db.saveTerm(keyword: "Test Oshi", collectionMode: .mediaOnly)
         
         XCTAssertEqual(db.terms.count, 1)
         XCTAssertEqual(db.terms.first?.keyword, "Test Oshi")
-        XCTAssertEqual(db.terms.first?.collection_mode, "media_only")
+        XCTAssertEqual(db.terms.first?.collection_mode, .mediaOnly)
         XCTAssertTrue(db.terms.first?.is_active ?? false)
         
         // 2. Update watch term
-        db.updateTerm(id: term.id, isActive: false, collectionMode: "all_info")
-        
+        db.updateTerm(id: term.id, isActive: false, collectionMode: .allInfo)
+
         XCTAssertEqual(db.terms.first?.is_active, false)
-        XCTAssertEqual(db.terms.first?.collection_mode, "all_info")
+        XCTAssertEqual(db.terms.first?.collection_mode, .allInfo)
 
         db.updateTerm(id: term.id, notifyOnNew: true)
         XCTAssertEqual(db.terms.first?.notify_on_new, true)
@@ -194,7 +192,103 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.mergeItems(newItems: [item]), 1)
         XCTAssertEqual(db.mergeItems(newItems: [item]), 0)
     }
-    
+
+    func testNotifyForNewItemsSkipsWhenEmpty() async throws {
+        let center = MockNotificationCenter(status: .authorized)
+        let manager = NotificationManager(center: center)
+        let term = WatchTerm(id: "t1", keyword: "Oshi", notify_on_new: true)
+        await manager.notifyForNewItems([], terms: [term])
+        XCTAssertEqual(center.requests.count, 0)
+    }
+
+    func testNotifyForNewItemsSkipsWhenDenied() async throws {
+        let center = MockNotificationCenter(status: .denied)
+        let manager = NotificationManager(center: center)
+        let nowString = ISO8601DateFormatter().string(from: Date())
+        let term = WatchTerm(id: "t1", keyword: "Oshi", notify_on_new: true)
+        let item = FeedItem(
+            id: "youtube:denied-test", platform: "youtube", url: "https://youtube.com/1",
+            title: "Video", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: nowString,
+            watch_term_keyword: "Oshi", fetched_at: nowString
+        )
+        await manager.notifyForNewItems([item], terms: [term])
+        XCTAssertEqual(center.requests.count, 0)
+    }
+
+    @MainActor
+    func testNotifyForNewItemsGroupsByKeyword() async throws {
+        let center = MockNotificationCenter(status: .authorized)
+        let manager = NotificationManager(center: center)
+        let nowString = ISO8601DateFormatter().string(from: Date())
+        let termA = WatchTerm(id: "a", keyword: "Oshi A", notify_on_new: true)
+        let termB = WatchTerm(id: "b", keyword: "Oshi B", notify_on_new: true)
+        let items = [
+            FeedItem(id: "1", platform: "youtube", url: "https://u/1", title: "A1",
+                     content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
+                     published_at: nowString, watch_term_keyword: "Oshi A", fetched_at: nowString),
+            FeedItem(id: "2", platform: "youtube", url: "https://u/2", title: "A2",
+                     content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
+                     published_at: nowString, watch_term_keyword: "Oshi A", fetched_at: nowString),
+            FeedItem(id: "3", platform: "note", url: "https://u/3", title: "B1",
+                     content_text: nil, author: nil, thumbnail_url: nil, media_type: "article",
+                     published_at: nowString, watch_term_keyword: "Oshi B", fetched_at: nowString),
+        ]
+        await manager.notifyForNewItems(items, terms: [termA, termB])
+        XCTAssertEqual(center.requests.count, 2)
+        let ids = Set(center.requests.map { $0.identifier })
+        XCTAssertTrue(ids.contains("oshireader-new-Oshi A"))
+        XCTAssertTrue(ids.contains("oshireader-new-Oshi B"))
+        let bodyA = center.requests.first(where: { $0.identifier == "oshireader-new-Oshi A" })?.content.body
+        XCTAssertEqual(bodyA, "2 new items found.")
+    }
+
+    @MainActor
+    func testNotifyForNewItemsIgnoresUnmatchedKeyword() async throws {
+        let center = MockNotificationCenter(status: .authorized)
+        let manager = NotificationManager(center: center)
+        let nowString = ISO8601DateFormatter().string(from: Date())
+        let term = WatchTerm(id: "t1", keyword: "Enabled Oshi", notify_on_new: true)
+        let item = FeedItem(
+            id: "youtube:orphan", platform: "youtube", url: "https://youtube.com/orphan",
+            title: "Orphan video", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: nowString,
+            watch_term_keyword: "Completely Different Oshi",
+            fetched_at: nowString
+        )
+        await manager.notifyForNewItems([item], terms: [term])
+        XCTAssertEqual(center.requests.count, 0)
+    }
+
+    func testCappedFeedItemsAreEvictedAndNotNotified() {
+        // mergeItems caps at 600 items sorted newest-first. The oldest item should be
+        // dropped from feedItems, which also prevents it from triggering a notification
+        // (the eviction check at line ~200 of LocalDB only notifies survived items).
+        let fmt = ISO8601DateFormatter()
+        let base = Date(timeIntervalSinceReferenceDate: 0)
+
+        var items: [FeedItem] = (1...600).map { i in
+            let ts = fmt.string(from: base.addingTimeInterval(Double(i) * 60))
+            return FeedItem(
+                id: "cap:\(i)", platform: "youtube", url: "https://u/\(i)", title: "Item \(i)",
+                content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
+                published_at: ts, watch_term_keyword: "Oshi", fetched_at: ts
+            )
+        }
+        let evictedTs = fmt.string(from: base)
+        items.append(FeedItem(
+            id: "cap:evicted", platform: "youtube", url: "https://u/evicted", title: "Evicted",
+            content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
+            published_at: evictedTs, watch_term_keyword: "Oshi", fetched_at: evictedTs
+        ))
+
+        _ = db.mergeItems(newItems: items)
+
+        XCTAssertEqual(db.feedItems.count, 600)
+        XCTAssertFalse(db.feedItems.contains { $0.id == "cap:evicted" },
+                       "Oldest item should be evicted by the 600-item cap and not stored (and therefore not notified)")
+    }
+
     // MARK: - Feature 3: Feed Querying & Filters (Strict matches, platform toggles, days)
     func testFeedQueryingFilters() throws {
         let formatter = ISO8601DateFormatter()
@@ -292,6 +386,182 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.customUrls.count, 0)
     }
     
+    // MARK: - Persistence round-trip
+    func testPersistenceRoundTrip() throws {
+        _ = db.saveTerm(keyword: "Persisted Oshi", collectionMode: .allInfo)
+        XCTAssertEqual(db.terms.count, 1)
+
+        // Allow the background queue write to finish before reading the file
+        let expectation = XCTestExpectation(description: "write flush")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { expectation.fulfill() }
+        wait(for: [expectation], timeout: 1.0)
+
+        let db2 = LocalDB(directory: tempDir)
+        XCTAssertEqual(db2.terms.count, 1)
+        XCTAssertEqual(db2.terms.first?.keyword, "Persisted Oshi")
+    }
+
+    // MARK: - Schema versioning
+    func testSchemaMigrationAddsNewPlatforms() throws {
+        // Simulate a pre-v1 install: subscribed platforms missing a known platform.
+        // Remove "oricon" from the persisted list, reset the schema version key, then
+        // create a fresh LocalDB — the migration should add it back.
+        UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
+        var platforms = Platform.all.filter(\.subscribedByDefault).map(\.id).filter { $0 != "oricon" }
+        let data = try JSONEncoder().encode(platforms)
+        let url = tempDir.appendingPathComponent("subscribed_platforms.json")
+        try data.write(to: url)
+
+        let freshDB = LocalDB(directory: tempDir)
+        XCTAssertTrue(freshDB.subscribedPlatforms.contains("oricon"),
+                      "Migration should have added missing 'oricon' platform")
+
+        // Clean up the version key so subsequent tests see a clean state
+        UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
+    }
+
+    // MARK: - Feature 5b: Hidden items (deleteFeedItem)
+    func testDeleteFeedItemHidesAndExcludesFromQuery() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "youtube:hidden-test", platform: "youtube",
+            url: "https://youtube.com/watch?v=hidden-test",
+            title: "Hidden item", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.mergeItems(newItems: [item])
+        XCTAssertEqual(db.feedItems.count, 1)
+
+        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
+
+        XCTAssertEqual(db.feedItems.count, 0)
+        // Hidden key should be recorded
+        XCTAssertTrue(db.hiddenItems.contains("youtube:hidden-test::Aiko"))
+        // A second merge of the same item should be filtered out
+        let added = db.mergeItems(newItems: [item])
+        XCTAssertEqual(added, 0)
+        XCTAssertEqual(db.feedItems.count, 0)
+    }
+
+    // MARK: - URL scheme security
+    func testAddCustomUrlRejectsNonHttpSchemes() throws {
+        db.addCustomUrl(url: "javascript:alert(1)", title: "XSS")
+        XCTAssertEqual(db.customUrls.count, 0)
+
+        db.addCustomUrl(url: "file:///etc/passwd", title: "File")
+        XCTAssertEqual(db.customUrls.count, 0)
+
+        db.addCustomUrl(url: "data:text/html,<h1>hi</h1>", title: "Data")
+        XCTAssertEqual(db.customUrls.count, 0)
+
+        // Valid schemes should be accepted
+        db.addCustomUrl(url: "https://valid-feed.com/rss", title: "RSS")
+        XCTAssertEqual(db.customUrls.count, 1)
+
+        db.addCustomUrl(url: "http://local-dev.test/feed", title: "Dev")
+        XCTAssertEqual(db.customUrls.count, 2)
+    }
+
+    // MARK: - Alias matching in strict platforms
+    func testAliasMatchingAllowsAliasedKeywords() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["news"])
+
+        // Term "Aiko" has alias "相川 愛子"
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        db.updateTerm(id: db.terms.first!.id, aliases: ["相川 愛子"])
+
+        // Article only mentions the alias, not the primary keyword
+        let itemAlias = FeedItem(
+            id: "news:alias-test", platform: "news",
+            url: "https://news.example.com/aiko-alias",
+            title: "相川 愛子が新曲をリリース", content_text: "相川 愛子 新曲情報",
+            author: nil, thumbnail_url: nil, media_type: "article",
+            published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        // Article mentions neither primary nor alias
+        let itemNoMatch = FeedItem(
+            id: "news:no-match", platform: "news",
+            url: "https://news.example.com/unrelated",
+            title: "全然違うニュース", content_text: "関係ない内容",
+            author: nil, thumbnail_url: nil, media_type: "article",
+            published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+
+        _ = db.mergeItems(newItems: [itemAlias, itemNoMatch])
+        let results = db.queryFeed(keyword: "Aiko", days: 30)
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.id, "news:alias-test")
+    }
+
+    // MARK: - clearAllData
+    func testClearAllDataResetsEverything() throws {
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        db.addCustomUrl(url: "https://feed.example.com/rss", title: "Feed")
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "youtube:clear-test", platform: "youtube",
+            url: "https://youtube.com/watch?v=clear-test",
+            title: "Clear test", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [item])
+        _ = db.toggleSaved(item: item)
+
+        XCTAssertEqual(db.terms.count, 1)
+        XCTAssertEqual(db.feedItems.count, 1)
+        XCTAssertEqual(db.savedPages.count, 1)
+        XCTAssertEqual(db.customUrls.count, 1)
+
+        db.clearAllData()
+
+        XCTAssertTrue(db.terms.isEmpty)
+        XCTAssertTrue(db.feedItems.isEmpty)
+        XCTAssertTrue(db.savedPages.isEmpty)
+        XCTAssertTrue(db.customUrls.isEmpty)
+        XCTAssertTrue(db.hiddenItems.isEmpty)
+        XCTAssertNil(db.wallpaper)
+        XCTAssertNil(db.sourcesOrder)
+
+        // Default subscribed platforms are restored after clear
+        XCTAssertFalse(db.subscribedPlatforms.isEmpty)
+    }
+
+    // MARK: - Date cutoff uses proper Date comparison (not string sort)
+    func testDateFilterUsesDateComparisonNotStringSort() throws {
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let now = Date()
+
+        // Item just inside the 30-day window (29 days ago)
+        let inside = formatter.string(from: Calendar.current.date(byAdding: .day, value: -29, to: now)!)
+        // Item just outside (31 days ago)
+        let outside = formatter.string(from: Calendar.current.date(byAdding: .day, value: -31, to: now)!)
+
+        let itemInside = FeedItem(
+            id: "youtube:inside", platform: "youtube", url: "https://yt/inside",
+            title: "Inside", content_text: "Inside", author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: inside,
+            watch_term_keyword: "Aiko", fetched_at: inside
+        )
+        let itemOutside = FeedItem(
+            id: "youtube:outside", platform: "youtube", url: "https://yt/outside",
+            title: "Outside", content_text: "Outside", author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: outside,
+            watch_term_keyword: "Aiko", fetched_at: outside
+        )
+
+        _ = db.mergeItems(newItems: [itemInside, itemOutside])
+        let results = db.queryFeed(keyword: nil, days: 30)
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.id, "youtube:inside")
+    }
+
     // MARK: - Feature 6: Oshi Avatars Compositions
     func testAvatarCompositions() throws {
         let layers = [
@@ -358,7 +628,7 @@ final class OshiReaderTests: XCTestCase {
         let keywords = ["Aiko", "Miku", "Yamada", "Ken"]
         var savedTerms = [WatchTerm]()
         for kw in keywords {
-            let term = db.saveTerm(keyword: kw, collectionMode: "all_info")
+            let term = db.saveTerm(keyword: kw, collectionMode: .allInfo)
             savedTerms.append(term)
         }
         
@@ -422,6 +692,128 @@ final class OshiReaderTests: XCTestCase {
             XCTAssertEqual(targetLangCode, expectedTargetCode, "Language code mapping should match Google Translate expectations.")
         }
     }
+}
+
+// MARK: - Network-client tests (Phase 5.3)
+
+final class NetworkManagerTests: XCTestCase {
+    private var savedSession: URLSession!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        savedSession = NetworkManager.shared.session
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        NetworkManager.shared.session = URLSession(configuration: config)
+        MockURLProtocol.handler = nil
+    }
+
+    override func tearDownWithError() throws {
+        NetworkManager.shared.session = savedSession
+        MockURLProtocol.handler = nil
+        try super.tearDownWithError()
+    }
+
+    private static let mockURL = URL(string: "https://mock.test")!
+
+    private static func response(status: Int) -> HTTPURLResponse {
+        HTTPURLResponse(url: mockURL, statusCode: status, httpVersion: nil, headerFields: nil)!
+    }
+
+    // 200 OK with valid JSON → decodes cleanly
+    func testFetchWatchTermsSuccess() async throws {
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
+        let data = try JSONEncoder().encode([term])
+        MockURLProtocol.handler = { _ in (data, Self.response(status: 200)) }
+
+        let terms = try await NetworkManager.shared.fetchWatchTerms()
+        XCTAssertEqual(terms.count, 1)
+        XCTAssertEqual(terms.first?.keyword, "Aiko")
+    }
+
+    // 4xx response → throws URLError(.badServerResponse)
+    func testFetchWatchTerms404Throws() async throws {
+        MockURLProtocol.handler = { _ in (Data(), Self.response(status: 404)) }
+
+        do {
+            _ = try await NetworkManager.shared.fetchWatchTerms()
+            XCTFail("Expected error not thrown")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .badServerResponse)
+        }
+    }
+
+    // 200 OK with malformed JSON → throws DecodingError
+    func testFetchWatchTermsMalformedJSONThrows() async throws {
+        MockURLProtocol.handler = { _ in (Data("not json".utf8), Self.response(status: 200)) }
+
+        do {
+            _ = try await NetworkManager.shared.fetchWatchTerms()
+            XCTFail("Expected DecodingError not thrown")
+        } catch is DecodingError {
+            // expected
+        }
+    }
+
+    // 5xx response → throws URLError(.badServerResponse)
+    func testFetchFeed500Throws() async throws {
+        MockURLProtocol.handler = { _ in (Data(), Self.response(status: 500)) }
+
+        do {
+            _ = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
+            XCTFail("Expected error not thrown")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .badServerResponse)
+        }
+    }
+
+    // 200 OK with empty array → returns empty, no throw
+    func testFetchFeedEmptyArray() async throws {
+        MockURLProtocol.handler = { _ in (Data("[]".utf8), Self.response(status: 200)) }
+
+        let items = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
+        XCTAssertTrue(items.isEmpty)
+    }
+
+    // 204 No Content within accept range → apiVoid succeeds
+    func testDeleteWatchTermAccepts204() async throws {
+        MockURLProtocol.handler = { _ in (Data(), Self.response(status: 204)) }
+
+        // deleteWatchTerm uses apiVoid with acceptRange 200...299
+        XCTAssertNoThrow(try await NetworkManager.shared.deleteWatchTerm(id: "99"))
+    }
+
+    // Platform normalization round-trip: normalize → find → same id
+    func testPlatformNormalizeRoundTrip() {
+        XCTAssertEqual(Platform.normalize("news:mdpr"), "mdpr")
+        XCTAssertEqual(Platform.normalize("news:yahoo_ent"), "yahoonews")
+        XCTAssertEqual(Platform.normalize("news:someother"), "news")
+        XCTAssertEqual(Platform.normalize("youtube"), "youtube")
+        XCTAssertNil(Platform.find("news:mdpr"))   // canonical lookup, not raw
+        XCTAssertNotNil(Platform.find("mdpr"))
+    }
+}
+
+// MARK: - MockURLProtocol
+
+private final class MockURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) -> (Data, HTTPURLResponse))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unknown))
+            return
+        }
+        let (data, response) = handler(request)
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 private final class MockNotificationCenter: NotificationCenterClient {

@@ -35,11 +35,23 @@ func cleanDisplayText(_ value: String?) -> String? {
     return trimmed.isEmpty ? nil : trimmed
 }
 
+// MARK: - CollectionMode
+enum CollectionMode: String, Codable, Hashable {
+    case allInfo  = "all_info"
+    case mediaOnly = "media_only"
+}
+
+// MARK: - MediaFilter
+enum MediaFilter {
+    case all
+    case mediaOnly
+}
+
 // MARK: - WatchTerm
 struct WatchTerm: Identifiable, Codable, Hashable {
     let id: String
     var keyword: String
-    var collection_mode: String // "all_info" | "media_only"
+    var collection_mode: CollectionMode
     var is_active: Bool
     var notify_on_new: Bool
     var aliases: [String]
@@ -49,7 +61,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         case id, keyword, collection_mode, is_active, notify_on_new, aliases, created_at
     }
 
-    init(id: String = UUID().uuidString, keyword: String, collection_mode: String = "all_info", is_active: Bool = true, notify_on_new: Bool = false, aliases: [String] = [], created_at: String = ISO8601DateFormatter().string(from: Date())) {
+    init(id: String = UUID().uuidString, keyword: String, collection_mode: CollectionMode = .allInfo, is_active: Bool = true, notify_on_new: Bool = false, aliases: [String] = [], created_at: String = ISO8601DateFormatter().string(from: Date())) {
         self.id = id
         self.keyword = keyword
         self.collection_mode = collection_mode
@@ -58,7 +70,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         self.aliases = aliases
         self.created_at = created_at
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         // Decodes ID as String or Int coerced to String
@@ -70,7 +82,8 @@ struct WatchTerm: Identifiable, Codable, Hashable {
             self.id = UUID().uuidString
         }
         self.keyword = try container.decode(String.self, forKey: .keyword)
-        self.collection_mode = try container.decode(String.self, forKey: .collection_mode)
+        // Gracefully fall back to .allInfo for unknown/missing values from older backend rows.
+        self.collection_mode = (try? container.decode(CollectionMode.self, forKey: .collection_mode)) ?? .allInfo
         self.is_active = try container.decodeIfPresent(Bool.self, forKey: .is_active) ?? true
         self.notify_on_new = try container.decodeIfPresent(Bool.self, forKey: .notify_on_new) ?? false
         self.aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
