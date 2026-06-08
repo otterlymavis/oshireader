@@ -5,8 +5,45 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-from app.apns import send_new_match_notifications
+from app.apns import _host, _payload, send_new_match_notifications
 from app.models import APNSDeviceToken, WatchTerm
+
+
+class TestPayload:
+    def _term(self, keyword: str = "Aiko", term_id: int = 1) -> WatchTerm:
+        t = WatchTerm(keyword=keyword)
+        t.id = term_id
+        return t
+
+    def test_payload_structure(self):
+        payload = _payload(self._term("Miku"), 3)
+        assert payload["aps"]["alert"]["title"] == "New items for Miku"
+        assert payload["watch_term_keyword"] == "Miku"
+        assert payload["new_count"] == 3
+
+    def test_singular_body(self):
+        payload = _payload(self._term(), 1)
+        assert payload["aps"]["alert"]["body"] == "1 new item found."
+
+    def test_plural_body(self):
+        payload = _payload(self._term(), 5)
+        assert payload["aps"]["alert"]["body"] == "5 new items found."
+
+    def test_watch_term_id_included(self):
+        payload = _payload(self._term(term_id=42), 1)
+        assert payload["watch_term_id"] == 42
+
+
+class TestHost:
+    def test_sandbox_url(self):
+        with patch("app.apns.settings") as mock_settings:
+            mock_settings.apns_use_sandbox = True
+            assert _host() == "https://api.sandbox.push.apple.com"
+
+    def test_production_url(self):
+        with patch("app.apns.settings") as mock_settings:
+            mock_settings.apns_use_sandbox = False
+            assert _host() == "https://api.push.apple.com"
 
 
 def _device(token: str, environment: str = "sandbox") -> APNSDeviceToken:
