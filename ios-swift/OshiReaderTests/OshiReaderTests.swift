@@ -464,7 +464,19 @@ final class OshiReaderTests: XCTestCase {
         db.removeCustomUrl(id: id)
         XCTAssertEqual(db.customUrls.count, 0)
     }
-    
+
+    func testAddCustomUrlPreventsDuplicates() throws {
+        db.addCustomUrl(url: "https://feed.example.com/rss", title: "Feed")
+        db.addCustomUrl(url: "https://feed.example.com/rss", title: "Feed again")
+        XCTAssertEqual(db.customUrls.count, 1)
+    }
+
+    func testAddCustomUrlPrefixesSchemeWhenMissing() throws {
+        db.addCustomUrl(url: "feed.example.com/rss", title: "Feed")
+        XCTAssertEqual(db.customUrls.count, 1)
+        XCTAssertEqual(db.customUrls.first?.url, "https://feed.example.com/rss")
+    }
+
     // MARK: - Persistence round-trip
     func testPersistenceRoundTrip() throws {
         _ = db.saveTerm(keyword: "Persisted Oshi", collectionMode: .allInfo)
