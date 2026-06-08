@@ -197,6 +197,43 @@ class TestIngestionIdempotency:
         assert db_session.query(Match).count() == 1
 
 
+class TestIngestionConnectorErrorIsolation:
+    @pytest.mark.asyncio
+    async def test_failing_connector_does_not_block_others(self, db_engine, db_session):
+        """A connector that raises must not prevent other connectors from running."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        bad_connector = MagicMock()
+        bad_connector.PLATFORM = "bad"
+        bad_connector.fetch = AsyncMock(side_effect=RuntimeError("network failed"))
+
+        good_item = _make_item(platform="youtube", item_id="ok1")
+        good_connector = _mock_connector("youtube", [good_item])
+
+        await _run_poll(db_engine, [bad_connector, good_connector])
+
+        db_session.expire_all()
+        source = db_session.get(SourceItem, "youtube:ok1")
+        assert source is not None, "Good connector's item should still be ingested"
+
+    @pytest.mark.asyncio
+    async def test_all_connectors_fail_leaves_db_empty(self, db_engine, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        bad = MagicMock()
+        bad.PLATFORM = "bad"
+        bad.fetch = AsyncMock(side_effect=RuntimeError("timeout"))
+
+        await _run_poll(db_engine, [bad])
+
+        db_session.expire_all()
+        assert db_session.query(SourceItem).count() == 0
+
+
 class TestIngestionCollectionMode:
     @pytest.mark.asyncio
     async def test_collection_mode_forwarded_to_connector(self, db_engine, db_session):
