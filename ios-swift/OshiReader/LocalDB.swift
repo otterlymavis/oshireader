@@ -186,7 +186,11 @@ class LocalDB: ObservableObject {
                     author: item.author ?? existing.author,
                     thumbnail_url: item.thumbnail_url ?? existing.thumbnail_url,
                     media_type: existing.media_type,
-                    published_at: min(existing.published_at, item.published_at),
+                    published_at: {
+                        let ed = parseISO8601Date(existing.published_at) ?? .distantFuture
+                        let nd = parseISO8601Date(item.published_at) ?? .distantFuture
+                        return ed <= nd ? existing.published_at : item.published_at
+                    }(),
                     watch_term_keyword: existing.watch_term_keyword,
                     fetched_at: item.fetched_at
                 )
@@ -194,7 +198,10 @@ class LocalDB: ObservableObject {
             }
         }
 
-        let sorted = currentMap.values.sorted(by: { $0.published_at > $1.published_at })
+        let sorted = currentMap.values.sorted(by: {
+            (parseISO8601Date($0.published_at) ?? .distantPast) >
+            (parseISO8601Date($1.published_at) ?? .distantPast)
+        })
         let finalItems = Array(sorted.prefix(600)) // Replicate MAX_ITEMS = 600
 
         // Only notify for items that survived the cap — avoids pinging for articles
@@ -276,7 +283,10 @@ class LocalDB: ObservableObject {
 
             return true
         }
-        .sorted(by: { $0.published_at > $1.published_at })
+        .sorted(by: {
+            (parseISO8601Date($0.published_at) ?? .distantPast) >
+            (parseISO8601Date($1.published_at) ?? .distantPast)
+        })
         .reduce(into: ([FeedItem](), Set<String>())) { acc, item in
             // When no keyword filter, deduplicate by URL — the same article can be
             // stored once per matching watch term; only the first (most recent) copy

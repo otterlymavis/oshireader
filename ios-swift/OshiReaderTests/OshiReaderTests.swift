@@ -562,6 +562,39 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(results.first?.id, "youtube:inside")
     }
 
+    func testSortOrderCorrectAcrossTimezoneOffsets() throws {
+        // A date with +09:00 offset and a UTC date representing the same instant would sort
+        // wrong lexicographically (e.g. "2024-01-01T21:00:00+09:00" > "2024-01-01T12:00:00Z"
+        // as strings but equal as dates). Verify mergeItems sorts by actual Date value.
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+
+        // newer: 1 hour ago in UTC
+        let newerUtc = "2024-06-01T03:00:00Z"
+        // older: 2 hours ago expressed with +09:00 (2024-06-01T10:00:00+09:00 == 2024-06-01T01:00:00Z)
+        // As a string "2024-06-01T10:00:00+09:00" > "2024-06-01T03:00:00Z" — wrong sort order
+        let olderWithOffset = "2024-06-01T10:00:00+09:00"
+
+        let newerItem = FeedItem(
+            id: "youtube:newer", platform: "youtube", url: "https://yt/newer",
+            title: "Newer", content_text: "Newer", author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: newerUtc,
+            watch_term_keyword: "Aiko", fetched_at: newerUtc
+        )
+        let olderItem = FeedItem(
+            id: "youtube:older", platform: "youtube", url: "https://yt/older",
+            title: "Older", content_text: "Older", author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: olderWithOffset,
+            watch_term_keyword: "Aiko", fetched_at: olderWithOffset
+        )
+
+        _ = db.mergeItems(newItems: [newerItem, olderItem])
+        let results = db.queryFeed(keyword: nil, days: 0)
+
+        XCTAssertEqual(results.count, 2)
+        XCTAssertEqual(results.first?.id, "youtube:newer", "Newer UTC item should sort first")
+        XCTAssertEqual(results.last?.id, "youtube:older", "Older +09:00 item should sort last")
+    }
+
     // MARK: - Feature 6: Oshi Avatars Compositions
     func testAvatarCompositions() throws {
         let layers = [
