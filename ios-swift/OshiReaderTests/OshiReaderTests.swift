@@ -112,6 +112,54 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.feedItems.count, 2)
     }
 
+    func testMergeTruncatedTitleReplacedByFullTitle() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let truncated = FeedItem(
+            id: "news:trunc", platform: "news", url: "https://n.example.com/1",
+            title: "速報: アイコが新曲リリース...", content_text: nil, author: nil,
+            thumbnail_url: nil, media_type: "article", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let full = FeedItem(
+            id: "news:trunc", platform: "news", url: "https://n.example.com/1",
+            title: "速報: アイコが新曲リリース — 初のソロアルバムを発表", content_text: "全文テキスト",
+            author: "News Corp", thumbnail_url: "https://img.example.com/1.jpg",
+            media_type: "article", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [truncated])
+        _ = db.mergeItems(newItems: [full])
+
+        let merged = db.feedItems.first!
+        // Truncated title replaced by full title
+        XCTAssertEqual(merged.title, full.title)
+        // Content, author, thumbnail filled in from the second fetch
+        XCTAssertEqual(merged.content_text, "全文テキスト")
+        XCTAssertEqual(merged.author, "News Corp")
+        XCTAssertEqual(merged.thumbnail_url, "https://img.example.com/1.jpg")
+    }
+
+    func testMergeKeepsEarlierPublishedAt() throws {
+        let formatter = ISO8601DateFormatter()
+        let older = formatter.string(from: Date(timeIntervalSinceNow: -3600))
+        let newer = formatter.string(from: Date(timeIntervalSinceNow: -60))
+        let base = FeedItem(
+            id: "tver:pub-test", platform: "tver", url: "https://tver.jp/ep/1",
+            title: "Episode Title", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: newer, watch_term_keyword: "Aiko", fetched_at: newer
+        )
+        let corrected = FeedItem(
+            id: "tver:pub-test", platform: "tver", url: "https://tver.jp/ep/1",
+            title: "Episode Title", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: older, watch_term_keyword: "Aiko", fetched_at: newer
+        )
+        _ = db.mergeItems(newItems: [base])
+        _ = db.mergeItems(newItems: [corrected])
+
+        // The earlier publish date (older) should be kept
+        XCTAssertEqual(db.feedItems.first?.published_at, older)
+    }
+
     @MainActor
     func testNotificationManagerSchedulesTestNotificationAfterAuthorization() async throws {
         let center = MockNotificationCenter(status: .notDetermined, grantsAuthorization: true)
