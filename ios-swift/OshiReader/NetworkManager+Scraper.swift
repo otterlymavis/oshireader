@@ -21,6 +21,19 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
     private var currentPubDate = ""
     private var currentThumbnailUrl: String? = nil
 
+    private let _dateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        return df
+    }()
+    private static let _dateFormats = [
+        "E, d MMM yyyy HH:mm:ss Z",
+        "yyyy-MM-dd'T'HH:mm:ssZ",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+        "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    ]
+    private let _iso8601Out = ISO8601DateFormatter()
+
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
         currentElement = elementName
         if elementName == "item" || elementName == "entry" {
@@ -67,20 +80,12 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
         item.thumbnailUrl = currentThumbnailUrl
 
         let dateString = currentPubDate.trimmingCharacters(in: .whitespacesAndNewlines)
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        let formats = [
-            "E, d MMM yyyy HH:mm:ss Z",
-            "yyyy-MM-dd'T'HH:mm:ssZ",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-            "yyyy-MM-dd'T'HH:mm:ss'Z'"
-        ]
         var parsedDate: Date? = nil
-        for format in formats {
-            df.dateFormat = format
-            if let d = df.date(from: dateString) { parsedDate = d; break }
+        for format in Self._dateFormats {
+            _dateFormatter.dateFormat = format
+            if let d = _dateFormatter.date(from: dateString) { parsedDate = d; break }
         }
-        item.pubDate = parsedDate.map { ISO8601DateFormatter().string(from: $0) } ?? dateString
+        item.pubDate = parsedDate.map { _iso8601Out.string(from: $0) } ?? dateString
 
         items.append(item)
         currentItem = nil

@@ -22,6 +22,7 @@ class LocalDB: ObservableObject {
     private let queue = DispatchQueue(label: "com.otterlymavis.oshireader.db", qos: .userInitiated)
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let iso8601 = ISO8601DateFormatter()
 
     // Bump this whenever a migration step is added below.
     private static let currentSchemaVersion = 1
@@ -327,7 +328,7 @@ class LocalDB: ObservableObject {
                 url: item.url,
                 title: item.title,
                 platform: item.platform,
-                saved_at: ISO8601DateFormatter().string(from: Date())
+                saved_at: iso8601.string(from: Date())
             )
             savedPages.insert(page, at: 0)
             saveToFile(name: "saved_pages", value: savedPages)
@@ -356,7 +357,7 @@ class LocalDB: ObservableObject {
         let id = "custom:\(normalized.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.prefix(60) ?? "")"
         if customUrls.contains(where: { $0.id == id }) { return }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let entry = CustomUrl(id: id, url: normalized, title: trimmedTitle.isEmpty ? nil : trimmedTitle, added_at: ISO8601DateFormatter().string(from: Date()))
+        let entry = CustomUrl(id: id, url: normalized, title: trimmedTitle.isEmpty ? nil : trimmedTitle, added_at: iso8601.string(from: Date()))
         customUrls.insert(entry, at: 0)
         saveToFile(name: "custom_urls", value: customUrls)
     }
