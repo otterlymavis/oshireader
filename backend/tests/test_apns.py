@@ -1,6 +1,8 @@
 """Tests for APNs notification dispatch logic."""
 from __future__ import annotations
 
+import app.apns as _apns_mod
+import jwt as _jwt_mod
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -351,3 +353,73 @@ class TestSendOne:
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
         assert result is False  # server error without bad-token reason — keep token
+
+
+class TestAuthToken:
+    def setup_method(self):
+        _apns_mod._auth_token.cache_clear()
+
+    def teardown_method(self):
+        _apns_mod._auth_token.cache_clear()
+
+    def test_encodes_jwt_with_correct_claims(self):
+        with patch("app.apns._private_key", return_value="pem-key"), \
+             patch("app.apns.settings") as s, \
+             patch("app.apns.time") as mock_time, \
+             patch.object(_jwt_mod, "encode", return_value="header.payload.sig") as mock_enc:
+            s.apns_team_id = "TEAMX"
+            s.apns_key_id = "KIDX"
+            mock_time.time.return_value = 1000000
+            token, issued_at = _apns_mod._auth_token()
+        assert token == "header.payload.sig"
+        assert issued_at == 1000000
+        mock_enc.assert_called_once_with(
+            {"iss": "TEAMX", "iat": 1000000},
+            "pem-key",
+            algorithm="ES256",
+            headers={"alg": "ES256", "kid": "KIDX"},
+        )
+
+    def test_caches_result(self):
+        with patch("app.apns._private_key", return_value="pem-key"), \
+             patch("app.apns.settings") as s, \
+             patch("app.apns.time") as mock_time, \
+             patch.object(_jwt_mod, "encode", return_value="header.payload.sig") as mock_enc:
+            s.apns_team_id = "TEAMX"
+            s.apns_key_id = "KIDX"
+            mock_time.time.return_value = 1000000
+            _apns_mod._auth_token()
+            _apns_mod._auth_token()
+        assert mock_enc.call_count == 1
+
+
+class TestCachedAuthToken:
+    def setup_method(self):
+        _apns_mod._auth_token.cache_clear()
+
+    def teardown_method(self):
+        _apns_mod._auth_token.cache_clear()
+
+    def test_returns_token_when_fresh(self):
+        issued_at = 1700000000
+        mock_fn = MagicMock(return_value=("fresh-tok", issued_at))
+        mock_fn.cache_clear = MagicMock()
+        with patch("app.apns._auth_token", mock_fn), \
+             patch("app.apns.time") as mock_time:
+            mock_time.time.return_value = issued_at + 100
+            result = _apns_mod._cached_auth_token()
+        assert result == "fresh-tok"
+        mock_fn.cache_clear.assert_not_called()
+        assert mock_fn.call_count == 1
+
+    def test_refreshes_when_expired(self):
+        issued_at = 1700000000
+        mock_fn = MagicMock(return_value=("new-tok", issued_at))
+        mock_fn.cache_clear = MagicMock()
+        with patch("app.apns._auth_token", mock_fn), \
+             patch("app.apns.time") as mock_time:
+            mock_time.time.return_value = issued_at + 51 * 60
+            result = _apns_mod._cached_auth_token()
+        assert result == "new-tok"
+        mock_fn.cache_clear.assert_called_once()
+        assert mock_fn.call_count == 2

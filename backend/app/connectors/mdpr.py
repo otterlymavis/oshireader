@@ -9,7 +9,7 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate, parse_feed_date
+from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class ModelPressConnector(BaseConnector):
     PLATFORM = "mdpr"
     SUPPORTS_MEDIA_FILTER = False
 
-    async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == "media_only":
             return []
 

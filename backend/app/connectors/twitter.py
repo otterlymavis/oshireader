@@ -3,6 +3,7 @@ from datetime import datetime
 import httpx
 
 from app.connectors.base import BaseConnector, SourceItemCreate
+from app.models import CollectionMode
 
 
 class TwitterConnector(BaseConnector):
@@ -14,7 +15,7 @@ class TwitterConnector(BaseConnector):
     def __init__(self, bearer_token: str) -> None:
         self.bearer_token = bearer_token
 
-    async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if not self.bearer_token:
             return []
 
@@ -25,7 +26,7 @@ class TwitterConnector(BaseConnector):
             "tweet.fields": "created_at,author_id,text",
             "expansions": "author_id,attachments.media_keys",
             "user.fields": "name,username",
-            "media.fields": "preview_image_url,url",
+            "media.fields": "preview_image_url,url,type",
         }
         headers = {"Authorization": f"Bearer {self.bearer_token}"}
 
@@ -45,9 +46,15 @@ class TwitterConnector(BaseConnector):
             created = datetime.fromisoformat(tweet["created_at"].replace("Z", "+00:00"))
 
             thumb = None
+            media_type = "text"
             for key in tweet.get("attachments", {}).get("media_keys", []):
                 media = media_map.get(key, {})
                 thumb = media.get("preview_image_url") or media.get("url")
+                m_type = media.get("type", "")
+                if m_type == "photo":
+                    media_type = "image"
+                elif m_type in ("video", "animated_gif"):
+                    media_type = "video"
                 if thumb:
                     break
 
@@ -57,7 +64,7 @@ class TwitterConnector(BaseConnector):
                     item_id=tweet_id,
                     url=f"https://x.com/{username}/status/{tweet_id}" if username else f"https://x.com/i/status/{tweet_id}",
                     published_at=created,
-                    media_type="video" if thumb else "text",
+                    media_type=media_type,
                     author=f"@{username}" if username else None,
                     title=None,
                     content_text=tweet.get("text"),

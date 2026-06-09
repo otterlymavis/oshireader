@@ -9,7 +9,7 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate, parse_feed_date
+from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
 
 log = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ class YouTubeConnector(BaseConnector):
             )
         return items
 
-    async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         # Always try API first if credential is provided
         if self.api_key:
             try:

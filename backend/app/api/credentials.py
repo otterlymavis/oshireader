@@ -24,6 +24,7 @@ def list_credentials(_: None = Depends(require_admin_auth), db: Session = Depend
                 platform=platform,
                 has_bearer_token=bool(cred and cred.bearer_token),
                 has_api_key=bool(cred and cred.api_key),
+                has_api_secret=bool(cred and cred.api_secret),
                 updated_at=cred.updated_at if cred else None,
             )
         )
@@ -56,6 +57,7 @@ def upsert_credential(
         platform=cred.platform,
         has_bearer_token=bool(cred.bearer_token),
         has_api_key=bool(cred.api_key),
+        has_api_secret=bool(cred.api_secret),
         updated_at=cred.updated_at,
     )
 

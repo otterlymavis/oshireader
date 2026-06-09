@@ -9,7 +9,7 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 
-from app.connectors.base import BaseConnector, SourceItemCreate
+from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class TVERConnector(BaseConnector):
             log.warning("TVer create token failed: %s", exc)
         return None, None
 
-    async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         async with httpx.AsyncClient(timeout=15.0, headers=HEADERS) as client:
             uid, token = await self._create_platform_token(client)
             if not uid or not token:

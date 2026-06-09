@@ -123,6 +123,7 @@ class CredentialOut(BaseModel):
     platform: str
     has_bearer_token: bool
     has_api_key: bool
+    has_api_secret: bool
     updated_at: Optional[datetime]
 
     model_config = {"from_attributes": True}

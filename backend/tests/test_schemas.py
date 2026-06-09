@@ -68,14 +68,14 @@ class TestCredentialOut:
     def test_naive_updated_at_becomes_utc(self):
         obj = CredentialOut(
             platform="youtube", has_bearer_token=False,
-            has_api_key=True, updated_at=_naive(),
+            has_api_key=True, has_api_secret=False, updated_at=_naive(),
         )
         assert obj.updated_at.tzinfo == timezone.utc
 
     def test_none_updated_at_stays_none(self):
         obj = CredentialOut(
             platform="youtube", has_bearer_token=False,
-            has_api_key=False, updated_at=None,
+            has_api_key=False, has_api_secret=False, updated_at=None,
         )
         assert obj.updated_at is None
 

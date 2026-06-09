@@ -11,6 +11,7 @@ if settings.database_url.startswith("sqlite"):
     def _set_sqlite_pragma(dbapi_conn, _record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

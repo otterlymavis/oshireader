@@ -224,6 +224,17 @@ class TestParseYouTubeRelative:
         result = _parse_youtube_relative("1週間前")
         assert result is not None
 
+    def test_english_years_ago(self):
+        from datetime import timedelta
+        before = datetime.now(timezone.utc)
+        result = _parse_youtube_relative("2 years ago")
+        assert result is not None
+        assert self._approx(result, before - timedelta(days=2 * 365), tolerance_sec=60)
+
+    def test_japanese_years_ago(self):
+        result = _parse_youtube_relative("1年前")
+        assert result is not None
+
     def test_returns_none_for_empty_string(self):
         assert _parse_youtube_relative("") is None
 
@@ -1300,7 +1311,7 @@ class TestTwitterFetch:
                 "attachments": {"media_keys": ["mk1"]},
             }],
             users=[{"id": "u2", "username": "mv_channel", "name": "MV Channel"}],
-            media=[{"media_key": "mk1", "preview_image_url": "https://pbs.twimg.com/mv/t.jpg"}],
+            media=[{"media_key": "mk1", "preview_image_url": "https://pbs.twimg.com/mv/t.jpg", "type": "video"}],
         )
         resp = MagicMock()
         resp.is_success = True

@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.api import credentials, devices, feed, watch_terms
 from app.auth import require_admin_auth
 from app.config import settings
-from app.database import engine, get_db
+from app.database import engine, get_db, SessionLocal
 from app.ingestion.scheduler import queue_poll, scheduler, start_scheduler
 from app.migrations import apply_startup_migrations
 from app.models import Match, SourceItem, WatchTerm
@@ -62,17 +62,16 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
     return {"status": "poll started"}
 
 
-
-
 @app.get("/api/admin/test-fetch")
-async def test_fetch(_: None = Depends(require_admin_auth)) -> dict:
-    """Run one keyword through every connector and report item counts + errors."""
+async def test_fetch(
+    _: None = Depends(require_admin_auth),
+    keyword: str = Query("吉沢亮"),
+) -> dict:
     import asyncio
     from app.ingestion.scheduler import _build_connectors, _fetch_one
-    db_sess = __import__("app.database", fromlist=["SessionLocal"]).SessionLocal()
+    db_sess = SessionLocal()
     try:
         connectors = _build_connectors(db_sess)
-        keyword = "吉沢亮"
         results = await asyncio.gather(
             *[_fetch_one(c, keyword, "all_info") for c in connectors]
         )

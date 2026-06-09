@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import httpx
 from bs4 import BeautifulSoup
 
-from app.connectors.base import BaseConnector, SourceItemCreate
+from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class TogetterConnector(BaseConnector):
 
     _SEARCH = "https://togetter.com/search"
 
-    async def fetch(self, keyword: str, mode: str) -> list[SourceItemCreate]:
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == "media_only":
             return []
 

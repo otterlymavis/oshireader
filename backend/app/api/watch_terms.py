@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -70,4 +71,6 @@ def delete_term(
     if not term:
         raise HTTPException(404, "Watch term not found")
     db.delete(term)
+    db.commit()
+    db.execute(text("DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"))
     db.commit()
