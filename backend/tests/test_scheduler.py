@@ -170,3 +170,9 @@ class TestSearchTermsFor:
         term = self._term("Oshi", ["Oshi", "oshi", "Other"])
         result = _search_terms_for(term)
         assert result.count("Oshi") == 1
+
+    def test_none_aliases_treated_as_empty(self):
+        term = WatchTerm(keyword="Miku")
+        term.aliases = None  # Simulate a None aliases value (e.g. from a legacy DB row)
+        result = _search_terms_for(term)
+        assert result == ["Miku"]
