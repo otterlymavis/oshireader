@@ -13,6 +13,7 @@ from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
+from app.connectors.niconico import NicoNicoConnector
 from app.connectors.note import NoteConnector
 from app.connectors.oricon import OriconConnector
 from app.connectors.oricon import _clean_title as _clean_oricon_title
@@ -809,3 +810,532 @@ class TestYahooNewsFetch:
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
         # valid + dup1 survive; no_link, dup2, empty_title are skipped
         assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# NicoNico connector tests
+# ---------------------------------------------------------------------------
+
+def _nico_ctx(side_effect=None, api_data=None, gnews_content=b"<rss/>"):
+    """Create a shared httpx context mock; supports optional call-count-based side effects."""
+    if side_effect is not None:
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=side_effect)
+    else:
+        resp = MagicMock()
+        resp.is_success = True
+        resp.json.return_value = api_data or {}
+        resp.content = gnews_content
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=ctx)
+
+
+class TestNicoNicoFetch:
+    @pytest.mark.asyncio
+    async def test_api_returns_items_on_success(self):
+        api_data = {
+            "data": [{
+                "contentId": "sm12345",
+                "title": "Aiko cover",
+                "startTime": "2024-01-15T10:00:00+00:00",
+                "userId": 123456,
+                "thumbnailUrl": "https://cdn.nicovideo.jp/t.jpg",
+                "description": "Nice cover",
+            }]
+        }
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(api_data=api_data)):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "niconico"
+        assert result[0].item_id == "sm12345"
+        assert result[0].thumbnail_url == "https://cdn.nicovideo.jp/t.jpg"
+        assert result[0].author == "123456"
+
+    @pytest.mark.asyncio
+    async def test_api_uses_channel_id_as_author_when_no_user_id(self):
+        api_data = {"data": [{"contentId": "sm1", "title": "T", "channelId": "ch999"}]}
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(api_data=api_data)):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert result[0].author == "ch999"
+
+    @pytest.mark.asyncio
+    async def test_api_bad_start_time_does_not_crash(self):
+        api_data = {"data": [{"contentId": "sm2", "title": "T", "startTime": "not-a-date"}]}
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(api_data=api_data)):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].published_at is not None
+
+    @pytest.mark.asyncio
+    async def test_api_skips_entry_without_content_id(self):
+        api_data = {"data": [{"title": "No ID"}]}
+        # API returns empty list → gnews fallback → gnews also empty
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = True
+        api_resp.json.return_value = api_data
+        gnews_resp = MagicMock()
+        gnews_resp.is_success = False
+        gnews_resp.status_code = 404
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else gnews_resp
+
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_api_http_error_falls_back_to_gnews(self):
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = False
+        api_resp.status_code = 403
+        gnews_resp = MagicMock()
+        gnews_resp.is_success = True
+        gnews_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else gnews_resp
+
+        valid = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="Aiko")
+        no_link = _FeedEntry(id="nl", link="", title="skip")
+        dup1 = _rss_entry(link="https://www.nicovideo.jp/watch/sm1", item_id="dup", title="D1")
+        dup2 = _rss_entry(link="https://www.nicovideo.jp/watch/sm2", item_id="dup", title="D2")
+        no_title = _rss_entry(link="https://www.nicovideo.jp/watch/sm3", title="")
+        fake_feed = _FakeFeed([valid, no_link, dup1, dup2, no_title])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert len(result) == 2  # valid + dup1; dup2, no_link, no_title skipped
+        assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_api_json_exception_falls_back_to_gnews(self):
+        # resp.json() raises → _fetch_api except → gnews fallback
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = True
+        api_resp.json.side_effect = ValueError("bad json")
+        gnews_resp = MagicMock()
+        gnews_resp.is_success = True
+        gnews_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else gnews_resp
+
+        gnews_entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm88", title="Aiko")
+        fake_feed = _FakeFeed([gnews_entry])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_gnews_http_error_returns_empty(self):
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = True
+        api_resp.json.return_value = {"data": []}
+        gnews_resp = MagicMock()
+        gnews_resp.is_success = False
+        gnews_resp.status_code = 503
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else gnews_resp
+
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_gnews_feedparser_exception_returns_empty(self):
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = True
+        api_resp.json.return_value = {"data": []}
+        gnews_resp = MagicMock()
+        gnews_resp.is_success = True
+        gnews_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else gnews_resp
+
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.niconico.feedparser.parse", side_effect=ValueError("x")):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Note connector tests
+# ---------------------------------------------------------------------------
+
+def _note_api_resp(notes, is_success=True, structure="contents"):
+    """Build a mock httpx response for note.com search API."""
+    if structure == "contents":
+        data = {"data": {"notes": {"contents": notes}}}
+    elif structure == "flat":
+        data = {"data": {"notes": notes}}
+    else:
+        data = structure
+    resp = MagicMock()
+    resp.is_success = is_success
+    resp.status_code = 200 if is_success else 500
+    resp.json.return_value = data
+    resp.content = b""
+    return resp
+
+
+class TestNoteFetch:
+    @pytest.mark.asyncio
+    async def test_empty_keyword_returns_empty(self):
+        result = await NoteConnector().fetch("   ", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_search_api_returns_items(self):
+        notes = [{
+            "key": "abc123",
+            "name": "Aiko の新曲レビュー",
+            "user": {"urlname": "reviewer", "name": "Reviewer San"},
+            "publishAt": "2024-01-15T10:00:00+00:00",
+            "body": "素晴らしい曲です",
+            "eyecatch": "https://assets.st-note.com/img/t.jpg",
+        }]
+        resp = _note_api_resp(notes)
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "note"
+        assert result[0].item_id == "abc123"
+        assert result[0].author == "Reviewer San"
+        assert result[0].thumbnail_url == "https://assets.st-note.com/img/t.jpg"
+
+    @pytest.mark.asyncio
+    async def test_search_api_non_list_notes_returns_empty(self):
+        # notes dict without "contents" key → isinstance(notes, list) fails → return []
+        # then rss fallback also fails → final result []
+        resp = _note_api_resp(None, structure={"data": {"notes": {"unexpected_shape": "data"}}})
+        call_count = [0]
+        rss_resp = MagicMock()
+        rss_resp.is_success = False
+        rss_resp.status_code = 404
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return resp if call_count[0] == 1 else rss_resp
+
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_side)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_search_api_http_error_falls_back_to_rss(self):
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = False
+        api_resp.status_code = 500
+        rss_resp = MagicMock()
+        rss_resp.is_success = True
+        rss_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else rss_resp
+
+        rss_entry = _rss_entry(link="https://note.com/u/n/abc1", title="Aiko article")
+        fake_feed = _FakeFeed([rss_entry])
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_side)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "note"
+
+    @pytest.mark.asyncio
+    async def test_search_api_json_exception_falls_back_to_rss(self):
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = True
+        api_resp.json.side_effect = ValueError("bad json")
+        rss_resp = MagicMock()
+        rss_resp.is_success = True
+        rss_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else rss_resp
+
+        rss_entry = _rss_entry(link="https://note.com/u/n/abc2", title="Article")
+        fake_feed = _FakeFeed([rss_entry])
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_side)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_search_api_skips_note_without_key(self):
+        notes = [{"name": "No Key"}, {"key": "k2", "name": "Has Key"}]
+        resp = _note_api_resp(notes)
+        call_count = [0]
+        rss_resp = MagicMock()
+        rss_resp.is_success = False
+        rss_resp.status_code = 404
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return resp if call_count[0] == 1 else rss_resp
+
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_side)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "k2"
+
+    @pytest.mark.asyncio
+    async def test_search_api_url_without_urlname(self):
+        # No urlname → URL uses /n/<key> format
+        notes = [{"key": "k3", "name": "Title", "user": {}}]
+        resp = _note_api_resp(notes)
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert result[0].url == "https://note.com/n/k3"
+
+    @pytest.mark.asyncio
+    async def test_search_api_bad_publish_at_uses_now(self):
+        notes = [{"key": "k4", "name": "Title", "publishAt": "not-a-date"}]
+        resp = _note_api_resp(notes)
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].published_at is not None
+
+    @pytest.mark.asyncio
+    async def test_rss_feedparser_exception_returns_empty(self):
+        # feedparser.parse raises inside _fetch_hashtag_rss → except branch
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = False
+        api_resp.status_code = 404
+        rss_resp = MagicMock()
+        rss_resp.is_success = True
+        rss_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else rss_resp
+
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_side)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", side_effect=ValueError("bad")):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_rss_skips_entry_without_link_and_extracts_enclosure_thumb(self):
+        # Covers: no-link skip, image enclosure thumbnail extraction
+        no_link = _FeedEntry(id="nl", link="", title="skip")
+        with_enclosure = _FeedEntry(
+            id="enc1", link="https://note.com/u/n/enc1",
+            title="Article with thumb",
+            enclosures=[{"type": "image/jpeg", "href": "https://assets.st-note.com/enc/t.jpg"}],
+        )
+        fake_feed = _FakeFeed([no_link, with_enclosure])
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = False
+        api_resp.status_code = 404
+        rss_resp = MagicMock()
+        rss_resp.is_success = True
+        rss_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else rss_resp
+
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_side)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].thumbnail_url == "https://assets.st-note.com/enc/t.jpg"
+
+    @pytest.mark.asyncio
+    async def test_rss_extracts_thumbnail_from_media_thumbnail(self):
+        entry = _FeedEntry(
+            id="nid1", link="https://note.com/u/n/nid1",
+            title="Article",
+            media_thumbnail=[{"url": "https://assets.st-note.com/media/t.jpg"}],
+        )
+        fake_feed = _FakeFeed([entry])
+        # API fails → RSS called
+        call_count = [0]
+        api_resp = MagicMock()
+        api_resp.is_success = False
+        api_resp.status_code = 404
+        rss_resp = MagicMock()
+        rss_resp.is_success = True
+        rss_resp.content = b"<rss/>"
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return api_resp if call_count[0] == 1 else rss_resp
+
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_side)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert result[0].thumbnail_url == "https://assets.st-note.com/media/t.jpg"
+
+
+# ---------------------------------------------------------------------------
+# Twitter connector tests
+# ---------------------------------------------------------------------------
+
+def _twitter_api_data(tweets=None, users=None, media=None):
+    return {
+        "data": tweets or [],
+        "includes": {
+            "users": users or [],
+            "media": media or [],
+        },
+    }
+
+
+class TestTwitterFetch:
+    @pytest.mark.asyncio
+    async def test_returns_items_on_success(self):
+        data = _twitter_api_data(
+            tweets=[{
+                "id": "t1",
+                "author_id": "u1",
+                "text": "Aiko new song!",
+                "created_at": "2024-01-15T10:00:00Z",
+                "attachments": {},
+            }],
+            users=[{"id": "u1", "username": "aikoFan", "name": "Aiko Fan"}],
+        )
+        resp = MagicMock()
+        resp.is_success = True
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = data
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "twitter"
+        assert result[0].url == "https://x.com/aikoFan/status/t1"
+        assert result[0].author == "@aikoFan"
+        assert result[0].media_type == "text"
+        assert result[0].content_text == "Aiko new song!"
+
+    @pytest.mark.asyncio
+    async def test_media_only_mode_sets_thumbnail_and_video_type(self):
+        data = _twitter_api_data(
+            tweets=[{
+                "id": "t2",
+                "author_id": "u2",
+                "text": "Check out Aiko's MV!",
+                "created_at": "2024-01-15T12:00:00Z",
+                "attachments": {"media_keys": ["mk1"]},
+            }],
+            users=[{"id": "u2", "username": "mv_channel", "name": "MV Channel"}],
+            media=[{"media_key": "mk1", "preview_image_url": "https://pbs.twimg.com/mv/t.jpg"}],
+        )
+        resp = MagicMock()
+        resp.is_success = True
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = data
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "media_only")
+        assert result[0].media_type == "video"
+        assert result[0].thumbnail_url == "https://pbs.twimg.com/mv/t.jpg"
+
+    @pytest.mark.asyncio
+    async def test_tweet_without_username_uses_fallback_url(self):
+        data = _twitter_api_data(
+            tweets=[{
+                "id": "t3",
+                "author_id": "u_unknown",
+                "text": "Tweet",
+                "created_at": "2024-01-15T14:00:00Z",
+                "attachments": {},
+            }],
+        )
+        resp = MagicMock()
+        resp.is_success = True
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = data
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
+        assert result[0].url == "https://x.com/i/status/t3"
+        assert result[0].author is None
