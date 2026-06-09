@@ -1101,6 +1101,33 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(freshDB.terms.count, 0)
     }
 
+    // MARK: - WatchTerm custom JSON decoding
+    func testWatchTermDecodesIntIdAsString() throws {
+        let json = #"{"id":42,"keyword":"Aiko","collection_mode":"all_info","is_active":true,"notify_on_new":false,"aliases":[],"created_at":"2024-01-01T00:00:00Z"}"#
+        let term = try JSONDecoder().decode(WatchTerm.self, from: Data(json.utf8))
+        XCTAssertEqual(term.id, "42")
+    }
+
+    func testWatchTermFallsBackToAllInfoForUnknownCollectionMode() throws {
+        let json = #"{"id":"x","keyword":"Aiko","collection_mode":"unknown_future_mode","is_active":true,"notify_on_new":false,"aliases":[],"created_at":"2024-01-01T00:00:00Z"}"#
+        let term = try JSONDecoder().decode(WatchTerm.self, from: Data(json.utf8))
+        XCTAssertEqual(term.collection_mode, .allInfo)
+    }
+
+    func testWatchTermFallsBackToAllInfoWhenCollectionModeMissing() throws {
+        let json = #"{"id":"x","keyword":"Aiko","is_active":true,"notify_on_new":false,"aliases":[],"created_at":"2024-01-01T00:00:00Z"}"#
+        let term = try JSONDecoder().decode(WatchTerm.self, from: Data(json.utf8))
+        XCTAssertEqual(term.collection_mode, .allInfo)
+    }
+
+    func testWatchTermDefaultsEmptyAliasesWhenMissing() throws {
+        let json = #"{"id":"x","keyword":"Aiko","created_at":"2024-01-01T00:00:00Z"}"#
+        let term = try JSONDecoder().decode(WatchTerm.self, from: Data(json.utf8))
+        XCTAssertEqual(term.aliases, [])
+        XCTAssertTrue(term.is_active)
+        XCTAssertFalse(term.notify_on_new)
+    }
+
     // MARK: - Content Cache
     func testContentCacheRoundTrip() throws {
         db.saveContentCache(id: "article-123", html: "<h1>Hello</h1>")
