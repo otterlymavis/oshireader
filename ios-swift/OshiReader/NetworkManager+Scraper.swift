@@ -146,7 +146,7 @@ extension NetworkManager {
            let gnewsItems = try? await parseRss(url: gnewsUrl) {
             for item in gnewsItems {
                 results.append(FeedItem(
-                    id: "news:gnews:\(UUID().uuidString)",
+                    id: "news:gnews:\(stableIdHash(item.link))",
                     platform: "news",
                     url: item.link,
                     title: cleanNewsTitle(item.title),

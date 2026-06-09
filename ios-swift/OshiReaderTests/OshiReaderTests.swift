@@ -1833,6 +1833,37 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertFalse(first.first?.id.contains("-") == true, "ID should not contain UUID hyphens")
     }
 
+    func testScrapeRSSFallbackGNewsUsesStableIds() async {
+        let emptyXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        let gnewsXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko new single review</title>
+              <link>https://news.google.com/rss/articles/gnews-stable-link-abc123</link>
+              <description>Review of Aiko's latest single.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { request in
+            let isGNews = request.url?.host?.contains("google.com") == true
+            return (Data((isGNews ? gnewsXml : emptyXml).utf8), Self.response(status: 200))
+        }
+
+        let first = await NetworkManager.shared.scrapeRSSFallback(keyword: "Aiko")
+        let second = await NetworkManager.shared.scrapeRSSFallback(keyword: "Aiko")
+
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertEqual(first.first?.id, second.first?.id,
+                       "GNews scraper IDs must be stable across refreshes to prevent duplicates")
+        XCTAssertFalse(first.first?.id.contains("-") == true, "ID should not contain UUID hyphens")
+    }
+
     func testScrapeRSSFallbackReturnsEmptyOnNetworkError() async {
         MockURLProtocol.errorHandler = { _ in URLError(.notConnectedToInternet) }
 
