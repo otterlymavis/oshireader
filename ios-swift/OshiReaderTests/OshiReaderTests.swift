@@ -1510,6 +1510,46 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertFalse(query.contains("since"), "URL must NOT contain 'since' when it is nil")
     }
 
+    func testFetchFeedIncludesTermIdWhenProvided() async throws {
+        var capturedURL: URL?
+        MockURLProtocol.handler = { req in
+            capturedURL = req.url
+            return (Data("[]".utf8), Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.fetchFeed(termId: 42, days: 30)
+
+        let query = capturedURL?.query ?? ""
+        XCTAssertTrue(query.contains("term_id=42"), "URL must include term_id=42")
+    }
+
+    func testFetchFeedIncludesPlatformWhenProvided() async throws {
+        var capturedURL: URL?
+        MockURLProtocol.handler = { req in
+            capturedURL = req.url
+            return (Data("[]".utf8), Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.fetchFeed(platform: "youtube", days: 30)
+
+        let query = capturedURL?.query ?? ""
+        XCTAssertTrue(query.contains("platform=youtube"), "URL must include platform=youtube")
+    }
+
+    func testFetchFeedOmitsTermIdAndPlatformWhenNil() async throws {
+        var capturedURL: URL?
+        MockURLProtocol.handler = { req in
+            capturedURL = req.url
+            return (Data("[]".utf8), Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.fetchFeed(days: 30)
+
+        let query = capturedURL?.query ?? ""
+        XCTAssertFalse(query.contains("term_id"), "term_id must be absent when not provided")
+        XCTAssertFalse(query.contains("platform"), "platform must be absent when not provided")
+    }
+
     // fetchFeed with backend items → decoded and mapped to FeedItem
     func testFetchFeedDecodesBackendItems() async throws {
         let now = ISO8601DateFormatter().string(from: Date())
