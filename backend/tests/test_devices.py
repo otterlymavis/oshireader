@@ -33,6 +33,16 @@ class TestAPNSTokenUpsert:
         assert data["environment"] == "production"
         assert data["device_id"] == "dev-xyz"
 
+    def test_upsert_removes_internal_spaces(self, client):
+        # _normalize_token uses split() which removes ALL whitespace including internal spaces
+        raw = " ".join(["ab"] * 32)  # "ab ab ab ... ab" — 64 hex chars with spaces
+        r = client.post(
+            "/api/devices/apns-token",
+            json={"token": raw, "environment": "sandbox"},
+        )
+        assert r.status_code == 201
+        assert r.json()["token"] == "ab" * 32
+
     def test_upsert_invalid_token_returns_400(self, client):
         r = client.post(
             "/api/devices/apns-token",

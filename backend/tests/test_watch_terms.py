@@ -22,6 +22,14 @@ class TestListWatchTerms:
         keywords = {t["keyword"] for t in resp.json()}
         assert keywords == {"Aiko", "Haruka"}
 
+    def test_list_ordered_newest_first(self, client, db_session):
+        db_session.add_all([WatchTerm(keyword="First"), WatchTerm(keyword="Second")])
+        db_session.commit()
+
+        resp = client.get("/api/watch-terms/")
+        keywords = [t["keyword"] for t in resp.json()]
+        assert keywords[0] == "Second", "Most recently created term must appear first"
+
     def test_returns_term_fields(self, client, db_session):
         db_session.add(WatchTerm(keyword="Miku", aliases=["初音ミク"], notify_on_new=True))
         db_session.commit()
