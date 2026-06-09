@@ -434,12 +434,12 @@ struct SettingsView: View {
     }
 
     private func loadCredentialsFromKeychain() {
-        if let legacy = UserDefaults.standard.string(forKey: "youtube_api_key"), !legacy.isEmpty {
-            KeychainHelper.write(key: "youtube_api_key", value: legacy)
+        if let legacy = UserDefaults.standard.string(forKey: "youtube_api_key"), !legacy.isEmpty,
+           KeychainHelper.write(key: "youtube_api_key", value: legacy) {
             UserDefaults.standard.removeObject(forKey: "youtube_api_key")
         }
-        if let legacy = UserDefaults.standard.string(forKey: "twitter_bearer_token"), !legacy.isEmpty {
-            KeychainHelper.write(key: "twitter_bearer_token", value: legacy)
+        if let legacy = UserDefaults.standard.string(forKey: "twitter_bearer_token"), !legacy.isEmpty,
+           KeychainHelper.write(key: "twitter_bearer_token", value: legacy) {
             UserDefaults.standard.removeObject(forKey: "twitter_bearer_token")
         }
         youtubeApiKey = KeychainHelper.read(key: "youtube_api_key") ?? ""
