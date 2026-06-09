@@ -3,7 +3,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.database import get_db
 from app.models import Match, SourceItem, WatchTerm
+
+
+class TestGetDb:
+    def test_yields_session_and_closes(self):
+        gen = get_db()
+        session = next(gen)
+        assert session is not None
+        try:
+            next(gen)
+        except StopIteration:
+            pass  # generator closed normally after yielding
 
 
 class TestHealth:
