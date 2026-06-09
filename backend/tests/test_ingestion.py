@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.orm import sessionmaker
 
 from app.connectors.base import SourceItemCreate
-from app.ingestion.scheduler import _poll_once_unlocked
+from app.ingestion.scheduler import _poll_once_unlocked, _prune_old_items
 from app.models import Match, SourceItem, WatchTerm
 
 
@@ -363,3 +363,104 @@ class TestIngestionDateHealing:
             stored_dt = stored_dt.replace(tzinfo=timezone.utc)
         diff = abs((stored_dt - old_stored).total_seconds())
         assert diff < 60, "Recent new date (< 5 min old) should not overwrite a valid stored date"
+
+
+class TestIngestionPruning:
+    def _seed_items(self, db_session, term, platform, count, prefix="item"):
+        """Insert `count` SourceItems + Matches, oldest last (highest index = oldest date)."""
+        base = datetime.now(timezone.utc)
+        sids = []
+        for i in range(count):
+            item_id = f"{prefix}{i:04d}"
+            sid = f"{platform}:{item_id}"
+            sids.append(sid)
+            db_session.add(SourceItem(
+                id=sid,
+                platform=platform,
+                item_id=item_id,
+                url=f"https://{platform}.example.com/{item_id}",
+                published_at=base - timedelta(hours=i),
+                media_type="video",
+                title=f"Item {i}",
+            ))
+        db_session.flush()  # ensure source_items exist before FK-constrained matches
+        for sid in sids:
+            db_session.add(Match(watch_term_id=term.id, source_item_id=sid))
+        db_session.commit()
+
+    def test_prunes_oldest_when_over_limit(self, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        self._seed_items(db_session, term, "youtube", 205)
+        _prune_old_items(db_session)
+
+        db_session.expire_all()
+        assert db_session.query(Match).count() == 200
+        assert db_session.query(SourceItem).count() == 200
+
+    def test_does_not_prune_at_or_below_limit(self, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        self._seed_items(db_session, term, "youtube", 200)
+        _prune_old_items(db_session)
+
+        db_session.expire_all()
+        assert db_session.query(Match).count() == 200
+
+    def test_skip_platforms_never_pruned(self, db_session):
+        """5ch, girlschannel, togetter must be skipped regardless of count."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        for platform in ("5ch", "girlschannel", "togetter"):
+            self._seed_items(db_session, term, platform, 205)
+
+        total_before = db_session.query(Match).count()
+        _prune_old_items(db_session)
+
+        db_session.expire_all()
+        assert db_session.query(Match).count() == total_before
+
+    def test_oldest_items_are_removed_not_newest(self, db_session):
+        """After pruning, the 5 oldest items must be gone; the 200 newest must survive."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        self._seed_items(db_session, term, "youtube", 205)
+        _prune_old_items(db_session)
+
+        db_session.expire_all()
+        # item0000 is the newest (base - 0h), item0204 is the oldest (base - 204h)
+        assert db_session.get(SourceItem, "youtube:item0000") is not None
+        assert db_session.get(SourceItem, "youtube:item0204") is None
+
+    def test_pruning_two_terms_independently(self, db_session):
+        """Each (platform, watch_term) pair is pruned independently."""
+        term1 = WatchTerm(keyword="Aiko")
+        term2 = WatchTerm(keyword="Haruka")
+        db_session.add_all([term1, term2])
+        db_session.commit()
+
+        self._seed_items(db_session, term1, "youtube", 205, prefix="t1item")
+        self._seed_items(db_session, term2, "youtube", 205, prefix="t2item")
+        _prune_old_items(db_session)
+
+        db_session.expire_all()
+        term1_count = (
+            db_session.query(Match)
+            .filter(Match.watch_term_id == term1.id)
+            .count()
+        )
+        term2_count = (
+            db_session.query(Match)
+            .filter(Match.watch_term_id == term2.id)
+            .count()
+        )
+        assert term1_count == 200
+        assert term2_count == 200
