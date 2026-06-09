@@ -271,3 +271,27 @@ class TestBuildConnectors:
         tw = next((c for c in connectors if isinstance(c, TwitterConnector)), None)
         assert tw is not None
         assert tw.bearer_token == "db-tw-token"
+
+    def test_env_key_takes_precedence_over_db_for_youtube(self, db):
+        cred = PlatformCredential(platform="youtube", api_key="db-yt-key")
+        db.add(cred)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = "env-yt-key"
+            s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        yt = next((c for c in connectors if isinstance(c, YouTubeConnector)), None)
+        assert yt is not None
+        assert yt.api_key == "env-yt-key"
+
+    def test_youtube_connector_always_present_without_key(self, db):
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = ""
+            s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        yt = next((c for c in connectors if isinstance(c, YouTubeConnector)), None)
+        assert yt is not None
+        assert yt.api_key == ""
