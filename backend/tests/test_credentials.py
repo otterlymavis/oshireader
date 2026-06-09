@@ -53,6 +53,13 @@ class TestUpsertCredential:
         yt = next(c for c in r.json() if c["platform"] == "youtube")
         assert yt["has_bearer_token"] is True
 
+    def test_upsert_api_secret(self, client):
+        # api_secret is a third credential field alongside bearer_token and api_key.
+        # Sending it must not crash and must be stored (the response doesn't expose it,
+        # but a second PUT that omits it must not clear it — persists via partial update).
+        r = client.put("/api/credentials/twitter", json={"bearer_token": "tok", "api_secret": "mysecret"})
+        assert r.status_code == 200
+
     def test_partial_update_preserves_existing_fields(self, client):
         client.put("/api/credentials/twitter", json={"bearer_token": "tok1", "api_key": "key1"})
         client.put("/api/credentials/twitter", json={"bearer_token": "tok2"})

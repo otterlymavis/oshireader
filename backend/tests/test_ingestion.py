@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.orm import sessionmaker
 
 from app.connectors.base import SourceItemCreate
-from app.ingestion.scheduler import _poll_once_unlocked, _prune_old_items
+import asyncio
+
+from app.ingestion.scheduler import _poll_lock, _poll_once_unlocked, poll_once, _prune_old_items
 from app.models import Match, SourceItem, WatchTerm
 
 
@@ -464,3 +466,14 @@ class TestIngestionPruning:
         )
         assert term1_count == 200
         assert term2_count == 200
+
+
+class TestPollOnceLocking:
+    @pytest.mark.asyncio
+    async def test_poll_once_skips_when_lock_is_held(self):
+        """If _poll_lock is already locked, poll_once must return without running the poll."""
+        async with _poll_lock:
+            # Lock is now held; poll_once should detect this and return early.
+            with patch("app.ingestion.scheduler._poll_once_unlocked", new=AsyncMock()) as mock_poll:
+                await poll_once()
+            mock_poll.assert_not_called()
