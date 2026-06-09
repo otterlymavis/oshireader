@@ -5,7 +5,11 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-from app.apns import _host, _payload, apns_configured, send_new_match_notifications
+from unittest.mock import MagicMock
+
+import httpx
+
+from app.apns import _host, _payload, _send_one, apns_configured, send_new_match_notifications
 from app.models import APNSDeviceToken, WatchTerm
 
 
@@ -209,3 +213,109 @@ class TestApnsConfigured:
             s.apns_private_key = ""
             s.apns_private_key_path = ""
             assert apns_configured() is False
+
+
+def _mock_response(status_code: int, json_body: dict | None = None, text: str = "") -> MagicMock:
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status_code
+    if json_body is not None:
+        resp.json.return_value = json_body
+    else:
+        resp.json.side_effect = Exception("not json")
+        resp.text = text
+    return resp
+
+
+def _mock_client(response: MagicMock | None = None, raise_exc: Exception | None = None) -> MagicMock:
+    client = MagicMock(spec=httpx.AsyncClient)
+    if raise_exc is not None:
+        client.post = AsyncMock(side_effect=raise_exc)
+    else:
+        client.post = AsyncMock(return_value=response)
+    return client
+
+
+def _term_and_device():
+    term = WatchTerm(keyword="Aiko")
+    term.id = 1
+    device = APNSDeviceToken(token="a" * 64, environment="sandbox")
+    return term, device
+
+
+class TestSendOne:
+    @pytest.mark.asyncio
+    async def test_returns_false_on_network_exception(self):
+        term, device = _term_and_device()
+        client = _mock_client(raise_exc=httpx.ConnectError("timeout"))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+        assert result is False  # keep token on network failure
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_200(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(200, {}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+        assert result is False  # success — keep token
+
+    @pytest.mark.asyncio
+    async def test_returns_true_for_bad_device_token(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(400, {"reason": "BadDeviceToken"}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+        assert result is True  # delete token
+
+    @pytest.mark.asyncio
+    async def test_returns_true_for_unregistered(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(410, {"reason": "Unregistered"}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+        assert result is True  # delete token
+
+    @pytest.mark.asyncio
+    async def test_returns_true_for_410_regardless_of_reason(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(410, {"reason": "SomeOtherReason"}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+        assert result is True  # 410 always means delete token
+
+    @pytest.mark.asyncio
+    async def test_returns_false_for_unknown_rejection_reason(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(400, {"reason": "PayloadTooLarge"}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+        assert result is False  # not a bad-token error — keep it
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_json_parse_fails(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(500, text="Internal Server Error"))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+        assert result is False  # server error without bad-token reason — keep token
