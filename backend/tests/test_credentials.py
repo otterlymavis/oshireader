@@ -1,4 +1,25 @@
 import pytest
+from unittest.mock import patch
+
+
+class TestCredentialAuth:
+    def test_list_requires_auth_when_token_set(self, client):
+        with patch("app.auth.settings") as s:
+            s.admin_api_token = "secret"
+            r = client.get("/api/credentials/")
+        assert r.status_code == 401
+
+    def test_upsert_requires_auth_when_token_set(self, client):
+        with patch("app.auth.settings") as s:
+            s.admin_api_token = "secret"
+            r = client.put("/api/credentials/youtube", json={"bearer_token": "tok"})
+        assert r.status_code == 401
+
+    def test_list_accepts_correct_token(self, client):
+        with patch("app.auth.settings") as s:
+            s.admin_api_token = "secret"
+            r = client.get("/api/credentials/", headers={"Authorization": "Bearer secret"})
+        assert r.status_code == 200
 
 
 class TestListCredentials:
