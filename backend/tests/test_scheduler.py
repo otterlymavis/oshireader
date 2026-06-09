@@ -232,9 +232,9 @@ class TestFetchOne:
 class TestPruneExceptionHandling:
     def test_prune_does_not_raise_on_db_error(self, db):
         """_prune_old_items must catch exceptions internally and rollback, not propagate."""
-        # Provide a mock session whose query() raises to trigger the except branch.
+        # Provide a mock session whose execute() raises to trigger the except branch.
         broken_db = MagicMock()
-        broken_db.query.side_effect = RuntimeError("simulated DB failure")
+        broken_db.execute.side_effect = RuntimeError("simulated DB failure")
         broken_db.rollback = MagicMock()
 
         # Should NOT raise — the exception is caught and logged internally.

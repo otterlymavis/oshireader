@@ -229,34 +229,31 @@ async def _poll_once_unlocked() -> None:
 
 
 def _prune_old_items(db) -> None:
-    """Delete the oldest matches beyond 200 per (platform, watch_term) pair."""
-    KEEP = 200
-    SKIP_PLATFORMS = {"5ch", "girlschannel", "togetter"}
+    """Delete the oldest matches beyond 200 per (platform, watch_term) pair.
+
+    Uses a single window-function query (ROW_NUMBER) instead of one query per
+    pair — O(1) round-trips regardless of how many (platform, term) combos exist.
+    Requires SQLite ≥ 3.25 / PostgreSQL ≥ 8.4 (both satisfied in production).
+    """
     try:
-        pairs = (
-            db.query(SourceItem.platform, Match.watch_term_id)
-            .join(Match, Match.source_item_id == SourceItem.id)
-            .filter(~SourceItem.platform.in_(SKIP_PLATFORMS))
-            .distinct()
-            .all()
-        )
-        pruned = 0
-        for platform, term_id in pairs:
-            excess = (
-                db.query(Match.id)
-                .join(SourceItem, SourceItem.id == Match.source_item_id)
-                .filter(SourceItem.platform == platform, Match.watch_term_id == term_id)
-                .order_by(SourceItem.published_at.desc())
-                .offset(KEEP)
-                .all()
+        result = db.execute(sa_text("""
+            DELETE FROM matches WHERE id IN (
+                SELECT id FROM (
+                    SELECT m.id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY si.platform, m.watch_term_id
+                               ORDER BY si.published_at DESC
+                           ) AS rn
+                    FROM matches m
+                    JOIN source_items si ON si.id = m.source_item_id
+                    WHERE si.platform NOT IN ('5ch', 'girlschannel', 'togetter')
+                ) ranked
+                WHERE rn > 200
             )
-            if excess:
-                ids = [r[0] for r in excess]
-                db.query(Match).filter(Match.id.in_(ids)).delete(synchronize_session=False)
-                pruned += len(ids)
+        """))
+        pruned = result.rowcount
         if pruned:
             db.commit()
-            # Remove source_items no longer referenced by any match
             db.execute(sa_text(
                 "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
             ))
