@@ -7,9 +7,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from unittest.mock import AsyncMock, MagicMock
+
 from app.database import Base
-from app.ingestion.scheduler import _prune_old_items, _search_terms_for
-from app.models import Match, SourceItem, WatchTerm
+from app.ingestion.scheduler import _fetch_one, _prune_old_items, _search_terms_for
+from app.models import CollectionMode, Match, SourceItem, WatchTerm
 
 
 @pytest.fixture()
@@ -176,3 +178,48 @@ class TestSearchTermsFor:
         term.aliases = None  # Simulate a None aliases value (e.g. from a legacy DB row)
         result = _search_terms_for(term)
         assert result == ["Miku"]
+
+
+class TestFetchOne:
+    def _connector(self, side_effect=None, return_value=None):
+        c = MagicMock()
+        c.PLATFORM = "mock"
+        if side_effect is not None:
+            c.fetch = AsyncMock(side_effect=side_effect)
+        else:
+            c.fetch = AsyncMock(return_value=return_value or [])
+        return c
+
+    @pytest.mark.asyncio
+    async def test_returns_connector_results_on_success(self):
+        from app.connectors.base import SourceItemCreate
+        from datetime import datetime, timezone
+        item = SourceItemCreate(
+            platform="mock", item_id="x1",
+            url="https://example.com/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+        )
+        connector = self._connector(return_value=[item])
+        result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert len(result) == 1
+        assert result[0].item_id == "x1"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_on_exception(self):
+        connector = self._connector(side_effect=RuntimeError("network error"))
+        result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_on_http_error(self):
+        import httpx
+        connector = self._connector(side_effect=httpx.ConnectError("timeout"))
+        result = await _fetch_one(connector, "Miku", CollectionMode.MEDIA_ONLY)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_passes_mode_to_connector(self):
+        connector = self._connector(return_value=[])
+        await _fetch_one(connector, "Test", CollectionMode.MEDIA_ONLY)
+        connector.fetch.assert_awaited_once_with("Test", CollectionMode.MEDIA_ONLY)

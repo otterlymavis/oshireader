@@ -18,6 +18,7 @@ from app.connectors.oricon import _clean_title as _clean_oricon_title
 from app.connectors.rss import RSSConnector
 from app.connectors.togetter import TogetterConnector
 from app.connectors.tver import _parse_tver_date
+from app.connectors.twitter import TwitterConnector
 from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.yahoonews import _clean_markdown_title
 from app.connectors.youtube import _parse_youtube_relative
@@ -142,6 +143,21 @@ class TestParseTverDate:
         result = _parse_tver_date({"publishedAt": 1700000000})
         assert result is not None
         assert result.tzinfo == timezone.utc
+
+    def test_future_date_rolls_back_to_prior_year(self):
+        # If parsed month/day is >7 days in the future relative to "now", roll back to last year.
+        # Pin now to Jan 5 so Dec 25 is clearly in the future → should become Dec 25 of prior year.
+        fixed_now = datetime(2024, 1, 5, 12, 0, 0, tzinfo=timezone.utc)
+        with patch("app.connectors.tver.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromtimestamp = datetime.fromtimestamp
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _parse_tver_date({"broadcastDateLabel": "12月25日(水)放送分"})
+        assert result is not None
+        assert result.year == 2023, "Dec 25 is >7 days ahead of Jan 5 — must roll back one year"
+        assert result.month == 12
+        assert result.day == 25
 
 
 class TestParseYouTubeRelative:
@@ -284,4 +300,18 @@ class TestConnectorMediaOnlyEarlyReturn:
     @pytest.mark.asyncio
     async def test_yahoonews_connector_returns_empty_for_media_only(self):
         result = await YahooNewsConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+
+class TestTwitterConnectorNoToken:
+    """TwitterConnector must return [] immediately when no bearer token is configured."""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_bearer_token_is_empty_string(self):
+        result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_for_media_only_with_no_token(self):
+        result = await TwitterConnector(bearer_token="").fetch("Aiko", "media_only")
         assert result == []
