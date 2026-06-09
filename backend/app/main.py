@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -13,7 +14,7 @@ from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.ingestion.scheduler import queue_poll, scheduler, start_scheduler
 from app.migrations import apply_startup_migrations
-from app.models import Match, SourceItem, WatchTerm
+from app.models import CollectionMode, Match, SourceItem, WatchTerm
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
@@ -67,13 +68,12 @@ async def test_fetch(
     _: None = Depends(require_admin_auth),
     keyword: str = Query("吉沢亮"),
 ) -> dict:
-    import asyncio
     from app.ingestion.scheduler import _build_connectors, _fetch_one
     db_sess = SessionLocal()
     try:
         connectors = _build_connectors(db_sess)
         results = await asyncio.gather(
-            *[_fetch_one(c, keyword, "all_info") for c in connectors]
+            *[_fetch_one(c, keyword, CollectionMode.ALL_INFO) for c in connectors]
         )
         return {c.PLATFORM: len(r) for c, r in zip(connectors, results)}
     finally:
