@@ -1807,6 +1807,32 @@ final class NetworkManagerTests: XCTestCase {
                        "NHK items not matching the keyword should be filtered out")
     }
 
+    func testScrapeRSSFallbackNHKUsesStableIds() async {
+        // IDs must be deterministic (derived from link URL) so the same article
+        // doesn't accumulate as a new entry on each refresh.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko live event recap</title>
+              <link>https://nhk.or.jp/aiko-live-recap</link>
+              <description>Aiko performed all her hits.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { _ in (Data(xml.utf8), Self.response(status: 200)) }
+
+        let first = await NetworkManager.shared.scrapeRSSFallback(keyword: "Aiko")
+        let second = await NetworkManager.shared.scrapeRSSFallback(keyword: "Aiko")
+
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertEqual(first.first?.id, second.first?.id,
+                       "NHK scraper IDs must be stable across refreshes to prevent duplicates")
+        XCTAssertFalse(first.first?.id.contains("-") == true, "ID should not contain UUID hyphens")
+    }
+
     func testScrapeRSSFallbackReturnsEmptyOnNetworkError() async {
         MockURLProtocol.errorHandler = { _ in URLError(.notConnectedToInternet) }
 
