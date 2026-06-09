@@ -48,7 +48,7 @@ extension NetworkManager {
 
     func getPopularIrasutoya() async throws -> [IrasutoyaImage] {
         let feed1 = "https://www.irasutoya.com/feeds/posts/default?alt=json&max-results=20"
-        let categoryUrl = "https://www.irasutoya.com/feeds/posts/default/-/\(URLQueryItem(name: "", value: "人物").value!.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")?alt=json&max-results=15"
+        let categoryUrl = "https://www.irasutoya.com/feeds/posts/default/-/\("人物".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "人物")?alt=json&max-results=15"
 
         let items1 = try await fetchBloggerFeed(feed1)
         let items2 = (try? await fetchBloggerFeed(categoryUrl)) ?? []
