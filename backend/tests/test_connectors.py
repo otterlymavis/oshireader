@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx as _httpx_mod
 import pytest
 
 from app.connectors.base import SourceItemCreate, parse_feed_date
@@ -27,6 +28,37 @@ from app.connectors.youtube import _parse_youtube_relative
 def _entry(**kwargs) -> SimpleNamespace:
     """Build a minimal feedparser-like entry using attribute access (as parse_feed_date uses getattr)."""
     return SimpleNamespace(**kwargs)
+
+
+class _FeedEntry(dict):
+    """feedparser entry stub — supports both dict .get() and attribute access."""
+
+    def __getattr__(self, key):
+        return self.get(key)
+
+
+class _FakeFeed:
+    def __init__(self, entries):
+        self.entries = entries
+
+
+def _rss_entry(link="https://example.com/1", title="Title", summary="", item_id=None):
+    return _FeedEntry(id=item_id or link, link=link, title=title, summary=summary)
+
+
+def _http_mock(status_code=200, content=b"", text="", is_success=True):
+    """Returns a mock httpx.AsyncClient class (context manager) yielding a fake response."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.content = content
+    resp.text = text
+    resp.is_success = is_success
+    client_mock = AsyncMock()
+    client_mock.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=ctx)
 
 
 class TestParseFeedDate:
@@ -315,3 +347,465 @@ class TestTwitterConnectorNoToken:
     async def test_returns_empty_for_media_only_with_no_token(self):
         result = await TwitterConnector(bearer_token="").fetch("Aiko", "media_only")
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# HTTP-level connector tests (mock httpx.AsyncClient + feedparser.parse)
+# ---------------------------------------------------------------------------
+
+class TestFiveChFetch:
+    @pytest.mark.asyncio
+    async def test_returns_items_on_success(self):
+        valid = _rss_entry(link="https://5ch.net/t1", title="Aiko thread")
+        no_link = _FeedEntry(id="nl", link="", title="skip me")
+        no_title = _rss_entry(link="https://5ch.net/t3", title="")
+        fake_feed = _FakeFeed([valid, no_link, no_title])
+        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "5ch"
+        assert result[0].url == "https://5ch.net/t1"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_http_error(self):
+        with patch("app.connectors.fivech.httpx.AsyncClient",
+                   _http_mock(status_code=503, is_success=False)):
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_network_exception(self):
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("timeout"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.fivech.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_by_item_id(self):
+        e1 = _rss_entry(link="https://5ch.net/t1", item_id="dup_id", title="A")
+        e2 = _rss_entry(link="https://5ch.net/t2", item_id="dup_id", title="B")
+        fake_feed = _FakeFeed([e1, e2])
+        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+
+
+class TestGirlsChannelFetch:
+    @pytest.mark.asyncio
+    async def test_returns_items_on_success(self):
+        valid = _rss_entry(link="https://girlschannel.net/t1", title="アイコ")
+        no_link = _FeedEntry(id="nl", link="", title="skip")
+        no_title = _rss_entry(link="https://girlschannel.net/t2", title="")
+        fake_feed = _FakeFeed([valid, no_link, no_title])
+        with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.girlschannel.feedparser.parse", return_value=fake_feed):
+            result = await GirlsChannelConnector().fetch("アイコ", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "girlschannel"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_http_error(self):
+        with patch("app.connectors.girlschannel.httpx.AsyncClient",
+                   _http_mock(status_code=500, is_success=False)):
+            result = await GirlsChannelConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_exception(self):
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("x"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.girlschannel.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await GirlsChannelConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_by_item_id(self):
+        e1 = _rss_entry(link="https://girlschannel.net/t1", item_id="dup", title="A")
+        e2 = _rss_entry(link="https://girlschannel.net/t2", item_id="dup", title="B")
+        fake_feed = _FakeFeed([e1, e2])
+        with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.girlschannel.feedparser.parse", return_value=fake_feed):
+            result = await GirlsChannelConnector().fetch("アイコ", "all_info")
+        assert len(result) == 1
+
+
+class TestMdprFetch:
+    @pytest.mark.asyncio
+    async def test_returns_items_with_title_cleaned(self):
+        valid = _rss_entry(link="https://mdpr.jp/a1", title="Aiko - モデルプレス")
+        no_link = _FeedEntry(id="nl", link="", title="skip")
+        no_title = _rss_entry(link="https://mdpr.jp/a2", title="   ")
+        fake_feed = _FakeFeed([valid, no_link, no_title])
+        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].title == "Aiko"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_http_error(self):
+        with patch("app.connectors.mdpr.httpx.AsyncClient",
+                   _http_mock(status_code=403, is_success=False)):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_exception(self):
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("x"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.mdpr.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_by_item_id(self):
+        e1 = _rss_entry(link="https://mdpr.jp/a1", item_id="dup", title="A")
+        e2 = _rss_entry(link="https://mdpr.jp/a2", item_id="dup", title="B")
+        fake_feed = _FakeFeed([e1, e2])
+        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+
+
+class TestOriconFetch:
+    @pytest.mark.asyncio
+    async def test_returns_items_with_title_cleaned_and_author_set(self):
+        valid = _rss_entry(link="https://oricon.co.jp/a1", title="受賞 - ORICON NEWS")
+        no_link = _FeedEntry(id="nl", link="", title="skip")
+        empty_title = _rss_entry(link="https://oricon.co.jp/a2", title="  - ORICON NEWS")
+        fake_feed = _FakeFeed([valid, no_link, empty_title])
+        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].title == "受賞"
+        assert result[0].author == "ORICON NEWS"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_http_error(self):
+        with patch("app.connectors.oricon.httpx.AsyncClient",
+                   _http_mock(status_code=500, is_success=False)):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_exception(self):
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("x"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.oricon.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_by_item_id(self):
+        e1 = _rss_entry(link="https://oricon.co.jp/a1", item_id="dup", title="A")
+        e2 = _rss_entry(link="https://oricon.co.jp/a2", item_id="dup", title="B")
+        fake_feed = _FakeFeed([e1, e2])
+        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+
+
+class TestRSSConnectorFetch:
+    @pytest.mark.asyncio
+    async def test_returns_keyword_matching_items(self):
+        matching = _rss_entry(link="https://natalie.mu/1", title="Aiko 最新情報")
+        non_matching = _rss_entry(link="https://natalie.mu/2", title="他のニュース")
+        fake_feed = _FakeFeed([matching, non_matching])
+        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
+            result = await RSSConnector().fetch("aiko", "all_info")
+        urls = [r.url for r in result]
+        assert all("natalie.mu/1" in u for u in urls)
+        assert not any("natalie.mu/2" in u for u in urls)
+
+    @pytest.mark.asyncio
+    async def test_skips_entry_without_link(self):
+        no_link = _FeedEntry(id="x", link="", title="Aiko news", summary="aiko content")
+        fake_feed = _FakeFeed([no_link])
+        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
+            result = await RSSConnector().fetch("aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_all_feeds_return_empty_on_http_error(self):
+        with patch("app.connectors.rss.httpx.AsyncClient",
+                   _http_mock(status_code=500, is_success=False)):
+            result = await RSSConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_extracts_image_enclosure_as_thumbnail(self):
+        entry = _FeedEntry(
+            id="id1", link="https://natalie.mu/1",
+            title="Aiko event", summary="aiko concert info",
+            enclosures=[{"type": "image/jpeg", "href": "https://example.com/t.jpg"}],
+        )
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
+            result = await RSSConnector().fetch("aiko", "all_info")
+        assert any(r.thumbnail_url == "https://example.com/t.jpg" for r in result)
+
+    @pytest.mark.asyncio
+    async def test_feedparser_exception_is_caught(self):
+        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.rss.feedparser.parse", side_effect=ValueError("bad feed")):
+            result = await RSSConnector().fetch("aiko", "all_info")
+        assert result == []
+
+
+_TOGETTER_HTML = """
+<html><body><ul>
+  <li>
+    <h3>アイコの人気まとめ</h3>
+    <a href="https://togetter.com/li/1234567">アイコのまとめ</a>
+    <time datetime="2024-01-15T12:00:00+00:00">Jan 15</time>
+    <img src="https://i.togetter.com/t.jpg" />
+  </li>
+</ul></body></html>
+"""
+
+
+class TestTogetterFetch:
+    @pytest.mark.asyncio
+    async def test_returns_items_from_html(self):
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(text=_TOGETTER_HTML, is_success=True)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "togetter"
+        assert result[0].item_id == "1234567"
+        assert result[0].title == "アイコの人気まとめ"
+        assert result[0].thumbnail_url == "https://i.togetter.com/t.jpg"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_http_error(self):
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(status_code=503, is_success=False)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_exception(self):
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("x"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.togetter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_same_togetter_id(self):
+        html = """
+        <html><body><ul>
+          <li><h3>Title A</h3>
+            <a href="https://togetter.com/li/99999">TA</a>
+          </li>
+          <li><h3>Title B</h3>
+            <a href="https://togetter.com/li/99999">TB</a>
+          </li>
+        </ul></body></html>
+        """
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(text=html, is_success=True)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_entry_with_no_title(self):
+        # No h3 and empty anchor text → entry is skipped
+        html = """
+        <html><body><ul>
+          <li>
+            <a href="https://togetter.com/li/11111"></a>
+          </li>
+        </ul></body></html>
+        """
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(text=html, is_success=True)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_caps_at_25_items(self):
+        entries = "\n".join(
+            f'<li><h3>Title {i}</h3><a href="https://togetter.com/li/{i:05d}">T{i}</a></li>'
+            for i in range(1, 30)
+        )
+        html = f"<html><body><ul>{entries}</ul></body></html>"
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(text=html, is_success=True)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert len(result) == 25
+
+    @pytest.mark.asyncio
+    async def test_bad_datetime_string_does_not_crash(self):
+        # Invalid datetime attribute → fromisoformat raises → falls back to datetime.now()
+        html = """
+        <html><body><ul>
+          <li>
+            <h3>タイトル</h3>
+            <a href="https://togetter.com/li/22222">T</a>
+            <time datetime="not-a-valid-date">text</time>
+          </li>
+        </ul></body></html>
+        """
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(text=html, is_success=True)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "22222"
+
+
+_JINA_MARKDOWN = """
+# Yahoo News Search Results
+
+1. [アイコの新曲情報](https://news.yahoo.co.jp/articles/abc123)
+2. [別のニュース](https://news.yahoo.co.jp/articles/xyz789)
+3. [重複エントリ](https://news.yahoo.co.jp/articles/abc123)
+"""
+
+
+class TestYahooNewsFetch:
+    @pytest.mark.asyncio
+    async def test_empty_keyword_returns_empty(self):
+        result = await YahooNewsConnector().fetch("", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_whitespace_keyword_returns_empty(self):
+        result = await YahooNewsConnector().fetch("   ", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_gnews_rss_returns_items(self):
+        entry = _FeedEntry(
+            id="https://news.yahoo.co.jp/articles/abc123",
+            link="https://news.yahoo.co.jp/articles/abc123",
+            title="アイコの最新情報",
+            summary="",
+        )
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=fake_feed):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "yahoonews"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_jina_when_gnews_empty(self):
+        # _JINA_MARKDOWN has 3 entries but one is a dup (abc123 appears twice) → 2 unique items
+        empty_feed = _FakeFeed([])
+        with patch("app.connectors.yahoonews.httpx.AsyncClient",
+                   _http_mock(content=b"<rss/>", text=_JINA_MARKDOWN)), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        assert len(result) == 2
+        assert all(r.platform == "yahoonews" for r in result)
+
+    @pytest.mark.asyncio
+    async def test_jina_non_success_returns_empty(self):
+        with patch("app.connectors.yahoonews.httpx.AsyncClient",
+                   _http_mock(status_code=500, is_success=False)):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_jina_exception_returns_empty(self):
+        empty_feed = _FakeFeed([])
+        call_count = [0]
+
+        async def _get_side_effect(url, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                resp = MagicMock()
+                resp.is_success = True
+                resp.content = b""
+                resp.text = ""
+                return resp
+            raise _httpx_mod.ConnectError("jina down")
+
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=_get_side_effect)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.yahoonews.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_gnews_feedparser_exception_falls_back_to_jina(self):
+        # feedparser.parse raises → _fetch_gnews_rss except branch → falls back to jina
+        with patch("app.connectors.yahoonews.httpx.AsyncClient",
+                   _http_mock(content=b"<rss/>", text=_JINA_MARKDOWN)), \
+             patch("app.connectors.yahoonews.feedparser.parse",
+                   side_effect=ValueError("bad gnews feed")):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_jina_caps_at_25_items(self):
+        entries = "\n".join(
+            f"{i+1}. [Title{i}](https://news.yahoo.co.jp/articles/art{i:03d})"
+            for i in range(30)
+        )
+        empty_feed = _FakeFeed([])
+        with patch("app.connectors.yahoonews.httpx.AsyncClient",
+                   _http_mock(content=b"<rss/>", text=entries)), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        assert len(result) == 25
+
+    @pytest.mark.asyncio
+    async def test_gnews_rss_skips_bad_entries(self):
+        # Entries with no link, duplicate id, and empty title are skipped
+        valid = _FeedEntry(
+            id="https://news.yahoo.co.jp/articles/abc1",
+            link="https://news.yahoo.co.jp/articles/abc1",
+            title="アイコ最新情報",
+        )
+        no_link = _FeedEntry(id="nl", link="", title="T")
+        dup1 = _FeedEntry(
+            id="https://news.yahoo.co.jp/articles/dup",
+            link="https://news.yahoo.co.jp/articles/dup",
+            title="Dup A",
+        )
+        dup2 = _FeedEntry(
+            id="https://news.yahoo.co.jp/articles/dup",
+            link="https://news.yahoo.co.jp/articles/dup",
+            title="Dup B",
+        )
+        empty_title = _FeedEntry(
+            id="https://news.yahoo.co.jp/articles/et",
+            link="https://news.yahoo.co.jp/articles/et",
+            title="",
+        )
+        fake_feed = _FakeFeed([valid, no_link, dup1, dup2, empty_title])
+        with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=fake_feed):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        # valid + dup1 survive; no_link, dup2, empty_title are skipped
+        assert len(result) == 2
