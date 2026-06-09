@@ -173,6 +173,25 @@ class TestUpdateWatchTerm:
             client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
         mock_poll.assert_not_called()
 
+    def test_update_keyword_alone_does_not_trigger_poll(self, client, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"keyword": "Aiko Updated"})
+        assert resp.status_code == 200
+        mock_poll.assert_not_called()
+
+    def test_update_notify_on_new_alone_does_not_trigger_poll(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=False)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            client.patch(f"/api/watch-terms/{term.id}", json={"notify_on_new": True})
+        mock_poll.assert_not_called()
+
     def test_update_invalid_collection_mode_returns_422(self, client, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)
