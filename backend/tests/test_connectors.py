@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx as _httpx_mod
+import json as _json_mod
 import pytest
 
 from app.connectors.base import SourceItemCreate, parse_feed_date
@@ -19,11 +20,11 @@ from app.connectors.oricon import OriconConnector
 from app.connectors.oricon import _clean_title as _clean_oricon_title
 from app.connectors.rss import RSSConnector
 from app.connectors.togetter import TogetterConnector
-from app.connectors.tver import _parse_tver_date
+from app.connectors.tver import TVERConnector, _parse_tver_date
 from app.connectors.twitter import TwitterConnector
 from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.yahoonews import _clean_markdown_title
-from app.connectors.youtube import _parse_youtube_relative
+from app.connectors.youtube import YouTubeConnector, _parse_youtube_relative
 
 
 def _entry(**kwargs) -> SimpleNamespace:
@@ -1339,3 +1340,623 @@ class TestTwitterFetch:
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result[0].url == "https://x.com/i/status/t3"
         assert result[0].author is None
+
+
+# ─── _parse_tver_date exception-path tests ────────────────────────────────────
+
+class TestParseTverDateExceptions:
+    """Covers exception-handler branches in _parse_tver_date (lines 23-24, 28-29, 54-55)."""
+
+    def test_overflow_timestamp_falls_through_to_none(self):
+        # Very large int → fromtimestamp raises OverflowError → pass → no other keys → None
+        result = _parse_tver_date({"publishedAt": 99999999999999999})
+        assert result is None
+
+    def test_invalid_iso_string_falls_through_to_none(self):
+        # String that can't be parsed as ISO → ValueError caught → None
+        result = _parse_tver_date({"publishedAt": "not-a-valid-date"})
+        assert result is None
+
+    def test_invalid_month_day_raises_valueerror_and_is_caught(self):
+        # Feb 30 causes datetime() to raise ValueError (lines 54-55)
+        fixed_now = datetime(2024, 2, 15, 12, 0, 0, tzinfo=timezone.utc)
+        with patch("app.connectors.tver.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.fromtimestamp = datetime.fromtimestamp
+            mock_dt.fromisoformat = datetime.fromisoformat
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _parse_tver_date({"broadcastDateLabel": "2月30日(金)放送分"})
+        assert result is None
+
+
+# ─── TVer helpers ─────────────────────────────────────────────────────────────
+
+def _tver_token_resp(uid="uid1", token="tok1", status_code=200):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = {"result": {"platform_uid": uid, "platform_token": token}}
+    return resp
+
+
+def _tver_search_resp(is_success=True, episodes=None, structure="episodes_contents"):
+    resp = MagicMock()
+    resp.is_success = is_success
+    resp.status_code = 200 if is_success else 404
+    eps = episodes or []
+    if structure == "episodes_contents":
+        resp.json.return_value = {"result": {"episodes": {"contents": eps}}}
+    elif structure == "series_and_episode":
+        resp.json.return_value = {"result": {"seriesAndEpisode": {"episodes": {"contents": eps}}}}
+    elif structure == "result_contents":
+        resp.json.return_value = {"result": {"contents": eps}}
+    elif structure == "result_rows":
+        resp.json.return_value = {"result": {"rows": eps}}
+    elif structure == "data_level":
+        resp.json.return_value = {"result": {}, "contents": eps}
+    return resp
+
+
+def _tver_client_ctx(token_resp, search_resp=None, token_exc=None, search_exc=None):
+    client_mock = AsyncMock()
+    if token_exc is not None:
+        client_mock.post = AsyncMock(side_effect=token_exc)
+    else:
+        client_mock.post = AsyncMock(return_value=token_resp)
+    if search_exc is not None:
+        client_mock.get = AsyncMock(side_effect=search_exc)
+    elif search_resp is not None:
+        client_mock.get = AsyncMock(return_value=search_resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=ctx)
+
+
+def _tver_ep(ep_id="ep001", title="Aiko Drama", ep_type="episode",
+             published_at_unix=1700000000, thumb=None, author="NHK"):
+    content = {
+        "id": ep_id,
+        "title": title,
+        "publishedAt": published_at_unix,
+        "broadcasterName": author,
+        "description": "desc",
+    }
+    if thumb:
+        content["thumbnailUrl"] = thumb
+    return {"type": ep_type, "content": content}
+
+
+class TestTVERFetch:
+    @pytest.mark.asyncio
+    async def test_no_token_returns_empty(self):
+        tr = _tver_token_resp(status_code=500)
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_token_exception_returns_empty(self):
+        tr = _tver_token_resp()
+        with patch("app.connectors.tver.httpx.AsyncClient",
+                   _tver_client_ctx(tr, token_exc=Exception("network err"))):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_search_api_http_error_returns_empty(self):
+        tr = _tver_token_resp()
+        sr = _tver_search_resp(is_success=False)
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_search_api_exception_returns_empty(self):
+        tr = _tver_token_resp()
+        with patch("app.connectors.tver.httpx.AsyncClient",
+                   _tver_client_ctx(tr, search_exc=Exception("conn refused"))):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_json_parse_error_returns_empty(self):
+        tr = _tver_token_resp()
+        sr = _tver_search_resp()
+        sr.json.side_effect = ValueError("bad json")
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_success_episodes_contents_structure(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep001", title="アイコのドラマ")
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "tver"
+        assert result[0].item_id == "ep001"
+        assert result[0].title == "アイコのドラマ"
+        assert result[0].url == "https://tver.jp/episodes/ep001"
+        assert result[0].author == "NHK"
+        assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_success_series_and_episode_structure(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep002", title="シリーズドラマ", ep_type="series")
+        sr = _tver_search_resp(episodes=[ep], structure="series_and_episode")
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].url == "https://tver.jp/series/ep002"
+
+    @pytest.mark.asyncio
+    async def test_success_result_contents_structure(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep003", title="コンテンツ")
+        sr = _tver_search_resp(episodes=[ep], structure="result_contents")
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "ep003"
+
+    @pytest.mark.asyncio
+    async def test_success_result_rows_structure(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep004", title="行データ")
+        sr = _tver_search_resp(episodes=[ep], structure="result_rows")
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "ep004"
+
+    @pytest.mark.asyncio
+    async def test_success_data_level_fallback(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep005", title="データレベル")
+        sr = _tver_search_resp(episodes=[ep], structure="data_level")
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "ep005"
+
+    @pytest.mark.asyncio
+    async def test_skips_episode_without_id(self):
+        tr = _tver_token_resp()
+        ep = {"type": "episode", "content": {"title": "No ID"}}
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_episode_without_title(self):
+        tr = _tver_token_resp()
+        ep = {"type": "episode", "content": {"id": "ep999"}}
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_url_type_special(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="sp001", title="スペシャル", ep_type="special")
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result[0].url == "https://tver.jp/specials/sp001"
+
+    @pytest.mark.asyncio
+    async def test_thumbnail_http_url_used_directly(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep010", title="T", thumb="https://cdn.example.com/thumb.jpg")
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result[0].thumbnail_url == "https://cdn.example.com/thumb.jpg"
+
+    @pytest.mark.asyncio
+    async def test_thumbnail_relative_path_prefixed(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep011", title="T", thumb="/img/thumb.jpg")
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result[0].thumbnail_url == "https://statics.tver.jp/img/thumb.jpg"
+
+    @pytest.mark.asyncio
+    async def test_episode_parse_exception_skips_and_continues(self):
+        tr = _tver_token_resp()
+        bad_ep = None  # None.get() raises AttributeError → caught by except Exception
+        good_ep = _tver_ep(ep_id="ep012", title="Good Episode")
+        sr = _tver_search_resp(episodes=[bad_ep, good_ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "ep012"
+
+
+# ─── YouTube helpers ──────────────────────────────────────────────────────────
+
+_YT_SCRAPE_DATA = {
+    "contents": {
+        "twoColumnSearchResultsRenderer": {
+            "primaryContents": {
+                "sectionListRenderer": {
+                    "contents": [
+                        {
+                            "itemSectionRenderer": {
+                                "contents": [
+                                    {
+                                        "videoRenderer": {
+                                            "videoId": "scr001",
+                                            "title": {"runs": [{"text": "Scraped Video"}]},
+                                            "ownerText": {"runs": [{"text": "ScrapedChannel"}]},
+                                            "detailedMetadataSnippets": [
+                                                {"snippetText": {"runs": [{"text": "desc text"}]}}
+                                            ],
+                                            "thumbnail": {"thumbnails": [{"url": "https://i.ytimg.com/vi/scr001/hq.jpg"}]},
+                                            "publishedTimeText": {"simpleText": "1 day ago"},
+                                        }
+                                    },
+                                    {"videoRenderer": {}},
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+}
+
+_YT_SCRAPE_HTML = (
+    "<html><script>var ytInitialData = "
+    + _json_mod.dumps(_YT_SCRAPE_DATA)
+    + ";</script></html>"
+)
+
+_YT_OLD_SCRAPE_DATA = {
+    "contents": {
+        "twoColumnSearchResultsRenderer": {
+            "primaryContents": {
+                "sectionListRenderer": {
+                    "contents": [
+                        {
+                            "itemSectionRenderer": {
+                                "contents": [
+                                    {
+                                        "videoRenderer": {
+                                            "videoId": "oldvid001",
+                                            "title": {"runs": [{"text": "Old Video"}]},
+                                            "ownerText": {"runs": [{"text": "OldCh"}]},
+                                            "publishedTimeText": {"simpleText": "5 months ago"},
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+}
+
+_YT_OLD_SCRAPE_HTML = (
+    "<html><script>var ytInitialData = "
+    + _json_mod.dumps(_YT_OLD_SCRAPE_DATA)
+    + ";</script></html>"
+)
+
+
+def _yt_api_ctx(items=None, raise_status_exc=None, get_exc=None):
+    resp = MagicMock()
+    if raise_status_exc:
+        resp.raise_for_status = MagicMock(side_effect=raise_status_exc)
+    else:
+        resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"items": items or []}
+    client_mock = AsyncMock()
+    if get_exc:
+        client_mock.get = AsyncMock(side_effect=get_exc)
+    else:
+        client_mock.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=ctx)
+
+
+def _yt_scrape_ctx(html="", is_success=True, get_exc=None):
+    resp = MagicMock()
+    resp.is_success = is_success
+    resp.status_code = 200 if is_success else 403
+    resp.text = html
+    client_mock = AsyncMock()
+    if get_exc:
+        client_mock.get = AsyncMock(side_effect=get_exc)
+    else:
+        client_mock.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=ctx)
+
+
+def _yt_gnews_ctx(content=b"", is_success=True, get_exc=None):
+    resp = MagicMock()
+    resp.is_success = is_success
+    resp.status_code = 200 if is_success else 503
+    resp.content = content
+    client_mock = AsyncMock()
+    if get_exc:
+        client_mock.get = AsyncMock(side_effect=get_exc)
+    else:
+        client_mock.get = AsyncMock(return_value=resp)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=ctx)
+
+
+def _yt_api_item(vid_id="v001", title="Test MV", channel="Test Ch",
+                 published="2024-01-15T10:00:00Z",
+                 thumb="https://i.ytimg.com/vi/v001/thumb.jpg"):
+    return {
+        "id": {"videoId": vid_id},
+        "snippet": {
+            "title": title,
+            "channelTitle": channel,
+            "publishedAt": published,
+            "description": "description",
+            "thumbnails": {"medium": {"url": thumb}},
+        },
+    }
+
+
+class TestParseYouTubeRelativeYear:
+    """Covers year unit and final return None (lines 32-33)."""
+
+    def test_english_year(self):
+        from datetime import timedelta
+        result = _parse_youtube_relative("1 year ago")
+        assert result is not None
+        expected = datetime.now(timezone.utc) - timedelta(days=365)
+        assert abs((result - expected).total_seconds()) < 10
+
+    def test_japanese_year(self):
+        result = _parse_youtube_relative("2年前")
+        assert result is not None
+
+    def test_unrecognized_unit_returns_none(self):
+        # Has a number but no recognized unit → falls to return None (line 33)
+        assert _parse_youtube_relative("3 decades ago") is None
+
+
+class TestYouTubeApiFetch:
+    @pytest.mark.asyncio
+    async def test_success_returns_items(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_api_ctx(items=[_yt_api_item(vid_id="v001")])):
+            result = await YouTubeConnector(api_key="key")._fetch_api("Aiko")
+        assert len(result) == 1
+        assert result[0].item_id == "v001"
+        assert result[0].platform == "youtube"
+        assert result[0].url == "https://www.youtube.com/watch?v=v001"
+        assert result[0].author == "Test Ch"
+        assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_skips_item_without_video_id(self):
+        no_id = {
+            "id": {},
+            "snippet": {
+                "title": "X",
+                "publishedAt": "2024-01-01T00:00:00Z",
+                "channelTitle": "C",
+                "description": "",
+            },
+        }
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_api_ctx(items=[no_id])):
+            result = await YouTubeConnector(api_key="key")._fetch_api("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises(self):
+        import httpx
+        exc = httpx.HTTPStatusError("403", request=MagicMock(), response=MagicMock())
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_api_ctx(raise_status_exc=exc)):
+            with pytest.raises(httpx.HTTPStatusError):
+                await YouTubeConnector(api_key="key")._fetch_api("Aiko")
+
+    @pytest.mark.asyncio
+    async def test_network_exception_propagates(self):
+        import httpx
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_api_ctx(get_exc=httpx.ConnectError("timeout"))):
+            with pytest.raises(httpx.ConnectError):
+                await YouTubeConnector(api_key="key")._fetch_api("Aiko")
+
+
+class TestYouTubeScrapeFetch:
+    @pytest.mark.asyncio
+    async def test_success_parses_ytInitialData(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_scrape_ctx(html=_YT_SCRAPE_HTML)):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
+        assert len(result) == 1
+        assert result[0].item_id == "scr001"
+        assert result[0].title == "Scraped Video"
+        assert result[0].author == "ScrapedChannel"
+        assert result[0].thumbnail_url == "https://i.ytimg.com/vi/scr001/hq.jpg"
+        assert result[0].platform == "youtube"
+        assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_http_failure_returns_empty(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_scrape_ctx(is_success=False)):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_no_ytInitialData_returns_empty(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_scrape_ctx(html="<html><body>no data here</body></html>")):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_in_ytInitialData_returns_empty(self):
+        html = "var ytInitialData = {not_valid_json:};"
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_scrape_ctx(html=html)):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_old_items_beyond_cutoff_filtered_out(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_scrape_ctx(html=_YT_OLD_SCRAPE_HTML)):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
+        assert result == []
+
+
+class TestYouTubeGnewsFetch:
+    @pytest.mark.asyncio
+    async def test_success_returns_items(self):
+        entry = _FeedEntry(
+            link="https://www.youtube.com/watch?v=gnews001",
+            id="gnews001",
+            title="Aiko YouTube",
+            summary="desc",
+        )
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert len(result) == 1
+        assert result[0].platform == "youtube"
+        assert result[0].url == "https://www.youtube.com/watch?v=gnews001"
+        assert result[0].title == "Aiko YouTube"
+        assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_http_error_returns_empty(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(is_success=False)):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_network_exception_returns_empty(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_gnews_ctx(get_exc=Exception("connection error"))):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_feedparser_exception_returns_empty(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", side_effect=Exception("parse fail")):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_dedup_prevents_duplicate_items(self):
+        entry = _FeedEntry(link="https://youtube.com/watch?v=dup", id="dup", title="Dup Video")
+        fake_feed = _FakeFeed([entry, entry])
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_skip_entry_without_link(self):
+        no_link = _FeedEntry(link="", id="no-link", title="No Link Video")
+        fake_feed = _FakeFeed([no_link])
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skip_entry_without_title(self):
+        no_title = _FeedEntry(link="https://youtube.com/watch?v=notitle", id="notitle", title="")
+        fake_feed = _FakeFeed([no_title])
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
+
+class TestYouTubeFetchOrchestration:
+    def _item(self, vid_id="v1"):
+        return SourceItemCreate(
+            platform="youtube", item_id=vid_id,
+            url=f"https://www.youtube.com/watch?v={vid_id}",
+            published_at=datetime.now(timezone.utc),
+            media_type="video",
+        )
+
+    @pytest.mark.asyncio
+    async def test_api_key_present_uses_fetch_api(self):
+        items = [self._item("v1")]
+        with patch.object(YouTubeConnector, "_fetch_api", new=AsyncMock(return_value=items)):
+            result = await YouTubeConnector(api_key="my-key").fetch("Aiko", "all_info")
+        assert result == items
+
+    @pytest.mark.asyncio
+    async def test_api_failure_falls_back_to_scrape(self):
+        items = [self._item("v2")]
+        with patch.object(YouTubeConnector, "_fetch_api", new=AsyncMock(side_effect=Exception("api err"))), \
+             patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=items)):
+            result = await YouTubeConnector(api_key="my-key").fetch("Aiko", "all_info")
+        assert result == items
+
+    @pytest.mark.asyncio
+    async def test_no_api_key_skips_to_scrape(self):
+        items = [self._item("v3")]
+        with patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=items)):
+            result = await YouTubeConnector(api_key="").fetch("Aiko", "all_info")
+        assert result == items
+
+    @pytest.mark.asyncio
+    async def test_empty_scrape_falls_to_gnews(self):
+        items = [self._item("v4")]
+        with patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=[])), \
+             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)):
+            result = await YouTubeConnector(api_key="").fetch("Aiko", "all_info")
+        assert result == items
+
+    @pytest.mark.asyncio
+    async def test_scrape_exception_falls_to_gnews(self):
+        items = [self._item("v5")]
+        with patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(side_effect=Exception("scrape err"))), \
+             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)):
+            result = await YouTubeConnector(api_key="").fetch("Aiko", "all_info")
+        assert result == items
+
+    @pytest.mark.asyncio
+    async def test_no_api_key_no_scrape_falls_to_gnews(self):
+        items = [self._item("v6")]
+        with patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=[])), \
+             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)):
+            result = await YouTubeConnector(api_key="").fetch("Aiko", "all_info")
+        assert result == items
+
+
+class TestTVERThumbnailElseBranch:
+    """Covers line 173 — thumb_raw with no http or / prefix is used as-is."""
+
+    @pytest.mark.asyncio
+    async def test_thumbnail_bare_value_used_directly(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep020", title="T", thumb="relative-no-slash.jpg")
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result[0].thumbnail_url == "relative-no-slash.jpg"
