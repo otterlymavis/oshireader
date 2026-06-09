@@ -237,3 +237,30 @@ class TestDeleteWatchTerm:
     def test_delete_nonexistent_returns_404(self, client):
         resp = client.delete("/api/watch-terms/999999")
         assert resp.status_code == 404
+
+    def test_delete_removes_orphan_source_items(self, client, db_session):
+        from datetime import datetime, timezone
+        from app.models import Match, SourceItem
+
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        item = SourceItem(
+            id="news:orphan-001",
+            platform="news",
+            item_id="orphan-001",
+            url="https://example.com/orphan",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+        )
+        db_session.add(item)
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=item.id))
+        db_session.commit()
+
+        item_id = item.id  # capture before the delete flushes the identity map
+        client.delete(f"/api/watch-terms/{term.id}")
+
+        remaining = db_session.query(SourceItem).filter_by(id=item_id).first()
+        assert remaining is None, "Orphaned source_item should be deleted when its only match is removed"
