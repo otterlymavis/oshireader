@@ -4,6 +4,8 @@ private let _bloggerImageRegex = try? NSRegularExpression(
     pattern: #"src="(https?://[^"]+\.(?:png|jpg|jpeg|gif))""#,
     options: .caseInsensitive
 )
+private let _japaneseScriptRegex = try? NSRegularExpression(pattern: "\\p{Hiragana}|\\p{Katakana}|\\p{Han}")
+private let _bloggerThumbSuffixRegex = try? NSRegularExpression(pattern: "/s72-c$")
 
 struct IrasutoyaImage: Codable, Identifiable, Hashable {
     var id: String { url }
@@ -17,7 +19,7 @@ extension NetworkManager {
     // MARK: - Google Translate
 
     func translateToJapanese(_ text: String) async -> String {
-        let isJapanese = text.range(of: "\\p{Hiragana}|\\p{Katakana}|\\p{Han}", options: .regularExpression) != nil
+        let isJapanese = _japaneseScriptRegex.flatMap { $0.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) } != nil
         if isJapanese { return text }
 
         let query = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? text
@@ -111,10 +113,12 @@ extension NetworkManager {
 
             guard !altLink.isEmpty, !thumb.isEmpty else { continue }
             // Upscale small Blogger thumbnails for the editor picker.
-            let upscaled = thumb
+            var upscaled = thumb
                 .replacingOccurrences(of: "/s72-c/", with: "/s400-c/")
-                .replacingOccurrences(of: "/s72-c$", with: "/s400-c", options: .regularExpression)
                 .replacingOccurrences(of: "/s1600/", with: "/s400/")
+            if let r = _bloggerThumbSuffixRegex {
+                upscaled = r.stringByReplacingMatches(in: upscaled, range: NSRange(upscaled.startIndex..., in: upscaled), withTemplate: "/s400-c")
+            }
             list.append(IrasutoyaImage(url: altLink, thumb: upscaled, title: title))
         }
         return list

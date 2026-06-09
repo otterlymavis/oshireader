@@ -13,6 +13,10 @@ private enum _ScraperRegex {
         #"<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']{1,360})["'][^>]*>"#,
         #"<meta[^>]+content=["']([^"']{1,360})["'][^>]+property=["']og:description["'][^>]*>"#,
     ].compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+
+    static let yahooNewsSuffix   = try? NSRegularExpression(pattern: #"\s*[-|]\s*Yahoo!ニュース\s*$"#)
+    static let yahooNewsParens   = try? NSRegularExpression(pattern: #"\s*\([^)]*ニュース\)\s*[-|]\s*Yahoo!ニュース\s*$"#)
+    static let searchEngineSuffix = try? NSRegularExpression(pattern: #"\s*[-|]\s*(?:Bing|Google)\s*$"#)
 }
 
 // MARK: - RSS Data Model
@@ -307,11 +311,11 @@ extension NetworkManager {
     }
 
     private func cleanNewsTitle(_ title: String) -> String {
-        title
-            .replacingOccurrences(of: "\\s*[-|]\\s*Yahoo!ニュース\\s*$", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\s*\\([^)]*ニュース\\)\\s*[-|]\\s*Yahoo!ニュース\\s*$", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\s*[-|]\\s*(?:Bing|Google)\\s*$", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var t = title
+        for regex in [_ScraperRegex.yahooNewsSuffix, _ScraperRegex.yahooNewsParens, _ScraperRegex.searchEngineSuffix] {
+            if let r = regex { t = r.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: "") }
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func matchesKeyword(title: String, desc: String, kw: String) -> Bool {
