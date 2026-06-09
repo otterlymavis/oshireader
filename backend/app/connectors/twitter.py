@@ -1,9 +1,12 @@
+import logging
 from datetime import datetime
 
 import httpx
 
 from app.connectors.base import BaseConnector, SourceItemCreate
 from app.models import CollectionMode
+
+log = logging.getLogger(__name__)
 
 
 class TwitterConnector(BaseConnector):
@@ -30,10 +33,16 @@ class TwitterConnector(BaseConnector):
         }
         headers = {"Authorization": f"Bearer {self.bearer_token}"}
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(self._SEARCH_URL, params=params, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(self._SEARCH_URL, params=params, headers=headers)
+                if not resp.is_success:
+                    log.warning("Twitter API returned status %d", resp.status_code)
+                    return []
+                data = resp.json()
+        except Exception as exc:
+            log.warning("Twitter fetch error: %s", exc)
+            return []
 
         users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
         media_map = {m["media_key"]: m for m in data.get("includes", {}).get("media", [])}
