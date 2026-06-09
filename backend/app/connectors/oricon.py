@@ -22,6 +22,7 @@ def _clean_title(value: str) -> str:
 
 class OriconConnector(BaseConnector):
     PLATFORM = "oricon"
+    SUPPORTS_MEDIA_FILTER = False
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
