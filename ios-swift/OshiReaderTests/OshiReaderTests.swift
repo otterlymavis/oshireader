@@ -641,7 +641,7 @@ final class OshiReaderTests: XCTestCase {
         // Remove "oricon" from the persisted list, reset the schema version key, then
         // create a fresh LocalDB — the migration should add it back.
         UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
-        var platforms = Platform.all.filter(\.subscribedByDefault).map(\.id).filter { $0 != "oricon" }
+        let platforms = Platform.all.filter(\.subscribedByDefault).map(\.id).filter { $0 != "oricon" }
         let data = try JSONEncoder().encode(platforms)
         let url = tempDir.appendingPathComponent("subscribed_platforms.json")
         try data.write(to: url)
@@ -1187,7 +1187,7 @@ final class OshiReaderTests: XCTestCase {
     }
 
     func testReplaceTermNoOpForUnknownId() throws {
-        db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
         let ghost = WatchTerm(id: "ghost-id", keyword: "Ghost")
         db.replaceTerm(localId: "nonexistent", with: ghost)
         XCTAssertEqual(db.terms.count, 1)
