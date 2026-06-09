@@ -216,18 +216,3 @@ struct Credential: Codable, Hashable {
     let has_api_secret: Bool
     let updated_at: String?
 }
-
-// MARK: - ScraperLog
-struct ScraperLog: Codable, Hashable {
-    let name: String
-    let count: Int
-    let error: String?
-    let ms: Int
-}
-
-// MARK: - ScrapeRun
-struct ScrapeRun: Codable, Hashable {
-    let keyword: String
-    let ran_at: String
-    let logs: [ScraperLog]
-}
