@@ -223,3 +223,17 @@ class TestFetchOne:
         connector = self._connector(return_value=[])
         await _fetch_one(connector, "Test", CollectionMode.MEDIA_ONLY)
         connector.fetch.assert_awaited_once_with("Test", CollectionMode.MEDIA_ONLY)
+
+
+class TestPruneExceptionHandling:
+    def test_prune_does_not_raise_on_db_error(self, db):
+        """_prune_old_items must catch exceptions internally and rollback, not propagate."""
+        # Provide a mock session whose query() raises to trigger the except branch.
+        broken_db = MagicMock()
+        broken_db.query.side_effect = RuntimeError("simulated DB failure")
+        broken_db.rollback = MagicMock()
+
+        # Should NOT raise — the exception is caught and logged internally.
+        _prune_old_items(broken_db)
+
+        broken_db.rollback.assert_called_once()

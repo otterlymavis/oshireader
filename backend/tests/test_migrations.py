@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from datetime import datetime, timedelta, timezone
 
 from app.database import Base
+import app.migrations as _migrations_mod
 from app.migrations import _add_missing_columns, _purge_bad_date_items, apply_startup_migrations
 from app.models import MigrationLog
 
@@ -97,6 +98,10 @@ class TestAddMissingColumns:
         # Should not raise even though existing_col is already there
         _add_missing_columns(fresh_engine, "_test_tbl2", {"existing_col": "TEXT"})
         assert "existing_col" in _column_names(fresh_engine, "_test_tbl2")
+
+    def test_column_names_returns_empty_set_for_missing_table(self, fresh_engine):
+        result = _migrations_mod._column_names(fresh_engine, "nonexistent_table")
+        assert result == set()
 
 
 class TestPurgeBadDateItems:

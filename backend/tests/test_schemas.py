@@ -167,3 +167,23 @@ class TestAliasValidation:
     def test_too_many_aliases_raises(self):
         with pytest.raises(ValidationError):
             WatchTermCreate(keyword="k", aliases=["alias"] * 21)
+
+
+class TestWatchTermUpdateValidation:
+    """WatchTermUpdate validators handle None gracefully — all fields are optional."""
+
+    def test_none_keyword_accepted(self):
+        obj = WatchTermUpdate(keyword=None)
+        assert obj.keyword is None
+
+    def test_none_aliases_accepted(self):
+        obj = WatchTermUpdate(aliases=None)
+        assert obj.aliases is None
+
+    def test_update_alias_too_long_raises(self):
+        with pytest.raises(ValidationError):
+            WatchTermUpdate(keyword="k", aliases=["a" * 201])
+
+    def test_update_too_many_aliases_raises(self):
+        with pytest.raises(ValidationError):
+            WatchTermUpdate(keyword="k", aliases=["alias"] * 21)

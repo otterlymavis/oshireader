@@ -9,7 +9,9 @@ from unittest.mock import MagicMock
 
 import httpx
 
-from app.apns import _host, _payload, _send_one, apns_configured, send_new_match_notifications
+import tempfile, os
+
+from app.apns import _host, _payload, _private_key, _send_one, apns_configured, send_new_match_notifications
 from app.models import APNSDeviceToken, WatchTerm
 
 
@@ -213,6 +215,36 @@ class TestApnsConfigured:
             s.apns_private_key = ""
             s.apns_private_key_path = ""
             assert apns_configured() is False
+
+
+class TestPrivateKey:
+    def test_returns_private_key_string_with_escaped_newlines_expanded(self):
+        with patch("app.apns.settings") as s:
+            s.apns_private_key = "line1\\nline2"
+            s.apns_private_key_path = ""
+            result = _private_key()
+        assert result == "line1\nline2"
+
+    def test_reads_from_file_when_env_key_is_empty(self):
+        key_content = "-----BEGIN EC PRIVATE KEY-----\nfakekey\n-----END EC PRIVATE KEY-----\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".p8", delete=False) as f:
+            f.write(key_content)
+            tmp_path = f.name
+        try:
+            with patch("app.apns.settings") as s:
+                s.apns_private_key = ""
+                s.apns_private_key_path = tmp_path
+                result = _private_key()
+            assert result == key_content
+        finally:
+            os.unlink(tmp_path)
+
+    def test_returns_empty_string_when_neither_set(self):
+        with patch("app.apns.settings") as s:
+            s.apns_private_key = ""
+            s.apns_private_key_path = ""
+            result = _private_key()
+        assert result == ""
 
 
 def _mock_response(status_code: int, json_body: dict | None = None, text: str = "") -> MagicMock:
