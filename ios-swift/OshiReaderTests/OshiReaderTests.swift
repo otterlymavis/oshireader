@@ -828,6 +828,51 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(results.first?.id, "news:alias-test")
     }
 
+    func testKeywordMatchingIsCaseInsensitive() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["news"])
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+
+        // Title uses all-caps — strict matching must still pass
+        let item = FeedItem(
+            id: "news:case-test", platform: "news",
+            url: "https://news.example.com/case",
+            title: "AIKO releases new single", content_text: nil,
+            author: nil, thumbnail_url: nil, media_type: "article",
+            published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [item])
+        let results = db.queryFeed(keyword: "Aiko", days: 30)
+        XCTAssertEqual(results.count, 1, "Strict keyword match must be case-insensitive")
+    }
+
+    func testMultiWordKeywordRequiresAllPartsPresent() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["news"])
+        _ = db.saveTerm(keyword: "Aiko Chan", collectionMode: .allInfo)
+
+        // Title contains both words — should pass
+        let bothWords = FeedItem(
+            id: "news:both", platform: "news",
+            url: "https://news.example.com/both",
+            title: "Aiko Chan announces tour", content_text: nil,
+            author: nil, thumbnail_url: nil, media_type: "article",
+            published_at: now, watch_term_keyword: "Aiko Chan", fetched_at: now
+        )
+        // Title contains only one word — should be filtered out
+        let oneWord = FeedItem(
+            id: "news:one", platform: "news",
+            url: "https://news.example.com/one",
+            title: "Aiko releases album", content_text: nil,
+            author: nil, thumbnail_url: nil, media_type: "article",
+            published_at: now, watch_term_keyword: "Aiko Chan", fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [bothWords, oneWord])
+        let results = db.queryFeed(keyword: "Aiko Chan", days: 30)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.id, "news:both")
+    }
+
     // MARK: - clearAllData
     func testClearAllDataResetsEverything() throws {
         _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
