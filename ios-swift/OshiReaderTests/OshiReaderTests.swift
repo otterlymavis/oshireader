@@ -1146,6 +1146,26 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(freshDB.terms.count, 0)
     }
 
+    // MARK: - setSourcesOrder / setWallpaper / setOshiAvatar
+    func testSetSourcesOrderUpdatesAndClearsOnClearAll() throws {
+        db.setSourcesOrder(order: ["youtube", "news", "tver"])
+        XCTAssertEqual(db.sourcesOrder, ["youtube", "news", "tver"])
+        db.clearAllData()
+        XCTAssertNil(db.sourcesOrder)
+    }
+
+    func testSetWallpaperUpdatesAndNilClearsOnClearAll() throws {
+        db.setWallpaper(url: "https://img.example.com/bg.jpg")
+        XCTAssertEqual(db.wallpaper, "https://img.example.com/bg.jpg")
+        db.setWallpaper(url: nil)
+        XCTAssertNil(db.wallpaper)
+    }
+
+    func testSetOshiAvatarStoresImageUrl() throws {
+        db.setOshiAvatar(keyword: "Aiko", imageUrl: "https://img.example.com/aiko.png")
+        XCTAssertEqual(db.oshiAvatars["Aiko"], "https://img.example.com/aiko.png")
+    }
+
     // MARK: - addTermFromBackend / replaceTerm / removeSaved
     func testAddTermFromBackendInsertsAtFront() throws {
         let first = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
