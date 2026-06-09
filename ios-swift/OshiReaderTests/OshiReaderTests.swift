@@ -1598,6 +1598,116 @@ final class NetworkManagerTests: XCTestCase {
     }
 }
 
+// MARK: - RSSParserDelegate Tests
+
+final class RSSParserDelegateTests: XCTestCase {
+    private func parse(_ xml: String) -> [RssItem] {
+        let delegate = RSSParserDelegate()
+        let parser = XMLParser(data: Data(xml.utf8))
+        parser.delegate = delegate
+        parser.parse()
+        return delegate.items
+    }
+
+    func testParsesBasicRssItem() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item>
+            <title>Hello World</title>
+            <link>https://example.com/hello</link>
+            <description>A test article</description>
+            <pubDate>Mon, 01 Jan 2024 12:00:00 +0000</pubDate>
+        </item>
+        </channel></rss>
+        """
+        let items = parse(xml)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].title, "Hello World")
+        XCTAssertEqual(items[0].link, "https://example.com/hello")
+        XCTAssertEqual(items[0].description, "A test article")
+        XCTAssertNotNil(items[0].pubDate)
+    }
+
+    func testParsesMediaThumbnailAttribute() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item>
+            <title>Media Item</title>
+            <link>https://example.com/media</link>
+            <media:thumbnail url="https://example.com/thumb.jpg"/>
+        </item>
+        </channel></rss>
+        """
+        let items = parse(xml)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].thumbnailUrl, "https://example.com/thumb.jpg")
+    }
+
+    func testParsesEnclosureImageAttribute() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item>
+            <title>Enclosure Item</title>
+            <link>https://example.com/enc</link>
+            <enclosure url="https://example.com/img.png" type="image/png"/>
+        </item>
+        </channel></rss>
+        """
+        let items = parse(xml)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].thumbnailUrl, "https://example.com/img.png")
+    }
+
+    func testEnclosureNonImageIgnored() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item>
+            <title>Audio Item</title>
+            <link>https://example.com/audio</link>
+            <enclosure url="https://example.com/audio.mp3" type="audio/mpeg"/>
+        </item>
+        </channel></rss>
+        """
+        let items = parse(xml)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertNil(items[0].thumbnailUrl)
+    }
+
+    func testParsesAtomEntryElement() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Atom Entry</title>
+            <link href="https://example.com/atom"/>
+            <summary>Atom summary</summary>
+            <published>2024-06-01T10:00:00Z</published>
+        </entry>
+        </feed>
+        """
+        let items = parse(xml)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].title, "Atom Entry")
+    }
+
+    func testParsesMultipleItems() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item><title>A</title><link>https://a.com</link></item>
+        <item><title>B</title><link>https://b.com</link></item>
+        <item><title>C</title><link>https://c.com</link></item>
+        </channel></rss>
+        """
+        let items = parse(xml)
+        XCTAssertEqual(items.count, 3)
+        XCTAssertEqual(items.map { $0.title }, ["A", "B", "C"])
+    }
+
+    func testEmptyFeedReturnsNoItems() {
+        let xml = """<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>"""
+        XCTAssertTrue(parse(xml).isEmpty)
+    }
+}
+
 // MARK: - KeychainHelper Tests (Phase 5.4)
 
 final class KeychainHelperTests: XCTestCase {
