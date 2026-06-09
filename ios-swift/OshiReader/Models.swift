@@ -1,6 +1,6 @@
 import Foundation
 
-private enum _ISO8601Cache {
+enum _ISO8601Cache {
     static let withFractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

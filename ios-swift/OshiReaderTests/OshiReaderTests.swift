@@ -1616,8 +1616,8 @@ final class NetworkManagerTests: XCTestCase {
     // fetchCredentials decodes credential list
     func testFetchCredentialsDecodesList() async throws {
         let creds = [
-            Credential(platform: "youtube", has_bearer_token: true, has_api_key: false, updated_at: nil),
-            Credential(platform: "twitter", has_bearer_token: false, has_api_key: false, updated_at: nil),
+            Credential(platform: "youtube", has_bearer_token: true, has_api_key: false, has_api_secret: false, updated_at: nil),
+            Credential(platform: "twitter", has_bearer_token: false, has_api_key: false, has_api_secret: false, updated_at: nil),
         ]
         let data = try JSONEncoder().encode(creds)
         MockURLProtocol.handler = { _ in (data, Self.response(status: 200)) }
@@ -1680,7 +1680,7 @@ final class NetworkManagerTests: XCTestCase {
     func testUpdateCredentialSendsPutAndDecodesCredential() async throws {
         var capturedMethod: String?
         var capturedBody: [String: Any]?
-        let cred = Credential(platform: "youtube", has_bearer_token: true, has_api_key: false, updated_at: nil)
+        let cred = Credential(platform: "youtube", has_bearer_token: true, has_api_key: false, has_api_secret: false, updated_at: nil)
         let data = try JSONEncoder().encode(cred)
         MockURLProtocol.handler = { req in
             capturedMethod = req.httpMethod
