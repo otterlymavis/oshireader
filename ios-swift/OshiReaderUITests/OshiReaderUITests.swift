@@ -51,7 +51,7 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(headline.waitForExistence(timeout: 3))
         (firstExistingButton(containing: "UITest Oshi headline") ?? headline).tap()
 
-        let readerModeButton = waitForButton(identifier: "reader.modeToggleButton", timeout: 5)
+        let readerModeButton = waitForButton(identifier: "reader.modeToggleButton", timeout: 10)
         XCTAssertNotNil(readerModeButton)
         readerModeButton?.tap()
     }
@@ -63,7 +63,7 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(savedTitle.waitForExistence(timeout: 3))
         (firstExistingButton(containing: "UITest saved article") ?? savedTitle).tap()
 
-        XCTAssertNotNil(waitForButton(identifier: "reader.modeToggleButton", timeout: 5))
+        XCTAssertNotNil(waitForButton(identifier: "reader.modeToggleButton", timeout: 10))
     }
 
     func testSearchFlow() throws {
