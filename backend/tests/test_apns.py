@@ -5,7 +5,7 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-from app.apns import _host, _payload, send_new_match_notifications
+from app.apns import _host, _payload, apns_configured, send_new_match_notifications
 from app.models import APNSDeviceToken, WatchTerm
 
 
@@ -166,3 +166,46 @@ class TestSendNewMatchNotifications:
 
         remaining = db_session.query(APNSDeviceToken).filter_by(token="d" * 64).first()
         assert remaining is not None
+
+
+class TestApnsConfigured:
+    def _mock_settings(self, team_id="", key_id="", topic="", private_key=""):
+        return {"apns_team_id": team_id, "apns_key_id": key_id,
+                "apns_topic": topic, "apns_private_key": private_key,
+                "apns_private_key_path": ""}
+
+    def test_returns_false_when_all_empty(self):
+        with patch("app.apns.settings") as s:
+            s.apns_team_id = ""
+            s.apns_key_id = ""
+            s.apns_topic = ""
+            s.apns_private_key = ""
+            s.apns_private_key_path = ""
+            assert apns_configured() is False
+
+    def test_returns_true_when_all_set(self):
+        with patch("app.apns.settings") as s:
+            s.apns_team_id = "TEAMID1234"
+            s.apns_key_id = "KEYID12345"
+            s.apns_topic = "com.example.app"
+            s.apns_private_key = "-----BEGIN EC PRIVATE KEY-----\nfake\n-----END EC PRIVATE KEY-----"
+            s.apns_private_key_path = ""
+            assert apns_configured() is True
+
+    def test_returns_false_when_team_id_missing(self):
+        with patch("app.apns.settings") as s:
+            s.apns_team_id = ""
+            s.apns_key_id = "KEYID12345"
+            s.apns_topic = "com.example.app"
+            s.apns_private_key = "key"
+            s.apns_private_key_path = ""
+            assert apns_configured() is False
+
+    def test_returns_false_when_private_key_missing(self):
+        with patch("app.apns.settings") as s:
+            s.apns_team_id = "TEAMID1234"
+            s.apns_key_id = "KEYID12345"
+            s.apns_topic = "com.example.app"
+            s.apns_private_key = ""
+            s.apns_private_key_path = ""
+            assert apns_configured() is False
