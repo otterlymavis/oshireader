@@ -149,3 +149,21 @@ class TestCollectionModeValidation:
         # str enum: CollectionMode.MEDIA_ONLY == "media_only" must be True
         assert CollectionMode.MEDIA_ONLY == "media_only"
         assert CollectionMode.ALL_INFO == "all_info"
+
+
+class TestAliasValidation:
+    def test_alias_too_long_raises(self):
+        with pytest.raises(ValidationError):
+            WatchTermCreate(keyword="k", aliases=["a" * 201])
+
+    def test_alias_at_max_length_accepted(self):
+        obj = WatchTermCreate(keyword="k", aliases=["a" * 200])
+        assert len(obj.aliases[0]) == 200
+
+    def test_blank_aliases_stripped(self):
+        obj = WatchTermCreate(keyword="k", aliases=["valid", "  ", "", "  spaces  "])
+        assert obj.aliases == ["valid", "spaces"]
+
+    def test_too_many_aliases_raises(self):
+        with pytest.raises(ValidationError):
+            WatchTermCreate(keyword="k", aliases=["alias"] * 21)
