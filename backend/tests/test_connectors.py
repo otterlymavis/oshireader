@@ -1328,6 +1328,33 @@ class TestTwitterFetch:
         assert result[0].thumbnail_url == "https://pbs.twimg.com/mv/t.jpg"
 
     @pytest.mark.asyncio
+    async def test_photo_tweet_uses_image_media_type(self):
+        data = _twitter_api_data(
+            tweets=[{
+                "id": "t_photo",
+                "author_id": "u_photo",
+                "text": "Photo tweet!",
+                "created_at": "2024-01-15T12:00:00Z",
+                "attachments": {"media_keys": ["mk_photo"]},
+            }],
+            users=[{"id": "u_photo", "username": "photofan", "name": "Photo Fan"}],
+            media=[{"media_key": "mk_photo", "url": "https://pbs.twimg.com/media/photo.jpg", "type": "photo"}],
+        )
+        resp = MagicMock()
+        resp.is_success = True
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = data
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
+        assert result[0].media_type == "image"
+        assert result[0].thumbnail_url == "https://pbs.twimg.com/media/photo.jpg"
+
+    @pytest.mark.asyncio
     async def test_tweet_without_username_uses_fallback_url(self):
         data = _twitter_api_data(
             tweets=[{

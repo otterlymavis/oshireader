@@ -45,7 +45,7 @@ struct FeedView: View {
             result = result.filter { matchesPlatform($0, platformId: platform) }
         }
         if mediaFilter == .mediaOnly {
-            result = result.filter { $0.media_type == "video" || Platform.forRawValue($0.platform)?.isMediaPlatform == true }
+            result = result.filter { $0.media_type == "video" || $0.media_type == "image" || Platform.forRawValue($0.platform)?.isMediaPlatform == true }
         }
         return result
     }

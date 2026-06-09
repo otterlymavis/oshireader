@@ -206,6 +206,7 @@ struct Credential: Codable, Hashable {
     let platform: String
     let has_bearer_token: Bool
     let has_api_key: Bool
+    let has_api_secret: Bool
     let updated_at: String?
 }
 

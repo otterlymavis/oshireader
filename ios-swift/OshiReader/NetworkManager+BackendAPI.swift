@@ -80,10 +80,11 @@ extension NetworkManager {
         try await apiRequest(URL(string: "\(apiBase)/api/credentials/")!, authorized: true, acceptRange: 200...200)
     }
 
-    func updateCredential(platform: String, apiKey: String? = nil, bearerToken: String? = nil) async throws -> Credential {
+    func updateCredential(platform: String, apiKey: String? = nil, bearerToken: String? = nil, apiSecret: String? = nil) async throws -> Credential {
         var body = [String: String]()
         if let apiKey { body["api_key"] = apiKey }
         if let bearerToken { body["bearer_token"] = bearerToken }
+        if let apiSecret { body["api_secret"] = apiSecret }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         return try await apiRequest(URL(string: "\(apiBase)/api/credentials/\(platform)")!, method: "PUT", body: bodyData, authorized: true)
     }
