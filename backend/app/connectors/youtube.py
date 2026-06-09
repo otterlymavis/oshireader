@@ -29,8 +29,7 @@ def _parse_youtube_relative(text: str) -> Optional[datetime]:
     if unit in ('day', '日'):         return now - timedelta(days=n)
     if unit in ('week', '週', '週間'): return now - timedelta(weeks=n)
     if unit in ('month', 'ヶ月', 'か月'): return now - timedelta(days=n * 30)
-    if unit in ('year', '年'):        return now - timedelta(days=n * 365)
-    return None
+    return now - timedelta(days=n * 365)  # unit must be 'year' or '年' — exhaustive
 
 
 class YouTubeConnector(BaseConnector):

@@ -433,7 +433,7 @@ class LocalDB: ObservableObject {
     func resetForUITesting() {
         guard ProcessInfo.processInfo.arguments.contains("--uitesting") else { return }
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = iso8601.string(from: Date())
         let term = WatchTerm(id: "ui-term-oshitest", keyword: "UITest Oshi", collection_mode: .allInfo, is_active: true, created_at: now)
         let feedItem = FeedItem(
             id: "ui-feed-reader",
