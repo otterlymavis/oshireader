@@ -235,6 +235,40 @@ class TestIngestionConnectorErrorIsolation:
         db_session.expire_all()
         assert db_session.query(SourceItem).count() == 0
 
+    @pytest.mark.asyncio
+    async def test_db_write_error_is_caught_and_rolled_back(self, db_engine, db_session):
+        """The inner try/except in the poll loop must catch DB errors and rollback without crashing."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        good_item = _make_item(platform="youtube", item_id="err1")
+        connector = _mock_connector("youtube", [good_item])
+
+        # Patch db.commit to raise — it's called after item + match are flushed.
+        # This triggers the except block (lines 211-220) which must rollback and not propagate.
+        TestSession = sessionmaker(bind=db_engine)
+        from sqlalchemy.orm import Session as _Session
+        original_commit = _Session.commit
+        commit_calls = {"count": 0}
+
+        def raising_commit(self):
+            commit_calls["count"] += 1
+            if commit_calls["count"] == 1:
+                raise RuntimeError("simulated commit error")
+            return original_commit(self)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()), \
+             patch.object(_Session, "commit", raising_commit):
+            # Must NOT raise — exception handler swallows the error and calls rollback.
+            await _poll_once_unlocked()
+
+        db_session.expire_all()
+        # The failed commit should have rolled back — no match is committed.
+        assert db_session.query(Match).count() == 0, "Rolled-back match must not be committed"
+
 
 class TestIngestionCollectionMode:
     @pytest.mark.asyncio

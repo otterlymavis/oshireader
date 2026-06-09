@@ -10,8 +10,12 @@ from sqlalchemy.orm import sessionmaker
 from unittest.mock import AsyncMock, MagicMock
 
 from app.database import Base
-from app.ingestion.scheduler import _fetch_one, _prune_old_items, _search_terms_for
-from app.models import CollectionMode, Match, SourceItem, WatchTerm
+from unittest.mock import patch
+
+from app.ingestion.scheduler import _build_connectors, _fetch_one, _prune_old_items, _search_terms_for
+from app.connectors.youtube import YouTubeConnector
+from app.connectors.twitter import TwitterConnector
+from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
 
 
 @pytest.fixture()
@@ -237,3 +241,33 @@ class TestPruneExceptionHandling:
         _prune_old_items(broken_db)
 
         broken_db.rollback.assert_called_once()
+
+
+class TestBuildConnectors:
+    def test_uses_youtube_api_key_from_db_when_env_is_empty(self, db):
+        cred = PlatformCredential(platform="youtube", api_key="db-yt-key")
+        db.add(cred)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = ""
+            s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        yt = next((c for c in connectors if isinstance(c, YouTubeConnector)), None)
+        assert yt is not None
+        assert yt.api_key == "db-yt-key"
+
+    def test_uses_twitter_bearer_from_db_when_env_is_empty(self, db):
+        cred = PlatformCredential(platform="twitter", bearer_token="db-tw-token")
+        db.add(cred)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = ""
+            s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        tw = next((c for c in connectors if isinstance(c, TwitterConnector)), None)
+        assert tw is not None
+        assert tw.bearer_token == "db-tw-token"
