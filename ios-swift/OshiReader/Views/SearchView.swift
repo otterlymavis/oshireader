@@ -97,7 +97,7 @@ struct SearchView: View {
                 keyword = first
             }
         }
-        .onChange(of: db.customUrls) { _ in
+        .onChange(of: db.customUrls) { _, _ in
             if selectedGroup == "Custom", customSearchLinks.isEmpty {
                 selectedGroup = "News"
             }

@@ -112,7 +112,7 @@ struct ContentView: View {
         .ifLet(appearance.dynamicTypeSizeOverride) { view, size in
             view.environment(\.dynamicTypeSize, size)
         }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 UNUserNotificationCenter.current().setBadgeCount(0)
                 UNUserNotificationCenter.current().removeAllDeliveredNotifications()

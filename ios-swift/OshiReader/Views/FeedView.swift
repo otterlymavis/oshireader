@@ -441,7 +441,7 @@ struct FeedView: View {
                 Task {
                     let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
                     if !customItems.isEmpty {
-                        _ = await db.mergeItems(newItems: customItems)
+                        _ = db.mergeItems(newItems: customItems)
                     }
                 }
                 customUrlString = ""
@@ -454,13 +454,13 @@ struct FeedView: View {
             ReorderSourcesSheet(theme: theme, i18n: i18n)
         }
         .accessibilityIdentifier("feed.screen")
-        .onChange(of: selectedKeyword) { _ in displayedCount = 20 }
-        .onChange(of: selectedPlatform) { _ in displayedCount = 20 }
-        .onChange(of: daysFilter) { newDays in
+        .onChange(of: selectedKeyword) { displayedCount = 20 }
+        .onChange(of: selectedPlatform) { displayedCount = 20 }
+        .onChange(of: daysFilter) { _, newDays in
             displayedCount = 20
             if newDays == 0 { launchRefresh() }
         }
-        .onChange(of: mediaFilter) { _ in displayedCount = 20 }
+        .onChange(of: mediaFilter) { displayedCount = 20 }
         .onAppear {
             guard !hasLoadedOnce else { return }
             hasLoadedOnce = true
@@ -549,7 +549,7 @@ struct FeedView: View {
             freshItems = []
         }
         if !freshItems.isEmpty {
-            _ = await db.mergeItems(newItems: freshItems)
+            _ = db.mergeItems(newItems: freshItems)
         }
         guard !Task.isCancelled else { return !freshItems.isEmpty }
 
@@ -565,7 +565,7 @@ struct FeedView: View {
         // 4. Custom URL cards
         let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
         if !customItems.isEmpty {
-            _ = await db.mergeItems(newItems: customItems)
+            _ = db.mergeItems(newItems: customItems)
         }
 
         return !freshItems.isEmpty
@@ -587,7 +587,7 @@ struct FeedView: View {
             }
             for await items in group where !items.isEmpty {
                 guard !Task.isCancelled else { break }
-                _ = await db.mergeItems(newItems: items)
+                _ = db.mergeItems(newItems: items)
             }
         }
     }
@@ -596,7 +596,7 @@ struct FeedView: View {
         do {
             let items = try await NetworkManager.shared.fetchFeed(platform: platformId, limit: 60, since: since)
             if !items.isEmpty {
-                _ = await db.mergeItems(newItems: items)
+                _ = db.mergeItems(newItems: items)
             }
         } catch {
             AppLogger.network.warning("fetchBackendPlatform(\(platformId)) failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
