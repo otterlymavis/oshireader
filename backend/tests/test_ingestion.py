@@ -311,3 +311,55 @@ class TestIngestionDateHealing:
         # Should have been updated to the real date (within a few seconds)
         diff = abs((stored_dt - real_date).total_seconds())
         assert diff < 10, f"published_at not healed: stored={stored_dt}, expected≈{real_date}"
+
+    @pytest.mark.asyncio
+    async def test_does_not_heal_when_dates_are_similar(self, db_engine, db_session):
+        """If new date is within 5 min of stored date, don't update (not a real correction)."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        original_date = datetime.now(timezone.utc) - timedelta(hours=2)
+        item = _make_item(item_id="vid2", published_at=original_date)
+        connector = _mock_connector("youtube", [item])
+        await _run_poll(db_engine, [connector])
+
+        # Second poll: date differs by only 2 minutes — should NOT trigger healing
+        slightly_different = original_date + timedelta(minutes=2)
+        item2 = _make_item(item_id="vid2", published_at=slightly_different)
+        connector2 = _mock_connector("youtube", [item2])
+        await _run_poll(db_engine, [connector2])
+
+        db_session.expire_all()
+        stored = db_session.get(SourceItem, "youtube:vid2")
+        stored_dt = stored.published_at
+        if stored_dt.tzinfo is None:
+            stored_dt = stored_dt.replace(tzinfo=timezone.utc)
+        diff = abs((stored_dt - original_date).total_seconds())
+        assert diff < 60, "Date within 5-min threshold should not be healed"
+
+    @pytest.mark.asyncio
+    async def test_does_not_heal_recent_date(self, db_engine, db_session):
+        """A new date that is itself very recent (< 5 min old) should not be used to heal."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        old_stored = datetime.now(timezone.utc) - timedelta(hours=1)
+        item = _make_item(item_id="vid3", published_at=old_stored)
+        connector = _mock_connector("youtube", [item])
+        await _run_poll(db_engine, [connector])
+
+        # Second poll: connector returns a date that's only 1 minute old — looks like a fallback
+        fresh_fallback = datetime.now(timezone.utc) - timedelta(minutes=1)
+        item2 = _make_item(item_id="vid3", published_at=fresh_fallback)
+        connector2 = _mock_connector("youtube", [item2])
+        await _run_poll(db_engine, [connector2])
+
+        db_session.expire_all()
+        stored = db_session.get(SourceItem, "youtube:vid3")
+        stored_dt = stored.published_at
+        if stored_dt.tzinfo is None:
+            stored_dt = stored_dt.replace(tzinfo=timezone.utc)
+        diff = abs((stored_dt - old_stored).total_seconds())
+        assert diff < 60, "Recent new date (< 5 min old) should not overwrite a valid stored date"
