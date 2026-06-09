@@ -1442,6 +1442,26 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(items.first?.media_type, "video")
     }
 
+    // BackendFeedItem with nil media_type falls back to "article"
+    func testFetchFeedNilMediaTypeFallsBackToArticle() async throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let sourceItem = SourceItem(
+            id: "news:abc", platform: "news",
+            url: "https://news.example.com/abc", published_at: now,
+            author: nil, title: "Article Title", content_text: nil,
+            media_type: nil, thumbnail_url: nil
+        )
+        let backendItem = BackendFeedItem(
+            match_id: 9, watch_term_id: 1, watch_term_keyword: "Aiko",
+            item: sourceItem, matched_at: now
+        )
+        let data = try JSONEncoder().encode([backendItem])
+        MockURLProtocol.handler = { _ in (data, Self.response(status: 200)) }
+
+        let items = try await NetworkManager.shared.fetchFeed()
+        XCTAssertEqual(items.first?.media_type, "article", "nil media_type should fall back to 'article'")
+    }
+
     // fetchCredentials decodes credential list
     func testFetchCredentialsDecodesList() async throws {
         let creds = [
