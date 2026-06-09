@@ -1101,6 +1101,52 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(freshDB.terms.count, 0)
     }
 
+    // MARK: - addTermFromBackend / replaceTerm / removeSaved
+    func testAddTermFromBackendInsertsAtFront() throws {
+        let first = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        let server = WatchTerm(id: "server-99", keyword: "Miku", collection_mode: .mediaOnly)
+        db.addTermFromBackend(server)
+        XCTAssertEqual(db.terms.count, 2)
+        XCTAssertEqual(db.terms.first?.id, "server-99", "addTermFromBackend must insert at position 0")
+        _ = first
+    }
+
+    func testReplaceTermSwapsById() throws {
+        let local = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        let updated = WatchTerm(id: "server-42", keyword: "Aiko Updated", collection_mode: .mediaOnly, is_active: false)
+        db.replaceTerm(localId: local.id, with: updated)
+        XCTAssertEqual(db.terms.count, 1)
+        XCTAssertEqual(db.terms.first?.id, "server-42")
+        XCTAssertEqual(db.terms.first?.keyword, "Aiko Updated")
+        XCTAssertEqual(db.terms.first?.collection_mode, .mediaOnly)
+    }
+
+    func testReplaceTermNoOpForUnknownId() throws {
+        db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        let ghost = WatchTerm(id: "ghost-id", keyword: "Ghost")
+        db.replaceTerm(localId: "nonexistent", with: ghost)
+        XCTAssertEqual(db.terms.count, 1)
+        XCTAssertEqual(db.terms.first?.keyword, "Aiko")
+    }
+
+    func testRemoveSavedDeletesBookmark() throws {
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(id: "youtube:x1", platform: "youtube", url: "https://youtu.be/x1",
+                            title: nil, content_text: nil, author: nil, thumbnail_url: nil,
+                            media_type: "video", published_at: now,
+                            watch_term_keyword: "Aiko", fetched_at: now)
+        _ = db.toggleSaved(item: item)
+        XCTAssertEqual(db.getSaved().count, 1)
+        db.removeSaved(id: "youtube:x1")
+        XCTAssertEqual(db.getSaved().count, 0)
+    }
+
+    func testRemoveSavedNoOpForUnknownId() throws {
+        XCTAssertNoThrow(db.removeSaved(id: "does-not-exist"))
+        XCTAssertEqual(db.getSaved().count, 0)
+    }
+
     // MARK: - WatchTerm custom JSON decoding
     func testWatchTermDecodesIntIdAsString() throws {
         let json = #"{"id":42,"keyword":"Aiko","collection_mode":"all_info","is_active":true,"notify_on_new":false,"aliases":[],"created_at":"2024-01-01T00:00:00Z"}"#
