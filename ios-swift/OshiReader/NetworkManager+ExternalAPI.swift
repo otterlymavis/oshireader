@@ -1,5 +1,10 @@
 import Foundation
 
+private let _bloggerImageRegex = try? NSRegularExpression(
+    pattern: #"src="(https?://[^"]+\.(?:png|jpg|jpeg|gif))""#,
+    options: .caseInsensitive
+)
+
 struct IrasutoyaImage: Codable, Identifiable, Hashable {
     var id: String { url }
     let url: String
@@ -97,8 +102,7 @@ extension NetworkManager {
 
             var thumb = (entry["media$thumbnail"] as? [String: Any])?["url"] as? String ?? ""
             if thumb.isEmpty, let contentHtml = (entry["content"] as? [String: Any])?["$t"] as? String {
-                let pattern = #"src="(https?://[^"]+\.(?:png|jpg|jpeg|gif))""#
-                if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                if let regex = _bloggerImageRegex,
                    let match = regex.firstMatch(in: contentHtml, range: NSRange(contentHtml.startIndex..., in: contentHtml)),
                    let range = Range(match.range(at: 1), in: contentHtml) {
                     thumb = String(contentHtml[range])

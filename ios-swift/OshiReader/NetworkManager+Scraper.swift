@@ -1,5 +1,20 @@
 import Foundation
 
+private let _scraperISO8601 = ISO8601DateFormatter()
+
+private enum _ScraperRegex {
+    static let titleTag = try? NSRegularExpression(
+        pattern: #"<title[^>]*>([^<]{1,240})</title>"#,
+        options: [.caseInsensitive, .dotMatchesLineSeparators]
+    )
+    static let metaDescription: [NSRegularExpression] = [
+        #"<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,360})["'][^>]*>"#,
+        #"<meta[^>]+content=["']([^"']{1,360})["'][^>]+name=["']description["'][^>]*>"#,
+        #"<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']{1,360})["'][^>]*>"#,
+        #"<meta[^>]+content=["']([^"']{1,360})["'][^>]+property=["']og:description["'][^>]*>"#,
+    ].compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+}
+
 // MARK: - RSS Data Model
 
 struct RssItem {
@@ -101,7 +116,7 @@ extension NetworkManager {
     func scrapeRSSFallback(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
         var results = [FeedItem]()
         let tag = tagKeyword ?? keyword
-        let nowString = ISO8601DateFormatter().string(from: Date())
+        let nowString = _scraperISO8601.string(from: Date())
 
         if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml"),
            let nhkItems = try? await parseRss(url: nhkUrl) {
@@ -161,7 +176,7 @@ extension NetworkManager {
         let normalized = normalizedCustomUrl(entry.url)
         guard let url = URL(string: normalized) else { return nil }
 
-        let nowString = ISO8601DateFormatter().string(from: Date())
+        let nowString = _scraperISO8601.string(from: Date())
         var title = entry.title?.trimmingCharacters(in: .whitespacesAndNewlines)
         var description: String?
 
@@ -171,7 +186,7 @@ extension NetworkManager {
             request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
             let (data, _) = try await session.data(for: request)
             if let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .shiftJIS) {
-                title = extractTagContent(named: "title", from: html) ?? title
+                title = extractTitleTag(from: html) ?? title
                 description = extractMetaDescription(from: html)
             }
         } catch {
@@ -201,9 +216,8 @@ extension NetworkManager {
         return "https://\(trimmed)"
     }
 
-    private func extractTagContent(named tag: String, from html: String) -> String? {
-        let pattern = #"<\#(tag)[^>]*>([^<]{1,240})</\#(tag)>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+    private func extractTitleTag(from html: String) -> String? {
+        guard let regex = _ScraperRegex.titleTag,
               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
               let range = Range(match.range(at: 1), in: html) else {
             return nil
@@ -212,15 +226,8 @@ extension NetworkManager {
     }
 
     private func extractMetaDescription(from html: String) -> String? {
-        let patterns = [
-            #"<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,360})["'][^>]*>"#,
-            #"<meta[^>]+content=["']([^"']{1,360})["'][^>]+name=["']description["'][^>]*>"#,
-            #"<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']{1,360})["'][^>]*>"#,
-            #"<meta[^>]+content=["']([^"']{1,360})["'][^>]+property=["']og:description["'][^>]*>"#
-        ]
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-                  let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+        for regex in _ScraperRegex.metaDescription {
+            guard let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
                   let range = Range(match.range(at: 1), in: html) else { continue }
             return cleanDisplayText(String(html[range]))
         }
@@ -259,7 +266,7 @@ extension NetworkManager {
         guard let url = URL(string: "https://news.google.com/rss/search?q=\(encoded)&hl=ja&gl=JP&ceid=JP%3Aja") else { return [] }
 
         let tag = tagKeyword ?? keyword
-        let nowString = ISO8601DateFormatter().string(from: Date())
+        let nowString = _scraperISO8601.string(from: Date())
 
         guard let items = try? await parseRss(url: url) else { return [] }
 
