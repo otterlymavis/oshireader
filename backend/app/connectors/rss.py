@@ -1,7 +1,5 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 
 import feedparser
 import httpx

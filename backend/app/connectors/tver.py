@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
-from bs4 import BeautifulSoup
 
 from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate
 
