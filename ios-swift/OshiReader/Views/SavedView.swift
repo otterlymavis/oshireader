@@ -178,11 +178,15 @@ struct SavedPageCard: View {
         .accessibilityIdentifier("saved.card.\(page.id)")
     }
     
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
     private func formattedDate(_ isoString: String) -> String {
         guard let date = parseISO8601Date(isoString) else { return isoString }
-        let outFormatter = DateFormatter()
-        outFormatter.dateStyle = .short
-        outFormatter.timeStyle = .short
-        return outFormatter.string(from: date)
+        return Self.dateFormatter.string(from: date)
     }
 }
