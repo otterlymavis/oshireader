@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -124,3 +124,39 @@ class TestAdminAuth:
                 headers={"Authorization": "Bearer secret123"},
             )
         assert r.status_code == 200
+
+
+class TestAdminTestFetch:
+    def test_test_fetch_returns_platform_counts(self, client):
+        from app.connectors.base import SourceItemCreate
+
+        mock_item = SourceItemCreate(
+            platform="youtube", item_id="v1",
+            url="https://yt.be/v1",
+            published_at=datetime.now(timezone.utc),
+            media_type="video",
+        )
+        mock_connector = MagicMock()
+        mock_connector.PLATFORM = "youtube"
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]), \
+             patch("app.ingestion.scheduler._fetch_one", new=AsyncMock(return_value=[mock_item])):
+            r = client.get("/api/admin/test-fetch")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert "youtube" in data
+        assert data["youtube"] == 1
+
+    def test_test_fetch_requires_auth_when_token_set(self, client):
+        with patch("app.auth.settings") as mock_settings:
+            mock_settings.admin_api_token = "secret"
+            r = client.get("/api/admin/test-fetch")
+        assert r.status_code == 401
+
+    def test_test_fetch_empty_connectors_returns_empty_dict(self, client):
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[]), \
+             patch("app.ingestion.scheduler._fetch_one", new=AsyncMock(return_value=[])):
+            r = client.get("/api/admin/test-fetch")
+        assert r.status_code == 200
+        assert r.json() == {}
