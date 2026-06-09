@@ -15,6 +15,16 @@ def _clean_keyword(v: str) -> str:
     return stripped
 
 
+def _clean_aliases_list(v: list) -> list:
+    cleaned = [a.strip() for a in v if isinstance(a, str) and a.strip()]
+    if len(cleaned) > 20:
+        raise ValueError("aliases must not exceed 20 entries")
+    for alias in cleaned:
+        if len(alias) > 200:
+            raise ValueError("each alias must be 200 characters or fewer")
+    return cleaned
+
+
 class WatchTermCreate(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
     aliases: list[str] = Field(default=[], max_length=20)
@@ -30,13 +40,7 @@ class WatchTermCreate(BaseModel):
     @field_validator("aliases", mode="before")
     @classmethod
     def clean_aliases(cls, v: list) -> list:
-        cleaned = [a.strip() for a in v if isinstance(a, str) and a.strip()]
-        if len(cleaned) > 20:
-            raise ValueError("aliases must not exceed 20 entries")
-        for alias in cleaned:
-            if len(alias) > 200:
-                raise ValueError("each alias must be 200 characters or fewer")
-        return cleaned
+        return _clean_aliases_list(v)
 
 
 class WatchTermUpdate(BaseModel):
@@ -59,13 +63,7 @@ class WatchTermUpdate(BaseModel):
     def clean_aliases(cls, v: Optional[list]) -> Optional[list]:
         if v is None:
             return None
-        cleaned = [a.strip() for a in v if isinstance(a, str) and a.strip()]
-        if len(cleaned) > 20:
-            raise ValueError("aliases must not exceed 20 entries")
-        for alias in cleaned:
-            if len(alias) > 200:
-                raise ValueError("each alias must be 200 characters or fewer")
-        return cleaned
+        return _clean_aliases_list(v)
 
 
 def _utc(v: datetime) -> datetime:
