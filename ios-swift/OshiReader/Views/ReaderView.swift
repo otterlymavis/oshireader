@@ -702,7 +702,4 @@ private extension String {
         return captures.joined(separator: "|")
     }
 
-    func match(_ pattern: String) -> String? {
-        match(try? NSRegularExpression(pattern: pattern))
-    }
 }
