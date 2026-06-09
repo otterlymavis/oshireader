@@ -522,12 +522,28 @@ struct WebViewHelper: UIViewRepresentable {
     }
 }
 
+private enum _ReaderRegex {
+    static let schemeAllowlist = try? NSRegularExpression(
+        pattern: #"^(about:|data:|blob:|file:|mailto:|tel:)"#,
+        options: .caseInsensitive
+    )
+    static let adBlocklist = try? NSRegularExpression(
+        pattern: #"(2mdn|doubleclick|googlesyndication|googleadservices|adservice\.google|googletagmanager|google-analytics|analytics\.yahoo|yjtag\.yahoo|yads\.c\.yimg|ad\.yahoo|ad-stir|ad-generation|admatrix|adingo|fam-ad|fluct|genieessp|gmossp|i-mobile|im-apps|impact-ad|microad|nend|popin|taboola|outbrain|/adserver[/.?_-]|/ads?[/.?_-]|/advert|/banner|/sponsor|/promoted)"#,
+        options: .caseInsensitive
+    )
+    static let itestHost   = try? NSRegularExpression(pattern: #"^itest\.5ch\.(net|io)$"#)
+    static let fivechHost  = try? NSRegularExpression(pattern: #"(^|\.)5ch\.(net|io)$"#)
+    static let itestPath   = try? NSRegularExpression(pattern: #"^/([^/]+)/test/read\.cgi/([^/]+)/(\d{9,})"#)
+    static let fivechPath  = try? NSRegularExpression(pattern: #"/test/read\.cgi/([^/]+)/(\d{9,})"#)
+    static let oriconArticle = try? NSRegularExpression(pattern: #"/(?:news|article)/(\d+)"#)
+}
+
 private func normalizedReaderUrl(_ rawUrl: String, platform: String) -> String? {
     let stripped = stripTrackingParams(rawUrl)
     if platform == "5ch" {
         return normalize5chReaderUrl(stripped)
     }
-    if platform == "oricon", let article = stripped.match(#"/(?:news|article)/(\d+)"#) {
+    if platform == "oricon", let article = stripped.match(_ReaderRegex.oriconArticle) {
         return "https://www.oricon.co.jp/news/\(article)/full/"
     }
     return stripped
@@ -546,18 +562,19 @@ private func stripTrackingParams(_ rawUrl: String) -> String {
 
 private func normalize5chReaderUrl(_ rawUrl: String) -> String {
     guard let url = URL(string: rawUrl), let host = url.host else { return rawUrl }
-    let isItest = host.range(of: #"^itest\.5ch\.(net|io)$"#, options: .regularExpression) != nil
-    let isFiveCh = host.range(of: #"(^|\.)5ch\.(net|io)$"#, options: .regularExpression) != nil
+    let hostRange = NSRange(host.startIndex..., in: host)
+    let isItest  = _ReaderRegex.itestHost?.firstMatch(in: host, range: hostRange) != nil
+    let isFiveCh = _ReaderRegex.fivechHost?.firstMatch(in: host, range: hostRange) != nil
     guard isItest || isFiveCh else { return rawUrl }
 
-    if isItest, let match = url.path.match(#"^/([^/]+)/test/read\.cgi/([^/]+)/(\d{9,})"#) {
+    if isItest, let match = url.path.match(_ReaderRegex.itestPath) {
         let parts = match.components(separatedBy: "|")
         if parts.count == 3 {
             return "https://itest.5ch.io/\(parts[0])/test/read.cgi/\(parts[1])/\(parts[2])/"
         }
     }
 
-    guard let match = url.path.match(#"/test/read\.cgi/([^/]+)/(\d{9,})"#) else { return rawUrl }
+    guard let match = url.path.match(_ReaderRegex.fivechPath) else { return rawUrl }
     let parts = match.components(separatedBy: "|")
     guard parts.count == 2 else { return rawUrl }
     let server = host.components(separatedBy: ".").first ?? ""
@@ -566,13 +583,9 @@ private func normalize5chReaderUrl(_ rawUrl: String) -> String {
 }
 
 private func shouldBlockReaderRequest(_ rawUrl: String) -> Bool {
-    if rawUrl.range(of: #"^(about:|data:|blob:|file:|mailto:|tel:)"#, options: [.regularExpression, .caseInsensitive]) != nil {
-        return false
-    }
-    return rawUrl.range(
-        of: #"(2mdn|doubleclick|googlesyndication|googleadservices|adservice\.google|googletagmanager|google-analytics|analytics\.yahoo|yjtag\.yahoo|yads\.c\.yimg|ad\.yahoo|ad-stir|ad-generation|admatrix|adingo|fam-ad|fluct|genieessp|gmossp|i-mobile|im-apps|impact-ad|microad|nend|popin|taboola|outbrain|/adserver[/.?_-]|/ads?[/.?_-]|/advert|/banner|/sponsor|/promoted)"#,
-        options: [.regularExpression, .caseInsensitive]
-    ) != nil
+    let range = NSRange(rawUrl.startIndex..., in: rawUrl)
+    if _ReaderRegex.schemeAllowlist?.firstMatch(in: rawUrl, range: range) != nil { return false }
+    return _ReaderRegex.adBlocklist?.firstMatch(in: rawUrl, range: range) != nil
 }
 
 private let readerInjectedJS = """
@@ -673,8 +686,8 @@ true;
 """
 
 private extension String {
-    func match(_ pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+    func match(_ regex: NSRegularExpression?) -> String? {
+        guard let regex,
               let match = regex.firstMatch(in: self, range: NSRange(startIndex..., in: self)) else {
             return nil
         }
@@ -687,5 +700,9 @@ private extension String {
             captures.append(String(self[range]))
         }
         return captures.joined(separator: "|")
+    }
+
+    func match(_ pattern: String) -> String? {
+        match(try? NSRegularExpression(pattern: pattern))
     }
 }
