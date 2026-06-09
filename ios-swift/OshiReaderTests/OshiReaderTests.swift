@@ -2046,6 +2046,10 @@ final class KeychainHelperTests: XCTestCase {
         KeychainHelper.write(key: testKey, value: value)
         XCTAssertEqual(KeychainHelper.read(key: testKey), value)
     }
+
+    func testWriteReturnsTrueOnSuccess() {
+        XCTAssertTrue(KeychainHelper.write(key: testKey, value: "check-return"), "write should return true when Keychain accepts the item")
+    }
 }
 
 // MARK: - adminApiToken Migration Tests (Phase 5.5)
