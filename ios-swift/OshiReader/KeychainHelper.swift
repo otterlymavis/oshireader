@@ -18,7 +18,8 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func write(key: String, value: String) {
+    @discardableResult
+    static func write(key: String, value: String) -> Bool {
         let data = Data(value.utf8)
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
@@ -27,7 +28,7 @@ enum KeychainHelper {
             kSecValueData:   data
         ]
         SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
     }
 
     static func delete(key: String) {

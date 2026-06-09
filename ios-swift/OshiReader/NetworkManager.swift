@@ -33,8 +33,8 @@ class NetworkManager {
 
     var adminApiToken: String? {
         if let legacy = UserDefaults.standard.string(forKey: "admin_api_token"),
-           !legacy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            KeychainHelper.write(key: "admin_api_token", value: legacy)
+           !legacy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           KeychainHelper.write(key: "admin_api_token", value: legacy) {
             UserDefaults.standard.removeObject(forKey: "admin_api_token")
         }
         if let token = KeychainHelper.read(key: "admin_api_token"),
