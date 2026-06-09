@@ -13,10 +13,11 @@ from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate,
 
 log = logging.getLogger(__name__)
 
+_SUFFIX_RE = re.compile(r"\s*[-|]\s*(ORICON NEWS|オリコンニュース|オリコン)\s*$", re.I)
+
 
 def _clean_title(value: str) -> str:
-    value = re.sub(r"\s*[-|]\s*(ORICON NEWS|オリコンニュース|オリコン)\s*$", "", value, flags=re.I)
-    return value.strip()
+    return _SUFFIX_RE.sub("", value).strip()
 
 
 class OriconConnector(BaseConnector):

@@ -13,12 +13,18 @@ from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate,
 
 log = logging.getLogger(__name__)
 
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_WHITESPACE_RE = re.compile(r"\s+")
+_JINA_ARTICLE_RE = re.compile(
+    r"^\s*\d+\.\s+\[(.+?)\]\((https://news\.yahoo\.co\.jp/articles/([A-Za-z0-9]+))\)",
+    re.M | re.S,
+)
+
 
 def _clean_markdown_title(value: str) -> str:
-    value = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", value)
+    value = _MD_IMAGE_RE.sub("", value)
     value = value.replace("_", "")
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
+    return _WHITESPACE_RE.sub(" ", value).strip()
 
 
 class YahooNewsConnector(BaseConnector):
@@ -55,11 +61,7 @@ class YahooNewsConnector(BaseConnector):
 
         items: list[SourceItemCreate] = []
         seen: set[str] = set()
-        pattern = re.compile(
-            r"^\s*\d+\.\s+\[(.+?)\]\((https://news\.yahoo\.co\.jp/articles/([A-Za-z0-9]+))\)",
-            re.M | re.S,
-        )
-        for m in pattern.finditer(resp.text):
+        for m in _JINA_ARTICLE_RE.finditer(resp.text):
             title = _clean_markdown_title(m.group(1))
             article_url = m.group(2)
             item_id = m.group(3)
