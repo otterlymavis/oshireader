@@ -126,7 +126,7 @@ extension NetworkManager {
            let nhkItems = try? await parseRss(url: nhkUrl) {
             for item in nhkItems where matchesKeyword(title: item.title, desc: item.description, kw: keyword) {
                 results.append(FeedItem(
-                    id: "news:nhk:\(UUID().uuidString)",
+                    id: "news:nhk:\(stableIdHash(item.link))",
                     platform: "news",
                     url: item.link,
                     title: cleanNewsTitle(item.title),
