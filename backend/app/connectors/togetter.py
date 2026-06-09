@@ -21,7 +21,7 @@ class TogetterConnector(BaseConnector):
     _SEARCH = "https://togetter.com/search"
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
-        if mode == "media_only":
+        if mode == CollectionMode.MEDIA_ONLY:
             return []
 
         params = {"q": keyword}

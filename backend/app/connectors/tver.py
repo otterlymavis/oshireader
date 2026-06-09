@@ -13,6 +13,11 @@ from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate
 
 log = logging.getLogger(__name__)
 
+_YEAR_RE = re.compile(r'^(\d{4})年')
+_MONTH_DAY_RE = re.compile(r'(\d+)月(\d+)日')
+_TIME_RE = re.compile(r'(\d+):(\d+)')
+
+
 def _parse_tver_date(content: dict) -> Optional[datetime]:
     # Unix timestamps (seconds) — most reliable
     for key in ("publishedAt", "publish_start", "deliveryStartAt", "broadcastDate", "airDate"):
@@ -33,15 +38,15 @@ def _parse_tver_date(content: dict) -> Optional[datetime]:
     if label:
         now = datetime.now(timezone.utc)
         # Year-only: "2021年放送"
-        year_m = re.match(r'^(\d{4})年', label)
+        year_m = _YEAR_RE.match(label)
         if year_m:
             return datetime(int(year_m.group(1)), 6, 1, tzinfo=timezone.utc)
         # Month/day with optional time: "6月5日(金)放送分" or "5月29日(金) 18:29"
-        md_m = re.search(r'(\d+)月(\d+)日', label)
+        md_m = _MONTH_DAY_RE.search(label)
         if md_m:
             month, day = int(md_m.group(1)), int(md_m.group(2))
             hour, minute = 0, 0
-            time_m = re.search(r'(\d+):(\d+)', label)
+            time_m = _TIME_RE.search(label)
             if time_m:
                 hour, minute = int(time_m.group(1)), int(time_m.group(2))
             year = now.year

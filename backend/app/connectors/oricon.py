@@ -23,7 +23,7 @@ class OriconConnector(BaseConnector):
     PLATFORM = "oricon"
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
-        if mode == "media_only":
+        if mode == CollectionMode.MEDIA_ONLY:
             return []
 
         encoded = quote(f"{keyword} site:oricon.co.jp")

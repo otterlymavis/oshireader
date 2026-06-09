@@ -19,7 +19,7 @@ class TwitterConnector(BaseConnector):
         if not self.bearer_token:
             return []
 
-        query = f"{keyword} has:media" if mode == "media_only" else keyword
+        query = f"{keyword} has:media" if mode == CollectionMode.MEDIA_ONLY else keyword
         params = {
             "query": query,
             "max_results": 25,

@@ -23,7 +23,7 @@ class NoteConnector(BaseConnector):
     SUPPORTS_MEDIA_FILTER = False
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
-        if mode == "media_only":
+        if mode == CollectionMode.MEDIA_ONLY:
             return []
 
         stripped = keyword.strip()
