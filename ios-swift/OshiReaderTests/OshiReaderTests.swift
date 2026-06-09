@@ -1703,7 +1703,7 @@ final class RSSParserDelegateTests: XCTestCase {
     }
 
     func testEmptyFeedReturnsNoItems() {
-        let xml = """<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>"""
+        let xml = #"<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>"#
         XCTAssertTrue(parse(xml).isEmpty)
     }
 }
