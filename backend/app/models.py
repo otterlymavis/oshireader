@@ -68,10 +68,10 @@ class Match(Base):
     __tablename__ = "matches"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    watch_term_id = Column(Integer, ForeignKey("watch_terms.id", ondelete="CASCADE"), nullable=False)
+    watch_term_id = Column(Integer, ForeignKey("watch_terms.id", ondelete="CASCADE"), nullable=False, index=True)
     source_item_id = Column(String, ForeignKey("source_items.id"), nullable=False, index=True)
     confidence = Column(Float, default=1.0)
-    created_at = Column(DateTime, default=_utcnow)
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
     __table_args__ = (UniqueConstraint("watch_term_id", "source_item_id"),)
 

@@ -333,7 +333,7 @@ struct SearchView: View {
         let query = trimmedKeyword
         let url = link.makeUrl(query)
         let title = link.group == "Custom" ? link.label : "\(link.label): \(query)"
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = _ISO8601Cache.withoutFractional.string(from: Date())
         return FeedItem(
             id: link.group == "Custom" ? link.id : "search:\(link.id):\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)",
             platform: link.platform,
