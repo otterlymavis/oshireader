@@ -245,6 +245,18 @@ class TestFeedAPI:
         resp = client.get("/api/feed/?media_type=video")
         ids = [r["item"]["id"] for r in resp.json()]
         assert vid.id in ids
+        assert art.id not in ids
+
+    def test_feed_ordered_newest_first(self, client, db_session):
+        term = _make_term(db_session)
+        old = _make_item(db_session, item_id="old_ord", days_ago=5)
+        new = _make_item(db_session, item_id="new_ord", days_ago=1)
+        _make_match(db_session, term, old)
+        _make_match(db_session, term, new)
+
+        rows = client.get("/api/feed/?days=30").json()
+        ids = [r["item"]["id"] for r in rows]
+        assert ids.index(new.id) < ids.index(old.id), "newer item must appear before older item"
 
     def test_feed_platform_filter(self, client, db_session):
         term = _make_term(db_session)
