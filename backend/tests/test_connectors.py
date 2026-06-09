@@ -8,9 +8,17 @@ from unittest.mock import patch
 import pytest
 
 from app.connectors.base import SourceItemCreate, parse_feed_date
+from app.connectors.fivech import FiveChConnector
+from app.connectors.girlschannel import GirlsChannelConnector
+from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
+from app.connectors.note import NoteConnector
+from app.connectors.oricon import OriconConnector
 from app.connectors.oricon import _clean_title as _clean_oricon_title
+from app.connectors.rss import RSSConnector
+from app.connectors.togetter import TogetterConnector
 from app.connectors.tver import _parse_tver_date
+from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.yahoonews import _clean_markdown_title
 from app.connectors.youtube import _parse_youtube_relative
 
@@ -233,3 +241,47 @@ class TestCleanMarkdownTitle:
     def test_combined_cleanup(self):
         result = _clean_markdown_title("  Hello_![x](u)  World  ")
         assert result == "Hello World"
+
+
+class TestConnectorMediaOnlyEarlyReturn:
+    """Text/article connectors must return [] immediately for media_only — no HTTP calls made."""
+
+    @pytest.mark.asyncio
+    async def test_rss_connector_returns_empty_for_media_only(self):
+        result = await RSSConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fivech_connector_returns_empty_for_media_only(self):
+        result = await FiveChConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_girlschannel_connector_returns_empty_for_media_only(self):
+        result = await GirlsChannelConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_modelpress_connector_returns_empty_for_media_only(self):
+        result = await ModelPressConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_note_connector_returns_empty_for_media_only(self):
+        result = await NoteConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_oricon_connector_returns_empty_for_media_only(self):
+        result = await OriconConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_togetter_connector_returns_empty_for_media_only(self):
+        result = await TogetterConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_yahoonews_connector_returns_empty_for_media_only(self):
+        result = await YahooNewsConnector().fetch("Aiko", "media_only")
+        assert result == []
