@@ -32,10 +32,16 @@ func parseISO8601Date(_ value: String) -> Date? {
     return nil
 }
 
+private enum _DisplayTextRegex {
+    static let htmlTags  = try! NSRegularExpression(pattern: "<[^>]+>")
+    static let whitespace = try! NSRegularExpression(pattern: "\\s+")
+}
+
 func cleanDisplayText(_ value: String?) -> String? {
     guard var text = value else { return nil }
     // Strip HTML tags first so entity-decoded < > aren't mistaken for tags
-    text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    var range = NSRange(text.startIndex..., in: text)
+    text = _DisplayTextRegex.htmlTags.stringByReplacingMatches(in: text, range: range, withTemplate: "")
     let replacements: [(String, String)] = [
         ("&amp;", "&"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"),
         ("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">")
@@ -43,7 +49,8 @@ func cleanDisplayText(_ value: String?) -> String? {
     for (needle, replacement) in replacements {
         text = text.replacingOccurrences(of: needle, with: replacement)
     }
-    text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    range = NSRange(text.startIndex..., in: text)
+    text = _DisplayTextRegex.whitespace.stringByReplacingMatches(in: text, range: range, withTemplate: " ")
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : trimmed
 }
@@ -74,7 +81,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         case id, keyword, collection_mode, is_active, notify_on_new, aliases, created_at
     }
 
-    init(id: String = UUID().uuidString, keyword: String, collection_mode: CollectionMode = .allInfo, is_active: Bool = true, notify_on_new: Bool = false, aliases: [String] = [], created_at: String = ISO8601DateFormatter().string(from: Date())) {
+    init(id: String = UUID().uuidString, keyword: String, collection_mode: CollectionMode = .allInfo, is_active: Bool = true, notify_on_new: Bool = false, aliases: [String] = [], created_at: String = _ISO8601Cache.withoutFractional.string(from: Date())) {
         self.id = id
         self.keyword = keyword
         self.collection_mode = collection_mode
@@ -100,7 +107,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         self.is_active = try container.decodeIfPresent(Bool.self, forKey: .is_active) ?? true
         self.notify_on_new = try container.decodeIfPresent(Bool.self, forKey: .notify_on_new) ?? false
         self.aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
-        self.created_at = try container.decodeIfPresent(String.self, forKey: .created_at) ?? ISO8601DateFormatter().string(from: Date())
+        self.created_at = try container.decodeIfPresent(String.self, forKey: .created_at) ?? _ISO8601Cache.withoutFractional.string(from: Date())
     }
 }
 

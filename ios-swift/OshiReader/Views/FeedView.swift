@@ -531,9 +531,7 @@ struct FeedView: View {
             // Use fetched_at (reliable grab time) not published_at — items with a bad
             // published_at=now() would otherwise block older legitimate content.
             guard let maxDate = db.feedItems.compactMap({ parseISO8601Date($0.fetched_at) }).max() else { return nil }
-            let fmt = ISO8601DateFormatter()
-            fmt.formatOptions = [.withInternetDateTime]
-            return fmt.string(from: maxDate)
+            return _ISO8601Cache.withoutFractional.string(from: maxDate)
         }()
         let fetchDays = wantsFullHistory ? 0 : (db.feedItems.isEmpty ? 90 : 30)
 
@@ -770,12 +768,15 @@ struct FeedCard: View {
         .accessibilityIdentifier("feed.card.\(item.id)")
     }
     
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
     private func relativeTime(from isoDate: String) -> String {
         guard let date = parseISO8601Date(isoDate) else { return "" }
-        
-        let formatter2 = RelativeDateTimeFormatter()
-        formatter2.unitsStyle = .abbreviated
-        return formatter2.localizedString(for: date, relativeTo: Date())
+        return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
 
