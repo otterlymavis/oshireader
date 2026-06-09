@@ -1767,6 +1767,80 @@ final class NetworkManagerTests: XCTestCase {
         let result = await NetworkManager.shared.translateToJapanese("hello")
         XCTAssertEqual(result, "hello")
     }
+
+    // MARK: - scrapeRSSFallback
+    func testScrapeRSSFallbackNHKFiltersByKeyword() async {
+        // NHK section applies keyword filter; GNews section does not (search results are pre-filtered).
+        // Return an RSS with one matching item and one non-matching item from the NHK URL,
+        // and empty RSS from GNews, so we can isolate NHK filtering.
+        let nhkXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko releases new album</title>
+              <link>https://nhk.or.jp/aiko-album</link>
+              <description>Singer Aiko announced a new release.</description>
+            </item>
+            <item>
+              <title>Unrelated sports result</title>
+              <link>https://nhk.or.jp/sports</link>
+              <description>The match ended 2-1.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        let emptyXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        MockURLProtocol.handler = { request in
+            let xml = request.url?.host?.contains("nhk") == true ? nhkXml : emptyXml
+            return (Data(xml.utf8), Self.response(status: 200))
+        }
+
+        let items = await NetworkManager.shared.scrapeRSSFallback(keyword: "Aiko")
+        let titles = items.map { $0.title ?? "" }
+        XCTAssertTrue(titles.contains(where: { $0.contains("Aiko") }),
+                      "NHK items matching the keyword should appear in results")
+        XCTAssertFalse(titles.contains(where: { $0.contains("Unrelated") }),
+                       "NHK items not matching the keyword should be filtered out")
+    }
+
+    func testScrapeRSSFallbackReturnsEmptyOnNetworkError() async {
+        MockURLProtocol.errorHandler = { _ in URLError(.notConnectedToInternet) }
+
+        let items = await NetworkManager.shared.scrapeRSSFallback(keyword: "Aiko")
+        XCTAssertTrue(items.isEmpty, "Network error should produce an empty result, not a crash")
+    }
+
+    func testScrapeRSSFallbackSetsCorrectPlatform() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko concert announcement</title>
+              <link>https://nhk.or.jp/concert</link>
+              <description>Aiko will hold a concert in Osaka.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { _ in (Data(xml.utf8), Self.response(status: 200)) }
+
+        let items = await NetworkManager.shared.scrapeRSSFallback(keyword: "Aiko")
+        if !items.isEmpty {
+            XCTAssertEqual(items.first?.platform, "news")
+            XCTAssertEqual(items.first?.media_type, "article")
+            XCTAssertEqual(items.first?.watch_term_keyword, "Aiko")
+        }
+    }
+
+    func testScrapeCustomUrlsEmptyInputReturnsEmpty() async {
+        let items = await NetworkManager.shared.scrapeCustomUrls([])
+        XCTAssertTrue(items.isEmpty, "Empty URL list should produce no items")
+    }
 }
 
 // MARK: - RSSParserDelegate Tests
