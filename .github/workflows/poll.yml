@@ -15,7 +15,7 @@ jobs:
             https://oshireader.onrender.com/api/admin/poll \
             -H "Authorization: Bearer ${{ secrets.ADMIN_API_TOKEN }}" \
             -H "Content-Type: application/json" \
-            --max-time 30)
+            --max-time 90)
           echo "Response status: $STATUS"
           if [ "$STATUS" != "200" ] && [ "$STATUS" != "202" ]; then
             echo "Poll request failed with status $STATUS"

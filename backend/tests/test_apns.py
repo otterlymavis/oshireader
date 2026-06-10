@@ -25,17 +25,17 @@ class TestPayload:
 
     def test_payload_structure(self):
         payload = _payload(self._term("Miku"), 3)
-        assert payload["aps"]["alert"]["title"] == "New items for Miku"
+        assert payload["aps"]["alert"]["title"] == "Miku の新着"
         assert payload["watch_term_keyword"] == "Miku"
         assert payload["new_count"] == 3
 
     def test_singular_body(self):
         payload = _payload(self._term(), 1)
-        assert payload["aps"]["alert"]["body"] == "1 new item found."
+        assert payload["aps"]["alert"]["body"] == "1件の新着があります。"
 
     def test_plural_body(self):
         payload = _payload(self._term(), 5)
-        assert payload["aps"]["alert"]["body"] == "5 new items found."
+        assert payload["aps"]["alert"]["body"] == "5件の新着があります。"
 
     def test_watch_term_id_included(self):
         payload = _payload(self._term(term_id=42), 1)

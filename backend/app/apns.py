@@ -59,8 +59,8 @@ def _payload(term: WatchTerm, count: int) -> dict:
     return {
         "aps": {
             "alert": {
-                "title": f"New items for {term.keyword}",
-                "body": f"{count} new item{'' if count == 1 else 's'} found.",
+                "title": f"{term.keyword} の新着",
+                "body": f"{count}件の新着があります。",
             },
             "sound": "default",
         },
