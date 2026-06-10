@@ -110,7 +110,7 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(privacyLink.waitForExistence(timeout: 3))
         privacyLink.tap()
 
-        XCTAssertTrue(app.staticTexts["Data Stored on This Device"].exists)
+        XCTAssertTrue(app.staticTexts["Data Stored on This Device"].waitForExistence(timeout: 3))
     }
 
     func testSettingsNotificationControls() throws {

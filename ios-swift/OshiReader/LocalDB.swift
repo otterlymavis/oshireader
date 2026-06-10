@@ -20,7 +20,6 @@ class LocalDB: ObservableObject {
 
     private let storeDirectory: URL
     private let queue = DispatchQueue(label: "com.otterlymavis.oshireader.db", qos: .userInitiated)
-    private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let iso8601 = ISO8601DateFormatter()
 
@@ -98,7 +97,7 @@ class LocalDB: ObservableObject {
         let url = fileURL(for: name)
         queue.async {
             do {
-                let data = try self.encoder.encode(value)
+                let data = try JSONEncoder().encode(value)
                 try data.write(to: url, options: [.atomic])
             } catch {
                 AppLogger.persistence.error("Failed to save \(name): \(error.localizedDescription)")

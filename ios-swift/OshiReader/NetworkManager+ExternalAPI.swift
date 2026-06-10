@@ -50,8 +50,10 @@ extension NetworkManager {
         let feed1 = "https://www.irasutoya.com/feeds/posts/default?alt=json&max-results=20"
         let categoryUrl = "https://www.irasutoya.com/feeds/posts/default/-/\("人物".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "人物")?alt=json&max-results=15"
 
-        let items1 = try await fetchBloggerFeed(feed1)
-        let items2 = (try? await fetchBloggerFeed(categoryUrl)) ?? []
+        async let fetch1 = fetchBloggerFeed(feed1)
+        async let fetch2 = fetchBloggerFeed(categoryUrl)
+        let items1 = try await fetch1
+        let items2 = (try? await fetch2) ?? []
 
         var combined = [IrasutoyaImage]()
         var seen = Set<String>()
@@ -69,8 +71,10 @@ extension NetworkManager {
         let feedUrl1 = "https://www.irasutoya.com/feeds/posts/default?alt=json&q=\(escaped)&max-results=36&start-index=1"
         let feedUrl2 = "https://www.irasutoya.com/feeds/posts/default?alt=json&q=\(escaped)&max-results=36&start-index=37"
 
-        let items1 = (try? await fetchBloggerFeed(feedUrl1)) ?? []
-        let items2 = (try? await fetchBloggerFeed(feedUrl2)) ?? []
+        async let fetch1 = fetchBloggerFeed(feedUrl1)
+        async let fetch2 = fetchBloggerFeed(feedUrl2)
+        let items1 = (try? await fetch1) ?? []
+        let items2 = (try? await fetch2) ?? []
 
         var combined = [IrasutoyaImage]()
         var seen = Set<String>()

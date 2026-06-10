@@ -18,7 +18,8 @@ struct AvatarEditorView: View {
     @State private var searchingStickers = false
     @State private var saving = false
     
-    // Drag gestures temporary starting state
+    // Drag gesture state — isDragging gates start-position capture
+    @State private var isDragging = false
     @State private var startX: Double = 0.0
     @State private var startY: Double = 0.0
     @State private var startCropX: Double = 0.0
@@ -121,19 +122,20 @@ struct AvatarEditorView: View {
                                         if selectedId != layer.id {
                                             selectedId = layer.id
                                             cropMode = false
+                                            isDragging = false
                                         }
-                                        
-                                        // On drag start values record (since gesture state updates continuously, check if starting)
-                                        if value.translation == .zero {
+
+                                        if !isDragging {
+                                            isDragging = true
                                             startX = layer.x
                                             startY = layer.y
                                             startCropX = layer.cropX ?? 0.0
                                             startCropY = layer.cropY ?? 0.0
                                         }
-                                        
+
                                         let dx = value.translation.width / scaleFactor
                                         let dy = value.translation.height / scaleFactor
-                                        
+
                                         if let idx = layers.firstIndex(where: { $0.id == layer.id }) {
                                             if cropMode {
                                                 var modified = layers[idx]
@@ -143,7 +145,6 @@ struct AvatarEditorView: View {
                                                 layers[idx].cropX = clamped.cropX
                                                 layers[idx].cropY = clamped.cropY
                                             } else {
-                                                // Clamp movements inside canvas
                                                 let maxX = 300.0 - (baseSize * layer.scale)
                                                 let maxY = 300.0 - (baseSize * layer.scale)
                                                 layers[idx].x = max(0.0, min(maxX, startX + dx))
@@ -151,6 +152,7 @@ struct AvatarEditorView: View {
                                             }
                                         }
                                     }
+                                    .onEnded { _ in isDragging = false }
                             )
                         }
                     }
