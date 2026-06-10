@@ -33,12 +33,15 @@ targets:
         Debug:
           OSHIREADER_API_BASE_URL: http://127.0.0.1:8000
           OSHIREADER_ENVIRONMENT: Local
+          APNS_ENVIRONMENT: development
         Staging:
           OSHIREADER_API_BASE_URL: https://oshireader.onrender.com
           OSHIREADER_ENVIRONMENT: Staging
+          APNS_ENVIRONMENT: production
         Release:
           OSHIREADER_API_BASE_URL: https://oshireader.onrender.com
           OSHIREADER_ENVIRONMENT: Production
+          APNS_ENVIRONMENT: production
   OshiReaderTests:
     type: bundle.unit-test
     platform: iOS

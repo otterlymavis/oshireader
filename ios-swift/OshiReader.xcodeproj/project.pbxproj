@@ -462,6 +462,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
+				APNS_ENVIRONMENT = development;
 				OSHIREADER_API_BASE_URL = "https://oshireader.onrender.com";
 				OSHIREADER_ENVIRONMENT = Staging;
 				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus;
@@ -489,6 +490,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
+				APNS_ENVIRONMENT = development;
 				OSHIREADER_API_BASE_URL = "http://127.0.0.1:8000";
 				OSHIREADER_ENVIRONMENT = Local;
 				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus;
@@ -516,6 +518,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
+				APNS_ENVIRONMENT = production;
 				OSHIREADER_API_BASE_URL = "https://oshireader.onrender.com";
 				OSHIREADER_ENVIRONMENT = Production;
 				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus;
