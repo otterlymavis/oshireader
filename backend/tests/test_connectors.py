@@ -992,22 +992,6 @@ class TestNicoNicoFetch:
 # Note connector tests
 # ---------------------------------------------------------------------------
 
-def _note_api_resp(notes, is_success=True, structure="contents"):
-    """Build a mock httpx response for note.com search API."""
-    if structure == "contents":
-        data = {"data": {"notes": {"contents": notes}}}
-    elif structure == "flat":
-        data = {"data": {"notes": notes}}
-    else:
-        data = structure
-    resp = MagicMock()
-    resp.is_success = is_success
-    resp.status_code = 200 if is_success else 500
-    resp.json.return_value = data
-    resp.content = b""
-    return resp
-
-
 class TestNoteFetch:
     @pytest.mark.asyncio
     async def test_empty_keyword_returns_empty(self):
@@ -1015,45 +999,30 @@ class TestNoteFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_search_api_returns_items(self):
-        notes = [{
-            "key": "abc123",
-            "name": "Aiko の新曲レビュー",
-            "user": {"urlname": "reviewer", "name": "Reviewer San"},
-            "publishAt": "2024-01-15T10:00:00+00:00",
-            "body": "素晴らしい曲です",
-            "eyecatch": "https://assets.st-note.com/img/t.jpg",
-        }]
-        resp = _note_api_resp(notes)
+    async def test_rss_returns_items(self):
+        rss_entry = _rss_entry(link="https://note.com/u/n/abc1", title="Aiko article")
+        fake_feed = _FakeFeed([rss_entry])
+        rss_resp = MagicMock()
+        rss_resp.is_success = True
+        rss_resp.content = b"<rss/>"
         client_mock = AsyncMock()
-        client_mock.get = AsyncMock(return_value=resp)
+        client_mock.get = AsyncMock(return_value=rss_resp)
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
         assert result[0].platform == "note"
-        assert result[0].item_id == "abc123"
-        assert result[0].author == "Reviewer San"
-        assert result[0].thumbnail_url == "https://assets.st-note.com/img/t.jpg"
 
     @pytest.mark.asyncio
-    async def test_search_api_non_list_notes_returns_empty(self):
-        # notes dict without "contents" key → isinstance(notes, list) fails → return []
-        # then rss fallback also fails → final result []
-        resp = _note_api_resp(None, structure={"data": {"notes": {"unexpected_shape": "data"}}})
-        call_count = [0]
+    async def test_rss_http_error_returns_empty(self):
         rss_resp = MagicMock()
         rss_resp.is_success = False
         rss_resp.status_code = 404
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return resp if call_count[0] == 1 else rss_resp
-
         client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_side)
+        client_mock.get = AsyncMock(return_value=rss_resp)
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
@@ -1062,126 +1031,12 @@ class TestNoteFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_search_api_http_error_falls_back_to_rss(self):
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = False
-        api_resp.status_code = 500
-        rss_resp = MagicMock()
-        rss_resp.is_success = True
-        rss_resp.content = b"<rss/>"
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else rss_resp
-
-        rss_entry = _rss_entry(link="https://note.com/u/n/abc1", title="Aiko article")
-        fake_feed = _FakeFeed([rss_entry])
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_side)
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
-             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
-            result = await NoteConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].platform == "note"
-
-    @pytest.mark.asyncio
-    async def test_search_api_json_exception_falls_back_to_rss(self):
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = True
-        api_resp.json.side_effect = ValueError("bad json")
-        rss_resp = MagicMock()
-        rss_resp.is_success = True
-        rss_resp.content = b"<rss/>"
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else rss_resp
-
-        rss_entry = _rss_entry(link="https://note.com/u/n/abc2", title="Article")
-        fake_feed = _FakeFeed([rss_entry])
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_side)
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
-             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
-            result = await NoteConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-
-    @pytest.mark.asyncio
-    async def test_search_api_skips_note_without_key(self):
-        notes = [{"name": "No Key"}, {"key": "k2", "name": "Has Key"}]
-        resp = _note_api_resp(notes)
-        call_count = [0]
-        rss_resp = MagicMock()
-        rss_resp.is_success = False
-        rss_resp.status_code = 404
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return resp if call_count[0] == 1 else rss_resp
-
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_side)
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
-            result = await NoteConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].item_id == "k2"
-
-    @pytest.mark.asyncio
-    async def test_search_api_url_without_urlname(self):
-        # No urlname → URL uses /n/<key> format
-        notes = [{"key": "k3", "name": "Title", "user": {}}]
-        resp = _note_api_resp(notes)
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(return_value=resp)
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
-            result = await NoteConnector().fetch("Aiko", "all_info")
-        assert result[0].url == "https://note.com/n/k3"
-
-    @pytest.mark.asyncio
-    async def test_search_api_bad_publish_at_uses_now(self):
-        notes = [{"key": "k4", "name": "Title", "publishAt": "not-a-date"}]
-        resp = _note_api_resp(notes)
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(return_value=resp)
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)):
-            result = await NoteConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].published_at is not None
-
-    @pytest.mark.asyncio
     async def test_rss_feedparser_exception_returns_empty(self):
-        # feedparser.parse raises inside _fetch_hashtag_rss → except branch
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = False
-        api_resp.status_code = 404
         rss_resp = MagicMock()
         rss_resp.is_success = True
         rss_resp.content = b"<rss/>"
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else rss_resp
-
         client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_side)
+        client_mock.get = AsyncMock(return_value=rss_resp)
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
@@ -1192,7 +1047,6 @@ class TestNoteFetch:
 
     @pytest.mark.asyncio
     async def test_rss_skips_entry_without_link_and_extracts_enclosure_thumb(self):
-        # Covers: no-link skip, image enclosure thumbnail extraction
         no_link = _FeedEntry(id="nl", link="", title="skip")
         with_enclosure = _FeedEntry(
             id="enc1", link="https://note.com/u/n/enc1",
@@ -1200,20 +1054,11 @@ class TestNoteFetch:
             enclosures=[{"type": "image/jpeg", "href": "https://assets.st-note.com/enc/t.jpg"}],
         )
         fake_feed = _FakeFeed([no_link, with_enclosure])
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = False
-        api_resp.status_code = 404
         rss_resp = MagicMock()
         rss_resp.is_success = True
         rss_resp.content = b"<rss/>"
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else rss_resp
-
         client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_side)
+        client_mock.get = AsyncMock(return_value=rss_resp)
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
@@ -1231,21 +1076,11 @@ class TestNoteFetch:
             media_thumbnail=[{"url": "https://assets.st-note.com/media/t.jpg"}],
         )
         fake_feed = _FakeFeed([entry])
-        # API fails → RSS called
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = False
-        api_resp.status_code = 404
         rss_resp = MagicMock()
         rss_resp.is_success = True
         rss_resp.content = b"<rss/>"
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else rss_resp
-
         client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_side)
+        client_mock.get = AsyncMock(return_value=rss_resp)
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)

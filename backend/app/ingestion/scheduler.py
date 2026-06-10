@@ -253,7 +253,6 @@ def _prune_old_items(db) -> None:
         """))
         pruned = result.rowcount
         if pruned:
-            db.commit()
             db.execute(sa_text(
                 "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
             ))

@@ -8,12 +8,16 @@ from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate,
 
 log = logging.getLogger(__name__)
 
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+}
+
 # Curated public RSS feeds — Japanese entertainment / idol news, no login needed.
+# sponichi and hochi removed their RSS feeds; natalie/tv removed their TV section feed.
 FEEDS: list[tuple[str, str, str]] = [
     ("news", "natalie", "https://natalie.mu/music/feed/news"),
-    ("news", "natalie", "https://natalie.mu/tv/feed/news"),
-    ("news", "sponichi", "https://www.sponichi.co.jp/entertainment/rss/entertainmentAll.rdf"),
-    ("news", "hochi", "https://hochi.news/rss/entertainment"),
+    ("news", "natalie", "https://natalie.mu/eiga/feed/news"),
+    ("news", "natalie", "https://natalie.mu/stage/feed/news"),
 ]
 
 
@@ -30,7 +34,7 @@ class RSSConnector(BaseConnector):
 
         async def _one(platform: str, source: str, url: str) -> None:
             try:
-                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=_HEADERS) as client:
                     resp = await client.get(url)
                     if not resp.is_success:
                         log.warning("RSS feed returned status=%d source=%s", resp.status_code, source)
