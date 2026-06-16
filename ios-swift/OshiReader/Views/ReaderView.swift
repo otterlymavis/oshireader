@@ -37,6 +37,7 @@ struct ReaderView: View {
     @State private var webLoadState: ReaderWebLoadState = .loading
     @State private var showSignInBanner = false
     @State private var isSigningIntoX = false
+    @State private var showOpenInBrowserBanner = false
 
     init(feedItem: FeedItem) {
         self.feedItem = feedItem
@@ -88,12 +89,19 @@ struct ReaderView: View {
                         saveAllImagesCounter: saveAllImagesCounter,
                         onLoadStateChange: { state in
                             webLoadState = state
-                            if state == .loading { showSignInBanner = false }
+                            if state == .loading {
+                                showSignInBanner = false
+                                showOpenInBrowserBanner = false
+                            }
                         },
                         onImageAction: { imageAction = $0 },
                         onSaveAllImages: { urls in saveAllImages(urls) },
                         onContentBlocked: {
-                            if !isSigningIntoX { showSignInBanner = true }
+                            if feedItem.platform == "twitter" {
+                                if !isSigningIntoX { showSignInBanner = true }
+                            } else {
+                                showOpenInBrowserBanner = true
+                            }
                         }
                     )
                     .background(bgColor)
@@ -108,6 +116,8 @@ struct ReaderView: View {
                             signInReturnBanner
                         } else if showSignInBanner {
                             signInPromptBanner
+                        } else if showOpenInBrowserBanner {
+                            openInBrowserBanner
                         }
                         Spacer()
                     }
@@ -271,6 +281,43 @@ struct ReaderView: View {
         .padding(10)
     }
 
+    private var openInBrowserBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundColor(theme.colors.textSub)
+            Text(i18n.t("readerCouldNotDisplay"))
+                .font(.caption)
+                .foregroundColor(theme.colors.textSub)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(i18n.t("readerOpenInBrowser")) {
+                showOpenInBrowserBanner = false
+                openInExternalBrowser()
+            }
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundColor(theme.colors.primary)
+            .accessibilityIdentifier("reader.openInBrowserButton")
+            Button {
+                showOpenInBrowserBanner = false
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(theme.colors.textMuted)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.colors.card)
+        .cornerRadius(10)
+        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .padding(10)
+    }
+
+    private func openInExternalBrowser() {
+        guard let url = targetUrl else { return }
+        UIApplication.shared.open(url)
+    }
+
     private var readerLoadStateOverlay: some View {
         VStack(spacing: 12) {
             if webLoadState == .loading {
@@ -287,6 +334,16 @@ struct ReaderView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(theme.colors.textSub)
                     .multilineTextAlignment(.center)
+                Button(i18n.t("readerOpenInBrowser")) {
+                    openInExternalBrowser()
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(theme.colors.primary)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+                .accessibilityIdentifier("reader.failedOpenInBrowserButton")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -643,10 +700,17 @@ struct WebViewHelper: UIViewRepresentable {
         }
 
         private func checkForBlockedContent(in webView: WKWebView) {
-            guard parent.platform == "twitter" else { return }
-            webView.evaluateJavaScript("document.body ? document.body.innerText.trim().length : 0") { result, _ in
-                guard let length = result as? Int, length < 40 else { return }
-                DispatchQueue.main.async { self.parent.onContentBlocked() }
+            // Some pages (Google News' redirect shell, x.com without a session, etc.) report a
+            // successful load while a client-side script is still working out where to send the
+            // user, or never manages to. Give that script a moment, then treat a still-empty
+            // page as failed-to-display rather than silently leaving the user on a blank screen.
+            let requestURLAtCheckTime = currentRequestURL
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
+                guard let self, let webView, self.currentRequestURL == requestURLAtCheckTime else { return }
+                webView.evaluateJavaScript("document.body ? document.body.innerText.trim().length : 0") { result, _ in
+                    guard let length = result as? Int, length < 40 else { return }
+                    DispatchQueue.main.async { self.parent.onContentBlocked() }
+                }
             }
         }
 
@@ -723,6 +787,18 @@ struct WebViewHelper: UIViewRepresentable {
             if shouldBlockReaderRequest(url.absoluteString) {
                 decisionHandler(.cancel)
                 return
+            }
+            // Rewrite 5ch.net navigations (including those reached via Google News redirects)
+            // to itest.5ch.io so threads are actually readable in the in-app browser.
+            let host = url.host ?? ""
+            let hostRange = NSRange(host.startIndex..., in: host)
+            if _ReaderRegex.fivechHost?.firstMatch(in: host, range: hostRange) != nil {
+                let rewritten = normalize5chReaderUrl(url.absoluteString)
+                if rewritten != url.absoluteString, let rewrittenUrl = URL(string: rewritten) {
+                    decisionHandler(.cancel)
+                    webView.load(URLRequest(url: rewrittenUrl))
+                    return
+                }
             }
             decisionHandler(.allow)
         }

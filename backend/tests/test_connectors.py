@@ -410,22 +410,68 @@ class TestFiveChFetch:
 
 
 class TestGirlsChannelFetch:
+    # Minimal HTML mimicking a GirlsChannel search results page
+    _HTML_WITH_TOPICS = """
+    <html><body>
+      <li>
+        <h3><a href="/topics/12345/">Thread Title アイコ</a></h3>
+        <time datetime="2024-06-15T10:30:00+09:00">2024年6月15日</time>
+      </li>
+      <li>
+        <h3><a href="/topics/99999/">Another thread</a></h3>
+      </li>
+    </body></html>
+    """
+
     @pytest.mark.asyncio
-    async def test_returns_items_on_success(self):
+    async def test_direct_scrape_returns_items(self):
+        with patch("app.connectors.girlschannel.httpx.AsyncClient",
+                   _http_mock(text=self._HTML_WITH_TOPICS)):
+            result = await GirlsChannelConnector().fetch("アイコ", "all_info")
+        assert len(result) >= 1
+        first = next(r for r in result if r.item_id == "12345")
+        assert first.platform == "girlschannel"
+        assert "girlschannel.net/topics/12345" in first.url
+        assert first.published_at.tzinfo is not None
+
+    @pytest.mark.asyncio
+    async def test_direct_scrape_deduplicates_by_topic_id(self):
+        html = """<html><body>
+          <a href="/topics/100/">T1</a>
+          <a href="/topics/100/">T1 again</a>
+          <a href="/topics/101/">T2</a>
+        </body></html>"""
+        with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(text=html)):
+            result = await GirlsChannelConnector().fetch("Aiko", "all_info")
+        ids = [r.item_id for r in result]
+        assert ids.count("100") == 1
+
+    @pytest.mark.asyncio
+    async def test_direct_http_error_falls_back_to_gnews(self):
+        call_count = [0]
+        fail_resp = MagicMock(is_success=False, status_code=403)
+        ok_resp = MagicMock(is_success=True, content=b"<rss/>")
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return fail_resp if call_count[0] == 1 else ok_resp
+
         valid = _rss_entry(link="https://girlschannel.net/t1", title="アイコ")
-        no_link = _FeedEntry(id="nl", link="", title="skip")
-        no_title = _rss_entry(link="https://girlschannel.net/t2", title="")
-        fake_feed = _FakeFeed([valid, no_link, no_title])
-        with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        fake_feed = _FakeFeed([valid])
+        with patch("app.connectors.girlschannel.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.girlschannel.feedparser.parse", return_value=fake_feed):
             result = await GirlsChannelConnector().fetch("アイコ", "all_info")
         assert len(result) == 1
         assert result[0].platform == "girlschannel"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_http_error(self):
-        with patch("app.connectors.girlschannel.httpx.AsyncClient",
-                   _http_mock(status_code=500, is_success=False)):
+    async def test_both_fail_returns_empty(self):
+        fail_resp = MagicMock(is_success=False, status_code=500)
+
+        async def _side(url, **kw):
+            return fail_resp
+
+        with patch("app.connectors.girlschannel.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await GirlsChannelConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -441,14 +487,9 @@ class TestGirlsChannelFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_deduplicates_by_item_id(self):
-        e1 = _rss_entry(link="https://girlschannel.net/t1", item_id="dup", title="A")
-        e2 = _rss_entry(link="https://girlschannel.net/t2", item_id="dup", title="B")
-        fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.girlschannel.feedparser.parse", return_value=fake_feed):
-            result = await GirlsChannelConnector().fetch("アイコ", "all_info")
-        assert len(result) == 1
+    async def test_media_only_returns_empty(self):
+        result = await GirlsChannelConnector().fetch("Aiko", "media_only")
+        assert result == []
 
 
 class TestMdprFetch:
@@ -828,7 +869,7 @@ class TestYahooNewsFetch:
 # NicoNico connector tests
 # ---------------------------------------------------------------------------
 
-def _nico_ctx(side_effect=None, api_data=None, gnews_content=b"<rss/>"):
+def _nico_ctx(side_effect=None, rss_content=b"<rss/>"):
     """Create a shared httpx context mock; supports optional call-count-based side effects."""
     if side_effect is not None:
         client_mock = AsyncMock()
@@ -836,8 +877,7 @@ def _nico_ctx(side_effect=None, api_data=None, gnews_content=b"<rss/>"):
     else:
         resp = MagicMock()
         resp.is_success = True
-        resp.json.return_value = api_data or {}
-        resp.content = gnews_content
+        resp.content = rss_content
         client_mock = AsyncMock()
         client_mock.get = AsyncMock(return_value=resp)
     ctx = MagicMock()
@@ -848,102 +888,58 @@ def _nico_ctx(side_effect=None, api_data=None, gnews_content=b"<rss/>"):
 
 class TestNicoNicoFetch:
     @pytest.mark.asyncio
-    async def test_api_returns_items_on_success(self):
-        api_data = {
-            "data": [{
-                "contentId": "sm12345",
-                "title": "Aiko cover",
-                "startTime": "2024-01-15T10:00:00+00:00",
-                "userId": 123456,
-                "thumbnailUrl": "https://cdn.nicovideo.jp/t.jpg",
-                "description": "Nice cover",
-            }]
-        }
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(api_data=api_data)):
+    async def test_rss_returns_items_on_success(self):
+        entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm12345", title="Aiko cover")
+        entry["media_thumbnail"] = [{"url": "https://cdn.nicovideo.jp/t.jpg"}]
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
             result = await NicoNicoConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
         assert result[0].platform == "niconico"
         assert result[0].item_id == "sm12345"
         assert result[0].thumbnail_url == "https://cdn.nicovideo.jp/t.jpg"
-        assert result[0].author == "123456"
-
-    @pytest.mark.asyncio
-    async def test_api_uses_channel_id_as_author_when_no_user_id(self):
-        api_data = {"data": [{"contentId": "sm1", "title": "T", "channelId": "ch999"}]}
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(api_data=api_data)):
-            result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert result[0].author == "ch999"
-
-    @pytest.mark.asyncio
-    async def test_api_bad_start_time_does_not_crash(self):
-        api_data = {"data": [{"contentId": "sm2", "title": "T", "startTime": "not-a-date"}]}
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(api_data=api_data)):
-            result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].published_at is not None
-
-    @pytest.mark.asyncio
-    async def test_api_skips_entry_without_content_id(self):
-        api_data = {"data": [{"title": "No ID"}]}
-        # API returns empty list → gnews fallback → gnews also empty
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = True
-        api_resp.json.return_value = api_data
-        gnews_resp = MagicMock()
-        gnews_resp.is_success = False
-        gnews_resp.status_code = 404
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else gnews_resp
-
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
-            result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_api_http_error_falls_back_to_gnews(self):
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = False
-        api_resp.status_code = 403
-        gnews_resp = MagicMock()
-        gnews_resp.is_success = True
-        gnews_resp.content = b"<rss/>"
-
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else gnews_resp
-
-        valid = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="Aiko")
-        no_link = _FeedEntry(id="nl", link="", title="skip")
-        dup1 = _rss_entry(link="https://www.nicovideo.jp/watch/sm1", item_id="dup", title="D1")
-        dup2 = _rss_entry(link="https://www.nicovideo.jp/watch/sm2", item_id="dup", title="D2")
-        no_title = _rss_entry(link="https://www.nicovideo.jp/watch/sm3", title="")
-        fake_feed = _FakeFeed([valid, no_link, dup1, dup2, no_title])
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
-            result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert len(result) == 2  # valid + dup1; dup2, no_link, no_title skipped
         assert result[0].media_type == "video"
 
     @pytest.mark.asyncio
-    async def test_api_json_exception_falls_back_to_gnews(self):
-        # resp.json() raises → _fetch_api except → gnews fallback
+    async def test_extracts_video_id_from_watch_url(self):
+        entry = _rss_entry(link="https://www.nicovideo.jp/watch/nm99999", title="Test video")
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
+            result = await NicoNicoConnector().fetch("test", "all_info")
+        assert result[0].item_id == "nm99999"
+        assert "nm99999" in result[0].url
+
+    @pytest.mark.asyncio
+    async def test_search_rss_fails_falls_back_to_tag_rss(self):
         call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = True
-        api_resp.json.side_effect = ValueError("bad json")
-        gnews_resp = MagicMock()
-        gnews_resp.is_success = True
-        gnews_resp.content = b"<rss/>"
+        fail_resp = MagicMock(is_success=False, status_code=403)
+        ok_resp = MagicMock(is_success=True, content=b"<rss/>")
 
         async def _side(url, **kw):
             call_count[0] += 1
-            return api_resp if call_count[0] == 1 else gnews_resp
+            return fail_resp if call_count[0] == 1 else ok_resp
 
-        gnews_entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm88", title="Aiko")
+        entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm42", title="Tag video")
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "sm42"
+
+    @pytest.mark.asyncio
+    async def test_both_rss_fail_falls_back_to_gnews(self):
+        call_count = [0]
+        fail_resp = MagicMock(is_success=False, status_code=403)
+        ok_resp = MagicMock(is_success=True, content=b"<rss/>")
+
+        async def _side(url, **kw):
+            call_count[0] += 1
+            return fail_resp if call_count[0] <= 2 else ok_resp
+
+        gnews_entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm88", title="GNews video")
         fake_feed = _FakeFeed([gnews_entry])
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
@@ -951,39 +947,44 @@ class TestNicoNicoFetch:
         assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_gnews_http_error_returns_empty(self):
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = True
-        api_resp.json.return_value = {"data": []}
-        gnews_resp = MagicMock()
-        gnews_resp.is_success = False
-        gnews_resp.status_code = 503
+    async def test_all_sources_fail_returns_empty(self):
+        fail_resp = MagicMock(is_success=False, status_code=503)
 
         async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else gnews_resp
+            return fail_resp
 
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await NicoNicoConnector().fetch("Aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_gnews_feedparser_exception_returns_empty(self):
-        call_count = [0]
-        api_resp = MagicMock()
-        api_resp.is_success = True
-        api_resp.json.return_value = {"data": []}
-        gnews_resp = MagicMock()
-        gnews_resp.is_success = True
-        gnews_resp.content = b"<rss/>"
+    async def test_skips_entries_without_title(self):
+        entries = [
+            _rss_entry(link="https://www.nicovideo.jp/watch/sm1", title="Good"),
+            _rss_entry(link="https://www.nicovideo.jp/watch/sm2", title=""),
+            _FeedEntry(id="nl", link="", title="no link"),
+        ]
+        fake_feed = _FakeFeed(entries)
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].item_id == "sm1"
 
-        async def _side(url, **kw):
-            call_count[0] += 1
-            return api_resp if call_count[0] == 1 else gnews_resp
+    @pytest.mark.asyncio
+    async def test_deduplicates_by_video_id(self):
+        e1 = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="V1")
+        e2 = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="V2")
+        fake_feed = _FakeFeed([e1, e2])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
 
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.niconico.feedparser.parse", side_effect=ValueError("x")):
+    @pytest.mark.asyncio
+    async def test_feedparser_exception_returns_empty(self):
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", side_effect=ValueError("bad")):
             result = await NicoNicoConnector().fetch("Aiko", "all_info")
         assert result == []
 

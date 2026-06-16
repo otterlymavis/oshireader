@@ -297,6 +297,18 @@ class I18nManager: ObservableObject {
             "zh-TW": "返回搜尋",
             "zh-CN": "返回搜索"
         ],
+        "readerCouldNotDisplay": [
+            "en": "This page couldn't be displayed in the app.",
+            "ja": "このページはアプリ内で表示できませんでした。",
+            "zh-TW": "此頁面無法在應用程式內顯示。",
+            "zh-CN": "此页面无法在应用内显示。"
+        ],
+        "readerOpenInBrowser": [
+            "en": "Open in Browser",
+            "ja": "ブラウザで開く",
+            "zh-TW": "在瀏覽器中開啟",
+            "zh-CN": "在浏览器中打开"
+        ],
         "ok": [
             "en": "OK",
             "ja": "OK",

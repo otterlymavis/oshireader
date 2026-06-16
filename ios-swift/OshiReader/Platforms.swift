@@ -104,9 +104,74 @@ struct Platform {
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
-            id: "twitter", name: "X", icon: "𝕏",
-            accent: .black, bg: .gray.opacity(0.16), fg: .primary,
-            rawPlatformValues: ["twitter"],
+            id: "smartnews", name: "SmartNews", icon: "📰",
+            accent: Color(red: 0.80, green: 0.00, blue: 0.00),
+            bg: Color(red: 1.0, green: 0.92, blue: 0.92),
+            fg: Color(red: 0.80, green: 0.00, blue: 0.00),
+            rawPlatformValues: ["smartnews"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
+            id: "ameblo", name: "Ameblo", icon: "✏️",
+            accent: Color(red: 1.00, green: 0.42, blue: 0.00),
+            bg: Color(red: 1.0, green: 0.94, blue: 0.88),
+            fg: Color(red: 1.00, green: 0.42, blue: 0.00),
+            rawPlatformValues: ["ameblo"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
+            id: "aera", name: "AERA dot.", icon: "📝",
+            accent: Color(red: 0.00, green: 0.27, blue: 0.58),
+            bg: Color(red: 0.90, green: 0.94, blue: 1.0),
+            fg: Color(red: 0.00, green: 0.27, blue: 0.58),
+            rawPlatformValues: ["aera"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
+            id: "hochi", name: "Hochi", icon: "🏅",
+            accent: Color(red: 0.82, green: 0.10, blue: 0.10),
+            bg: Color(red: 1.0, green: 0.92, blue: 0.92),
+            fg: Color(red: 0.82, green: 0.10, blue: 0.10),
+            rawPlatformValues: ["hochi"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
+            id: "sponichi", name: "Sponichi", icon: "⚽",
+            accent: Color(red: 0.00, green: 0.27, blue: 0.60),
+            bg: Color(red: 0.90, green: 0.94, blue: 1.0),
+            fg: Color(red: 0.00, green: 0.27, blue: 0.60),
+            rawPlatformValues: ["sponichi"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
+            id: "livedoor", name: "Livedoor", icon: "🔴",
+            accent: Color(red: 0.88, green: 0.00, blue: 0.20),
+            bg: Color(red: 1.0, green: 0.92, blue: 0.94),
+            fg: Color(red: 0.88, green: 0.00, blue: 0.20),
+            rawPlatformValues: ["livedoor"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
+            id: "mantanweb", name: "Mantan Web", icon: "🎌",
+            accent: Color(red: 0.07, green: 0.53, blue: 0.25),
+            bg: Color(red: 0.90, green: 1.0, blue: 0.93),
+            fg: Color(red: 0.07, green: 0.53, blue: 0.25),
+            rawPlatformValues: ["mantanweb"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
+            id: "barks", name: "BARKS", icon: "🎸",
+            accent: Color(red: 0.13, green: 0.13, blue: 0.13),
+            bg: Color(red: 0.93, green: 0.93, blue: 0.93),
+            fg: Color(red: 0.13, green: 0.13, blue: 0.13),
+            rawPlatformValues: ["barks"],
             usesStrictKeywordMatching: false, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -16,6 +16,16 @@ router = APIRouter(prefix="/api/feed", tags=["feed"])
 # These platforms host long-lived threads / community content — skip date filters
 # so they always reach the client (mirrors the iOS app's skipCutoff logic).
 _TIMELESS_PLATFORMS = ("5ch", "girlschannel", "togetter")
+
+# Sort key: use published_at for all platforms.
+# - girlschannel: direct scraper returns real "last reply" dates → published_at is fresh
+# - togetter: scraper already extracts real update dates from <time> elements
+# - 5ch: Google News can't give real last-reply dates, so fall back to match discovery time
+# - everything else: real publication dates from the connector
+_FEED_SORT_KEY = case(
+    (SourceItem.platform == "5ch", Match.created_at),
+    else_=SourceItem.published_at,
+)
 
 
 @router.get("/", response_model=list[FeedItemOut])
@@ -33,7 +43,7 @@ def get_feed(
         db.query(Match, SourceItem, WatchTerm)
         .join(SourceItem, Match.source_item_id == SourceItem.id)
         .join(WatchTerm, Match.watch_term_id == WatchTerm.id)
-        .order_by(SourceItem.published_at.desc())
+        .order_by(_FEED_SORT_KEY.desc())
     )
     if since is not None:
         aware_since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since

@@ -232,6 +232,16 @@ class LocalDB: ObservableObject {
         saveToFile(name: "feed_items", value: feedItems)
     }
 
+    // For skipDateCutoff (forum-type) platforms, published_at reflects when the thread
+    // was first indexed (often years old), not when new replies appeared — sorting by it
+    // would bury freshly-matched threads at the bottom. Sort those by fetched_at (match
+    // discovery time) instead; mirrors the backend feed query's sort key.
+    private func sortDate(for item: FeedItem) -> Date {
+        let skipsCutoff = Platform.forRawValue(item.platform)?.skipDateCutoff == true
+        let dateString = skipsCutoff ? item.fetched_at : item.published_at
+        return parseISO8601Date(dateString) ?? .distantPast
+    }
+
     // MARK: - Query Feed (Filtering)
     func queryFeed(keyword: String?, days: Int) -> [FeedItem] {
         let now = Date()
@@ -285,9 +295,8 @@ class LocalDB: ObservableObject {
 
             return true
         }
-        .sorted(by: {
-            (parseISO8601Date($0.published_at) ?? .distantPast) >
-            (parseISO8601Date($1.published_at) ?? .distantPast)
+        .sorted(by: { lhs, rhs in
+            sortDate(for: lhs) > sortDate(for: rhs)
         })
         .reduce(into: ([FeedItem](), Set<String>())) { acc, item in
             // When no keyword filter, deduplicate by URL — the same article can be

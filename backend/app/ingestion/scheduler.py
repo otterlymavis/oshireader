@@ -16,7 +16,17 @@ from app.connectors.mdpr import ModelPressConnector
 from app.connectors.niconico import NicoNicoConnector
 from app.connectors.note import NoteConnector
 from app.connectors.oricon import OriconConnector
+from app.connectors.news_sites import (
+    AmebloConnector,
+    AERAConnector,
+    BARKSConnector,
+    HochiConnector,
+    LivedoorConnector,
+    MantanWebConnector,
+    SponichiConnector,
+)
 from app.connectors.rss import RSSConnector
+from app.connectors.smartnews import SmartNewsConnector
 from app.connectors.togetter import TogetterConnector
 from app.connectors.twitter import TwitterConnector
 from app.connectors.tver import TVERConnector
@@ -30,16 +40,28 @@ scheduler = AsyncIOScheduler()
 _poll_lock = asyncio.Lock()
 _queued_task: asyncio.Task | None = None
 
+# Platforms where published_at should reflect "last reply/activity" rather than original
+# post date. We update published_at whenever we see a more recent date from the connector.
+_DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "togetter"})
+
 
 def _build_connectors(db) -> list[BaseConnector]:
     connectors: list[BaseConnector] = [
         RSSConnector(),
+        AERAConnector(),
+        AmebloConnector(),
+        BARKSConnector(),
         FiveChConnector(),
         GirlsChannelConnector(),
+        HochiConnector(),
+        LivedoorConnector(),
+        MantanWebConnector(),
         ModelPressConnector(),
         NicoNicoConnector(),
         NoteConnector(),
         OriconConnector(),
+        SmartNewsConnector(),
+        SponichiConnector(),
         TogetterConnector(),
         TVERConnector(),
         YahooNewsConnector(),
@@ -161,17 +183,23 @@ async def _poll_once_unlocked() -> None:
                                 )
                                 existing_source_ids.add(raw.composite_id)
                             else:
-                                # Heal bad dates: if the connector now returns a real
-                                # date (>5 min old) that differs from what's stored,
-                                # update published_at so sorting becomes correct.
+                                # Update published_at when the connector returns a better date.
+                                # Discussion platforms: always update toward newer dates so
+                                # threads with recent replies sort above stale ones.
+                                # Other platforms: only heal when dates differ significantly
+                                # (avoids spurious updates from fetch-time placeholders).
                                 stored = existing_items.get(raw.composite_id)
                                 new_pub = raw.published_at
                                 if stored is not None and new_pub is not None:
                                     new_aware = new_pub if new_pub.tzinfo else new_pub.replace(tzinfo=timezone.utc)
                                     stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
-                                    new_age = (now - new_aware).total_seconds()
-                                    diff = abs((new_aware - stored_aware).total_seconds())
-                                    if new_age > 300 and diff > 300:
+                                    if raw.platform in _DISCUSSION_PLATFORMS:
+                                        should_update = new_aware > stored_aware
+                                    else:
+                                        new_age = (now - new_aware).total_seconds()
+                                        diff = abs((new_aware - stored_aware).total_seconds())
+                                        should_update = new_age > 300 and diff > 300
+                                    if should_update:
                                         db.query(SourceItem).filter(
                                             SourceItem.id == raw.composite_id
                                         ).update(

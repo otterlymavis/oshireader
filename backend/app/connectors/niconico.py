@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -12,63 +13,111 @@ from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate,
 
 log = logging.getLogger(__name__)
 
+_VID_ID_RE = re.compile(r'/watch/([a-zA-Z0-9]+)')
+_THUMB_RE = re.compile(r'<img[^>]+src="(https://[^"]+nicovideo\.jp[^"]+)"', re.I)
+
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept-Language": "ja,en;q=0.9",
+}
+
 
 class NicoNicoConnector(BaseConnector):
     PLATFORM = "niconico"
     SUPPORTS_MEDIA_FILTER = True
 
-    _SEARCH_URL = "https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search"
-
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
-        items = await self._fetch_api(keyword)
+        items = await self._fetch_rss(keyword)
+        if not items:
+            items = await self._fetch_tag_rss(keyword)
         if not items:
             items = await self._fetch_gnews(keyword)
         return items
 
-    async def _fetch_api(self, keyword: str) -> list[SourceItemCreate]:
-        params = {
-            "q": keyword,
-            "targets": "title,description,tags",
-            "fields": "contentId,title,description,userId,channelId,startTime,thumbnailUrl",
-            "_sort": "-startTime",
-            "_limit": "25",
-        }
+    async def _fetch_rss(self, keyword: str) -> list[SourceItemCreate]:
+        """NicoNico keyword search RSS feed (newest first)."""
+        encoded = quote(keyword)
+        url = f"https://www.nicovideo.jp/search/{encoded}?sort=f&order=d&rss=2.0&lang=ja-jp"
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(self._SEARCH_URL, params=params, headers={"Accept": "application/json"})
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=_HEADERS) as client:
+                resp = await client.get(url)
                 if not resp.is_success:
-                    log.warning("NicoNico snapshot API returned status %d", resp.status_code)
+                    log.warning("NicoNico search RSS returned status %d", resp.status_code)
                     return []
-                data = resp.json()
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
-            log.warning("NicoNico API fetch error: %s", exc)
+            log.warning("NicoNico search RSS fetch error: %s", exc)
             return []
 
+        return self._parse_feed(feed, keyword, "rss_search")
+
+    async def _fetch_tag_rss(self, keyword: str) -> list[SourceItemCreate]:
+        """NicoNico tag RSS — finds videos where keyword is an exact tag."""
+        encoded = quote(keyword)
+        url = f"https://www.nicovideo.jp/tag/{encoded}?sort=f&order=d&rss=2.0&lang=ja-jp"
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=_HEADERS) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    log.warning("NicoNico tag RSS returned status %d", resp.status_code)
+                    return []
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+        except Exception as exc:
+            log.warning("NicoNico tag RSS fetch error: %s", exc)
+            return []
+
+        return self._parse_feed(feed, keyword, "rss_tag")
+
+    def _parse_feed(self, feed: feedparser.FeedParserDict, keyword: str, source: str) -> list[SourceItemCreate]:
         items: list[SourceItemCreate] = []
-        for raw in data.get("data", []):
-            content_id = raw.get("contentId")
-            if not content_id:
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            link = entry.get("link", "")
+            if not link:
                 continue
-            published = datetime.now(timezone.utc)
-            start_time = raw.get("startTime")
-            if start_time:
-                try:
-                    dt = datetime.fromisoformat(str(start_time).replace("Z", "+00:00"))
-                    published = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-                except ValueError:
-                    pass
+
+            vid_m = _VID_ID_RE.search(link)
+            vid_id = vid_m.group(1) if vid_m else (entry.get("id") or link)
+
+            if vid_id in seen:
+                continue
+            seen.add(vid_id)
+
+            title = (entry.get("title") or "").strip()
+            if not title:
+                continue
+
+            # Thumbnail: from media:thumbnail, media:content, or description HTML
+            thumb: str | None = None
+            for attr in ("media_thumbnail", "media_content"):
+                media = entry.get(attr) or []
+                if media and isinstance(media, list):
+                    thumb = media[0].get("url")
+                    break
+            if not thumb:
+                summary = entry.get("summary") or ""
+                m = _THUMB_RE.search(summary)
+                if m:
+                    thumb = m.group(1)
+
+            author: str | None = None
+            if entry.get("authors"):
+                author = entry.authors[0].get("name")
+            elif entry.get("author"):
+                author = entry.get("author")
+
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
-                    item_id=str(content_id),
-                    url=f"https://www.nicovideo.jp/watch/{content_id}",
-                    published_at=published,
+                    item_id=str(vid_id),
+                    url=f"https://www.nicovideo.jp/watch/{vid_id}" if vid_m else link,
+                    published_at=parse_feed_date(entry),
                     media_type="video",
-                    author=str(raw.get("userId") or raw.get("channelId") or "") or None,
-                    title=raw.get("title"),
-                    content_text=raw.get("description"),
-                    thumbnail_url=raw.get("thumbnailUrl"),
-                    raw_payload=raw,
+                    author=author,
+                    title=title,
+                    content_text=None,
+                    thumbnail_url=thumb,
+                    raw_payload={"source": source, "keyword": keyword},
                 )
             )
         return items

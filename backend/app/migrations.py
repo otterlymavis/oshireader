@@ -121,6 +121,38 @@ def apply_startup_migrations(engine: Engine) -> None:
         _purge_bad_date_items(engine, platforms=("tver", "togetter", "youtube"))
         _record_migration(PURGE_SLUG)
 
+    # One-time cleanup: remove GirlsChannel items stored via Google News (item_id starts
+    # with "http").  The connector now scrapes GirlsChannel directly using numeric topic
+    # IDs, so old entries have wrong URLs, wrong dates, and will never be healed.
+    PURGE_GC_SLUG = "purge_girlschannel_googlenews_v1"
+    if not _migration_applied(PURGE_GC_SLUG):
+        _purge_girlschannel_googlenews_items(engine)
+        _record_migration(PURGE_GC_SLUG)
+
+
+def _purge_girlschannel_googlenews_items(engine: Engine) -> None:
+    """Delete GirlsChannel source_items whose item_id is a URL (from the old Google News
+    connector). The new direct scraper uses numeric topic IDs so these will never be healed."""
+    with engine.begin() as conn:
+        result = conn.execute(text(
+            "SELECT COUNT(*) FROM source_items"
+            " WHERE platform = 'girlschannel' AND id LIKE 'girlschannel:http%'"
+        ))
+        bad_count = result.scalar() or 0
+        if bad_count == 0:
+            return
+        log.info("Purging %d old GirlsChannel Google-News items", bad_count)
+        conn.execute(text(
+            "DELETE FROM matches WHERE source_item_id IN ("
+            "  SELECT id FROM source_items"
+            "  WHERE platform = 'girlschannel' AND id LIKE 'girlschannel:http%'"
+            ")"
+        ))
+        conn.execute(text(
+            "DELETE FROM source_items"
+            " WHERE platform = 'girlschannel' AND id LIKE 'girlschannel:http%'"
+        ))
+
 
 def _purge_bad_date_items(engine: Engine, platforms: tuple[str, ...]) -> None:
     """Delete source_items (and their matches) whose published_at was set to
