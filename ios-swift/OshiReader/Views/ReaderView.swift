@@ -9,6 +9,12 @@ struct ReaderImageAction: Identifiable {
     let alt: String?
 }
 
+enum ReaderWebLoadState {
+    case loading
+    case loaded
+    case failed
+}
+
 struct ReaderView: View {
     let feedItem: FeedItem
 
@@ -19,7 +25,7 @@ struct ReaderView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    @State private var readerMode = true
+    @State private var readerMode: Bool
     @State private var readerTheme: AppThemeMode = .light
     @State private var fontSize: CGFloat = 16.0
     @State private var isTranslated = false
@@ -28,8 +34,23 @@ struct ReaderView: View {
     @State private var showingSaveImageStatus = false
     @State private var saveAllImagesCounter = 0
     @State private var isSavingAllImages = false
+    @State private var webLoadState: ReaderWebLoadState = .loading
+    @State private var showSignInBanner = false
+    @State private var isSigningIntoX = false
+
+    init(feedItem: FeedItem) {
+        self.feedItem = feedItem
+        _readerMode = State(initialValue: Self.initialReaderMode(for: feedItem))
+    }
+
+    static func initialReaderMode(for feedItem: FeedItem) -> Bool {
+        !feedItem.id.hasPrefix("search:")
+    }
 
     var targetUrl: URL? {
+        if isSigningIntoX {
+            return URL(string: "https://x.com/login")
+        }
         guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform),
               let originalUrl = URL(string: normalized) else { return nil }
         if isTranslated {
@@ -56,17 +77,41 @@ struct ReaderView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let url = targetUrl {
-                WebViewHelper(
-                    url: url,
-                    cacheId: feedItem.id,
-                    themeMode: readerTheme,
-                    fontSize: fontSize,
-                    readerMode: readerMode,
-                    saveAllImagesCounter: saveAllImagesCounter,
-                    onImageAction: { imageAction = $0 },
-                    onSaveAllImages: { urls in saveAllImages(urls) }
-                )
-                .background(bgColor)
+                ZStack {
+                    WebViewHelper(
+                        url: url,
+                        cacheId: feedItem.id,
+                        platform: feedItem.platform,
+                        themeMode: readerTheme,
+                        fontSize: fontSize,
+                        readerMode: readerMode,
+                        saveAllImagesCounter: saveAllImagesCounter,
+                        onLoadStateChange: { state in
+                            webLoadState = state
+                            if state == .loading { showSignInBanner = false }
+                        },
+                        onImageAction: { imageAction = $0 },
+                        onSaveAllImages: { urls in saveAllImages(urls) },
+                        onContentBlocked: {
+                            if !isSigningIntoX { showSignInBanner = true }
+                        }
+                    )
+                    .background(bgColor)
+
+                    if webLoadState != .loaded {
+                        readerLoadStateOverlay
+                            .allowsHitTesting(webLoadState == .failed)
+                    }
+
+                    VStack {
+                        if isSigningIntoX {
+                            signInReturnBanner
+                        } else if showSignInBanner {
+                            signInPromptBanner
+                        }
+                        Spacer()
+                    }
+                }
             } else {
                 Text(i18n.t("invalidUrl"))
                     .foregroundColor(theme.colors.textMuted)
@@ -169,6 +214,86 @@ struct ReaderView: View {
         .overlay(Rectangle().frame(height: 0.5).foregroundColor(theme.colors.divider), alignment: .top)
     }
 
+    private var signInPromptBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "lock.fill")
+                .foregroundColor(theme.colors.textSub)
+            Text(i18n.t("readerSignInRequired"))
+                .font(.caption)
+                .foregroundColor(theme.colors.textSub)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(i18n.t("readerSignInButton")) {
+                showSignInBanner = false
+                isSigningIntoX = true
+            }
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundColor(theme.colors.primary)
+            .accessibilityIdentifier("reader.signInButton")
+            Button {
+                showSignInBanner = false
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(theme.colors.textMuted)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.colors.card)
+        .cornerRadius(10)
+        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .padding(10)
+    }
+
+    private var signInReturnBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundColor(theme.colors.textSub)
+            Text(i18n.t("readerSignInReturnMessage"))
+                .font(.caption)
+                .foregroundColor(theme.colors.textSub)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(i18n.t("readerSignInReturnButton")) {
+                isSigningIntoX = false
+            }
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundColor(theme.colors.primary)
+            .accessibilityIdentifier("reader.signInReturnButton")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.colors.card)
+        .cornerRadius(10)
+        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .padding(10)
+    }
+
+    private var readerLoadStateOverlay: some View {
+        VStack(spacing: 12) {
+            if webLoadState == .loading {
+                ProgressView()
+                    .tint(theme.colors.primary)
+                Text(i18n.t("readerLoadingPage"))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(theme.colors.textSub)
+            } else {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundColor(theme.colors.textMuted)
+                Text(i18n.t("readerLoadFailed"))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(theme.colors.textSub)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(webLoadState == .loading ? bgColor.opacity(0.82) : bgColor)
+        .accessibilityIdentifier(webLoadState == .loading ? "reader.loadingState" : "reader.failedState")
+    }
+
     private var regularReaderControlBar: some View {
         HStack(spacing: 12) {
             readerModeButton(showTitle: true)
@@ -212,6 +337,7 @@ struct ReaderView: View {
         .foregroundColor(theme.colors.primary)
         .cornerRadius(8)
         .accessibilityLabel(readerMode ? i18n.t("readerModeText") : i18n.t("readerModeWeb"))
+        .accessibilityValue(readerMode ? "reader" : "web")
         .accessibilityIdentifier("reader.modeToggleButton")
     }
 
@@ -344,12 +470,15 @@ struct ReaderView: View {
 struct WebViewHelper: UIViewRepresentable {
     let url: URL
     let cacheId: String
+    let platform: String
     let themeMode: AppThemeMode
     let fontSize: CGFloat
     let readerMode: Bool
     let saveAllImagesCounter: Int
+    let onLoadStateChange: (ReaderWebLoadState) -> Void
     let onImageAction: (ReaderImageAction) -> Void
     let onSaveAllImages: (([URL]) -> Void)?
+    let onContentBlocked: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -366,12 +495,22 @@ struct WebViewHelper: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        if platform == "twitter" {
+            // x.com serves a broken "open in app" redirect to user agents that look like an
+            // embedded/in-app browser (i.e. WKWebView's default UA). A full, standard mobile
+            // Safari UA avoids that redirect and gets the normal page.
+            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+        }
         return webView
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
         context.coordinator.parent = self
-        if uiView.url == nil || uiView.url?.absoluteString != url.absoluteString {
+        let requestURL = url.absoluteString
+        if context.coordinator.currentRequestURL != requestURL {
+            context.coordinator.currentRequestURL = requestURL
+            context.coordinator.beginNewRequest()
+            onLoadStateChange(.loading)
             uiView.load(URLRequest(url: url))
         } else {
             uiView.evaluateJavaScript(styleInjectionJS(), completionHandler: nil)
@@ -436,6 +575,10 @@ struct WebViewHelper: UIViewRepresentable {
             pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
             a { color: \(linkHex) !important; }
             """
+        } else if platform == "twitter" {
+            // x.com is a heavily self-styled SPA with its own dark/light theming; forcing a flat
+            // body background/text color clashes with it and makes buttons invisible/illegible.
+            readerCSS = ""
         } else {
             readerCSS = """
             body {
@@ -461,30 +604,109 @@ struct WebViewHelper: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: WebViewHelper
         var lastSaveAllCounter = 0
+        var currentRequestURL: String?
+        private var hasCommittedPage = false
+        private var pendingFailure: DispatchWorkItem?
 
         init(_ parent: WebViewHelper) {
             self.parent = parent
         }
 
+        func beginNewRequest() {
+            hasCommittedPage = false
+            pendingFailure?.cancel()
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            pendingFailure?.cancel()
+            if !hasCommittedPage {
+                DispatchQueue.main.async { self.parent.onLoadStateChange(.loading) }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            hasCommittedPage = true
+            pendingFailure?.cancel()
+            DispatchQueue.main.async { self.parent.onLoadStateChange(.loaded) }
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            hasCommittedPage = true
+            pendingFailure?.cancel()
+            DispatchQueue.main.async { self.parent.onLoadStateChange(.loaded) }
             webView.evaluateJavaScript(parent.styleInjectionJS(), completionHandler: nil)
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, _ in
                 guard let html = result as? String, !html.isEmpty else { return }
                 LocalDB.shared.saveContentCache(id: self.parent.cacheId, html: html)
             }
+            checkForBlockedContent(in: webView)
+        }
+
+        private func checkForBlockedContent(in webView: WKWebView) {
+            guard parent.platform == "twitter" else { return }
+            webView.evaluateJavaScript("document.body ? document.body.innerText.trim().length : 0") { result, _ in
+                guard let length = result as? Int, length < 40 else { return }
+                DispatchQueue.main.async { self.parent.onContentBlocked() }
+            }
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            loadCachedPage(in: webView)
+            handleLoadFailure(error, in: webView)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            loadCachedPage(in: webView)
+            handleLoadFailure(error, in: webView)
         }
 
-        private func loadCachedPage(in webView: WKWebView) {
-            guard let html = LocalDB.shared.getContentCache(id: parent.cacheId) else { return }
+        private func handleLoadFailure(_ error: Error, in webView: WKWebView) {
+            let nsError = error as NSError
+            AppLogger.network.warning("Reader load failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code) url=\(webView.url?.absoluteString ?? self.parent.url.absoluteString, privacy: .public)")
+
+            if isBenignNavigationFailure(error) || hasCommittedPage {
+                if hasCommittedPage {
+                    DispatchQueue.main.async { self.parent.onLoadStateChange(.loaded) }
+                }
+                return
+            }
+
+            if !loadCachedPage(in: webView) {
+                if parent.platform == "twitter" {
+                    DispatchQueue.main.async { self.parent.onContentBlocked() }
+                }
+                pendingFailure?.cancel()
+                let failure = DispatchWorkItem { [weak self, weak webView] in
+                    guard let self, let webView, !self.hasCommittedPage else { return }
+                    webView.evaluateJavaScript("document.readyState") { result, _ in
+                        if self.hasCommittedPage || result is String {
+                            DispatchQueue.main.async { self.parent.onLoadStateChange(.loaded) }
+                        } else {
+                            DispatchQueue.main.async { self.parent.onLoadStateChange(.failed) }
+                        }
+                    }
+                }
+                pendingFailure = failure
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: failure)
+            }
+        }
+
+        private func isBenignNavigationFailure(_ error: Error) -> Bool {
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+                return true
+            }
+            if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 {
+                return true
+            }
+            return false
+        }
+
+        private func loadCachedPage(in webView: WKWebView) -> Bool {
+            guard let html = LocalDB.shared.getContentCache(id: parent.cacheId) else { return false }
+            pendingFailure?.cancel()
+            hasCommittedPage = false
+            DispatchQueue.main.async { self.parent.onLoadStateChange(.loading) }
             webView.loadHTMLString(html, baseURL: parent.url)
+            return true
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

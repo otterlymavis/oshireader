@@ -15,7 +15,7 @@ struct ContentView: View {
     
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab: OshiTab = .feed
+    @State private var selectedTab: OshiTab = ProcessInfo.processInfo.arguments.contains("--uitesting-start-search") ? .search : .feed
     
     init() {
         // Customize tab bar background/colors to match Otterpia aesthetics
@@ -70,6 +70,7 @@ struct ContentView: View {
                 FeedView()
                     .tabItem {
                         Label(i18n.t("tabFeed"), systemImage: "house")
+                            .accessibilityIdentifier("tab.feed")
                     }
                     .tag(OshiTab.feed)
                     .accessibilityIdentifier("tab.feed")
@@ -77,6 +78,7 @@ struct ContentView: View {
                 SearchView()
                     .tabItem {
                         Label(i18n.t("tabSearch"), systemImage: "magnifyingglass")
+                            .accessibilityIdentifier("tab.search")
                     }
                     .tag(OshiTab.search)
                     .accessibilityIdentifier("tab.search")
@@ -84,6 +86,7 @@ struct ContentView: View {
                 SavedView()
                     .tabItem {
                         Label(i18n.t("tabSaved"), systemImage: "bookmark")
+                            .accessibilityIdentifier("tab.saved")
                     }
                     .tag(OshiTab.saved)
                     .accessibilityIdentifier("tab.saved")
@@ -91,6 +94,7 @@ struct ContentView: View {
                 OshiView()
                     .tabItem {
                         Label(i18n.t("tabOshi"), systemImage: "star")
+                            .accessibilityIdentifier("tab.oshi")
                     }
                     .tag(OshiTab.oshi)
                     .accessibilityIdentifier("tab.oshi")
@@ -98,6 +102,7 @@ struct ContentView: View {
                 SettingsView()
                     .tabItem {
                         Label(i18n.t("tabSettings"), systemImage: "gearshape")
+                            .accessibilityIdentifier("tab.settings")
                     }
                     .tag(OshiTab.settings)
                     .accessibilityIdentifier("tab.settings")

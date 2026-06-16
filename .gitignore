@@ -1,8 +1,18 @@
 # Backend
 backend/.env
 backend/otterpia.db
+backend/otterpia.db-shm
+backend/otterpia.db-wal
 backend/__pycache__/
 backend/**/__pycache__/
+backend/.coverage
+otterpia.db
+otterpia.db-shm
+otterpia.db-wal
+
+# iOS
+ios-swift/build/
+ios-swift/*.log
 
 # Frontend
 frontend/node_modules/

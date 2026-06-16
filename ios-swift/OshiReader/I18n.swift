@@ -261,6 +261,42 @@ class I18nManager: ObservableObject {
             "zh-TW": "無效的網址",
             "zh-CN": "无效的链接"
         ],
+        "readerLoadingPage": [
+            "en": "Loading page...",
+            "ja": "ページを読み込み中...",
+            "zh-TW": "正在載入頁面...",
+            "zh-CN": "正在加载页面..."
+        ],
+        "readerLoadFailed": [
+            "en": "Page could not be loaded.",
+            "ja": "ページを読み込めませんでした。",
+            "zh-TW": "無法載入頁面。",
+            "zh-CN": "无法加载页面。"
+        ],
+        "readerSignInRequired": [
+            "en": "X requires sign-in to show this content.",
+            "ja": "Xはこの内容を表示するにはログインが必要です。",
+            "zh-TW": "X 需要登入才能顯示此內容。",
+            "zh-CN": "X 需要登录才能显示此内容。"
+        ],
+        "readerSignInButton": [
+            "en": "Sign in",
+            "ja": "ログイン",
+            "zh-TW": "登入",
+            "zh-CN": "登录"
+        ],
+        "readerSignInReturnMessage": [
+            "en": "Signed in? Go back to reload your search.",
+            "ja": "ログインしましたか？戻って検索を再読み込みします。",
+            "zh-TW": "已登入？返回以重新載入搜尋結果。",
+            "zh-CN": "已登录？返回以重新加载搜索结果。"
+        ],
+        "readerSignInReturnButton": [
+            "en": "Back to search",
+            "ja": "検索に戻る",
+            "zh-TW": "返回搜尋",
+            "zh-CN": "返回搜索"
+        ],
         "ok": [
             "en": "OK",
             "ja": "OK",
@@ -478,24 +514,6 @@ class I18nManager: ObservableObject {
             "ja": "リーダー",
             "zh-TW": "閱讀器",
             "zh-CN": "阅读器"
-        ],
-        "credentialsSection": [
-            "en": "API Credentials",
-            "ja": "API設定",
-            "zh-TW": "API設定",
-            "zh-CN": "API设置"
-        ],
-        "youtubeApiKey": [
-            "en": "YouTube API Key",
-            "ja": "YouTube APIキー",
-            "zh-TW": "YouTube API 金鑰",
-            "zh-CN": "YouTube API 密钥"
-        ],
-        "xBearerToken": [
-            "en": "X Bearer Token",
-            "ja": "X Bearerトークン",
-            "zh-TW": "X Bearer Token",
-            "zh-CN": "X Bearer Token"
         ],
         "privacySection": [
             "en": "Privacy",
@@ -816,6 +834,12 @@ class I18nManager: ObservableObject {
             "ja": "キーワードを入力",
             "zh-TW": "輸入關鍵字",
             "zh-CN": "输入关键字"
+        ],
+        "searchEmptyKeywordBody": [
+            "en": "Type a keyword or choose one of your saved keywords above.",
+            "ja": "キーワードを入力するか、上の保存済みキーワードを選択してください。",
+            "zh-TW": "請輸入關鍵字，或選擇上方已儲存的關鍵字。",
+            "zh-CN": "请输入关键字，或选择上方已保存的关键字。"
         ],
         "searchAddKeywordHint": [
             "en": "Add watch keywords in Settings, or type a keyword here.",

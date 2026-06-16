@@ -1,6 +1,6 @@
 import SwiftUI
 
-private struct SearchLink: Identifiable {
+struct SearchLink: Identifiable {
     let id: String
     let group: String
     let label: String
@@ -20,7 +20,7 @@ struct SearchView: View {
     @StateObject private var i18n = I18nManager.shared
 
     @State private var keyword = ""
-    @State private var selectedGroup = "News"
+    @State private var selectedGroup = ProcessInfo.processInfo.arguments.contains("--uitesting-search-social") ? "Social" : "News"
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedItem: FeedItem? = nil
     @FocusState private var fieldFocused: Bool
@@ -140,11 +140,14 @@ struct SearchView: View {
                 if !keyword.isEmpty {
                     Button {
                         keyword = ""
+                        selectedItem = nil
+                        fieldFocused = false
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(theme.colors.textMuted)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
                     .accessibilityIdentifier("search.clearButton")
                 }
             }
@@ -225,7 +228,9 @@ struct SearchView: View {
                     .foregroundColor(theme.colors.textMuted)
             }
 
-            if selectedLinks.isEmpty {
+            if selectedGroup != "Custom" && trimmedKeyword.isEmpty {
+                emptyKeywordPrompt
+            } else if selectedLinks.isEmpty {
                 Text(i18n.t("noCustomUrlsAdded"))
                     .font(.system(size: 13))
                     .foregroundColor(theme.colors.textMuted)
@@ -240,6 +245,28 @@ struct SearchView: View {
                 }
             }
         }
+    }
+
+    private var emptyKeywordPrompt: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 28, weight: .regular))
+                .foregroundColor(theme.colors.textMuted)
+            Text(i18n.t("searchEnterKeyword"))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(theme.colors.text)
+                .accessibilityIdentifier("search.emptyKeywordTitle")
+            Text(i18n.t("searchEmptyKeywordBody"))
+                .font(.system(size: 12))
+                .foregroundColor(theme.colors.textMuted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 28)
+        .background(theme.colors.card)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.colors.border, lineWidth: 1))
+        .cornerRadius(8)
     }
 
     private func searchLinkNavigationRow(_ link: SearchLink) -> some View {
@@ -335,7 +362,7 @@ struct SearchView: View {
         let title = link.group == "Custom" ? link.label : "\(link.label): \(query)"
         let now = _ISO8601Cache.withoutFractional.string(from: Date())
         return FeedItem(
-            id: link.group == "Custom" ? link.id : "search:\(link.id):\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)",
+            id: "search:\(link.id):\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)",
             platform: link.platform,
             url: url,
             title: title,
@@ -384,7 +411,7 @@ private let groupMeta: [String: SearchGroupMeta] = [
     "Custom": SearchGroupMeta(symbol: "link", color: Color(red: 0.32, green: 0.32, blue: 0.36))
 ]
 
-private let staticSearchLinks: [SearchLink] = [
+let staticSearchLinks: [SearchLink] = [
     SearchLink(id: "yahoo-news", group: "News", label: "Yahoo! News Japan", domain: "news.yahoo.co.jp", platform: "yahoonews") {
         "https://news.yahoo.co.jp/search?p=\($0.urlQueryEscaped)&ei=utf-8"
     },

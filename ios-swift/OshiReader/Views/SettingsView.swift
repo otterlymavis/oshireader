@@ -13,8 +13,6 @@ struct SettingsView: View {
     @State private var newCollectionMode = CollectionMode.allInfo
     @State private var addingAliasForId: String? = nil
     @State private var newAliasText = ""
-    @State private var youtubeApiKey = ""
-    @State private var twitterBearerToken = ""
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     
     var allPlatforms: [(String, String)] {
@@ -265,22 +263,6 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings.autoTranslateToggle")
                 }
 
-                Section(header: Text(i18n.t("credentialsSection"))) {
-                    SecureField(i18n.t("youtubeApiKey"), text: $youtubeApiKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .onSubmit { saveYoutubeApiKey() }
-                        .onDisappear { saveYoutubeApiKey() }
-                        .accessibilityIdentifier("settings.youtubeApiKeyField")
-
-                    SecureField(i18n.t("xBearerToken"), text: $twitterBearerToken)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .onSubmit { saveTwitterBearerToken() }
-                        .onDisappear { saveTwitterBearerToken() }
-                        .accessibilityIdentifier("settings.twitterBearerTokenField")
-                }
-                
                 // Section: Customizations
                 Section(header: Text(i18n.t("appearanceSection"))) {
                     Picker(i18n.t("appTheme"), selection: $theme.mode) {
@@ -357,7 +339,6 @@ struct SettingsView: View {
             .navigationTitle(i18n.t("settingsTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .background(theme.colors.bg)
-            .onAppear { loadCredentialsFromKeychain() }
             .sheet(isPresented: $showingAddKeywordAlert) {
                 VStack(spacing: 16) {
                     Text(i18n.t("addKeyword"))
@@ -431,33 +412,6 @@ struct SettingsView: View {
                 Text(i18n.t("clearAllDataMessage"))
             }
         }
-    }
-
-    private func loadCredentialsFromKeychain() {
-        if let legacy = UserDefaults.standard.string(forKey: "youtube_api_key"), !legacy.isEmpty,
-           KeychainHelper.write(key: "youtube_api_key", value: legacy) {
-            UserDefaults.standard.removeObject(forKey: "youtube_api_key")
-        }
-        if let legacy = UserDefaults.standard.string(forKey: "twitter_bearer_token"), !legacy.isEmpty,
-           KeychainHelper.write(key: "twitter_bearer_token", value: legacy) {
-            UserDefaults.standard.removeObject(forKey: "twitter_bearer_token")
-        }
-        youtubeApiKey = KeychainHelper.read(key: "youtube_api_key") ?? ""
-        twitterBearerToken = KeychainHelper.read(key: "twitter_bearer_token") ?? ""
-    }
-
-    private func saveYoutubeApiKey() {
-        let trimmed = youtubeApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { KeychainHelper.delete(key: "youtube_api_key") }
-        else { KeychainHelper.write(key: "youtube_api_key", value: trimmed) }
-        Task { try? await NetworkManager.shared.updateCredential(platform: "youtube", apiKey: trimmed) }
-    }
-
-    private func saveTwitterBearerToken() {
-        let trimmed = twitterBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { KeychainHelper.delete(key: "twitter_bearer_token") }
-        else { KeychainHelper.write(key: "twitter_bearer_token", value: trimmed) }
-        Task { try? await NetworkManager.shared.updateCredential(platform: "twitter", bearerToken: trimmed) }
     }
 }
 

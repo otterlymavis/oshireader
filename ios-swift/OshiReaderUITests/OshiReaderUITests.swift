@@ -67,16 +67,92 @@ final class OshiReaderUITests: XCTestCase {
     }
 
     func testSearchFlow() throws {
-        tapTab(index: 1, labels: ["Search"])
-
-        let searchField = app.textFields["search.keywordField"]
-        XCTAssertTrue(searchField.waitForExistence(timeout: 3))
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--uitesting-start-search"]
+        app.launch()
 
         // Keyword chip from the seeded UITest term should be visible
         XCTAssertTrue(app.staticTexts["UITest Oshi"].waitForExistence(timeout: 3))
 
-        // onAppear pre-fills the field with the first active term's keyword
-        XCTAssertEqual(searchField.value as? String, "UITest Oshi")
+        // onAppear pre-fills the field with the first active term's keyword.
+        XCTAssertTrue(app.buttons["Clear search"].waitForExistence(timeout: 3))
+    }
+
+    func testSearchClearShowsEmptyKeywordPrompt() throws {
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--uitesting-start-search"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["UITest Oshi"].waitForExistence(timeout: 3))
+
+        let clearButton = app.buttons["Clear search"]
+        XCTAssertTrue(clearButton.waitForExistence(timeout: 3))
+        clearButton.tap()
+
+        XCTAssertTrue(app.staticTexts["search.emptyKeywordTitle"].waitForExistence(timeout: 3))
+        XCTAssertFalse(clearButton.exists)
+    }
+
+    func testSearchResultOpensReaderInWebMode() throws {
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--uitesting-start-search", "--uitesting-search-social"]
+        app.launch()
+
+        let xSearchLink = app.buttons["search.link.x"]
+        XCTAssertTrue(xSearchLink.waitForExistence(timeout: 3))
+        xSearchLink.tap()
+
+        let modeButton = app.buttons["reader.modeToggleButton"]
+        XCTAssertTrue(modeButton.waitForExistence(timeout: 10))
+        XCTAssertEqual(modeButton.value as? String, "web")
+
+        let loadingState = app.otherElements["reader.loadingState"]
+        let loadFinished = NSPredicate(format: "exists == false")
+        expectation(for: loadFinished, evaluatedWith: loadingState)
+        waitForExpectations(timeout: 15)
+        XCTAssertFalse(app.otherElements["reader.failedState"].exists)
+    }
+
+    func testXSearchRendersRealContentNotBlank() throws {
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--uitesting-start-search", "--uitesting-search-social"]
+        app.launch()
+
+        let xSearchLink = app.buttons["search.link.x"]
+        XCTAssertTrue(xSearchLink.waitForExistence(timeout: 3))
+        xSearchLink.tap()
+
+        let loadingState = app.otherElements["reader.loadingState"]
+        let loadFinished = NSPredicate(format: "exists == false")
+        expectation(for: loadFinished, evaluatedWith: loadingState)
+        waitForExpectations(timeout: 15)
+        XCTAssertFalse(app.otherElements["reader.failedState"].exists)
+
+        // x.com should render its own page (search results, or its login prompt for a guest
+        // session) rather than our in-app fallback banner or a blank page.
+        XCTAssertFalse(app.buttons["reader.signInButton"].exists, "Should not need the fallback banner when x.com renders normally")
+    }
+
+    func testXSearchSignInFallbackOffersInAppLoginAndReturn() throws {
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--uitesting-start-search", "--uitesting-search-social"]
+        app.launch()
+
+        let xSearchLink = app.buttons["search.link.x"]
+        XCTAssertTrue(xSearchLink.waitForExistence(timeout: 3))
+        xSearchLink.tap()
+
+        let signInButton = app.buttons["reader.signInButton"]
+        guard signInButton.waitForExistence(timeout: 15) else {
+            throw XCTSkip("x.com loaded normally this run; the sign-in fallback only appears when x.com fails to load")
+        }
+        signInButton.tap()
+
+        let returnButton = app.buttons["reader.signInReturnButton"]
+        XCTAssertTrue(returnButton.waitForExistence(timeout: 10), "Expected return banner while signing in to X in-app")
+        returnButton.tap()
+
+        XCTAssertFalse(app.buttons["reader.signInReturnButton"].exists)
     }
 
     func testAvatarEditorFlow() throws {

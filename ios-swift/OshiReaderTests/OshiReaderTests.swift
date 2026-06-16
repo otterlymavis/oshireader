@@ -1135,6 +1135,60 @@ final class OshiReaderTests: XCTestCase {
         i18n.setLanguage(saved)
     }
 
+    // MARK: - Search catalog
+    func testAllBuiltInSearchPagesGenerateValidWebModeReaders() throws {
+        let query = "UITest Oshi"
+        let expectedGroups = Set([
+            "News", "Entertainment", "Magazines", "Video", "Writing",
+            "Social", "Community", "Web", "Shopping"
+        ])
+        let groups = Set(staticSearchLinks.map(\.group))
+        XCTAssertEqual(groups, expectedGroups)
+        XCTAssertEqual(Set(staticSearchLinks.map(\.id)).count, staticSearchLinks.count)
+
+        for link in staticSearchLinks {
+            let urlString = link.makeUrl(query)
+            let components = URLComponents(string: urlString)
+            XCTAssertEqual(components?.scheme, "https", "\(link.id) should use https")
+            XCTAssertFalse(components?.host?.isEmpty ?? true, "\(link.id) should have a host")
+            XCTAssertFalse(urlString.contains(" "), "\(link.id) URL should be escaped")
+            XCTAssertTrue(urlString.localizedCaseInsensitiveContains("UITest") || link.id == "nhk",
+                          "\(link.id) should include the query")
+
+            let item = FeedItem(
+                id: "search:\(link.id):UITest%20Oshi",
+                platform: link.platform,
+                url: urlString,
+                title: "\(link.label): \(query)",
+                content_text: nil,
+                author: link.domain,
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: "2026-06-15T00:00:00Z",
+                watch_term_keyword: query,
+                fetched_at: "2026-06-15T00:00:00Z"
+            )
+            XCTAssertFalse(ReaderView.initialReaderMode(for: item),
+                           "\(link.id) should open in web mode to avoid blank search pages")
+        }
+
+        let customSearchItem = FeedItem(
+            id: "search:custom-url:",
+            platform: "custom",
+            url: "https://example.com",
+            title: "Custom URL",
+            content_text: nil,
+            author: "example.com",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: "2026-06-15T00:00:00Z",
+            watch_term_keyword: "",
+            fetched_at: "2026-06-15T00:00:00Z"
+        )
+        XCTAssertFalse(ReaderView.initialReaderMode(for: customSearchItem),
+                       "Custom URLs opened from Search should also use web mode")
+    }
+
     // MARK: - Persistence: malformed JSON file is silently ignored
     func testMalformedPersistenceFileLoadsEmpty() throws {
         // Write garbage to terms.json before creating a LocalDB from the same directory.
@@ -1362,6 +1416,52 @@ final class OshiReaderTests: XCTestCase {
             }
             
             XCTAssertEqual(targetLangCode, expectedTargetCode, "Language code mapping should match Google Translate expectations.")
+        }
+    }
+
+    func testRandomKeywordsAllSources() throws {
+        // Generate random keywords
+        let randomKeywords = (0..<3).map { _ in UUID().uuidString }
+        
+        let sources = Platform.all.map { $0.id }
+        db.setSubscribedPlatforms(platforms: sources)
+        
+        for kw in randomKeywords {
+            _ = db.saveTerm(keyword: kw, collectionMode: .allInfo)
+        }
+        
+        let nowString = ISO8601DateFormatter().string(from: Date())
+        var newItems = [FeedItem]()
+        
+        for kw in randomKeywords {
+            for source in sources {
+                let item = FeedItem(
+                    id: "\(source):mock:\(kw)",
+                    platform: source,
+                    url: "https://mock.com/\(source)/\(kw)",
+                    title: "Random update from \(source)",
+                    content_text: "Summary of \(kw) on \(source)",
+                    author: "Mock User",
+                    thumbnail_url: nil,
+                    media_type: "article",
+                    published_at: nowString,
+                    watch_term_keyword: kw,
+                    fetched_at: nowString
+                )
+                newItems.append(item)
+            }
+        }
+        
+        let addedCount = db.mergeItems(newItems: newItems)
+        XCTAssertEqual(addedCount, randomKeywords.count * sources.count)
+        
+        for kw in randomKeywords {
+            let queryResult = db.queryFeed(keyword: kw, days: 30)
+            XCTAssertGreaterThanOrEqual(queryResult.count, sources.count, "Should fetch results from all sources for \(kw)")
+            
+            let platformsFound = Set(queryResult.map { $0.platform })
+            let expectedPlatforms = Set(sources)
+            XCTAssertEqual(platformsFound, expectedPlatforms, "All sources should be present for \(kw)")
         }
     }
 }
