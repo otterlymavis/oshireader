@@ -61,6 +61,14 @@ class GirlsChannelConnector(BaseConnector):
 
         items = await self._fetch_direct(keyword)
         if not items:
+            # Direct scrape yielded nothing — the layout may have changed or we were
+            # blocked. Fall back to Google News, but log loudly: these items use
+            # google-news URL ids the scraper can never heal, and a silent fallback
+            # masks a scrape regression.
+            log.warning(
+                "GirlsChannel direct scrape returned no items for %r; using Google News fallback",
+                keyword,
+            )
             items = await self._fetch_gnews(keyword)
         return items
 
@@ -139,6 +147,10 @@ class GirlsChannelConnector(BaseConnector):
                         if published:
                             break
 
+            # Distinguish a genuinely parsed date from the fetch-time placeholder.
+            # The scheduler must NOT keep healing placeholder dates toward now()
+            # every poll, or undated threads would pin themselves to the top forever.
+            date_parsed = published is not None
             if not published:
                 published = datetime.now(timezone.utc)
 
@@ -152,7 +164,7 @@ class GirlsChannelConnector(BaseConnector):
                     title=title,
                     thumbnail_url=None,
                     content_text=None,
-                    raw_payload={"keyword": keyword, "source": "direct"},
+                    raw_payload={"keyword": keyword, "source": "direct", "date_parsed": date_parsed},
                 )
             )
 

@@ -194,7 +194,12 @@ async def _poll_once_unlocked() -> None:
                                     new_aware = new_pub if new_pub.tzinfo else new_pub.replace(tzinfo=timezone.utc)
                                     stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
                                     if raw.platform in _DISCUSSION_PLATFORMS:
-                                        should_update = new_aware > stored_aware
+                                        # Only heal toward a newer date when the connector
+                                        # actually parsed a real timestamp. A fetch-time
+                                        # placeholder (date_parsed=False) is always ~now and
+                                        # would otherwise re-pin the thread to the top every poll.
+                                        date_parsed = (raw.raw_payload or {}).get("date_parsed", True)
+                                        should_update = date_parsed and new_aware > stored_aware
                                     else:
                                         new_age = (now - new_aware).total_seconds()
                                         diff = abs((new_aware - stored_aware).total_seconds())

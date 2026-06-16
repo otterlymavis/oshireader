@@ -401,6 +401,58 @@ class TestIngestionDateHealing:
         assert diff < 60, "Recent new date (< 5 min old) should not overwrite a valid stored date"
 
 
+class TestIngestionDiscussionHealing:
+    @pytest.mark.asyncio
+    async def test_discussion_heals_toward_newer_parsed_date(self, db_engine, db_session):
+        """girlschannel thread with a real (parsed) newer date should bubble up."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        old = datetime.now(timezone.utc) - timedelta(hours=5)
+        item = _make_item(platform="girlschannel", item_id="111",
+                          published_at=old, raw_payload={"date_parsed": True})
+        await _run_poll(db_engine, [_mock_connector("girlschannel", [item])])
+
+        newer = datetime.now(timezone.utc) - timedelta(minutes=10)
+        item2 = _make_item(platform="girlschannel", item_id="111",
+                           published_at=newer, raw_payload={"date_parsed": True})
+        await _run_poll(db_engine, [_mock_connector("girlschannel", [item2])])
+
+        db_session.expire_all()
+        stored = db_session.get(SourceItem, "girlschannel:111")
+        stored_dt = stored.published_at
+        if stored_dt.tzinfo is None:
+            stored_dt = stored_dt.replace(tzinfo=timezone.utc)
+        assert abs((stored_dt - newer).total_seconds()) < 10, "parsed newer date should heal"
+
+    @pytest.mark.asyncio
+    async def test_discussion_does_not_heal_placeholder_date(self, db_engine, db_session):
+        """A placeholder date (date_parsed=False) must NOT re-pin the thread to now()."""
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        original = datetime.now(timezone.utc) - timedelta(hours=3)
+        item = _make_item(platform="girlschannel", item_id="222",
+                          published_at=original, raw_payload={"date_parsed": False})
+        await _run_poll(db_engine, [_mock_connector("girlschannel", [item])])
+
+        # Second poll: connector returns a fresh now() placeholder (date_parsed=False).
+        placeholder = datetime.now(timezone.utc)
+        item2 = _make_item(platform="girlschannel", item_id="222",
+                           published_at=placeholder, raw_payload={"date_parsed": False})
+        await _run_poll(db_engine, [_mock_connector("girlschannel", [item2])])
+
+        db_session.expire_all()
+        stored = db_session.get(SourceItem, "girlschannel:222")
+        stored_dt = stored.published_at
+        if stored_dt.tzinfo is None:
+            stored_dt = stored_dt.replace(tzinfo=timezone.utc)
+        assert abs((stored_dt - original).total_seconds()) < 60, \
+            "placeholder date must not overwrite the stored date every poll"
+
+
 class TestIngestionPruning:
     def _seed_items(self, db_session, term, platform, count, prefix="item"):
         """Insert `count` SourceItems + Matches, oldest last (highest index = oldest date)."""

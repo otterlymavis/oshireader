@@ -435,6 +435,18 @@ class TestGirlsChannelFetch:
         assert first.published_at.tzinfo is not None
 
     @pytest.mark.asyncio
+    async def test_parsed_date_flagged_true_placeholder_flagged_false(self):
+        # Topic 12345 has a <time> element (real date); 99999 has none (placeholder).
+        # The scheduler relies on raw_payload["date_parsed"] to avoid re-pinning
+        # undated threads to the top of the feed on every poll.
+        with patch("app.connectors.girlschannel.httpx.AsyncClient",
+                   _http_mock(text=self._HTML_WITH_TOPICS)):
+            result = await GirlsChannelConnector().fetch("アイコ", "all_info")
+        by_id = {r.item_id: r for r in result}
+        assert by_id["12345"].raw_payload["date_parsed"] is True
+        assert by_id["99999"].raw_payload["date_parsed"] is False
+
+    @pytest.mark.asyncio
     async def test_direct_scrape_deduplicates_by_topic_id(self):
         html = """<html><body>
           <a href="/topics/100/">T1</a>
