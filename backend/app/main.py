@@ -89,6 +89,12 @@ async def test_fetch(
         db_sess.close()
 
 
+@app.post("/api/admin/test-push")
+async def test_push(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
+    from app.apns import send_test_push
+    return await send_test_push(db)
+
+
 @app.get("/api/admin/stats")
 def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
     from app.apns import apns_configured

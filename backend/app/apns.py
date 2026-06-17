@@ -122,3 +122,44 @@ async def send_new_match_notifications(db: Session, term: WatchTerm, count: int)
         if should_delete:
             db.delete(device)
     db.commit()
+
+
+async def send_test_push(db: Session) -> dict:
+    """Send a diagnostic notification to every registered device immediately and
+    report the per-device APNs result, so push setup can be verified without
+    waiting for a new feed item."""
+    if not apns_configured():
+        return {"configured": False, "results": []}
+    devices: list[APNSDeviceToken] = db.query(APNSDeviceToken).all()
+    if not devices:
+        return {"configured": True, "results": [], "note": "no device tokens registered"}
+
+    payload = {
+        "aps": {
+            "alert": {"title": "OshiReader", "body": "プッシュ通知テストです ✅"},
+            "sound": "default",
+        }
+    }
+    results: list[dict] = []
+    async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
+        for device in devices:
+            host = _host(device.environment)
+            headers = {
+                "authorization": f"bearer {_cached_auth_token()}",
+                "apns-topic": settings.apns_topic,
+                "apns-push-type": "alert",
+                "apns-priority": "10",
+            }
+            entry = {"token": device.token[-8:], "environment": device.environment, "host": host}
+            try:
+                resp = await client.post(f"{host}/3/device/{device.token}", json=payload, headers=headers)
+                entry["status"] = resp.status_code
+                if resp.status_code not in (200, 201):
+                    try:
+                        entry["reason"] = resp.json().get("reason")
+                    except Exception:
+                        entry["reason"] = resp.text
+            except Exception as exc:
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+            results.append(entry)
+    return {"configured": True, "results": results}

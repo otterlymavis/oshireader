@@ -24,3 +24,9 @@ jobs:
             echo "Poll request failed with status $CODE"
             exit 1
           fi
+
+      - name: Test push (temp diagnostic)
+        run: |
+          echo "--- sending test push to registered devices ---"
+          curl -s --max-time 30 -X POST https://oshireader.onrender.com/api/admin/test-push \
+            -H "Authorization: Bearer ${{ secrets.ADMIN_API_TOKEN }}" | python3 -m json.tool || true
