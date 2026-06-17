@@ -45,6 +45,13 @@ def get_feed(
         .join(WatchTerm, Match.watch_term_id == WatchTerm.id)
         .order_by(_FEED_SORT_KEY.desc())
     )
+    # Timeless forum platforms (5ch/girlschannel/togetter) host long-lived threads
+    # and are exempt from pruning, so they accumulate for months. Only let them
+    # bypass the date window when the user explicitly opens that source's filter —
+    # in the unfiltered "all" feed apply the normal window to them too, otherwise
+    # months of accumulated forum threads bury every other source.
+    viewing_timeless = platform in _TIMELESS_PLATFORMS
+
     if since is not None:
         aware_since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since
         # Filter by when the item was *stored* (matched_at), not published_at.
@@ -54,12 +61,12 @@ def get_feed(
             or_(Match.created_at > aware_since,
                 SourceItem.platform.in_(_TIMELESS_PLATFORMS))
         )
-    elif days > 0:
+    elif days > 0 and not viewing_timeless:
+        # Apply the window using each row's effective sort date (created_at for 5ch,
+        # published_at otherwise) so forum items are filtered consistently with how
+        # they're ordered.
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        q = q.filter(
-            or_(SourceItem.published_at >= cutoff,
-                SourceItem.platform.in_(_TIMELESS_PLATFORMS))
-        )
+        q = q.filter(_FEED_SORT_KEY >= cutoff)
     if term_id is not None:
         q = q.filter(Match.watch_term_id == term_id)
     if platform:

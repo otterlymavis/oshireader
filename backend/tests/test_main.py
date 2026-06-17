@@ -82,15 +82,23 @@ class TestAdminStats:
 
 
 class TestAdminPoll:
-    def test_poll_returns_started_when_not_running(self, client):
-        with patch("app.main.queue_poll", return_value=True) as mock_poll:
+    def test_poll_runs_synchronously_and_reports_completed(self, client):
+        # The endpoint awaits the poll (so Render keeps the instance alive for the
+        # whole run) rather than firing it as a background task.
+        from unittest.mock import AsyncMock
+        mock_lock = MagicMock()
+        mock_lock.locked.return_value = False
+        with patch("app.main.poll_once", new=AsyncMock()) as mock_poll, \
+             patch("app.main._poll_lock", mock_lock):
             r = client.post("/api/admin/poll")
         assert r.status_code == 200
-        assert r.json() == {"status": "poll started"}
-        mock_poll.assert_called_once()
+        assert r.json() == {"status": "poll completed"}
+        mock_poll.assert_awaited_once()
 
     def test_poll_returns_already_running_when_busy(self, client):
-        with patch("app.main.queue_poll", return_value=False):
+        mock_lock = MagicMock()
+        mock_lock.locked.return_value = True
+        with patch("app.main._poll_lock", mock_lock):
             r = client.post("/api/admin/poll")
         assert r.status_code == 200
         assert r.json() == {"status": "poll already running"}
@@ -128,8 +136,12 @@ class TestAdminAuth:
         assert r.status_code == 401
 
     def test_poll_accepts_correct_token(self, client):
+        from unittest.mock import AsyncMock
+        mock_lock = MagicMock()
+        mock_lock.locked.return_value = False
         with patch("app.auth.settings") as mock_settings, \
-             patch("app.main.queue_poll", return_value=True):
+             patch("app.main.poll_once", new=AsyncMock()), \
+             patch("app.main._poll_lock", mock_lock):
             mock_settings.admin_api_token = "secret123"
             r = client.post(
                 "/api/admin/poll",

@@ -12,7 +12,7 @@ from app.api import credentials, devices, feed, watch_terms
 from app.auth import require_admin_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
-from app.ingestion.scheduler import queue_poll, scheduler, start_scheduler
+from app.ingestion.scheduler import _poll_lock, poll_once, queue_poll, scheduler, start_scheduler
 from app.migrations import apply_startup_migrations
 from app.models import CollectionMode, Match, SourceItem, WatchTerm
 
@@ -57,10 +57,19 @@ def health() -> dict:
 
 @app.post("/api/admin/poll")
 async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
-    started = queue_poll()
-    if not started:
+    # Run the poll synchronously (awaited) rather than as a fire-and-forget
+    # background task. On Render's free tier the instance is suspended shortly
+    # after the HTTP response is sent, which would kill a backgrounded poll
+    # mid-flight before most connectors finish. Holding the request open keeps
+    # the instance alive for the duration. The scheduler commits per-connector,
+    # so even if we hit the timeout, completed connectors are already persisted.
+    if _poll_lock.locked():
         return {"status": "poll already running"}
-    return {"status": "poll started"}
+    try:
+        await asyncio.wait_for(poll_once(), timeout=80.0)
+        return {"status": "poll completed"}
+    except asyncio.TimeoutError:
+        return {"status": "poll timed out (partial progress saved)"}
 
 
 @app.get("/api/admin/test-fetch")

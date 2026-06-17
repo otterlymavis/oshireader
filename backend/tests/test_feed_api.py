@@ -226,14 +226,18 @@ class TestFeedAPI:
         resp = client.get("/api/feed/?days=0")
         assert len(resp.json()) == 1
 
-    def test_feed_timeless_platform_bypasses_days_filter(self, client, db_session):
+    def test_timeless_platform_bypasses_days_only_when_filtered(self, client, db_session):
+        # A 200-day-old forum thread must NOT flood the unfiltered "all" feed,
+        # but must still be reachable when the user opens that source's filter.
         term = _make_term(db_session)
         old_togetter = _make_item(db_session, platform="togetter", item_id="t1", days_ago=200)
         _make_match(db_session, term, old_togetter)
 
-        resp = client.get("/api/feed/?days=30")
-        ids = [r["item"]["id"] for r in resp.json()]
-        assert old_togetter.id in ids
+        all_ids = [r["item"]["id"] for r in client.get("/api/feed/?days=30").json()]
+        assert old_togetter.id not in all_ids, "old forum item should be windowed out of 'all'"
+
+        filtered_ids = [r["item"]["id"] for r in client.get("/api/feed/?days=30&platform=togetter").json()]
+        assert old_togetter.id in filtered_ids, "forum filter should show all threads regardless of age"
 
     def test_feed_media_type_filter(self, client, db_session):
         term = _make_term(db_session)
