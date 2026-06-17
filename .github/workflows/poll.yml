@@ -24,3 +24,13 @@ jobs:
             echo "Poll request failed with status $CODE"
             exit 1
           fi
+
+      - name: Diagnostics (deployed connectors + stats)
+        run: |
+          echo "--- test-fetch (live per-connector counts; reveals deployed connectors) ---"
+          curl -s --max-time 110 \
+            "https://oshireader.onrender.com/api/admin/test-fetch?keyword=%E5%90%89%E6%B2%A2%E4%BA%AE" \
+            -H "Authorization: Bearer ${{ secrets.ADMIN_API_TOKEN }}" | python3 -m json.tool || true
+          echo "--- stats (device tokens + platform totals) ---"
+          curl -s --max-time 30 https://oshireader.onrender.com/api/admin/stats \
+            -H "Authorization: Bearer ${{ secrets.ADMIN_API_TOKEN }}" | python3 -m json.tool || true
