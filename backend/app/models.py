@@ -24,7 +24,7 @@ class WatchTerm(Base):
     language_hint = Column(String)
     collection_mode = Column(String, default="all_info")  # all_info | media_only
     is_active = Column(Boolean, default=True)
-    notify_on_new = Column(Boolean, default=False)
+    notify_on_new = Column(Boolean, default=True)
     created_at = Column(DateTime, default=_utcnow)
 
 

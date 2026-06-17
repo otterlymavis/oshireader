@@ -129,6 +129,15 @@ def apply_startup_migrations(engine: Engine) -> None:
         _purge_girlschannel_googlenews_items(engine)
         _record_migration(PURGE_GC_SLUG)
 
+    # One-time: enable new-item notifications on existing terms. The flag previously
+    # defaulted to False, so terms created before this release never notified even
+    # though users expect to be alerted on new feed items.
+    NOTIFY_SLUG = "enable_notify_on_new_v1"
+    if not _migration_applied(NOTIFY_SLUG):
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE watch_terms SET notify_on_new = TRUE WHERE notify_on_new = FALSE"))
+        _record_migration(NOTIFY_SLUG)
+
 
 def _purge_girlschannel_googlenews_items(engine: Engine) -> None:
     """Delete GirlsChannel source_items whose item_id is a URL (from the old Google News

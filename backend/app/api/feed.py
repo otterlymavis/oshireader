@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -17,15 +17,10 @@ router = APIRouter(prefix="/api/feed", tags=["feed"])
 # so they always reach the client (mirrors the iOS app's skipCutoff logic).
 _TIMELESS_PLATFORMS = ("5ch", "girlschannel", "togetter")
 
-# Sort key: use published_at for all platforms.
-# - girlschannel: direct scraper returns real "last reply" dates → published_at is fresh
-# - togetter: scraper already extracts real update dates from <time> elements
-# - 5ch: Google News can't give real last-reply dates, so fall back to match discovery time
-# - everything else: real publication dates from the connector
-_FEED_SORT_KEY = case(
-    (SourceItem.platform == "5ch", Match.created_at),
-    else_=SourceItem.published_at,
-)
+# Sort key: every platform by its real published / last-updated date, never by fetch
+# (match-discovery) time — girlschannel/togetter scrapers heal published_at to the real
+# last-reply date, and other connectors carry real publication dates.
+_FEED_SORT_KEY = SourceItem.published_at
 
 
 @router.get("/", response_model=list[FeedItemOut])
