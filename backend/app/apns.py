@@ -49,8 +49,12 @@ def _cached_auth_token() -> str:
     return token
 
 
-def _host() -> str:
-    if settings.apns_use_sandbox:
+def _host(environment: str | None = None) -> str:
+    # Route by the token's own environment so production (TestFlight/App Store) and
+    # sandbox (Xcode debug) tokens each hit the correct APNs host. Falls back to the
+    # global apns_use_sandbox setting only when a token has no environment recorded.
+    env = environment or ("sandbox" if settings.apns_use_sandbox else "production")
+    if env == "sandbox":
         return "https://api.sandbox.push.apple.com"
     return "https://api.push.apple.com"
 
@@ -71,7 +75,7 @@ def _payload(term: WatchTerm, count: int) -> dict:
 
 
 async def _send_one(client: httpx.AsyncClient, device: APNSDeviceToken, term: WatchTerm, count: int) -> bool:
-    url = f"{_host()}/3/device/{device.token}"
+    url = f"{_host(device.environment)}/3/device/{device.token}"
     headers = {
         "authorization": f"bearer {_cached_auth_token()}",
         "apns-topic": settings.apns_topic,
@@ -103,12 +107,11 @@ async def send_new_match_notifications(db: Session, term: WatchTerm, count: int)
         log.info("APNs not configured; skipping remote notification term=%r count=%d", term.keyword, count)
         return
 
-    environment = "sandbox" if settings.apns_use_sandbox else "production"
-    devices: list[APNSDeviceToken] = (
-        db.query(APNSDeviceToken)
-        .filter(APNSDeviceToken.environment == environment)
-        .all()
-    )
+    # Send to every registered device; _send_one routes each token to the APNs host
+    # matching its own environment. Previously this filtered to a single global
+    # environment, so a server set to "sandbox" never delivered to production
+    # (TestFlight) tokens — and vice versa.
+    devices: list[APNSDeviceToken] = db.query(APNSDeviceToken).all()
     if not devices:
         return
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:

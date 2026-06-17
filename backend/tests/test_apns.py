@@ -129,7 +129,9 @@ class TestSendNewMatchNotifications:
         assert call_args.args[3] == 3
 
     @pytest.mark.asyncio
-    async def test_does_not_send_to_wrong_environment(self, db_session):
+    async def test_sends_to_device_regardless_of_global_setting(self, db_session):
+        # A production (TestFlight) token must still be delivered even when the server's
+        # global apns_use_sandbox is True — _send_one routes by the token's own environment.
         term = WatchTerm(keyword="Aiko", notify_on_new=True)
         device = _device("b" * 64, environment="production")
         db_session.add_all([term, device])
@@ -141,7 +143,12 @@ class TestSendNewMatchNotifications:
             mock_settings.apns_use_sandbox = True  # sandbox mode, but device is production
             await send_new_match_notifications(db_session, term, 1)
 
-        mock_send.assert_not_called()
+        mock_send.assert_called_once()
+        assert mock_send.call_args.args[1].token == "b" * 64
+
+    def test_host_routes_by_token_environment(self):
+        assert _host("production") == "https://api.push.apple.com"
+        assert _host("sandbox") == "https://api.sandbox.push.apple.com"
 
     @pytest.mark.asyncio
     async def test_deletes_bad_token_device(self, db_session):

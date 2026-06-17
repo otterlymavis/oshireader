@@ -24,8 +24,3 @@ jobs:
             echo "Poll request failed with status $CODE"
             exit 1
           fi
-
-      - name: APNS status (temp diagnostic)
-        run: |
-          curl -s --max-time 30 https://oshireader.onrender.com/api/admin/stats \
-            -H "Authorization: Bearer ${{ secrets.ADMIN_API_TOKEN }}" | python3 -m json.tool || true
