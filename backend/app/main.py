@@ -91,13 +91,27 @@ async def test_fetch(
 
 @app.get("/api/admin/stats")
 def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
+    from app.apns import apns_configured
+    from app.models import APNSDeviceToken
+
     items_total = db.query(func.count(SourceItem.id)).scalar()
     matches_total = db.query(func.count(Match.id)).scalar()
     terms = db.query(WatchTerm).all()
     by_platform = db.query(SourceItem.platform, func.count(SourceItem.id)).group_by(SourceItem.platform).all()
+    device_tokens = db.query(APNSDeviceToken.environment, func.count(APNSDeviceToken.token)).group_by(
+        APNSDeviceToken.environment
+    ).all()
     return {
         "items_total": items_total,
         "matches_total": matches_total,
-        "watch_terms": [{"id": t.id, "keyword": t.keyword, "is_active": t.is_active} for t in terms],
+        "watch_terms": [
+            {"id": t.id, "keyword": t.keyword, "is_active": t.is_active, "notify_on_new": t.notify_on_new}
+            for t in terms
+        ],
         "items_by_platform": {p: c for p, c in by_platform},
+        "apns": {
+            "configured": apns_configured(),
+            "server_environment": "sandbox" if settings.apns_use_sandbox else "production",
+            "device_tokens_by_environment": {env: c for env, c in device_tokens},
+        },
     }
