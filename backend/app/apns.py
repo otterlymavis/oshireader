@@ -141,6 +141,7 @@ async def send_test_push(db: Session) -> dict:
         }
     }
     results: list[dict] = []
+    dead: list[APNSDeviceToken] = []
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
         for device in devices:
             host = _host(device.environment)
@@ -155,11 +156,19 @@ async def send_test_push(db: Session) -> dict:
                 resp = await client.post(f"{host}/3/device/{device.token}", json=payload, headers=headers)
                 entry["status"] = resp.status_code
                 if resp.status_code not in (200, 201):
+                    reason = None
                     try:
-                        entry["reason"] = resp.json().get("reason")
+                        reason = resp.json().get("reason")
                     except Exception:
-                        entry["reason"] = resp.text
+                        reason = resp.text
+                    entry["reason"] = reason
+                    if reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"} or resp.status_code == 410:
+                        dead.append(device)
             except Exception as exc:
                 entry["error"] = f"{type(exc).__name__}: {exc}"
             results.append(entry)
-    return {"configured": True, "results": results}
+    if dead:
+        for device in dead:
+            db.delete(device)
+        db.commit()
+    return {"configured": True, "results": results, "pruned_tokens": len(dead)}

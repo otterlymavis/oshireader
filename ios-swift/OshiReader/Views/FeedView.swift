@@ -519,14 +519,25 @@ struct FeedView: View {
         isRefreshing = false
 
         guard !Task.isCancelled else { return }
-        // Always scrape device-side after the backend pass. The backend's Render
-        // datacenter IP is blocked by Google News (503) and niconico (403), so many
-        // sources (niconico, 5ch, smartnews, ameblo, aera, hochi, sponichi, livedoor,
-        // mantanweb, barks, mdpr, oricon, yahoo) only return data when fetched from
-        // the device's own network. mergeItems() dedupes against the backend results.
+        // Scrape device-side after the backend pass. The backend's Render datacenter IP is
+        // blocked by Google News (503) and niconico (403), so many sources (niconico, 5ch,
+        // smartnews, ameblo, aera, hochi, sponichi, livedoor, mantanweb, barks, mdpr,
+        // oricon, yahoo) only return data when fetched from the device's own network.
+        // mergeItems() dedupes against the backend results.
+        //
+        // Throttle it: each run fires ~13 Google News requests from the phone and kicks an
+        // ~80s backend poll, so skip on rapid successive refreshes (but always run on a
+        // cold/empty cache). Without this the device risks the same 503 rate-limiting.
+        let elapsed = Self.lastDeviceScrapeAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+        guard db.feedItems.isEmpty || elapsed > Self.deviceScrapeThrottle else { return }
+        Self.lastDeviceScrapeAt = Date()
         isScrapingFallback = true
         await deepFallback()
     }
+
+    // Device-side scrape throttle — shared across FeedView instances for the session.
+    private static var lastDeviceScrapeAt: Date?
+    private static let deviceScrapeThrottle: TimeInterval = 150
 
     // Syncs terms, fetches backend feed + per-platform items, and scrapes custom URLs.
     // Returns true if the backend returned any feed items.

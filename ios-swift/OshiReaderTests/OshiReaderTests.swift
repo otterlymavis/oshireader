@@ -531,6 +531,30 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(results.contains { $0.id == "news:recent" }, "Recent news should pass")
     }
 
+    // MARK: - Cross-path dedup (backend copy + device Google News copy of same article)
+    func testQueryFeedDedupesSameArticleFromTwoSources() throws {
+        db.setSubscribedPlatforms(platforms: ["mdpr"])
+        let now = ISO8601DateFormatter().string(from: Date())
+        // Backend copy: direct URL, plain id.
+        let backendCopy = FeedItem(
+            id: "mdpr:12345", platform: "mdpr", url: "https://mdpr.jp/news/12345",
+            title: "Aiko 新曲を発表！", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        // Device-scraped copy of the SAME article: Google News URL, gnews id.
+        let deviceCopy = FeedItem(
+            id: "mdpr:gnews:99887766", platform: "mdpr", url: "https://news.google.com/rss/articles/ABC",
+            title: "Aiko 新曲を発表！", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [backendCopy, deviceCopy])
+        _ = db.saveTerm(keyword: "Aiko")
+
+        let results = db.queryFeed(keyword: "Aiko", days: 30)
+        let mdprResults = results.filter { $0.platform == "mdpr" }
+        XCTAssertEqual(mdprResults.count, 1, "Same article from backend + device should appear once")
+    }
+
     // MARK: - Custom platform keyword-filter bypass
     func testCustomPlatformItemsPassKeywordFilter() throws {
         // custom items have a different watch_term_keyword (e.g. "") but should appear
@@ -1290,7 +1314,8 @@ final class OshiReaderTests: XCTestCase {
         let term = try JSONDecoder().decode(WatchTerm.self, from: Data(json.utf8))
         XCTAssertEqual(term.aliases, [])
         XCTAssertTrue(term.is_active)
-        XCTAssertFalse(term.notify_on_new)
+        // notify_on_new now defaults to true so new terms alert on new feed items.
+        XCTAssertTrue(term.notify_on_new)
     }
 
     // MARK: - Content Cache

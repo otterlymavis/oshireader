@@ -149,6 +149,9 @@ class LocalDB: ObservableObject {
 
     // MARK: - Feed Items & Merging
     func mergeItems(newItems: [FeedItem]) -> Int {
+        // On a fresh install / cleared cache the whole first fetch is "new"; don't fire a
+        // burst of notifications for content the user is seeing for the first time anyway.
+        let wasFirstLoad = feedItems.isEmpty
         var addedCount = 0
         var addedItems: [FeedItem] = []
         let itemKey = { (i: FeedItem) -> String in "\(i.id)::\(i.watch_term_keyword)" }
@@ -208,7 +211,7 @@ class LocalDB: ObservableObject {
 
         // Only notify for items that survived the cap — avoids pinging for articles
         // that were immediately evicted as too old.
-        if !addedItems.isEmpty {
+        if !addedItems.isEmpty && !wasFirstLoad {
             let survivedKeys = Set(finalItems.map { itemKey($0) })
             let notifyItems = addedItems.filter { survivedKeys.contains(itemKey($0)) }
             if !notifyItems.isEmpty {
@@ -298,12 +301,24 @@ class LocalDB: ObservableObject {
             sortDate(for: lhs) > sortDate(for: rhs)
         })
         .reduce(into: ([FeedItem](), Set<String>())) { acc, item in
-            // When no keyword filter, deduplicate by URL — the same article can be
-            // stored once per matching watch term; only the first (most recent) copy
-            // is shown. When filtering by a specific keyword, all matches are shown.
-            guard keyword == nil else { acc.0.append(item); return }
-            if acc.1.insert(item.url).inserted { acc.0.append(item) }
+            // Deduplicate the same article arriving from two paths — e.g. a backend copy
+            // with a direct URL and a device-scraped Google News copy with a news.google
+            // URL (different ids/URLs, same story). Key on canonical platform + normalized
+            // title, falling back to URL for titleless items. Only the first (most recent
+            // by sort) copy survives.
+            let titleKey = Self.normalizedTitleKey(item.title)
+            let dedupKey = titleKey.isEmpty
+                ? "u:\(item.url)"
+                : "t:\(Platform.normalize(item.platform))|\(titleKey)"
+            if acc.1.insert(dedupKey).inserted { acc.0.append(item) }
         }.0
+    }
+
+    // Collapses a title to a comparison key: lowercased, alphanumerics only (keeps CJK,
+    // drops spaces/punctuation/suffix separators) so two copies of the same article match.
+    static func normalizedTitleKey(_ title: String?) -> String {
+        guard let t = title?.lowercased(), !t.isEmpty else { return "" }
+        return String(t.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
     }
 
     private func matchesKeyword(item: FeedItem, kw: String) -> Bool {
