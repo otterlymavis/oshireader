@@ -136,6 +136,7 @@ class APNSDeviceTokenUpsert(BaseModel):
     token: str
     environment: Literal["sandbox", "production"] = "sandbox"
     device_id: Optional[str] = None
+    device_secret: str = Field(min_length=16, max_length=200)
 
 
 class APNSDeviceTokenOut(BaseModel):
@@ -150,6 +151,11 @@ class APNSDeviceTokenOut(BaseModel):
     @classmethod
     def stamp_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
         return _utc_opt(v)
+
+
+class APNSDeviceTestPush(BaseModel):
+    token: str
+    device_secret: str = Field(min_length=16, max_length=200)
 
 
 class FeedItemOut(BaseModel):

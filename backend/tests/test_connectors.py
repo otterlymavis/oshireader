@@ -23,7 +23,7 @@ from app.connectors.togetter import TogetterConnector
 from app.connectors.tver import TVERConnector, _parse_tver_date
 from app.connectors.twitter import TwitterConnector
 from app.connectors.yahoonews import YahooNewsConnector
-from app.connectors.yahoonews import _clean_markdown_title
+from app.connectors.yahoonews import _clean_html_summary, _clean_markdown_title
 from app.connectors.youtube import YouTubeConnector, _parse_youtube_relative
 
 
@@ -754,6 +754,14 @@ _JINA_MARKDOWN = """
 
 
 class TestYahooNewsFetch:
+    def test_cleans_google_news_html_summary(self):
+        summary = (
+            '<a href="https://news.google.com/rss/articles/ABC?oc=5">'
+            "アイコの最新情報</a>&nbsp;&nbsp;"
+            '<font color="#6f6f6f">Yahoo!ニュース</font>'
+        )
+        assert _clean_html_summary(summary) == "アイコの最新情報 Yahoo!ニュース"
+
     @pytest.mark.asyncio
     async def test_empty_keyword_returns_empty(self):
         result = await YahooNewsConnector().fetch("", "all_info")
@@ -770,7 +778,10 @@ class TestYahooNewsFetch:
             id="https://news.yahoo.co.jp/articles/abc123",
             link="https://news.yahoo.co.jp/articles/abc123",
             title="アイコの最新情報",
-            summary="",
+            summary=(
+                '<a href="https://news.google.com/rss/articles/abc123">'
+                "アイコの最新情報</a> Yahoo!ニュース"
+            ),
         )
         fake_feed = _FakeFeed([entry])
         with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
@@ -778,6 +789,8 @@ class TestYahooNewsFetch:
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
         assert len(result) == 1
         assert result[0].platform == "yahoonews"
+        assert result[0].content_text == "アイコの最新情報 Yahoo!ニュース"
+        assert "https://" not in result[0].content_text
 
     @pytest.mark.asyncio
     async def test_falls_back_to_jina_when_gnews_empty(self):

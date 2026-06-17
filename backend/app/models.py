@@ -61,6 +61,7 @@ class APNSDeviceToken(Base):
     token = Column(String, primary_key=True)
     environment = Column(String, default="sandbox", index=True)
     device_id = Column(String, index=True)
+    device_secret = Column(String, index=True)
     last_seen_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 

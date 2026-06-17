@@ -1,11 +1,25 @@
 import pytest
+from unittest.mock import AsyncMock, patch
+
+from app.models import APNSDeviceToken
+
+_DEVICE_SECRET = "device-secret-123"
+
+
+def _registration(token: str, environment: str = "sandbox", **extra):
+    return {
+        "token": token,
+        "environment": environment,
+        "device_secret": _DEVICE_SECRET,
+        **extra,
+    }
 
 
 class TestAPNSTokenUpsert:
     def test_upsert_new_token_returns_201(self, client):
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": "a" * 64, "environment": "sandbox"},
+            json=_registration("a" * 64),
         )
         assert r.status_code == 201
         data = r.json()
@@ -16,29 +30,53 @@ class TestAPNSTokenUpsert:
         raw = "  " + "AB" * 32 + "  "
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": raw, "environment": "sandbox"},
+            json=_registration(raw),
         )
         assert r.status_code == 201
         assert r.json()["token"] == "ab" * 32
 
     def test_upsert_updates_existing_token(self, client):
         token = "b" * 64
-        client.post("/api/devices/apns-token", json={"token": token, "environment": "sandbox"})
+        client.post("/api/devices/apns-token", json=_registration(token))
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": token, "environment": "production", "device_id": "dev-xyz"},
+            json=_registration(token, "production", device_id="dev-xyz"),
         )
         assert r.status_code == 201
         data = r.json()
         assert data["environment"] == "production"
         assert data["device_id"] == "dev-xyz"
+        assert "device_secret" not in data
+
+    def test_upsert_stores_device_secret_as_hash(self, client, db_session):
+        token = "b" * 64
+        client.post("/api/devices/apns-token", json=_registration(token))
+        stored = db_session.get(APNSDeviceToken, token)
+        assert stored.device_secret != _DEVICE_SECRET
+        assert len(stored.device_secret) == 64
+
+    def test_upsert_rejects_wrong_secret_for_existing_token(self, client):
+        token = "b" * 64
+        client.post("/api/devices/apns-token", json=_registration(token))
+        r = client.post(
+            "/api/devices/apns-token",
+            json=_registration(token, "production", device_secret="different-secret-123"),
+        )
+        assert r.status_code == 409
+
+    def test_upsert_requires_device_secret(self, client):
+        r = client.post(
+            "/api/devices/apns-token",
+            json={"token": "b" * 64, "environment": "sandbox"},
+        )
+        assert r.status_code == 422
 
     def test_upsert_removes_internal_spaces(self, client):
         # _normalize_token uses split() which removes ALL whitespace including internal spaces
         raw = " ".join(["ab"] * 32)  # "ab ab ab ... ab" — 64 hex chars with spaces
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": raw, "environment": "sandbox"},
+            json=_registration(raw),
         )
         assert r.status_code == 201
         assert r.json()["token"] == "ab" * 32
@@ -46,35 +84,35 @@ class TestAPNSTokenUpsert:
     def test_upsert_invalid_token_returns_400(self, client):
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": "not-hex!!", "environment": "sandbox"},
+            json=_registration("not-hex!!"),
         )
         assert r.status_code == 400
 
     def test_upsert_empty_token_returns_400(self, client):
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": "   ", "environment": "sandbox"},
+            json=_registration("   "),
         )
         assert r.status_code == 400
 
     def test_upsert_short_token_returns_400(self, client):
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": "a" * 32, "environment": "sandbox"},
+            json=_registration("a" * 32),
         )
         assert r.status_code == 400
 
     def test_upsert_long_token_returns_400(self, client):
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": "a" * 65, "environment": "sandbox"},
+            json=_registration("a" * 65),
         )
         assert r.status_code == 400
 
     def test_last_seen_at_is_utc_aware(self, client):
         r = client.post(
             "/api/devices/apns-token",
-            json={"token": "c" * 64, "environment": "sandbox"},
+            json=_registration("c" * 64),
         )
         assert r.status_code == 201
         last_seen = r.json()["last_seen_at"]
@@ -85,21 +123,77 @@ class TestAPNSTokenUpsert:
 class TestAPNSTokenDelete:
     def test_delete_existing_token_returns_204(self, client):
         token = "d" * 64
-        client.post("/api/devices/apns-token", json={"token": token, "environment": "sandbox"})
-        r = client.delete(f"/api/devices/apns-token/{token}")
+        client.post("/api/devices/apns-token", json=_registration(token))
+        r = client.delete(
+            f"/api/devices/apns-token/{token}",
+            headers={"X-Device-Secret": _DEVICE_SECRET},
+        )
         assert r.status_code == 204
 
-    def test_delete_nonexistent_token_returns_204(self, client):
-        r = client.delete("/api/devices/apns-token/" + "e" * 64)
-        assert r.status_code == 204
+    def test_delete_nonexistent_token_returns_404(self, client):
+        r = client.delete(
+            "/api/devices/apns-token/" + "e" * 64,
+            headers={"X-Device-Secret": _DEVICE_SECRET},
+        )
+        assert r.status_code == 404
+
+    def test_delete_rejects_wrong_secret(self, client):
+        token = "d" * 64
+        client.post("/api/devices/apns-token", json=_registration(token))
+        r = client.delete(
+            f"/api/devices/apns-token/{token}",
+            headers={"X-Device-Secret": "wrong-secret-123"},
+        )
+        assert r.status_code == 404
 
     def test_deleted_token_no_longer_listed(self, client):
         token = "f" * 64
-        client.post("/api/devices/apns-token", json={"token": token, "environment": "sandbox"})
-        client.delete(f"/api/devices/apns-token/{token}")
+        client.post("/api/devices/apns-token", json=_registration(token))
+        client.delete(
+            f"/api/devices/apns-token/{token}",
+            headers={"X-Device-Secret": _DEVICE_SECRET},
+        )
         r = client.get("/api/devices/apns-tokens")
         listed = [d["token"] for d in r.json()]
         assert token not in listed
+
+
+class TestDeviceScopedTestPush:
+    def test_rejects_unregistered_token(self, client):
+        r = client.post(
+            "/api/devices/apns-test-push",
+            json={"token": "a" * 64, "device_secret": "secret-secret-secret"},
+        )
+        assert r.status_code == 404
+
+    def test_rejects_wrong_secret(self, client):
+        token = "a" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "sandbox", "device_secret": "correct-secret-123"},
+        )
+        r = client.post(
+            "/api/devices/apns-test-push",
+            json={"token": token, "device_secret": "wrong-secret-123"},
+        )
+        assert r.status_code == 404
+
+    def test_sends_to_registered_device_with_matching_secret(self, client):
+        token = "b" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        expected = {"configured": True, "results": [{"token": token[-8:], "status": 200}], "pruned_tokens": 0}
+        with patch("app.apns.send_test_push_to_device", new=AsyncMock(return_value=expected)) as mock_send:
+            r = client.post(
+                "/api/devices/apns-test-push",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == expected
+        mock_send.assert_awaited_once()
 
 
 class TestListAPNSTokens:
@@ -111,8 +205,8 @@ class TestListAPNSTokens:
     def test_list_returns_all_tokens(self, client):
         token1 = "a" * 64
         token2 = "b" * 64
-        client.post("/api/devices/apns-token", json={"token": token1, "environment": "sandbox"})
-        client.post("/api/devices/apns-token", json={"token": token2, "environment": "production"})
+        client.post("/api/devices/apns-token", json=_registration(token1))
+        client.post("/api/devices/apns-token", json=_registration(token2, "production"))
 
         r = client.get("/api/devices/apns-tokens")
         assert r.status_code == 200
@@ -123,8 +217,8 @@ class TestListAPNSTokens:
     def test_list_sorted_newest_first(self, client):
         token1 = "c" * 64
         token2 = "d" * 64
-        client.post("/api/devices/apns-token", json={"token": token1, "environment": "sandbox"})
-        client.post("/api/devices/apns-token", json={"token": token2, "environment": "sandbox"})
+        client.post("/api/devices/apns-token", json=_registration(token1))
+        client.post("/api/devices/apns-token", json=_registration(token2))
 
         r = client.get("/api/devices/apns-tokens")
         tokens = [d["token"] for d in r.json()]

@@ -34,6 +34,7 @@ class TestAdminStats:
         assert data["matches_total"] == 0
         assert data["watch_terms"] == []
         assert data["items_by_platform"] == {}
+        assert data["apns"]["backend_public_url"]
 
     def test_stats_counts_reflect_db_content(self, client, db_session):
         term = WatchTerm(keyword="Aiko")

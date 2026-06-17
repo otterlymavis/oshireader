@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 import feedparser
 import httpx
+from bs4 import BeautifulSoup
 
 from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
 
@@ -25,6 +26,14 @@ def _clean_markdown_title(value: str) -> str:
     value = _MD_IMAGE_RE.sub("", value)
     value = value.replace("_", "")
     return _WHITESPACE_RE.sub(" ", value).strip()
+
+
+def _clean_html_summary(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = BeautifulSoup(value, "lxml").get_text(" ", strip=True)
+    cleaned = _WHITESPACE_RE.sub(" ", text).strip()
+    return cleaned or None
 
 
 class YahooNewsConnector(BaseConnector):
@@ -119,7 +128,7 @@ class YahooNewsConnector(BaseConnector):
                     published_at=parse_feed_date(entry),
                     media_type="article",
                     title=title,
-                    content_text=entry.get("summary") or None,
+                    content_text=_clean_html_summary(entry.get("summary")),
                     raw_payload={"keyword": keyword, "source": "google_news"},
                 )
             )

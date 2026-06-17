@@ -141,6 +141,7 @@ async def _poll_once_unlocked() -> None:
                         continue
                     try:
                         new_count = 0
+                        preview_item: dict | None = None
                         ids = [raw.composite_id for raw in items]
                         now = datetime.now(timezone.utc)
 
@@ -225,14 +226,29 @@ async def _poll_once_unlocked() -> None:
 
                         for raw in items:
                             if raw.composite_id not in existing_match_ids:
-                                db.add(Match(watch_term_id=term.id, source_item_id=raw.composite_id))
+                                match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
+                                db.add(match)
+                                db.flush()
                                 existing_match_ids.add(raw.composite_id)
                                 new_count += 1
+                                if preview_item is None:
+                                    public_base_url = settings.backend_public_url.rstrip("/")
+                                    preview_item = {
+                                        "id": raw.composite_id,
+                                        "match_id": match.id,
+                                        "platform": raw.platform,
+                                        "url": raw.url,
+                                        "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
+                                        "title": raw.title,
+                                        "content_text": raw.content_text,
+                                        "author": raw.author,
+                                        "thumbnail_url": raw.thumbnail_url,
+                                    }
 
                         db.flush()
                         db.commit()
                         if new_count:
-                            await send_new_match_notifications(db, term, new_count)
+                            await send_new_match_notifications(db, term, new_count, preview_item)
                         log.info(
                             "term=%r search=%r connector=%s fetched=%d new=%d",
                             term.keyword,

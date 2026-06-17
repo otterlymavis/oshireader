@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     apns_private_key_path: str = ""
     apns_topic: str = "com.otterpia.oshireader.plus"
     apns_use_sandbox: bool = False  # set APNS_USE_SANDBOX=true only for Debug-config builds; TestFlight/App Store builds use the production APNs host
+    backend_public_url: str = "https://oshireader.onrender.com"
 
     model_config = {"env_file": ".env"}
 

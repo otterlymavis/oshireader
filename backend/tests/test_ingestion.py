@@ -125,9 +125,12 @@ class TestIngestionNotifications:
             await _poll_once_unlocked()
 
         mock_notify.assert_called_once()
-        _, called_term, called_count = mock_notify.call_args.args
+        _, called_term, called_count, preview_item = mock_notify.call_args.args
         assert called_term.keyword == "Aiko"
         assert called_count == 1
+        assert preview_item["title"] == "Test Item"
+        assert preview_item["match_id"]
+        assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
 
     @pytest.mark.asyncio
     async def test_notify_called_for_any_new_items(self, db_engine, db_session):

@@ -78,6 +78,13 @@ def apply_startup_migrations(engine: Engine) -> None:
     )
     _add_missing_columns(
         engine,
+        "apns_device_tokens",
+        {
+            "device_secret": "VARCHAR",
+        },
+    )
+    _add_missing_columns(
+        engine,
         "matches",
         {
             "confidence": "FLOAT DEFAULT 1.0",

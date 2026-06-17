@@ -13,7 +13,17 @@ import httpx
 
 import tempfile, os
 
-from app.apns import _host, _payload, _private_key, _send_one, apns_configured, send_new_match_notifications
+from app.apns import (
+    _host,
+    _payload,
+    _payload_size,
+    _private_key,
+    _send_one,
+    apns_configured,
+    send_new_match_notifications,
+    send_test_push,
+    send_test_push_to_device,
+)
 from app.models import APNSDeviceToken, WatchTerm
 
 
@@ -40,6 +50,97 @@ class TestPayload:
     def test_watch_term_id_included(self):
         payload = _payload(self._term(term_id=42), 1)
         assert payload["watch_term_id"] == 42
+
+    def test_preview_item_replaces_count_body(self):
+        payload = _payload(
+            self._term("Aiko"),
+            3,
+            {
+                "id": "youtube:1",
+                "match_id": 123,
+                "platform": "youtube",
+                "url": "https://example.com/watch",
+                "redirect_url": "https://backend.example.com/api/feed/matches/123/redirect",
+                "title": "Aiko announces a new live stream",
+                "content_text": "Longer stream details",
+                "author": "Aiko Channel",
+                "thumbnail_url": "https://example.com/thumb.jpg",
+                "media_type": "video",
+                "published_at": "2026-06-17T12:00:00Z",
+            },
+        )
+        assert payload["aps"]["mutable-content"] == 1
+        assert payload["aps"]["category"] == "OSHI_RESULT_PREVIEW"
+        assert payload["aps"]["thread-id"] == "oshireader-1"
+        assert payload["aps"]["target-content-id"] == "youtube:1"
+        assert payload["aps"]["alert"]["body"] == "Aiko announces a new live stream\nほか2件"
+        assert payload["aps"]["alert"]["subtitle"] == "Aiko Channel · youtube"
+        assert payload["preview_item"]["url"] == "https://backend.example.com/api/feed/matches/123/redirect"
+        assert payload["preview_item"]["match_id"] == "123"
+        assert payload["preview_item"]["content_text"] == "Longer stream details"
+        assert payload["preview_item"]["thumbnail_url"] == "https://example.com/thumb.jpg"
+        assert payload["item_id"] == "youtube:1"
+        assert payload["item_url"] == "https://backend.example.com/api/feed/matches/123/redirect"
+        assert payload["match_id"] == "123"
+        assert payload["item_platform"] == "youtube"
+        assert payload["item_title"] == "Aiko announces a new live stream"
+        assert payload["item_content_text"] == "Longer stream details"
+        assert payload["item_author"] == "Aiko Channel"
+        assert payload["item_media_type"] == "video"
+        assert payload["item_published_at"] == "2026-06-17T12:00:00Z"
+        assert payload["thumbnail_url"] == "https://example.com/thumb.jpg"
+
+    def test_preview_item_metadata_is_bounded_for_apns_size(self):
+        payload = _payload(
+            self._term("Aiko"),
+            1,
+            {
+                "id": "x" * 300,
+                "match_id": 123456,
+                "platform": "youtube",
+                "url": "https://example.com/" + ("u" * 800),
+                "title": "T" * 300,
+                "content_text": "C" * 3000,
+                "author": "A" * 300,
+                "thumbnail_url": "https://example.com/" + ("t" * 800),
+                "media_type": "article",
+                "published_at": "2026-06-17T12:00:00Z",
+            },
+        )
+        assert payload["preview_item"]["id"] == "x" * 300
+        assert payload["preview_item"]["match_id"] == "123456"
+        assert payload["match_id"] == "123456"
+        assert payload["preview_item"]["url"] == "https://example.com/" + ("u" * 800)
+        assert "title" not in payload["preview_item"]
+        assert len(payload["item_title"]) == 180
+        assert payload["item_id"] == payload["preview_item"]["id"]
+        assert payload["item_url"] == payload["preview_item"]["url"]
+        assert "content_text" not in payload["preview_item"]
+        assert "item_content_text" not in payload
+        assert "author" not in payload["preview_item"]
+        assert "item_author" not in payload
+        assert "thumbnail_url" not in payload["preview_item"]
+        assert "thumbnail_url" not in payload
+        assert _payload_size(payload) <= 3500
+
+    def test_alert_subtitle_is_bounded_for_apns_size(self):
+        payload = _payload(
+            self._term("Aiko"),
+            1,
+            {
+                "id": "youtube:1",
+                "url": "https://example.com/watch",
+                "title": "Aiko update",
+                "author": "A" * 5000,
+                "platform": "P" * 5000,
+            },
+        )
+
+        subtitle = payload["aps"]["alert"]["subtitle"]
+        author, platform = subtitle.split(" · ")
+        assert len(author) == 120
+        assert len(platform) == 80
+        assert _payload_size(payload) <= 3500
 
 
 class TestHost:
@@ -289,11 +390,45 @@ class TestSendOne:
         term, device = _term_and_device()
         client = _mock_client(raise_exc=httpx.ConnectError("timeout"))
         with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.asyncio.sleep", new=AsyncMock()), \
              patch("app.apns.settings") as s:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
         assert result is False  # keep token on network failure
+        assert client.post.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_retries_transient_response_then_succeeds(self):
+        term, device = _term_and_device()
+        client = _mock_client()
+        client.post.side_effect = [
+            _mock_response(503, {"reason": "ServiceUnavailable"}),
+            _mock_response(200, {}),
+        ]
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.asyncio.sleep", new=AsyncMock()) as mock_sleep, \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            result = await _send_one(client, device, term, 1)
+
+        assert result is False
+        assert client.post.await_count == 2
+        mock_sleep.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_permanent_rejection(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(400, {"reason": "BadDeviceToken"}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.asyncio.sleep", new=AsyncMock()) as mock_sleep, \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            result = await _send_one(client, device, term, 1)
+
+        assert result is True
+        client.post.assert_awaited_once()
+        mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_false_on_200(self):
@@ -305,6 +440,37 @@ class TestSendOne:
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
         assert result is False  # success — keep token
+
+    @pytest.mark.asyncio
+    async def test_skips_send_when_preview_payload_exceeds_apns_limit(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(200, {}))
+        huge_preview = {
+            "id": "x" * 5000,
+            "url": "https://example.com/" + ("u" * 5000),
+            "title": "Aiko",
+        }
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1, huge_preview)
+
+        assert result is False
+        client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sends_collapse_header_per_term(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(200, {}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            await _send_one(client, device, term, 1)
+
+        headers = client.post.call_args.kwargs["headers"]
+        assert headers["apns-collapse-id"] == "oshireader-1"
 
     @pytest.mark.asyncio
     async def test_returns_true_for_bad_device_token(self):
@@ -360,6 +526,53 @@ class TestSendOne:
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
         assert result is False  # server error without bad-token reason — keep token
+
+
+class TestSendTestPush:
+    @pytest.mark.asyncio
+    async def test_admin_test_push_uses_preview_payload(self, db_session):
+        device = _device("a" * 64, environment="sandbox")
+        db_session.add(device)
+        db_session.commit()
+
+        client = _mock_client(response=_mock_response(200, {}))
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.httpx.AsyncClient") as mock_client_class, \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            mock_client_class.return_value.__aenter__.return_value = client
+            await send_test_push(db_session)
+
+        payload = client.post.call_args.kwargs["json"]
+        assert payload["aps"]["category"] == "OSHI_RESULT_PREVIEW"
+        assert payload["aps"]["mutable-content"] == 1
+        assert payload["preview_item"]["id"] == "oshireader:test-preview"
+        assert payload["item_title"] == "通知プレビューのテスト"
+        headers = client.post.call_args.kwargs["headers"]
+        assert headers["apns-collapse-id"] == "oshireader-test"
+
+    @pytest.mark.asyncio
+    async def test_device_test_push_uses_preview_payload(self, db_session):
+        device = _device("b" * 64, environment="production")
+        db_session.add(device)
+        db_session.commit()
+
+        client = _mock_client(response=_mock_response(200, {}))
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.httpx.AsyncClient") as mock_client_class, \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            mock_client_class.return_value.__aenter__.return_value = client
+            await send_test_push_to_device(db_session, device)
+
+        payload = client.post.call_args.kwargs["json"]
+        assert payload["aps"]["category"] == "OSHI_RESULT_PREVIEW"
+        assert payload["aps"]["target-content-id"] == "oshireader:test-preview"
+        assert payload["item_url"] == "https://oshireader.onrender.com"
+        headers = client.post.call_args.kwargs["headers"]
+        assert headers["apns-collapse-id"] == "oshireader-test"
 
 
 class TestAuthToken:

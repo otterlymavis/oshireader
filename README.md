@@ -42,7 +42,8 @@ Backend settings are loaded from environment variables or `backend/.env`.
 | `APNS_PRIVATE_KEY` | empty | APNs `.p8` private key text. Use escaped `\n` line breaks if storing in one environment variable. |
 | `APNS_PRIVATE_KEY_PATH` | empty | Alternative path to the APNs `.p8` private key file. |
 | `APNS_TOPIC` | `com.otterpia.oshireader.plus` | APNs topic, usually the iOS bundle identifier. |
-| `APNS_USE_SANDBOX` | `true` | Use APNs sandbox host for development builds. Set to `false` for production tokens. |
+| `APNS_USE_SANDBOX` | `false` | Fallback APNs host when a stored token has no environment. Device registrations include their own environment, so production and sandbox tokens can coexist. |
+| `BACKEND_PUBLIC_URL` | `https://oshireader.onrender.com` | Public backend origin used for compact notification redirect links. |
 
 When `ADMIN_API_TOKEN` is set, protected requests must include:
 
@@ -70,11 +71,22 @@ The app is a universal iPhone and iPad build. Use schemes to choose the backend 
 |---|---|---|
 | `OshiReader Local` | `Debug` | `http://127.0.0.1:8000` |
 | `OshiReader Staging` | `Staging` | production URL until a staging backend is deployed |
-| `OshiReader Production` | `Release` | `https://otterpia-backend-production.up.railway.app` |
+| `OshiReader Production` | `Release` | `https://oshireader.onrender.com` |
 
 The backend URL is injected through `OshiReaderAPIBaseURL` in `Info.plist`, with values generated from `ios-swift/project.yml`.
 
 Remote push notifications use APNs. The Swift app registers its APNs device token after notification permission is granted, then posts that token to `/api/devices/apns-token`. The backend sends remote notifications for new matches only when the watch term has notifications enabled.
+
+### Push Notification Release Checklist
+
+Before shipping a build that relies on background/rich notifications:
+
+1. Set production backend environment variables: `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY` or `APNS_PRIVATE_KEY_PATH`, `APNS_TOPIC=com.otterpia.oshireader.plus`, `APNS_USE_SANDBOX=false`, and `BACKEND_PUBLIC_URL` to the deployed backend origin.
+2. Deploy backend migrations before testing pushes. The APNs device table must include `device_secret`.
+3. Launch the updated iOS app once after deployment and allow notifications, so the app re-registers the APNs token with `device_secret` and its APNs environment.
+4. In Settings, send a test notification on a physical device or TestFlight build. The notification should use the rich preview category, and repeated tests should collapse into one diagnostic notification.
+5. Trigger a real poll that creates a new match. Confirm the notification arrives while the app is backgrounded, expands with preview UI, opens the result on tap, and saves via the notification action.
+6. Check `/api/admin/stats` for APNs configuration and token environment counts when diagnosing delivery issues.
 
 ## Supported Backend Sources
 

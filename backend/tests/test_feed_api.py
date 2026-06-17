@@ -193,6 +193,29 @@ class TestFeedAPI:
         assert rows[0]["item"]["id"] == item.id
         assert rows[0]["watch_term_keyword"] == term.keyword
 
+    def test_match_redirect_opens_source_url(self, client, db_session):
+        term = _make_term(db_session)
+        item = _make_item(db_session, item_id="redirect")
+        match = _make_match(db_session, term, item)
+
+        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+        assert resp.status_code == 307
+        assert resp.headers["location"] == item.url
+
+    def test_match_redirect_404_for_unknown_match(self, client):
+        resp = client.get("/api/feed/matches/999999/redirect", follow_redirects=False)
+        assert resp.status_code == 404
+
+    def test_match_redirect_rejects_non_http_url(self, client, db_session):
+        term = _make_term(db_session)
+        item = _make_item(db_session, item_id="unsafe-redirect")
+        item.url = "javascript:alert(1)"
+        db_session.commit()
+        match = _make_match(db_session, term, item)
+
+        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+        assert resp.status_code == 404
+
     def test_feed_filter_by_term_id(self, client, db_session):
         t1 = _make_term(db_session, keyword="one")
         t2 = _make_term(db_session, keyword="two")

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,23 @@ _TIMELESS_PLATFORMS = ("5ch", "girlschannel", "togetter")
 # (match-discovery) time — girlschannel/togetter scrapers heal published_at to the real
 # last-reply date, and other connectors carry real publication dates.
 _FEED_SORT_KEY = SourceItem.published_at
+
+
+@router.get("/matches/{match_id}/redirect")
+def redirect_match(match_id: int, db: Session = Depends(get_db)):
+    row = (
+        db.query(SourceItem.url)
+        .join(Match, Match.source_item_id == SourceItem.id)
+        .filter(Match.id == match_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "Feed match not found")
+    source_url = row[0]
+    parsed = urlparse(source_url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(404, "Feed match URL not available")
+    return RedirectResponse(url=source_url, status_code=307)
 
 
 @router.get("/", response_model=list[FeedItemOut])

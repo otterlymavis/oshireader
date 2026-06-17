@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from functools import lru_cache
@@ -13,6 +14,20 @@ from app.config import settings
 from app.models import APNSDeviceToken, WatchTerm
 
 log = logging.getLogger(__name__)
+
+_PREVIEW_FIELD_LIMITS = {
+    "match_id": 40,
+    "platform": 80,
+    "title": 180,
+    "content_text": 320,
+    "author": 120,
+    "media_type": 40,
+    "published_at": 80,
+}
+_APNS_PAYLOAD_SOFT_LIMIT_BYTES = 3500
+_APNS_PAYLOAD_HARD_LIMIT_BYTES = 4096
+_APNS_MAX_ATTEMPTS = 3
+_APNS_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def _private_key() -> str:
@@ -59,31 +74,222 @@ def _host(environment: str | None = None) -> str:
     return "https://api.push.apple.com"
 
 
-def _payload(term: WatchTerm, count: int) -> dict:
-    return {
+def _preview_text(preview_item: dict | None) -> str | None:
+    if not preview_item:
+        return None
+    value = preview_item.get("title") or preview_item.get("content_text") or preview_item.get("url")
+    if not value:
+        return None
+    text = " ".join(str(value).split())
+    if not text:
+        return None
+    return text if len(text) <= 140 else f"{text[:137]}..."
+
+
+def _payload_value(preview_item: dict, key: str) -> str | None:
+    if key == "url":
+        value = preview_item.get("redirect_url") or preview_item.get("url")
+    else:
+        value = preview_item.get(key)
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    if not text:
+        return None
+    limit = _PREVIEW_FIELD_LIMITS.get(key)
+    if limit and len(text) > limit:
+        return f"{text[:limit - 3]}..."
+    return text
+
+
+def _payload_size(payload: dict) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _drop_path(payload: dict, *path: str) -> None:
+    current = payload
+    for key in path[:-1]:
+        value = current.get(key)
+        if not isinstance(value, dict):
+            return
+        current = value
+    current.pop(path[-1], None)
+
+
+def _shrink_payload(payload: dict) -> dict:
+    # Preserve item_id/item_url for tap-through. Trim optional preview richness first.
+    drop_order = [
+        ("thumbnail_url",),
+        ("preview_item", "thumbnail_url"),
+        ("item_content_text",),
+        ("preview_item", "content_text"),
+        ("item_author",),
+        ("preview_item", "author"),
+        ("preview_item", "title"),
+        ("item_published_at",),
+        ("preview_item", "published_at"),
+        ("item_media_type",),
+        ("preview_item", "media_type"),
+        ("item_platform",),
+        ("preview_item", "platform"),
+        ("aps", "target-content-id"),
+    ]
+    for path in drop_order:
+        if _payload_size(payload) <= _APNS_PAYLOAD_SOFT_LIMIT_BYTES:
+            break
+        _drop_path(payload, *path)
+    if isinstance(payload.get("preview_item"), dict) and not payload["preview_item"]:
+        payload.pop("preview_item", None)
+    return payload
+
+
+def _payload_exceeds_apns_limit(payload: dict) -> bool:
+    return _payload_size(payload) > _APNS_PAYLOAD_HARD_LIMIT_BYTES
+
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+) -> httpx.Response:
+    last_error: Exception | None = None
+    for attempt in range(_APNS_MAX_ATTEMPTS):
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+        except Exception as exc:
+            last_error = exc
+        else:
+            if response.status_code not in _APNS_TRANSIENT_STATUS_CODES:
+                return response
+            last_error = None
+
+        if attempt + 1 < _APNS_MAX_ATTEMPTS:
+            await asyncio.sleep(0.25 * (2 ** attempt))
+
+    if last_error is not None:
+        raise last_error
+    return response
+
+
+def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> dict:
+    preview = _preview_text(preview_item)
+    body = preview or (f"{count}件の新着があります。" if count != 1 else "1件の新着があります。")
+    if preview and count > 1:
+        body = f"{body}\nほか{count - 1}件"
+    subtitle_parts = []
+    if preview_item:
+        subtitle_parts = [
+            value
+            for key in ("author", "platform")
+            if (value := _payload_value(preview_item, key))
+        ]
+    alert = {
+        "title": f"{term.keyword} の新着",
+        "body": body,
+    }
+    if subtitle_parts:
+        alert["subtitle"] = " · ".join(subtitle_parts)
+
+    payload = {
         "aps": {
-            "alert": {
-                "title": f"{term.keyword} の新着",
-                "body": f"{count}件の新着があります。",
-            },
+            "alert": alert,
             "sound": "default",
+            "mutable-content": 1,
+            "category": "OSHI_RESULT_PREVIEW",
+            "thread-id": f"oshireader-{term.id}",
         },
         "watch_term_id": term.id,
         "watch_term_keyword": term.keyword,
         "new_count": count,
     }
+    if preview_item:
+        payload["preview_item"] = {
+            key: value
+            for key in (
+                "id",
+                "match_id",
+                "platform",
+                "url",
+                "title",
+                "content_text",
+                "author",
+                "thumbnail_url",
+                "media_type",
+                "published_at",
+            )
+            if (value := _payload_value(preview_item, key))
+        }
+        top_level_preview_keys = {
+            "id": "item_id",
+            "match_id": "match_id",
+            "url": "item_url",
+            "platform": "item_platform",
+            "title": "item_title",
+            "content_text": "item_content_text",
+            "author": "item_author",
+            "media_type": "item_media_type",
+            "published_at": "item_published_at",
+        }
+        for source_key, payload_key in top_level_preview_keys.items():
+            if payload["preview_item"].get(source_key):
+                payload[payload_key] = payload["preview_item"][source_key]
+        if payload["preview_item"].get("id"):
+            payload["aps"]["target-content-id"] = payload["preview_item"]["id"]
+        if payload["preview_item"].get("thumbnail_url"):
+            payload["thumbnail_url"] = payload["preview_item"]["thumbnail_url"]
+    return _shrink_payload(payload)
 
 
-async def _send_one(client: httpx.AsyncClient, device: APNSDeviceToken, term: WatchTerm, count: int) -> bool:
+def _collapse_id(term: WatchTerm) -> str:
+    return f"oshireader-{term.id}"[:64]
+
+
+def _test_payload() -> dict:
+    term = WatchTerm(keyword="OshiReader")
+    term.id = 0
+    return _payload(
+        term,
+        1,
+        {
+            "id": "oshireader:test-preview",
+            "platform": "OshiReader",
+            "url": "https://oshireader.onrender.com",
+            "title": "通知プレビューのテスト",
+            "content_text": "新着結果のタイトル、本文、リンクが通知内に表示されます。",
+            "author": "OshiReader",
+            "media_type": "article",
+        },
+    )
+
+
+async def _send_one(
+    client: httpx.AsyncClient,
+    device: APNSDeviceToken,
+    term: WatchTerm,
+    count: int,
+    preview_item: dict | None = None,
+) -> bool:
     url = f"{_host(device.environment)}/3/device/{device.token}"
     headers = {
         "authorization": f"bearer {_cached_auth_token()}",
         "apns-topic": settings.apns_topic,
         "apns-push-type": "alert",
         "apns-priority": "10",
+        "apns-collapse-id": _collapse_id(term),
     }
+    payload = _payload(term, count, preview_item)
+    if _payload_exceeds_apns_limit(payload):
+        log.warning(
+            "APNs payload too large; skipping send token=%s term=%s bytes=%d",
+            device.token[-8:],
+            term.id,
+            _payload_size(payload),
+        )
+        return False
+
     try:
-        resp = await client.post(url, json=_payload(term, count), headers=headers)
+        resp = await _post_with_retry(client, url, payload, headers)
     except Exception as exc:
         log.warning("APNs send failed token=%s: %s", device.token[-8:], exc)
         return False
@@ -100,7 +306,12 @@ async def _send_one(client: httpx.AsyncClient, device: APNSDeviceToken, term: Wa
     return reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"} or resp.status_code == 410
 
 
-async def send_new_match_notifications(db: Session, term: WatchTerm, count: int) -> None:
+async def send_new_match_notifications(
+    db: Session,
+    term: WatchTerm,
+    count: int,
+    preview_item: dict | None = None,
+) -> None:
     if count <= 0 or not term.notify_on_new:
         return
     if not apns_configured():
@@ -116,7 +327,7 @@ async def send_new_match_notifications(db: Session, term: WatchTerm, count: int)
         return
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
         results = await asyncio.gather(
-            *[_send_one(client, device, term, count) for device in devices]
+            *[_send_one(client, device, term, count, preview_item) for device in devices]
         )
     for device, should_delete in zip(devices, results):
         if should_delete:
@@ -134,12 +345,7 @@ async def send_test_push(db: Session) -> dict:
     if not devices:
         return {"configured": True, "results": [], "note": "no device tokens registered"}
 
-    payload = {
-        "aps": {
-            "alert": {"title": "OshiReader", "body": "プッシュ通知テストです ✅"},
-            "sound": "default",
-        }
-    }
+    payload = _test_payload()
     results: list[dict] = []
     dead: list[APNSDeviceToken] = []
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
@@ -150,10 +356,16 @@ async def send_test_push(db: Session) -> dict:
                 "apns-topic": settings.apns_topic,
                 "apns-push-type": "alert",
                 "apns-priority": "10",
+                "apns-collapse-id": "oshireader-test",
             }
             entry = {"token": device.token[-8:], "environment": device.environment, "host": host}
             try:
-                resp = await client.post(f"{host}/3/device/{device.token}", json=payload, headers=headers)
+                resp = await _post_with_retry(
+                    client,
+                    f"{host}/3/device/{device.token}",
+                    payload,
+                    headers,
+                )
                 entry["status"] = resp.status_code
                 if resp.status_code not in (200, 201):
                     reason = None
@@ -172,3 +384,43 @@ async def send_test_push(db: Session) -> dict:
             db.delete(device)
         db.commit()
     return {"configured": True, "results": results, "pruned_tokens": len(dead)}
+
+
+async def send_test_push_to_device(db: Session, device: APNSDeviceToken) -> dict:
+    if not apns_configured():
+        return {"configured": False, "results": []}
+
+    payload = _test_payload()
+    host = _host(device.environment)
+    headers = {
+        "authorization": f"bearer {_cached_auth_token()}",
+        "apns-topic": settings.apns_topic,
+        "apns-push-type": "alert",
+        "apns-priority": "10",
+        "apns-collapse-id": "oshireader-test",
+    }
+    entry = {"token": device.token[-8:], "environment": device.environment, "host": host}
+    should_delete = False
+    async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
+        try:
+            resp = await _post_with_retry(
+                client,
+                f"{host}/3/device/{device.token}",
+                payload,
+                headers,
+            )
+            entry["status"] = resp.status_code
+            if resp.status_code not in (200, 201):
+                try:
+                    reason = resp.json().get("reason")
+                except Exception:
+                    reason = resp.text
+                entry["reason"] = reason
+                should_delete = reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"} or resp.status_code == 410
+        except Exception as exc:
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+
+    if should_delete:
+        db.delete(device)
+        db.commit()
+    return {"configured": True, "results": [entry], "pruned_tokens": 1 if should_delete else 0}

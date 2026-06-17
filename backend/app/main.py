@@ -118,6 +118,7 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         "apns": {
             "configured": apns_configured(),
             "server_environment": "sandbox" if settings.apns_use_sandbox else "production",
+            "backend_public_url": settings.backend_public_url,
             "device_tokens_by_environment": {env: c for env, c in device_tokens},
         },
     }

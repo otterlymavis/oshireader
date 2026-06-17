@@ -43,6 +43,7 @@ class TestApplyStartupMigrations:
         assert "platform_credentials" in tables
         assert "apns_device_tokens" in tables
         assert "migration_log" in tables
+        assert "device_secret" in _column_names(fresh_engine, "apns_device_tokens")
 
     def test_idempotent_second_call_succeeds(self, fresh_engine):
         Session = sessionmaker(bind=fresh_engine)
