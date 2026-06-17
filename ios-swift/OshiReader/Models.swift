@@ -81,7 +81,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         case id, keyword, collection_mode, is_active, notify_on_new, aliases, created_at
     }
 
-    init(id: String = UUID().uuidString, keyword: String, collection_mode: CollectionMode = .allInfo, is_active: Bool = true, notify_on_new: Bool = false, aliases: [String] = [], created_at: String = _ISO8601Cache.withoutFractional.string(from: Date())) {
+    init(id: String = UUID().uuidString, keyword: String, collection_mode: CollectionMode = .allInfo, is_active: Bool = true, notify_on_new: Bool = true, aliases: [String] = [], created_at: String = _ISO8601Cache.withoutFractional.string(from: Date())) {
         self.id = id
         self.keyword = keyword
         self.collection_mode = collection_mode
@@ -105,7 +105,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         // Gracefully fall back to .allInfo for unknown/missing values from older backend rows.
         self.collection_mode = (try? container.decode(CollectionMode.self, forKey: .collection_mode)) ?? .allInfo
         self.is_active = try container.decodeIfPresent(Bool.self, forKey: .is_active) ?? true
-        self.notify_on_new = try container.decodeIfPresent(Bool.self, forKey: .notify_on_new) ?? false
+        self.notify_on_new = try container.decodeIfPresent(Bool.self, forKey: .notify_on_new) ?? true
         self.aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
         self.created_at = try container.decodeIfPresent(String.self, forKey: .created_at) ?? _ISO8601Cache.withoutFractional.string(from: Date())
     }

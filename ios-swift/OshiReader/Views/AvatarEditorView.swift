@@ -17,6 +17,7 @@ struct AvatarEditorView: View {
     @State private var activeCategory: String? = nil // Nil = popular
     @State private var searchingStickers = false
     @State private var saving = false
+    @State private var settingWallpaper = false
     
     // Drag gesture state — isDragging gates start-position capture
     @State private var isDragging = false
@@ -225,7 +226,7 @@ struct AvatarEditorView: View {
                     Button(action: {
                         Task { await applyAsWallpaper() }
                     }) {
-                        Text(i18n.t("setAsWallpaper"))
+                        Text(settingWallpaper ? "..." : i18n.t("setAsWallpaper"))
                             .bold()
                             .foregroundColor(theme.colors.primary)
                             .frame(maxWidth: .infinity)
@@ -233,7 +234,7 @@ struct AvatarEditorView: View {
                             .background(theme.colors.primaryBg)
                             .cornerRadius(10)
                     }
-                    .disabled(layers.isEmpty)
+                    .disabled(layers.isEmpty || settingWallpaper)
                     .opacity(layers.isEmpty ? 0.5 : 1.0)
                 }
                 .padding(.horizontal, 12)
@@ -482,7 +483,15 @@ struct AvatarEditorView: View {
     }
     
     private func applyAsWallpaper() async {
-        if let topLayer = layers.sorted(by: { $0.zIndex < $1.zIndex }).last {
+        guard !layers.isEmpty, !settingWallpaper else { return }
+        settingWallpaper = true
+        defer { settingWallpaper = false }
+        // Flatten the whole composition (all layers, with their position / scale / crop /
+        // rotation) into a single image and use that as the wallpaper — not just the top
+        // sticker. Falls back to the top layer's URL if rendering fails.
+        if let fileUrl = await renderCompositionToFile(layers: layers, baseSize: baseSize) {
+            db.setWallpaper(url: fileUrl.absoluteString)
+        } else if let topLayer = layers.sorted(by: { $0.zIndex < $1.zIndex }).last {
             db.setWallpaper(url: topLayer.imageUrl)
         }
     }
@@ -546,5 +555,87 @@ struct AvatarEditorView: View {
         .disabled(needsSelection && activeLayer == nil)
         .opacity(needsSelection && activeLayer == nil ? 0.4 : 1.0)
         .accessibilityIdentifier(a11y ?? "")
+    }
+
+    // MARK: - Composition Flattening (for wallpaper)
+
+    /// Downloads every layer's image, renders the full composition to a PNG on disk,
+    /// and returns its file URL. Runs on the main actor because ImageRenderer requires it.
+    @MainActor
+    private func renderCompositionToFile(layers: [AvatarLayer], baseSize: Double) async -> URL? {
+        var images: [String: UIImage] = [:]
+        for layer in layers where images[layer.imageUrl] == nil {
+            if let img = await Self.loadImage(layer.imageUrl) {
+                images[layer.imageUrl] = img
+            }
+        }
+        guard !images.isEmpty else { return nil }
+
+        let canvas = 300.0
+        let renderer = ImageRenderer(
+            content: _CompositionCanvas(layers: layers, images: images, baseSize: baseSize, canvas: canvas)
+        )
+        renderer.scale = 3.0  // ~900×900 output
+        guard let image = renderer.uiImage, let data = image.pngData() else { return nil }
+
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        // Clean up previous wallpaper renders so they don't accumulate.
+        if let existing = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            for name in existing where name.hasPrefix("oshi_wallpaper_") {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+            }
+        }
+        // Unique filename so AsyncImage / UIImage don't serve a stale cached copy.
+        let url = dir.appendingPathComponent("oshi_wallpaper_\(Int(Date().timeIntervalSince1970)).png")
+        do {
+            try data.write(to: url)
+            return url
+        } catch {
+            AppLogger.network.error("wallpaper render write failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private static func loadImage(_ urlString: String) async -> UIImage? {
+        guard let url = URL(string: urlString) else { return nil }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            return UIImage(data: data)
+        } catch {
+            return nil
+        }
+    }
+}
+
+// Flattened, non-interactive render of an avatar composition — mirrors the editor
+// canvas geometry (300×300 logical) so the wallpaper matches what the user arranged.
+private struct _CompositionCanvas: View {
+    let layers: [AvatarLayer]
+    let images: [String: UIImage]
+    let baseSize: Double
+    let canvas: Double
+
+    var body: some View {
+        ZStack {
+            Color.clear.frame(width: canvas, height: canvas)
+            ForEach(layers.sorted(by: { $0.zIndex < $1.zIndex })) { layer in
+                let size = baseSize * layer.scale
+                let cropScale = layer.cropScale ?? 1.0
+                let rotation = layer.rotation ?? 0.0
+                if let img = images[layer.imageUrl] {
+                    Image(uiImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .scaleEffect(cropScale)
+                        .offset(x: layer.cropX ?? 0.0, y: layer.cropY ?? 0.0)
+                        .frame(width: size, height: size)
+                        .clipped()
+                        .rotationEffect(Angle(degrees: rotation))
+                        .frame(width: size, height: size)
+                        .position(x: layer.x + size / 2.0, y: layer.y + size / 2.0)
+                }
+            }
+        }
+        .frame(width: canvas, height: canvas)
     }
 }

@@ -248,8 +248,20 @@ extension NetworkManager {
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.yahoo.co.jp", platform: "yahoonews", tagKeyword: tag) }
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mdpr.jp", platform: "mdpr", tagKeyword: tag) }
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "oricon.co.jp", platform: "oricon", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "girlschannel.net", platform: "girlschannel", tagKeyword: tag) }
+            // NOTE: girlschannel is intentionally omitted — the backend serves it via
+            // direct scrape (its datacenter IP isn't blocked there), and scraping it
+            // here too would create duplicates (the per-oshi keyword view doesn't dedupe).
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "5ch.net", platform: "5ch", tagKeyword: tag) }
+            // Newer sources — the backend's datacenter IP is blocked by Google News (503),
+            // so these only populate when fetched from the device's own network.
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "smartnews.com", platform: "smartnews", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "ameblo.jp", platform: "ameblo", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "dot.asahi.com", platform: "aera", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "hochi.news", platform: "hochi", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "sponichi.co.jp", platform: "sponichi", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.livedoor.com", platform: "livedoor", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mantan-web.jp", platform: "mantanweb", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "barks.jp", platform: "barks", tagKeyword: tag) }
             var all = [FeedItem]()
             for await items in group { all.append(contentsOf: items) }
             return all

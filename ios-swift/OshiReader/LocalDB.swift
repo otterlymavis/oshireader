@@ -232,14 +232,13 @@ class LocalDB: ObservableObject {
         saveToFile(name: "feed_items", value: feedItems)
     }
 
-    // For skipDateCutoff (forum-type) platforms, published_at reflects when the thread
-    // was first indexed (often years old), not when new replies appeared — sorting by it
-    // would bury freshly-matched threads at the bottom. Sort those by fetched_at (match
-    // discovery time) instead; mirrors the backend feed query's sort key.
+    // Sort every item by its real published / last-updated date — never by fetch time.
+    // The backend heals forum published_at to the real last-reply date (girlschannel,
+    // togetter) and device-side scrapes carry the article's real pubDate, so a batch of
+    // forum threads fetched together no longer shares fetched_at≈now and clumps at the
+    // top of the feed.
     private func sortDate(for item: FeedItem) -> Date {
-        let skipsCutoff = Platform.forRawValue(item.platform)?.skipDateCutoff == true
-        let dateString = skipsCutoff ? item.fetched_at : item.published_at
-        return parseISO8601Date(dateString) ?? .distantPast
+        return parseISO8601Date(item.published_at) ?? .distantPast
     }
 
     // MARK: - Query Feed (Filtering)

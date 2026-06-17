@@ -72,16 +72,28 @@ struct FeedView: View {
         ZStack {
             theme.colors.bg.ignoresSafeArea()
             
-            // Custom Wallpaper (from localDB)
+            // Custom Wallpaper (from localDB) — may be a remote URL or a locally
+            // rendered composition file (file://). Load local files directly since
+            // AsyncImage is unreliable with file URLs.
             if let wallpaperUrl = db.wallpaper, let url = URL(string: wallpaperUrl) {
-                AsyncImage(url: url) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .opacity(0.12)
-                        .ignoresSafeArea()
-                } placeholder: {
-                    EmptyView()
+                if url.isFileURL {
+                    if let ui = UIImage(contentsOfFile: url.path) {
+                        Image(uiImage: ui)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .opacity(0.12)
+                            .ignoresSafeArea()
+                    }
+                } else {
+                    AsyncImage(url: url) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .opacity(0.12)
+                            .ignoresSafeArea()
+                    } placeholder: {
+                        EmptyView()
+                    }
                 }
             }
             
@@ -503,10 +515,15 @@ struct FeedView: View {
         refreshErrorMessage = nil
         defer { isRefreshing = false; isScrapingFallback = false }
 
-        let hadBackendItems = await quickRefresh()
+        _ = await quickRefresh()
         isRefreshing = false
 
-        guard !Task.isCancelled, !hadBackendItems else { return }
+        guard !Task.isCancelled else { return }
+        // Always scrape device-side after the backend pass. The backend's Render
+        // datacenter IP is blocked by Google News (503) and niconico (403), so many
+        // sources (niconico, 5ch, smartnews, ameblo, aera, hochi, sponichi, livedoor,
+        // mantanweb, barks, mdpr, oricon, yahoo) only return data when fetched from
+        // the device's own network. mergeItems() dedupes against the backend results.
         isScrapingFallback = true
         await deepFallback()
     }
