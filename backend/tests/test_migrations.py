@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from app.database import Base
 import app.migrations as _migrations_mod
 from app.migrations import _add_missing_columns, _purge_bad_date_items, apply_startup_migrations
-from app.models import MigrationLog
+from app.models import Match, MigrationLog, SourceItem, WatchTerm
 
 
 @pytest.fixture()
@@ -79,6 +79,55 @@ class TestApplyStartupMigrations:
             apply_startup_migrations(fresh_engine)
 
         assert purge_call_count == 1
+
+    def test_relevance_migration_removes_summary_only_article_match(self, fresh_engine):
+        Base.metadata.create_all(bind=fresh_engine)
+        Session = sessionmaker(bind=fresh_engine)
+        db = Session()
+        term = WatchTerm(keyword="吉沢亮", aliases=[])
+        db.add(term)
+        db.flush()
+        relevant = SourceItem(
+            id="note:relevant",
+            platform="note",
+            item_id="relevant",
+            url="https://note.com/relevant",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="吉沢亮の最新インタビュー",
+        )
+        stale = SourceItem(
+            id="note:stale",
+            platform="note",
+            item_id="stale",
+            url="https://note.com/stale",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="映画『国宝』の感想",
+            content_text="吉沢亮について本文で触れています",
+        )
+        db.add_all([relevant, stale])
+        db.flush()
+        relevant_id = relevant.id
+        stale_id = stale.id
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=relevant_id),
+            Match(watch_term_id=term.id, source_item_id=stale_id),
+        ])
+        db.commit()
+        db.close()
+
+        with patch("app.migrations.SessionLocal", Session):
+            apply_startup_migrations(fresh_engine)
+
+        db = Session()
+        try:
+            assert db.query(Match).count() == 1
+            assert db.get(SourceItem, relevant_id) is not None
+            assert db.get(SourceItem, stale_id) is None
+            assert db.get(MigrationLog, "purge_irrelevant_matches_v1") is not None
+        finally:
+            db.close()
 
 
 class TestAddMissingColumns:

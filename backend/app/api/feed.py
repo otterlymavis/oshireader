@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Match, SourceItem, WatchTerm
+from app.relevance import watch_term_matches
 from app.schemas import FeedItemOut, SourceItemOut
 
 router = APIRouter(prefix="/api/feed", tags=["feed"])
@@ -88,7 +89,21 @@ def get_feed(
     if media_type:
         q = q.filter(SourceItem.media_type == media_type)
 
-    rows = q.offset(offset).limit(limit).all()
+    needed = offset + limit
+    relevant_rows = []
+    scan_offset = 0
+    batch_size = max(200, needed)
+    while len(relevant_rows) < needed:
+        batch = q.offset(scan_offset).limit(batch_size).all()
+        if not batch:
+            break
+        relevant_rows.extend(
+            row for row in batch if watch_term_matches(row[2], row[1])
+        )
+        scan_offset += len(batch)
+        if len(batch) < batch_size:
+            break
+    rows = relevant_rows[offset:needed]
 
     return [
         FeedItemOut(

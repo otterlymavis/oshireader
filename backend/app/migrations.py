@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import models as _models  # noqa: F401
 from app.database import Base, SessionLocal
+from app.relevance import prune_irrelevant_matches
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +145,25 @@ def apply_startup_migrations(engine: Engine) -> None:
         with engine.begin() as conn:
             conn.execute(text("UPDATE watch_terms SET notify_on_new = TRUE WHERE notify_on_new = FALSE"))
         _record_migration(NOTIFY_SLUG)
+
+    RELEVANCE_SLUG = "purge_irrelevant_matches_v1"
+    if not _migration_applied(RELEVANCE_SLUG):
+        _purge_irrelevant_matches()
+        _record_migration(RELEVANCE_SLUG)
+
+
+def _purge_irrelevant_matches() -> None:
+    db: Session = SessionLocal()
+    try:
+        removed = prune_irrelevant_matches(db)
+        db.commit()
+        if removed:
+            log.info("Purged %d irrelevant legacy match records", removed)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def _purge_girlschannel_googlenews_items(engine: Engine) -> None:

@@ -25,7 +25,16 @@ def _make_term(db, keyword="テスト", **kw):
     return term
 
 
-def _make_item(db, platform="news", item_id="item1", days_ago=1, media_type="article"):
+def _make_item(
+    db,
+    platform="news",
+    item_id="item1",
+    days_ago=1,
+    media_type="article",
+    title=None,
+    content_text=None,
+    author=None,
+):
     published = datetime.now(timezone.utc) - timedelta(days=days_ago)
     item = SourceItem(
         id=f"{platform}:{item_id}",
@@ -34,6 +43,9 @@ def _make_item(db, platform="news", item_id="item1", days_ago=1, media_type="art
         url=f"https://example.com/{item_id}",
         published_at=published,
         media_type=media_type,
+        title=title,
+        content_text=content_text,
+        author=author,
     )
     db.add(item)
     db.commit()
@@ -42,6 +54,9 @@ def _make_item(db, platform="news", item_id="item1", days_ago=1, media_type="art
 
 
 def _make_match(db, term, item):
+    if not item.title and not item.content_text:
+        item.title = f"{term.keyword} item"
+        db.commit()
     match = Match(watch_term_id=term.id, source_item_id=item.id)
     db.add(match)
     db.commit()
@@ -353,6 +368,75 @@ class TestFeedAPI:
         ids1 = {r["item"]["id"] for r in page1}
         ids2 = {r["item"]["id"] for r in page2}
         assert ids1.isdisjoint(ids2)
+
+    def test_feed_hides_summary_only_article_match(self, client, db_session):
+        term = _make_term(db_session, keyword="吉沢亮")
+        item = _make_item(
+            db_session,
+            platform="realsound",
+            item_id="summary-only",
+            title="杉野遥亮、『世にも奇妙な物語』で初主演",
+            content_text="吉沢亮の関連記事も紹介",
+        )
+        _make_match(db_session, term, item)
+
+        assert client.get("/api/feed/?days=0").json() == []
+
+    def test_feed_keeps_article_matching_alias(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        term.aliases = ["相川愛子"]
+        db_session.commit()
+        item = _make_item(
+            db_session,
+            platform="oricon",
+            item_id="alias",
+            title="相川愛子の最新インタビュー",
+        )
+        _make_match(db_session, term, item)
+
+        rows = client.get("/api/feed/?days=0").json()
+        assert [row["item"]["id"] for row in rows] == [item.id]
+
+    def test_feed_keeps_video_matching_description(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        item = _make_item(
+            db_session,
+            platform="tver",
+            item_id="description-match",
+            media_type="video",
+            title="Tonight's drama",
+            content_text="Aiko appears as a guest",
+        )
+        _make_match(db_session, term, item)
+
+        rows = client.get("/api/feed/?days=0").json()
+        assert [row["item"]["id"] for row in rows] == [item.id]
+
+    def test_feed_pagination_scans_past_irrelevant_rows(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        for i in range(4):
+            stale = _make_item(
+                db_session,
+                platform="note",
+                item_id=f"stale{i}",
+                days_ago=i,
+                title=f"Unrelated article {i}",
+                content_text="Aiko appears only in the summary",
+            )
+            _make_match(db_session, term, stale)
+        for i in range(3):
+            relevant = _make_item(
+                db_session,
+                platform="note",
+                item_id=f"relevant{i}",
+                days_ago=10 + i,
+                title=f"Aiko article {i}",
+            )
+            _make_match(db_session, term, relevant)
+
+        rows = client.get("/api/feed/?limit=2&offset=0&days=0").json()
+        assert len(rows) == 2
+        assert all("relevant" in row["item"]["id"] for row in rows)
 
     def test_feed_since_filter_returns_only_new_matches(self, client, db_session):
         """The iOS app passes `since=<last_sync_time>` for incremental updates.

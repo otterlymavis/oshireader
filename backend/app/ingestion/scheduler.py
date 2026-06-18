@@ -34,6 +34,7 @@ from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
 from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
+from app.relevance import primary_text_matches, prune_irrelevant_matches
 
 log = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -118,10 +119,21 @@ def _search_terms_for(term: WatchTerm) -> list[str]:
 async def _fetch_one(connector: BaseConnector, search_term: str, mode: CollectionMode) -> list:
     """Run a single connector fetch; return [] on any error."""
     try:
-        return await connector.fetch(search_term, mode)
+        items = await connector.fetch(search_term, mode)
     except Exception as exc:
         log.warning("fetch error connector=%s term=%r: %s", connector.PLATFORM, search_term, exc)
         return []
+    filtered = [item for item in items if primary_text_matches(search_term, item)]
+    dropped = len(items) - len(filtered)
+    if dropped:
+        log.info(
+            "filtered non-matching items connector=%s term=%r dropped=%d returned=%d",
+            connector.PLATFORM,
+            search_term,
+            dropped,
+            len(items),
+        )
+    return filtered
 
 
 async def _poll_once_unlocked() -> None:
@@ -267,6 +279,11 @@ async def _poll_once_unlocked() -> None:
                             exc_info=True,
                         )
                         db.rollback()
+
+        removed = prune_irrelevant_matches(db, terms)
+        if removed:
+            db.commit()
+            log.info("Pruned %d irrelevant legacy match records", removed)
 
         # Prune: keep at most 200 items per (platform, watch_term) to
         # prevent unbounded DB growth.  Community platforms (5ch, girlschannel)

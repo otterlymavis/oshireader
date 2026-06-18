@@ -19,7 +19,7 @@ def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate
         url=f"https://{platform}.example.com/{item_id}",
         published_at=datetime.now(timezone.utc),
         media_type="video",
-        title="Test Item",
+        title="Aiko Haruka Test Item",
     )
     defaults.update(kwargs)
     return SourceItemCreate(platform=platform, item_id=item_id, **defaults)
@@ -55,7 +55,7 @@ class TestIngestionNewItems:
         source = db_session.get(SourceItem, "youtube:abc")
         assert source is not None
         assert source.platform == "youtube"
-        assert source.title == "Test Item"
+        assert source.title == "Aiko Haruka Test Item"
 
     @pytest.mark.asyncio
     async def test_new_item_creates_match(self, db_engine, db_session):
@@ -128,7 +128,7 @@ class TestIngestionNotifications:
         _, called_term, called_count, preview_item = mock_notify.call_args.args
         assert called_term.keyword == "Aiko"
         assert called_count == 1
-        assert preview_item["title"] == "Test Item"
+        assert preview_item["title"] == "Aiko Haruka Test Item"
         assert preview_item["match_id"]
         assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
 

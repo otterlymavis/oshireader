@@ -203,11 +203,44 @@ class TestFetchOne:
             url="https://example.com/x1",
             published_at=datetime.now(timezone.utc),
             media_type="article",
+            title="Aiko news",
         )
         connector = self._connector(return_value=[item])
         result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
         assert len(result) == 1
         assert result[0].item_id == "x1"
+
+    @pytest.mark.asyncio
+    async def test_filters_keyword_found_only_in_article_description(self):
+        from app.connectors.base import SourceItemCreate
+        item = SourceItemCreate(
+            platform="mock",
+            item_id="x1",
+            url="https://example.com/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="unrelated news",
+            content_text="Aiko appears only in the description",
+        )
+        connector = self._connector(return_value=[item])
+        result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_keeps_video_keyword_found_in_description(self):
+        from app.connectors.base import SourceItemCreate
+        item = SourceItemCreate(
+            platform="tver",
+            item_id="x1",
+            url="https://example.com/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="video",
+            title="Tonight's drama",
+            content_text="Aiko appears as a guest",
+        )
+        connector = self._connector(return_value=[item])
+        result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert result == [item]
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_on_exception(self):
