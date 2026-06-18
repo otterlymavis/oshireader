@@ -176,6 +176,15 @@ struct Platform {
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
+            id: "cinemacafe", name: "CinemaCafe", icon: "🎬",
+            accent: Color(red: 0.56, green: 0.20, blue: 0.64),
+            bg: Color(red: 0.96, green: 0.91, blue: 0.98),
+            fg: Color(red: 0.56, green: 0.20, blue: 0.64),
+            rawPlatformValues: ["cinemacafe"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
             id: "barks", name: "BARKS", icon: "🎸",
             accent: Color(red: 0.13, green: 0.13, blue: 0.13),
             bg: Color(red: 0.93, green: 0.93, blue: 0.93),

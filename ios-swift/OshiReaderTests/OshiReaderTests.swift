@@ -498,7 +498,7 @@ final class OshiReaderTests: XCTestCase {
     }
 
     func testStrictArticleSourceIgnoresSummaryOnlyKeywordMatch() throws {
-        db.setSubscribedPlatforms(platforms: ["livedoor", "realsound"])
+        db.setSubscribedPlatforms(platforms: ["livedoor", "realsound", "cinemacafe"])
         _ = db.saveTerm(keyword: "吉沢亮")
         let now = ISO8601DateFormatter().string(from: Date())
         let livedoorItem = FeedItem(
@@ -527,7 +527,20 @@ final class OshiReaderTests: XCTestCase {
             watch_term_keyword: "吉沢亮",
             fetched_at: now
         )
-        _ = db.mergeItems(newItems: [livedoorItem, realSoundItem])
+        let cinemaCafeItem = FeedItem(
+            id: "cinemacafe:summary-only",
+            platform: "cinemacafe",
+            url: "https://cinemacafe.net/example",
+            title: "杉野遥亮、『世にも奇妙な物語』で初主演",
+            content_text: "吉沢亮の関連記事も紹介",
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: "吉沢亮",
+            fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [livedoorItem, realSoundItem, cinemaCafeItem])
 
         XCTAssertTrue(db.queryFeed(keyword: "吉沢亮", days: 30).isEmpty)
     }

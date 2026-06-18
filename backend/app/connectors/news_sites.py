@@ -162,6 +162,11 @@ class RealSoundConnector(_GNewsSiteConnector):
     SITE = "realsound.jp"
 
 
+class CinemaCafeConnector(_GNewsSiteConnector):
+    PLATFORM = "cinemacafe"
+    SITE = "cinemacafe.net"
+
+
 class BARKSConnector(_GNewsSiteConnector):
     PLATFORM = "barks"
     SITE = "barks.jp"

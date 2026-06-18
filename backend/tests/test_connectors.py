@@ -14,6 +14,7 @@ from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
+from app.connectors.news_sites import CinemaCafeConnector
 from app.connectors.niconico import NicoNicoConnector
 from app.connectors.note import NoteConnector
 from app.connectors.oricon import OriconConnector
@@ -345,6 +346,11 @@ class TestConnectorMediaOnlyEarlyReturn:
     @pytest.mark.asyncio
     async def test_yahoonews_connector_returns_empty_for_media_only(self):
         result = await YahooNewsConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_cinemacafe_connector_returns_empty_for_media_only(self):
+        result = await CinemaCafeConnector().fetch("Aiko", "media_only")
         assert result == []
 
 

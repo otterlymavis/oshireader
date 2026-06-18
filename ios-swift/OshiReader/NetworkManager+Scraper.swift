@@ -265,6 +265,7 @@ extension NetworkManager {
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mantan-web.jp", platform: "mantanweb", tagKeyword: tag) }
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "barks.jp", platform: "barks", tagKeyword: tag) }
             group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "realsound.jp", platform: "realsound", tagKeyword: tag) }
+            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "cinemacafe.net", platform: "cinemacafe", tagKeyword: tag) }
             var all = [FeedItem]()
             for await items in group { all.append(contentsOf: items) }
             return all

@@ -13,7 +13,7 @@ from app.database import Base
 from unittest.mock import patch
 
 from app.ingestion.scheduler import _build_connectors, _fetch_one, _prune_old_items, _search_terms_for
-from app.connectors.news_sites import RealSoundConnector
+from app.connectors.news_sites import CinemaCafeConnector, RealSoundConnector
 from app.connectors.youtube import YouTubeConnector
 from app.connectors.twitter import TwitterConnector
 from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
@@ -278,13 +278,14 @@ class TestPruneExceptionHandling:
 
 
 class TestBuildConnectors:
-    def test_strict_news_site_connectors_include_real_sound(self, db):
+    def test_strict_news_site_connectors_include_newer_sites(self, db):
         with patch("app.ingestion.scheduler.settings") as s:
             s.youtube_api_key = ""
             s.twitter_bearer_token = ""
             connectors = _build_connectors(db)
 
         assert any(isinstance(c, RealSoundConnector) for c in connectors)
+        assert any(isinstance(c, CinemaCafeConnector) for c in connectors)
 
     def test_uses_youtube_api_key_from_db_when_env_is_empty(self, db):
         cred = PlatformCredential(platform="youtube", api_key="db-yt-key")
