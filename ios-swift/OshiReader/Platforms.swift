@@ -167,6 +167,15 @@ struct Platform {
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
+            id: "realsound", name: "Real Sound", icon: "🎧",
+            accent: Color(red: 0.18, green: 0.36, blue: 0.72),
+            bg: Color(red: 0.91, green: 0.95, blue: 1.0),
+            fg: Color(red: 0.18, green: 0.36, blue: 0.72),
+            rawPlatformValues: ["realsound"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
             id: "barks", name: "BARKS", icon: "🎸",
             accent: Color(red: 0.13, green: 0.13, blue: 0.13),
             bg: Color(red: 0.93, green: 0.93, blue: 0.93),

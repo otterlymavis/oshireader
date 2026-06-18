@@ -157,6 +157,11 @@ class MantanWebConnector(_GNewsSiteConnector):
     TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*まんたんウェブ.*$')
 
 
+class RealSoundConnector(_GNewsSiteConnector):
+    PLATFORM = "realsound"
+    SITE = "realsound.jp"
+
+
 class BARKSConnector(_GNewsSiteConnector):
     PLATFORM = "barks"
     SITE = "barks.jp"

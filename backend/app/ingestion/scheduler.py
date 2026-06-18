@@ -23,6 +23,7 @@ from app.connectors.news_sites import (
     HochiConnector,
     LivedoorConnector,
     MantanWebConnector,
+    RealSoundConnector,
     SponichiConnector,
 )
 from app.connectors.rss import RSSConnector
@@ -61,6 +62,7 @@ def _build_connectors(db) -> list[BaseConnector]:
         NicoNicoConnector(),
         NoteConnector(),
         OriconConnector(),
+        RealSoundConnector(),
         SmartNewsConnector(),
         SponichiConnector(),
         TogetterConnector(),
