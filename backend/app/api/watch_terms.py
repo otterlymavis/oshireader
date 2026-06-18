@@ -3,7 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import require_admin_auth
+from app.auth import require_admin_or_device_auth
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll
 from app.models import WatchTerm
@@ -20,7 +20,7 @@ def list_terms(db: Session = Depends(get_db)):
 @router.post("/", response_model=WatchTermOut, status_code=201)
 async def create_term(
     body: WatchTermCreate,
-    _: None = Depends(require_admin_auth),
+    _: None = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
     term = WatchTerm(**body.model_dump())
@@ -39,7 +39,7 @@ async def create_term(
 def update_term(
     term_id: int,
     body: WatchTermUpdate,
-    _: None = Depends(require_admin_auth),
+    _: None = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
     term = db.get(WatchTerm, term_id)
@@ -64,7 +64,7 @@ def update_term(
 @router.delete("/{term_id}", status_code=204)
 def delete_term(
     term_id: int,
-    _: None = Depends(require_admin_auth),
+    _: None = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
     term = db.get(WatchTerm, term_id)

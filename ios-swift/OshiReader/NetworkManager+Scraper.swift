@@ -260,6 +260,9 @@ extension NetworkManager {
         ("barks.jp", "barks"),
         ("realsound.jp", "realsound"),
         ("cinemacafe.net", "cinemacafe"),
+        ("togetter.com", "togetter"),
+        ("tver.jp", "tver"),
+        ("x.com", "twitter"),
     ]
 
     func scrapeLocalFallbacks(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
@@ -299,7 +302,16 @@ extension NetworkManager {
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
-        guard let items = try? await parseRss(url: url) else { return [] }
+        guard let initialItems = try? await parseRss(url: url) else { return [] }
+        var items = initialItems
+        if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
+            let historicalQuery = "\(query) when:10y"
+            let historicalEncoded = historicalQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? historicalQuery
+            if let historicalURL = URL(string: "https://news.google.com/rss/search?q=\(historicalEncoded)&hl=ja&gl=JP&ceid=JP%3Aja"),
+               let historicalItems = try? await parseRss(url: historicalURL) {
+                items = historicalItems
+            }
+        }
 
         return items.compactMap { item in
             guard !item.link.isEmpty else { return nil }

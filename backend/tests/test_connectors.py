@@ -387,12 +387,17 @@ class TestConnectorMediaOnlyEarlyReturn:
 
 
 class TestTwitterConnectorNoToken:
-    """TwitterConnector must return [] immediately when no bearer token is configured."""
+    """Without API credentials, Twitter falls back to indexed public x.com posts."""
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_bearer_token_is_empty_string(self):
-        result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
-        assert result == []
+    async def test_returns_public_index_items_when_bearer_token_is_empty_string(self):
+        entry = _rss_entry(link="https://x.com/aiko/status/1", title="Aiko concert update - x.com")
+        with patch("app.connectors.twitter.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.twitter.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "twitter"
+        assert result[0].url == "https://x.com/aiko/status/1"
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_media_only_with_no_token(self):

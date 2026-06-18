@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from urllib.parse import quote
 
 import feedparser
 import httpx
@@ -77,4 +78,41 @@ class RSSConnector(BaseConnector):
                 log.warning("RSS feed failed source=%s: %s", source, exc)
 
         await asyncio.gather(*[_one(platform, source, url) for platform, source, url in FEEDS])
+        if not results:
+            results = await self._fetch_google_news_history(keyword)
         return results
+
+    async def _fetch_google_news_history(self, keyword: str) -> list[SourceItemCreate]:
+        encoded = quote(f"{keyword} when:10y")
+        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=_HEADERS) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    return []
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+        except Exception as exc:
+            log.warning("Google News history fallback failed: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            item_id = entry.get("id") or link
+            if not link or not title_contains_keyword(keyword, title) or item_id in seen:
+                continue
+            seen.add(item_id)
+            items.append(SourceItemCreate(
+                platform=self.PLATFORM,
+                item_id=item_id,
+                url=link,
+                published_at=parse_feed_date(entry),
+                media_type="article",
+                title=title,
+                content_text=entry.get("summary") or None,
+                author="Google News",
+                raw_payload={"source": "google_news_history", "keyword": keyword},
+            ))
+        return items

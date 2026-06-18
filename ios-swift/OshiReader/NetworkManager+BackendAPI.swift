@@ -10,15 +10,21 @@ extension NetworkManager {
     }
 
     // Pushes local watch terms missing from the backend (e.g. after a database reset).
-    func syncWatchTermsToBackend(localTerms: [WatchTerm]) async {
-        guard !isUITesting, !localTerms.isEmpty else { return }
-        guard let backendTerms = try? await fetchWatchTerms() else { return }
+    @discardableResult
+    func syncWatchTermsToBackend(localTerms: [WatchTerm]) async -> Bool {
+        guard !isUITesting else { return false }
+        guard !localTerms.isEmpty else { return true }
+        guard let backendTerms = try? await fetchWatchTerms() else { return false }
         let backendKeywords = Set(backendTerms.map { $0.keyword })
+        var succeeded = true
         for term in localTerms where !backendKeywords.contains(term.keyword) {
             if let serverTerm = try? await createWatchTerm(keyword: term.keyword, collectionMode: term.collection_mode, aliases: term.aliases) {
                 await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
+            } else {
+                succeeded = false
             }
         }
+        return succeeded
     }
 
     // Pulls backend watch terms absent locally (e.g. fresh install after another session registered terms).
@@ -40,7 +46,13 @@ extension NetworkManager {
         var body: [String: Any] = ["keyword": keyword, "collection_mode": collectionMode.rawValue]
         if !aliases.isEmpty { body["aliases"] = aliases }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        return try await apiRequest(URL(string: "\(apiBase)/api/watch-terms/")!, method: "POST", body: bodyData, authorized: true)
+        return try await apiRequest(
+            URL(string: "\(apiBase)/api/watch-terms/")!,
+            method: "POST",
+            body: bodyData,
+            authorized: true,
+            deviceAuthorized: true
+        )
     }
 
     func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) async throws -> WatchTerm {
@@ -51,12 +63,23 @@ extension NetworkManager {
         if let notifyOnNew { body["notify_on_new"] = notifyOnNew }
         if let aliases { body["aliases"] = aliases }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        return try await apiRequest(URL(string: "\(apiBase)/api/watch-terms/\(id)")!, method: "PATCH", body: bodyData, authorized: true)
+        return try await apiRequest(
+            URL(string: "\(apiBase)/api/watch-terms/\(id)")!,
+            method: "PATCH",
+            body: bodyData,
+            authorized: true,
+            deviceAuthorized: true
+        )
     }
 
     func deleteWatchTerm(id: String) async throws {
         if isUITesting { return }
-        try await apiVoid(URL(string: "\(apiBase)/api/watch-terms/\(id)")!, method: "DELETE", authorized: true)
+        try await apiVoid(
+            URL(string: "\(apiBase)/api/watch-terms/\(id)")!,
+            method: "DELETE",
+            authorized: true,
+            deviceAuthorized: true
+        )
     }
 
     // MARK: - Feed
@@ -91,7 +114,7 @@ extension NetworkManager {
 
     // MARK: - APNs Registration
 
-    private var apnsDeviceSecret: String {
+    var apnsDeviceSecret: String {
         let key = "apns_device_secret"
         if let existing = KeychainHelper.read(key: key), !existing.isEmpty {
             return existing

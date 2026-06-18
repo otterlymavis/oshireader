@@ -33,10 +33,14 @@ class _GNewsSiteConnector(BaseConnector):
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
             return []
-        return await self._fetch_gnews(keyword)
+        items = await self._fetch_gnews(keyword)
+        if not items:
+            items = await self._fetch_gnews(keyword, history_years=10)
+        return items
 
-    async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
-        encoded = quote(f"{keyword} site:{self.SITE}")
+    async def _fetch_gnews(self, keyword: str, history_years: int | None = None) -> list[SourceItemCreate]:
+        history = f" when:{history_years}y" if history_years else ""
+        encoded = quote(f"{keyword} site:{self.SITE}{history}")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
         try:
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
@@ -76,7 +80,11 @@ class _GNewsSiteConnector(BaseConnector):
                     media_type="article",
                     title=title,
                     content_text=summary or None,
-                    raw_payload={"site": self.SITE, "keyword": keyword},
+                    raw_payload={
+                        "site": self.SITE,
+                        "keyword": keyword,
+                        "history_years": history_years,
+                    },
                 )
             )
         return items
@@ -186,4 +194,6 @@ class BARKSConnector(_GNewsSiteConnector):
         items = await self._fetch_direct_rss("https://www.barks.jp/news/rss/", keyword)
         if not items:
             items = await self._fetch_gnews(keyword)
+        if not items:
+            items = await self._fetch_gnews(keyword, history_years=10)
         return items

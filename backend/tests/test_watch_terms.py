@@ -1,10 +1,12 @@
 """Tests for the /api/watch-terms CRUD endpoints."""
 from __future__ import annotations
 
+import hashlib
 import pytest
 from unittest.mock import patch
 
-from app.models import WatchTerm
+from app.config import settings
+from app.models import APNSDeviceToken, WatchTerm
 
 
 class TestListWatchTerms:
@@ -101,6 +103,36 @@ class TestCreateWatchTerm:
             client.post("/api/watch-terms/", json={"keyword": "Aiko"})
             resp = client.post("/api/watch-terms/", json={"keyword": "Aiko"})
         assert resp.status_code == 409
+
+    def test_registered_device_can_create_when_admin_auth_is_enabled(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        db_session.add(APNSDeviceToken(
+            token=token,
+            environment="sandbox",
+            device_secret=hashlib.sha256(secret.encode()).hexdigest(),
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 201
+
+    def test_unregistered_device_is_rejected_when_admin_auth_is_enabled(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Token": "b" * 64, "X-Device-Secret": "wrong-secret"},
+            )
+
+        assert resp.status_code == 401
 
 
 class TestUpdateWatchTerm:

@@ -45,11 +45,15 @@ Backend settings are loaded from environment variables or `backend/.env`.
 | `APNS_USE_SANDBOX` | `false` | Fallback APNs host when a stored token has no environment. Device registrations include their own environment, so production and sandbox tokens can coexist. |
 | `BACKEND_PUBLIC_URL` | `https://oshireader.onrender.com` | Public backend origin used for compact notification redirect links. |
 
-When `ADMIN_API_TOKEN` is set, protected requests must include:
+When `ADMIN_API_TOKEN` is set, admin and credential requests must include:
 
 ```text
 Authorization: Bearer <token>
 ```
+
+Watch-term writes also accept the registered app device credentials
+(`X-Device-Token` and `X-Device-Secret`), allowing the iOS app to synchronize
+keywords without exposing the admin token in the app.
 
 ## Native iOS App
 

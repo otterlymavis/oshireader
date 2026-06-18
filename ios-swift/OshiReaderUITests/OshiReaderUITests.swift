@@ -446,11 +446,15 @@ final class OshiReaderUITests: XCTestCase {
         app = XCUIApplication()
         app.launch()
 
-        let randomKeywords = ["Apple", "iOS", "Swift"]
+        let randomKeywords = ["木村拓哉", "戸田恵梨香"]
 
         tapTab(index: 4, labels: ["Settings"])
 
         for keyword in randomKeywords {
+            if app.staticTexts[keyword].exists {
+                continue
+            }
+
             let addButton = app.buttons["settings.addKeywordButton"]
             XCTAssertTrue(addButton.waitForExistence(timeout: 10))
             addButton.tap()
@@ -467,6 +471,10 @@ final class OshiReaderUITests: XCTestCase {
 
             // Wait for sheet to disappear
             _ = addButton.waitForExistence(timeout: 5)
+            XCTAssertTrue(
+                app.staticTexts[keyword].waitForExistence(timeout: 5),
+                "Keyword was not added: \(keyword)"
+            )
         }
 
         // Go to feed

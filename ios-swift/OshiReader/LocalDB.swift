@@ -393,23 +393,26 @@ class LocalDB: ObservableObject {
             if !subscribedPlatformSet.contains(platformKey) {
                 return false
             }
-
             return true
         }
         .sorted { lhs, rhs in
             sortDate(for: lhs) > sortDate(for: rhs)
         }
-        .reduce(into: ([FeedItem](), Set<String>())) { acc, item in
+        .reduce(into: ([FeedItem](), Set<String>(), Set<String>())) { acc, item in
             // Deduplicate the same article arriving from two paths — e.g. a backend copy
             // with a direct URL and a device-scraped Google News copy with a news.google
-            // URL (different ids/URLs, same story). Key on canonical platform + normalized
-            // title, falling back to URL for titleless items. Only the first (most recent
-            // by sort) copy survives.
+            // URL (different ids/URLs, same story). Exact URLs are global duplicates even
+            // when source labels append different title suffixes. Normalized titles still
+            // catch direct-vs-redirect copies within the same canonical platform.
+            let urlKey = item.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard urlKey.isEmpty || acc.1.insert(urlKey).inserted else { return }
+
             let titleKey = Self.normalizedTitleKey(item.title)
-            let dedupKey = titleKey.isEmpty
-                ? "u:\(item.url)"
-                : "t:\(Platform.normalize(item.platform))|\(titleKey)"
-            if acc.1.insert(dedupKey).inserted { acc.0.append(item) }
+            let platformTitleKey = titleKey.isEmpty
+                ? ""
+                : "\(Platform.normalize(item.platform))|\(titleKey)"
+            guard platformTitleKey.isEmpty || acc.2.insert(platformTitleKey).inserted else { return }
+            acc.0.append(item)
         }.0
 
         return Self.diversifiedFeedOrder(deduped)

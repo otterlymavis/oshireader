@@ -1229,6 +1229,31 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(harukaPosts.count, 1)
     }
 
+    func testQueryFeedDeduplicatesExactUrlAcrossDifferentPlatforms() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["news", "yahoonews"])
+        let sharedURL = "https://news.google.com/rss/articles/shared-story?oc=5"
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "news:gnews:shared", platform: "news", url: sharedURL,
+                title: "Aiko announces a new film - Example News",
+                content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now,
+                watch_term_keyword: "Aiko", fetched_at: now
+            ),
+            FeedItem(
+                id: "yahoonews:gnews:shared", platform: "yahoonews", url: sharedURL,
+                title: "Aiko announces a new film（Example News） - Yahoo!ニュース",
+                content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now,
+                watch_term_keyword: "Aiko", fetched_at: now
+            ),
+        ])
+
+        XCTAssertEqual(db.feedItems.count, 2, "Source-specific copies remain available for source filters")
+        XCTAssertEqual(db.queryFeed(keyword: nil, days: 30).count, 1)
+    }
+
     // MARK: - URL scheme security
     func testAddCustomUrlRejectsNonHttpSchemes() throws {
         db.addCustomUrl(url: "javascript:alert(1)", title: "XSS")
@@ -2029,15 +2054,24 @@ final class NetworkManagerTests: XCTestCase {
     // createWatchTerm sends POST and decodes the returned term
     func testCreateWatchTermSendsPostAndDecodesTerm() async throws {
         var capturedMethod: String?
+        var capturedDeviceToken: String?
+        var capturedDeviceSecret: String?
+        let deviceToken = String(repeating: "a", count: 64)
+        KeychainHelper.write(key: "apns_device_token", value: deviceToken)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
         let expected = WatchTerm(id: "7", keyword: "Haruka", collection_mode: .allInfo)
         let responseData = try JSONEncoder().encode(expected)
         MockURLProtocol.handler = { req in
             capturedMethod = req.httpMethod
+            capturedDeviceToken = req.value(forHTTPHeaderField: "X-Device-Token")
+            capturedDeviceSecret = req.value(forHTTPHeaderField: "X-Device-Secret")
             return (responseData, Self.response(status: 200))
         }
 
         let created = try await NetworkManager.shared.createWatchTerm(keyword: "Haruka", collectionMode: .allInfo)
         XCTAssertEqual(capturedMethod, "POST")
+        XCTAssertEqual(capturedDeviceToken, deviceToken)
+        XCTAssertEqual(capturedDeviceSecret, "device-secret")
         XCTAssertEqual(created.keyword, "Haruka")
     }
 

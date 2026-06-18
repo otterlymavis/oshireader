@@ -117,6 +117,12 @@ class NetworkManager {
         request.setValue("Bearer \(adminApiToken)", forHTTPHeaderField: "Authorization")
     }
 
+    func applyDeviceAuthorization(to request: inout URLRequest) {
+        guard let token = registeredAPNSDeviceToken, !token.isEmpty else { return }
+        request.setValue(token, forHTTPHeaderField: "X-Device-Token")
+        request.setValue(apnsDeviceSecret, forHTTPHeaderField: "X-Device-Secret")
+    }
+
     // MARK: - Shared Request Helpers
 
     // Overridable in tests via a URLSession configured with MockURLProtocol.
@@ -127,6 +133,7 @@ class NetworkManager {
         method: String = "GET",
         body: Data? = nil,
         authorized: Bool = false,
+        deviceAuthorized: Bool = false,
         acceptRange: ClosedRange<Int> = 200...299,
         timeout: TimeInterval = 30
     ) async throws -> T {
@@ -138,6 +145,7 @@ class NetworkManager {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         if authorized { applyAdminAuthorization(to: &request) }
+        if deviceAuthorized { applyDeviceAuthorization(to: &request) }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
             throw URLError(.badServerResponse)
@@ -150,6 +158,7 @@ class NetworkManager {
         method: String,
         body: Data? = nil,
         authorized: Bool = false,
+        deviceAuthorized: Bool = false,
         acceptRange: ClosedRange<Int> = 200...299,
         timeout: TimeInterval = 30
     ) async throws {
@@ -161,6 +170,7 @@ class NetworkManager {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         if authorized { applyAdminAuthorization(to: &request) }
+        if deviceAuthorized { applyDeviceAuthorization(to: &request) }
         let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
             throw URLError(.badServerResponse)

@@ -1,9 +1,12 @@
 import logging
+import asyncio
 from datetime import datetime
+from urllib.parse import quote
 
+import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate, contains_keyword
+from app.connectors.base import BaseConnector, SourceItemCreate, contains_keyword, parse_feed_date
 from app.models import CollectionMode
 
 log = logging.getLogger(__name__)
@@ -20,7 +23,7 @@ class TwitterConnector(BaseConnector):
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if not self.bearer_token:
-            return []
+            return await self._fetch_public_index(keyword, mode)
 
         query = f"{keyword} has:media" if mode == CollectionMode.MEDIA_ONLY else keyword
         params = {
@@ -84,4 +87,44 @@ class TwitterConnector(BaseConnector):
                 )
             )
 
+        return items
+
+    async def _fetch_public_index(
+        self,
+        keyword: str,
+        mode: CollectionMode,
+    ) -> list[SourceItemCreate]:
+        encoded = quote(f"{keyword} site:x.com when:1y")
+        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    return []
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+        except Exception as exc:
+            log.warning("X public-index fallback failed: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            item_id = entry.get("id") or link
+            if not link or not contains_keyword(keyword, title) or item_id in seen:
+                continue
+            if mode == CollectionMode.MEDIA_ONLY:
+                continue
+            seen.add(item_id)
+            items.append(SourceItemCreate(
+                platform=self.PLATFORM,
+                item_id=item_id,
+                url=link,
+                published_at=parse_feed_date(entry),
+                media_type="text",
+                title=title,
+                content_text=entry.get("summary") or None,
+                raw_payload={"source": "google_news_public_index", "keyword": keyword},
+            ))
         return items
