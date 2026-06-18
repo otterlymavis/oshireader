@@ -22,14 +22,16 @@ enum AppColorStyle: String, CaseIterable, Identifiable {
 
 enum AppFontChoice: String, CaseIterable, Identifiable {
     case normal = "normal"
-    case comicSans = "comic_sans"
+    case playful = "comic_sans"
+    case serif = "serif"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .normal: return "Normal"
-        case .comicSans: return "Comic Sans"
+        case .playful: return "Playful"
+        case .serif: return "Serif"
         }
     }
 
@@ -37,8 +39,10 @@ enum AppFontChoice: String, CaseIterable, Identifiable {
         switch self {
         case .normal:
             return "-apple-system, BlinkMacSystemFont, \"Helvetica Neue\", Arial, sans-serif"
-        case .comicSans:
-            return "\"Comic Sans MS\", \"Comic Sans\", ChalkboardSE-Regular, Chalkboard, cursive"
+        case .playful:
+            return "\"Chalkboard SE\", \"Marker Felt\", \"Comic Sans MS\", cursive"
+        case .serif:
+            return "Georgia, \"Times New Roman\", serif"
         }
     }
 }
@@ -234,11 +238,17 @@ class AppearanceManager: ObservableObject {
     // Size scaling is handled by preferredDynamicTypeSize, so we use semantic
     // sizes here to avoid double-scaling.
     var appFont: Font {
+        font(size: 17.0, relativeTo: .body)
+    }
+
+    func font(size: CGFloat, relativeTo textStyle: Font.TextStyle = .body) -> Font {
         switch fontChoice {
         case .normal:
-            return .body
-        case .comicSans:
-            return .custom("Comic Sans MS", size: 17.0, relativeTo: .body)
+            return .system(size: size, design: .default)
+        case .playful:
+            return .system(size: size, design: .rounded)
+        case .serif:
+            return .system(size: size, design: .serif)
         }
     }
 

@@ -8,7 +8,13 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
+from app.connectors.base import (
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    parse_feed_date,
+    title_contains_keyword,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +58,10 @@ class OriconConnector(BaseConnector):
                 continue
             seen.add(item_id)
             title = _clean_title(entry.get("title", ""))
+            summary = entry.get("summary") or ""
             if not title:
+                continue
+            if not title_contains_keyword(keyword, title):
                 continue
             items.append(
                 SourceItemCreate(
@@ -63,7 +72,7 @@ class OriconConnector(BaseConnector):
                     media_type="article",
                     author="ORICON NEWS",
                     title=title,
-                    content_text=entry.get("summary") or None,
+                    content_text=summary or None,
                     thumbnail_url=None,
                     raw_payload={"source": "google_news", "keyword": keyword},
                 )

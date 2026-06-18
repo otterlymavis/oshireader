@@ -14,7 +14,8 @@ from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.ingestion.scheduler import _poll_lock, poll_once, queue_poll, scheduler, start_scheduler
 from app.migrations import apply_startup_migrations
-from app.models import CollectionMode, Match, SourceItem, WatchTerm
+from app.models import BackendEvent, CollectionMode, Match, SourceItem, WatchTerm
+from app.schemas import ClientDiagnosticIn
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
@@ -53,6 +54,22 @@ app.include_router(devices.router)
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/api/client-diagnostics")
+def client_diagnostics(report: ClientDiagnosticIn) -> dict:
+    failed_events = [event for event in report.events if event.status not in {"ok", "items"}]
+    log.warning(
+        "client diagnostic reason=%s env=%s terms=%d cached=%d platforms=%s failed_events=%d events=%s",
+        report.reason,
+        report.environment,
+        report.active_terms_count,
+        report.cached_feed_count,
+        ",".join(report.subscribed_platforms),
+        len(failed_events),
+        [event.model_dump() for event in report.events],
+    )
+    return {"status": "received"}
 
 
 @app.post("/api/admin/poll")
@@ -107,6 +124,10 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
     device_tokens = db.query(APNSDeviceToken.environment, func.count(APNSDeviceToken.token)).group_by(
         APNSDeviceToken.environment
     ).all()
+    recent_events = db.query(BackendEvent).order_by(
+        BackendEvent.created_at.desc(),
+        BackendEvent.id.desc(),
+    ).limit(20).all()
     return {
         "items_total": items_total,
         "matches_total": matches_total,
@@ -121,4 +142,15 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             "backend_public_url": settings.backend_public_url,
             "device_tokens_by_environment": {env: c for env, c in device_tokens},
         },
+        "recent_events": [
+            {
+                "id": event.id,
+                "kind": event.kind,
+                "status": event.status,
+                "message": event.message,
+                "payload": event.payload or {},
+                "created_at": event.created_at,
+            }
+            for event in recent_events
+        ],
     }

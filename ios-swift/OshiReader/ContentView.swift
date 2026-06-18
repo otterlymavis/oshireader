@@ -12,6 +12,7 @@ struct ContentView: View {
     @StateObject private var theme = ThemeManager.shared
     @StateObject private var i18n = I18nManager.shared
     @StateObject private var appearance = AppearanceManager.shared
+    @StateObject private var notificationNavigation = NotificationNavigationManager.shared
     
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -120,8 +121,20 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 UNUserNotificationCenter.current().setBadgeCount(0)
-                UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+            } else if phase == .background {
+                BackgroundRefreshManager.shared.schedule()
             }
+        }
+        .onReceive(notificationNavigation.$selectedItem) { item in
+            if item != nil {
+                selectedTab = .feed
+            }
+        }
+        .sheet(item: $notificationNavigation.selectedItem) { item in
+            NavigationStack {
+                ReaderView(feedItem: item)
+            }
+            .preferredColorScheme(theme.mode == .dark ? .dark : .light)
         }
     }
 

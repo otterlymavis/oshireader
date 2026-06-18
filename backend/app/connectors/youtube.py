@@ -9,7 +9,14 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
+from app.connectors.base import (
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    contains_keyword,
+    parse_feed_date,
+    title_contains_keyword,
+)
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +77,13 @@ class YouTubeConnector(BaseConnector):
             if not vid_id:
                 continue
             snippet = raw["snippet"]
+            if not contains_keyword(
+                keyword,
+                snippet.get("title"),
+                snippet.get("description"),
+                snippet.get("channelTitle"),
+            ):
+                continue
             published = datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00"))
             thumb = snippet.get("thumbnails", {}).get("medium", {}).get("url")
             items.append(
@@ -150,6 +164,8 @@ class YouTubeConnector(BaseConnector):
 
                     if published_at < cutoff:
                         continue
+                    if not contains_keyword(keyword, title, desc, channel):
+                        continue
 
                     items.append(
                         SourceItemCreate(
@@ -195,7 +211,10 @@ class YouTubeConnector(BaseConnector):
                 continue
             seen.add(item_id)
             title = (entry.get("title") or "").strip()
+            summary = entry.get("summary") or ""
             if not title:
+                continue
+            if not title_contains_keyword(keyword, title):
                 continue
             items.append(
                 SourceItemCreate(
@@ -205,7 +224,7 @@ class YouTubeConnector(BaseConnector):
                     published_at=parse_feed_date(entry),
                     media_type="video",
                     title=title,
-                    content_text=entry.get("summary") or None,
+                    content_text=summary or None,
                     thumbnail_url=None,
                     raw_payload={"source": "google_news", "keyword": keyword},
                 )

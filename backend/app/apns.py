@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.diagnostics import record_backend_event
 from app.models import APNSDeviceToken, WatchTerm
 
 log = logging.getLogger(__name__)
@@ -177,19 +178,10 @@ def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> d
     body = preview or (f"{count}件の新着があります。" if count != 1 else "1件の新着があります。")
     if preview and count > 1:
         body = f"{body}\nほか{count - 1}件"
-    subtitle_parts = []
-    if preview_item:
-        subtitle_parts = [
-            value
-            for key in ("author", "platform")
-            if (value := _payload_value(preview_item, key))
-        ]
     alert = {
         "title": f"{term.keyword} の新着",
         "body": body,
     }
-    if subtitle_parts:
-        alert["subtitle"] = " · ".join(subtitle_parts)
 
     payload = {
         "aps": {
@@ -312,10 +304,28 @@ async def send_new_match_notifications(
     count: int,
     preview_item: dict | None = None,
 ) -> None:
-    if count <= 0 or not term.notify_on_new:
+    if count <= 0:
+        return
+    if not term.notify_on_new:
+        record_backend_event(
+            db,
+            "apns",
+            "skipped",
+            "Watch term notifications are disabled",
+            {"term_id": term.id, "keyword": term.keyword, "new_count": count},
+        )
+        db.commit()
         return
     if not apns_configured():
         log.info("APNs not configured; skipping remote notification term=%r count=%d", term.keyword, count)
+        record_backend_event(
+            db,
+            "apns",
+            "skipped",
+            "APNs is not configured",
+            {"term_id": term.id, "keyword": term.keyword, "new_count": count},
+        )
+        db.commit()
         return
 
     # Send to every registered device; _send_one routes each token to the APNs host
@@ -324,14 +334,37 @@ async def send_new_match_notifications(
     # (TestFlight) tokens — and vice versa.
     devices: list[APNSDeviceToken] = db.query(APNSDeviceToken).all()
     if not devices:
+        record_backend_event(
+            db,
+            "apns",
+            "skipped",
+            "No registered APNs device tokens",
+            {"term_id": term.id, "keyword": term.keyword, "new_count": count},
+        )
+        db.commit()
         return
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
         results = await asyncio.gather(
             *[_send_one(client, device, term, count, preview_item) for device in devices]
         )
+    pruned_tokens = 0
     for device, should_delete in zip(devices, results):
         if should_delete:
             db.delete(device)
+            pruned_tokens += 1
+    record_backend_event(
+        db,
+        "apns",
+        "attempted",
+        "APNs notification attempted",
+        {
+            "term_id": term.id,
+            "keyword": term.keyword,
+            "new_count": count,
+            "device_count": len(devices),
+            "pruned_tokens": pruned_tokens,
+        },
+    )
     db.commit()
 
 

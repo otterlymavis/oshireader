@@ -437,6 +437,18 @@ class I18nManager: ObservableObject {
             "zh-TW": "推播通知",
             "zh-CN": "推送通知"
         ],
+        "notificationSetupHint": [
+            "en": "Open the app once and allow notifications so background alerts can be delivered.",
+            "ja": "バックグラウンド通知を受け取るには、一度アプリを開いて通知を許可してください。",
+            "zh-TW": "請先開啟一次 App 並允許通知，才能接收背景提醒。",
+            "zh-CN": "请先打开一次 App 并允许通知，才能接收后台提醒。"
+        ],
+        "backgroundRefreshSettingHint": [
+            "en": "iOS calls this Background App Refresh. If alerts stop, check Settings → General → Background App Refresh and keep it on for OshiReader.",
+            "ja": "iOSでは「Appのバックグラウンド更新」と表示されます。通知が止まる場合は、設定 → 一般 → Appのバックグラウンド更新でOshiReaderが有効か確認してください。",
+            "zh-TW": "iOS 會顯示為「背景 App 重新整理」。如果提醒停止，請到設定 → 一般 → 背景 App 重新整理，確認 OshiReader 已開啟。",
+            "zh-CN": "iOS 会显示为“后台 App 刷新”。如果提醒停止，请到设置 → 通用 → 后台 App 刷新，确认 OshiReader 已开启。"
+        ],
         "notifStatusEnabled": [
             "en": "Enabled",
             "ja": "有効",
@@ -497,6 +509,102 @@ class I18nManager: ObservableObject {
             "zh-TW": "通知功能已就緒。",
             "zh-CN": "通知功能已准备就绪。"
         ],
+        "notifLocalTestFailed": [
+            "en": "Local notification test failed. Check iOS notification settings.",
+            "ja": "ローカル通知テストに失敗しました。iOSの通知設定を確認してください。",
+            "zh-TW": "本機通知測試失敗，請檢查 iOS 通知設定。",
+            "zh-CN": "本地通知测试失败，请检查 iOS 通知设置。"
+        ],
+        "notifRemoteTestSent": [
+            "en": "Remote test push sent.",
+            "ja": "リモートテスト通知を送信しました。",
+            "zh-TW": "已傳送遠端測試推播。",
+            "zh-CN": "已发送远程测试推送。"
+        ],
+        "notifRemoteChecking": [
+            "en": "Checking remote push…",
+            "ja": "リモート通知を確認中…",
+            "zh-TW": "正在檢查遠端推播…",
+            "zh-CN": "正在检查远程推送…"
+        ],
+        "notifRemoteTokenMissing": [
+            "en": "Device token is not registered yet. Local test sent instead.",
+            "ja": "デバイストークンが未登録です。代わりにローカル通知を送信しました。",
+            "zh-TW": "裝置權杖尚未註冊，已改送本機測試通知。",
+            "zh-CN": "设备令牌尚未注册，已改发本地测试通知。"
+        ],
+        "notifRemoteNotConfigured": [
+            "en": "Backend APNs is not configured. Local test sent instead.",
+            "ja": "バックエンドのAPNs設定が未完了です。代わりにローカル通知を送信しました。",
+            "zh-TW": "後端 APNs 尚未設定，已改送本機測試通知。",
+            "zh-CN": "后端 APNs 尚未配置，已改发本地测试通知。"
+        ],
+        "notifRemoteNoDevices": [
+            "en": "No device token found on backend. Local test sent instead.",
+            "ja": "バックエンドにデバイストークンがありません。代わりにローカル通知を送信しました。",
+            "zh-TW": "後端沒有裝置權杖，已改送本機測試通知。",
+            "zh-CN": "后端没有设备令牌，已改发本地测试通知。"
+        ],
+        "apnsEnvironment": [
+            "en": "APNs environment",
+            "ja": "APNs環境",
+            "zh-TW": "APNs 環境",
+            "zh-CN": "APNs 环境"
+        ],
+        "apnsDeviceToken": [
+            "en": "Device token",
+            "ja": "デバイストークン",
+            "zh-TW": "裝置權杖",
+            "zh-CN": "设备令牌"
+        ],
+        "notRegistered": [
+            "en": "Not registered",
+            "ja": "未登録",
+            "zh-TW": "尚未註冊",
+            "zh-CN": "未注册"
+        ],
+        "apnsLastErrorFmt": [
+            "en": "Last APNs error: %@",
+            "ja": "直近のAPNsエラー: %@",
+            "zh-TW": "最近 APNs 錯誤：%@",
+            "zh-CN": "最近 APNs 错误：%@"
+        ],
+        "notifRemoteTestRequestFailed": [
+            "en": "Remote push test failed. Local test sent instead.",
+            "ja": "リモート通知テストに失敗しました。代わりにローカル通知を送信しました。",
+            "zh-TW": "遠端推播測試失敗，已改送本機測試通知。",
+            "zh-CN": "远程推送测试失败，已改发本地测试通知。"
+        ],
+        "notifRemoteRejectedFmt": [
+            "en": "APNs rejected the token: %@",
+            "ja": "APNsがトークンを拒否しました: %@",
+            "zh-TW": "APNs 拒絕此權杖：%@",
+            "zh-CN": "APNs 拒绝此令牌：%@"
+        ],
+        "notifRemoteEnvironmentKeyMismatch": [
+            "en": "The server APNs key does not support this build environment. Update the server key to support both Sandbox and Production.",
+            "ja": "サーバーのAPNsキーがこのビルド環境に対応していません。SandboxとProductionの両方に対応するキーへ更新してください。",
+            "zh-TW": "伺服器的 APNs 金鑰不支援此建置環境。請更新為同時支援 Sandbox 與 Production 的金鑰。",
+            "zh-CN": "服务器的 APNs 密钥不支持此构建环境。请更新为同时支持 Sandbox 和 Production 的密钥。"
+        ],
+        "notifRemoteErrorFmt": [
+            "en": "APNs request error: %@",
+            "ja": "APNsリクエストエラー: %@",
+            "zh-TW": "APNs 請求錯誤：%@",
+            "zh-CN": "APNs 请求错误：%@"
+        ],
+        "notifRemoteStatusFmt": [
+            "en": "APNs returned status %d.",
+            "ja": "APNsがステータス %d を返しました。",
+            "zh-TW": "APNs 回傳狀態 %d。",
+            "zh-CN": "APNs 返回状态 %d。"
+        ],
+        "notifRemoteUnknownFailure": [
+            "en": "Remote push test did not succeed.",
+            "ja": "リモート通知テストは成功しませんでした。",
+            "zh-TW": "遠端推播測試未成功。",
+            "zh-CN": "远程推送测试未成功。"
+        ],
         "notifNewItemsTitle": [
             "en": "New items for %@",
             "ja": "%@ の新着",
@@ -514,6 +622,24 @@ class I18nManager: ObservableObject {
             "ja": "%d件の新着があります。",
             "zh-TW": "%d 個新項目。",
             "zh-CN": "%d 个新内容。"
+        ],
+        "notifNewItemsMoreFmt": [
+            "en": "+ %d more",
+            "ja": "ほか%d件",
+            "zh-TW": "另有 %d 個",
+            "zh-CN": "另有 %d 个"
+        ],
+        "notifActionOpen": [
+            "en": "Open",
+            "ja": "開く",
+            "zh-TW": "開啟",
+            "zh-CN": "打开"
+        ],
+        "notifActionSave": [
+            "en": "Save",
+            "ja": "保存",
+            "zh-TW": "儲存",
+            "zh-CN": "保存"
         ],
         "appearanceSection": [
             "en": "Theme & Appearance",

@@ -74,7 +74,7 @@ class TestPayload:
         assert payload["aps"]["thread-id"] == "oshireader-1"
         assert payload["aps"]["target-content-id"] == "youtube:1"
         assert payload["aps"]["alert"]["body"] == "Aiko announces a new live stream\nほか2件"
-        assert payload["aps"]["alert"]["subtitle"] == "Aiko Channel · youtube"
+        assert "subtitle" not in payload["aps"]["alert"]
         assert payload["preview_item"]["url"] == "https://backend.example.com/api/feed/matches/123/redirect"
         assert payload["preview_item"]["match_id"] == "123"
         assert payload["preview_item"]["content_text"] == "Longer stream details"
@@ -123,7 +123,7 @@ class TestPayload:
         assert "thumbnail_url" not in payload
         assert _payload_size(payload) <= 3500
 
-    def test_alert_subtitle_is_bounded_for_apns_size(self):
+    def test_alert_does_not_expose_source_metadata(self):
         payload = _payload(
             self._term("Aiko"),
             1,
@@ -136,10 +136,7 @@ class TestPayload:
             },
         )
 
-        subtitle = payload["aps"]["alert"]["subtitle"]
-        author, platform = subtitle.split(" · ")
-        assert len(author) == 120
-        assert len(platform) == 80
+        assert "subtitle" not in payload["aps"]["alert"]
         assert _payload_size(payload) <= 3500
 
 

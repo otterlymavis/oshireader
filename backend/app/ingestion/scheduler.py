@@ -35,6 +35,7 @@ from app.connectors.tver import TVERConnector
 from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
+from app.diagnostics import prune_backend_events, record_backend_event
 from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
 from app.relevance import primary_text_matches, prune_irrelevant_matches
 
@@ -145,6 +146,15 @@ async def _poll_once_unlocked() -> None:
     try:
         connectors = _build_connectors(db)
         terms = db.query(WatchTerm).filter(WatchTerm.is_active == True).all()  # noqa: E712
+        total_new = 0
+        failed_connectors = 0
+        record_backend_event(
+            db,
+            "poll",
+            "started",
+            "Scheduled/backend poll started",
+            {"terms": len(terms), "connectors": len(connectors)},
+        )
 
         for term in terms:
             for search_term in _search_terms_for(term):
@@ -264,6 +274,7 @@ async def _poll_once_unlocked() -> None:
                         db.flush()
                         db.commit()
                         if new_count:
+                            total_new += new_count
                             await send_new_match_notifications(db, term, new_count, preview_item)
                         log.info(
                             "term=%r search=%r connector=%s fetched=%d new=%d",
@@ -274,6 +285,7 @@ async def _poll_once_unlocked() -> None:
                             new_count,
                         )
                     except Exception as exc:
+                        failed_connectors += 1
                         log.warning(
                             "poll failed term=%r search=%r connector=%s: %s",
                             term.keyword,
@@ -284,18 +296,41 @@ async def _poll_once_unlocked() -> None:
                         )
                         db.rollback()
 
-        removed = prune_irrelevant_matches(db, terms)
-        if removed:
-            db.commit()
-            log.info("Pruned %d irrelevant legacy match records", removed)
+        _prune_irrelevant_matches(db, terms)
 
         # Prune: keep at most 200 items per (platform, watch_term) to
         # prevent unbounded DB growth.  Community platforms (5ch, girlschannel)
         # are excluded — their threads are rare and long-lived.
         _prune_old_items(db)
+        record_backend_event(
+            db,
+            "poll",
+            "completed" if failed_connectors == 0 else "completed_with_errors",
+            "Scheduled/backend poll completed",
+            {"terms": len(terms), "connectors": len(connectors), "new_matches": total_new, "failed_connectors": failed_connectors},
+        )
+        prune_backend_events(db)
+        for term in terms:
+            try:
+                db.expunge(term)
+            except Exception:
+                pass
+        db.commit()
 
     finally:
         db.close()
+
+
+def _prune_irrelevant_matches(db, terms: list[WatchTerm]) -> None:
+    """Remove legacy matches whose visible title/post text no longer matches the term."""
+    try:
+        removed = prune_irrelevant_matches(db, terms)
+        if removed:
+            db.commit()
+            log.info("Pruned %d irrelevant legacy match records", removed)
+    except Exception as exc:
+        log.warning("Irrelevant-match prune failed: %s", exc)
+        db.rollback()
 
 
 def _prune_old_items(db) -> None:

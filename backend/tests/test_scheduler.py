@@ -13,8 +13,14 @@ from unittest.mock import AsyncMock, MagicMock
 from app.database import Base
 from unittest.mock import patch
 
-from app.ingestion.scheduler import _build_connectors, _fetch_one, _prune_old_items, _search_terms_for
 from app.connectors import news_sites
+from app.ingestion.scheduler import (
+    _build_connectors,
+    _fetch_one,
+    _prune_irrelevant_matches,
+    _prune_old_items,
+    _search_terms_for,
+)
 from app.connectors.youtube import YouTubeConnector
 from app.connectors.twitter import TwitterConnector
 from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
@@ -213,7 +219,22 @@ class TestFetchOne:
         assert result[0].item_id == "x1"
 
     @pytest.mark.asyncio
-    async def test_filters_keyword_found_only_in_article_description(self):
+    async def test_filters_results_without_search_term(self):
+        from app.connectors.base import SourceItemCreate
+        from datetime import datetime, timezone
+        item = SourceItemCreate(
+            platform="mock", item_id="x1",
+            url="https://example.com/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="unrelated news",
+        )
+        connector = self._connector(return_value=[item])
+        result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_keyword_found_only_in_description_or_author(self):
         from app.connectors.base import SourceItemCreate
         item = SourceItemCreate(
             platform="mock",
@@ -223,13 +244,30 @@ class TestFetchOne:
             media_type="article",
             title="unrelated news",
             content_text="Aiko appears only in the description",
+            author="Aiko fan",
         )
         connector = self._connector(return_value=[item])
         result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_keeps_video_keyword_found_in_description(self):
+    async def test_text_only_item_matches_post_body(self):
+        from app.connectors.base import SourceItemCreate
+        item = SourceItemCreate(
+            platform="mock",
+            item_id="x1",
+            url="https://example.com/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="text",
+            title=None,
+            content_text="Aiko posted an update",
+        )
+        connector = self._connector(return_value=[item])
+        result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert result == [item]
+
+    @pytest.mark.asyncio
+    async def test_video_item_can_match_description(self):
         from app.connectors.base import SourceItemCreate
         item = SourceItemCreate(
             platform="tver",
@@ -239,10 +277,30 @@ class TestFetchOne:
             media_type="video",
             title="Tonight's drama",
             content_text="Aiko appears as a guest",
+            author="TVer",
         )
         connector = self._connector(return_value=[item])
         result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
         assert result == [item]
+
+    @pytest.mark.asyncio
+    async def test_logs_filtered_result_count(self, caplog):
+        from app.connectors.base import SourceItemCreate
+        from datetime import datetime, timezone
+        item = SourceItemCreate(
+            platform="mock", item_id="x1",
+            url="https://example.com/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="unrelated news",
+        )
+        connector = self._connector(return_value=[item])
+
+        with caplog.at_level("INFO", logger="app.ingestion.scheduler"):
+            result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+
+        assert result == []
+        assert "filtered non-matching items connector=mock" in caplog.text
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_on_exception(self):
@@ -262,6 +320,68 @@ class TestFetchOne:
         connector = self._connector(return_value=[])
         await _fetch_one(connector, "Test", CollectionMode.MEDIA_ONLY)
         connector.fetch.assert_awaited_once_with("Test", CollectionMode.MEDIA_ONLY)
+
+
+class TestPruneIrrelevantMatches:
+    def test_removes_stale_match_and_orphan_item(self, db):
+        term = WatchTerm(keyword="Aiko", aliases=[])
+        db.add(term)
+        db.flush()
+        item = SourceItem(
+            id="news:stale",
+            platform="news",
+            item_id="stale",
+            url="https://example.com/stale",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="unrelated news",
+            content_text="Aiko appears only in the old summary",
+        )
+        db.add(item)
+        db.flush()
+        db.add(Match(watch_term_id=term.id, source_item_id=item.id))
+        db.commit()
+
+        _prune_irrelevant_matches(db, [term])
+
+        assert db.query(Match).count() == 0
+        assert db.query(SourceItem).count() == 0
+
+    def test_keeps_alias_and_text_only_matches(self, db):
+        term = WatchTerm(keyword="Aiko", aliases=["相川愛子"])
+        db.add(term)
+        db.flush()
+        alias_item = SourceItem(
+            id="news:alias",
+            platform="news",
+            item_id="alias",
+            url="https://example.com/alias",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="相川愛子の最新ニュース",
+        )
+        text_item = SourceItem(
+            id="twitter:text",
+            platform="twitter",
+            item_id="text",
+            url="https://example.com/text",
+            published_at=datetime.now(timezone.utc),
+            media_type="text",
+            title=None,
+            content_text="Aiko posted an update",
+        )
+        db.add_all([alias_item, text_item])
+        db.flush()
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=alias_item.id),
+            Match(watch_term_id=term.id, source_item_id=text_item.id),
+        ])
+        db.commit()
+
+        _prune_irrelevant_matches(db, [term])
+
+        assert db.query(Match).count() == 2
+        assert db.query(SourceItem).count() == 2
 
 
 class TestPruneExceptionHandling:

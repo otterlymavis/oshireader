@@ -8,7 +8,7 @@ from typing import Optional
 
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate
+from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, contains_keyword
 
 log = logging.getLogger(__name__)
 
@@ -178,6 +178,8 @@ class TVERConnector(BaseConnector):
 
                     author = content.get("broadcasterName") or content.get("productionProviderName")
                     description = content.get("description") or content.get("episodeDescription")
+                    if not contains_keyword(keyword, title, description, author, content.get("seriesTitle")):
+                        continue
 
                     # Try API timestamp fields before falling back to now()
                     published_at = _parse_tver_date(content) or datetime.now(timezone.utc)

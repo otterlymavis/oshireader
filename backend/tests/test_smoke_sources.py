@@ -6,7 +6,7 @@ import pytest
 
 from app.connectors.base import SourceItemCreate
 from app.models import CollectionMode
-from scripts.smoke_sources import check_connector
+from scripts.smoke_sources import _check_connector, check_connector
 
 
 class FakeConnector:
@@ -76,3 +76,31 @@ async def test_check_connector_reports_connector_errors():
     assert result.dropped == 0
     assert result.samples == []
     assert result.error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_rich_check_connector_marks_keyword_mismatch():
+    result = await _check_connector(
+        FakeConnector([_item("unrelated result")]),
+        ["Aiko"],
+        CollectionMode.ALL_INFO,
+        page_limit=0,
+    )
+
+    assert result.ok is False
+    assert result.status == "keyword_mismatch"
+    assert result.samples[0]["keyword_match"] is False
+
+
+@pytest.mark.asyncio
+async def test_rich_check_connector_accepts_keyword_matching_items():
+    result = await _check_connector(
+        FakeConnector([_item("Aiko result")]),
+        ["Aiko"],
+        CollectionMode.ALL_INFO,
+        page_limit=0,
+    )
+
+    assert result.ok is True
+    assert result.status == "ok"
+    assert result.samples[0]["keyword_match"] is True

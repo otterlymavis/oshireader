@@ -85,6 +85,7 @@ struct ReaderView: View {
                         platform: feedItem.platform,
                         themeMode: readerTheme,
                         fontSize: fontSize,
+                        fontFamilyCSS: appearance.readerFontFamilyCSS,
                         readerMode: readerMode,
                         saveAllImagesCounter: saveAllImagesCounter,
                         onLoadStateChange: { state in
@@ -209,6 +210,9 @@ struct ReaderView: View {
             if UserDefaults.standard.bool(forKey: "auto_translate_reader") {
                 isTranslated = true
             }
+        }
+        .onChange(of: appearance.fontSizeChoice) {
+            fontSize = appearance.readerFontSize
         }
     }
 
@@ -530,6 +534,7 @@ struct WebViewHelper: UIViewRepresentable {
     let platform: String
     let themeMode: AppThemeMode
     let fontSize: CGFloat
+    let fontFamilyCSS: String
     let readerMode: Bool
     let saveAllImagesCounter: Int
     let onLoadStateChange: (ReaderWebLoadState) -> Void
@@ -611,12 +616,14 @@ struct WebViewHelper: UIViewRepresentable {
                 background-color: \(bgColorHex) !important;
                 color: \(textColorHex) !important;
                 font-size: \(fontSize)px !important;
-                font-family: \(AppearanceManager.shared.readerFontFamilyCSS) !important;
                 line-height: 1.75 !important;
                 padding: 16px !important;
                 max-width: 760px !important;
                 margin: 0 auto !important;
                 word-break: break-word !important;
+            }
+            body, body * {
+                font-family: \(fontFamilyCSS) !important;
             }
             nav, header, footer, aside, iframe, [role=navigation], [role=banner], [role=contentinfo],
             .sidebar, .ad, .ads, .adbox, .ad_box, .ad_area, .adsbygoogle, .advert, .advertisement,

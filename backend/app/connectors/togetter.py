@@ -2,9 +2,9 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from bs4 import BeautifulSoup
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate
+from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, contains_keyword
+from app.connectors.scrapling_helpers import attr_of, first, scrapling_page, text_of
 
 log = logging.getLogger(__name__)
 
@@ -35,47 +35,49 @@ class TogetterConnector(BaseConnector):
             log.warning("Togetter fetch error: %s", exc)
             return []
 
-        soup = BeautifulSoup(resp.text, "lxml")
+        page = scrapling_page(resp.text, self._SEARCH)
         items: list[SourceItemCreate] = []
 
         seen_ids: set[str] = set()
-        for a in soup.select("a[href^='https://togetter.com/li/']"):
+        for a in page.css("a[href^='https://togetter.com/li/']"):
             if len(items) >= 25:
                 break
-            url = a.get("href", "")
+            url = attr_of(a, "href")
             togetter_id = url.rstrip("/").split("/")[-1]
             if not togetter_id or togetter_id in seen_ids:
                 continue
             seen_ids.add(togetter_id)
 
             # The <li> is the outermost article container; <time datetime> lives there
-            li_parent = a.find_parent("li")
-            container = li_parent or a.find_parent(["div", "article"])
+            li_parent = a.find_ancestor(lambda node: node.tag == "li")
+            container = li_parent or a.find_ancestor(lambda node: node.tag in {"div", "article"})
 
             # Title is on the h3 inside the li, not always on this <a>
             title = ""
             if li_parent:
-                h3 = li_parent.find("h3")
+                h3 = first(li_parent.css("h3"))
                 if h3:
-                    title = h3.get_text(strip=True)
+                    title = text_of(h3)
             if not title:
-                title = a.get_text(strip=True)
+                title = text_of(a)
             if not title:
+                continue
+            if not contains_keyword(keyword, title, text_of(container) if container else None):
                 continue
 
             thumb = None
             published = datetime.now(timezone.utc)
 
             if container:
-                img = container.select_one("img[src]")
+                img = first(container.css("img[src]"))
                 if img:
-                    src = img.get("src", "")
+                    src = attr_of(img, "src")
                     if src.startswith("http"):
                         thumb = src
 
-                time_el = container.select_one("time[datetime]")
+                time_el = first(container.css("time[datetime]"))
                 if time_el:
-                    dt_str = (time_el.get("datetime") or "").strip()
+                    dt_str = attr_of(time_el, "datetime")
                     try:
                         parsed = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
                         published = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

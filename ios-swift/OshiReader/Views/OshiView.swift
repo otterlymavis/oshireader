@@ -107,6 +107,11 @@ struct OshiPage: View {
     let theme: ThemeManager
     let i18n: I18nManager
     let onEdit: () -> Void
+
+    @StateObject private var db = LocalDB.shared
+    @State private var settingWallpaper = false
+
+    private let baseSize = 90.0
     
     var body: some View {
         GeometryReader { geometry in
@@ -199,25 +204,54 @@ struct OshiPage: View {
                     
                     Spacer()
                     
-                    Button(action: onEdit) {
-                        HStack(spacing: 4) {
-                            Text("✏️")
-                            Text(i18n.t("edit"))
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Button(action: onEdit) {
+                            HStack(spacing: 4) {
+                                Text("✏️")
+                                Text(i18n.t("edit"))
+                            }
+                            .font(.system(size: 13, weight: .bold))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 9)
+                            .background(theme.colors.primaryBg)
+                            .foregroundColor(theme.colors.primary)
+                            .cornerRadius(12)
                         }
-                        .font(.system(size: 13, weight: .bold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                        .background(theme.colors.primaryBg)
-                        .foregroundColor(theme.colors.primary)
-                        .cornerRadius(12)
+                        .accessibilityIdentifier("oshi.editButton.\(term.keyword)")
+
+                        Button {
+                            Task { await setCurrentAvatarAsWallpaper() }
+                        } label: {
+                            Text(settingWallpaper ? "..." : i18n.t("setAsWallpaper"))
+                                .font(.system(size: 12, weight: .bold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(theme.colors.primary)
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
+                        }
+                        .disabled(layers.isEmpty || settingWallpaper)
+                        .opacity(layers.isEmpty ? 0.45 : 1.0)
+                        .accessibilityIdentifier("oshi.setWallpaperButton.\(term.keyword)")
                     }
-                    .accessibilityIdentifier("oshi.editButton.\(term.keyword)")
                 }
                 .padding(18)
                 .background(theme.colors.card)
                 
                 Spacer()
             }
+        }
+    }
+
+    private func setCurrentAvatarAsWallpaper() async {
+        guard !layers.isEmpty, !settingWallpaper else { return }
+        settingWallpaper = true
+        defer { settingWallpaper = false }
+
+        if let fileUrl = await CompositionRenderer.renderToFile(layers: layers, baseSize: baseSize) {
+            db.setWallpaper(url: fileUrl.absoluteString)
+        } else if let topLayer = layers.sorted(by: { $0.zIndex < $1.zIndex }).last {
+            db.setWallpaper(url: topLayer.imageUrl)
         }
     }
 }
