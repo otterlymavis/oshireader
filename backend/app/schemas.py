@@ -154,7 +154,9 @@ class APNSDeviceTokenOut(BaseModel):
 
 
 class APNSDeviceTestPush(BaseModel):
-    token: str
+    token: Optional[str] = None
+    device_id: Optional[str] = None
+    environment: Literal["sandbox", "production"] = "sandbox"
     device_secret: str = Field(min_length=16, max_length=200)
 
 

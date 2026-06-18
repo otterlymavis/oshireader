@@ -57,11 +57,25 @@ def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)
 
 @router.post("/apns-test-push")
 async def send_device_test_push(body: APNSDeviceTestPush, db: Session = Depends(get_db)) -> dict:
-    token = _normalize_token(body.token)
-    if not token or len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
-        raise HTTPException(400, "Invalid APNs device token")
+    stored: APNSDeviceToken | None = None
+    if body.token:
+        token = _normalize_token(body.token)
+        if not token or len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
+            raise HTTPException(400, "Invalid APNs device token")
+        stored = db.get(APNSDeviceToken, token)
+    elif body.device_id:
+        stored = (
+            db.query(APNSDeviceToken)
+            .filter(
+                APNSDeviceToken.device_id == body.device_id,
+                APNSDeviceToken.environment == body.environment,
+            )
+            .order_by(APNSDeviceToken.last_seen_at.desc(), APNSDeviceToken.token.desc())
+            .first()
+        )
+    else:
+        raise HTTPException(400, "APNs device token or device_id is required")
 
-    stored = db.get(APNSDeviceToken, token)
     if not stored or not _secret_matches(stored.device_secret, body.device_secret):
         raise HTTPException(404, "APNs device token not registered")
 

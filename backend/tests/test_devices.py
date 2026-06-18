@@ -195,6 +195,73 @@ class TestDeviceScopedTestPush:
         assert r.json() == expected
         mock_send.assert_awaited_once()
 
+    def test_sends_to_latest_registered_token_for_device_id(self, client):
+        older_token = "c" * 64
+        latest_token = "d" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={
+                "token": older_token,
+                "environment": "sandbox",
+                "device_id": "device-xyz",
+                "device_secret": "correct-secret-123",
+            },
+        )
+        client.post(
+            "/api/devices/apns-token",
+            json={
+                "token": latest_token,
+                "environment": "sandbox",
+                "device_id": "device-xyz",
+                "device_secret": "correct-secret-123",
+            },
+        )
+        expected = {"configured": True, "results": [{"token": latest_token[-8:], "status": 200}], "pruned_tokens": 0}
+        with patch("app.apns.send_test_push_to_device", new=AsyncMock(return_value=expected)) as mock_send:
+            r = client.post(
+                "/api/devices/apns-test-push",
+                json={
+                    "device_id": "device-xyz",
+                    "environment": "sandbox",
+                    "device_secret": "correct-secret-123",
+                },
+            )
+
+        assert r.status_code == 200
+        assert r.json() == expected
+        sent_device = mock_send.await_args.args[1]
+        assert sent_device.token == latest_token
+
+    def test_device_id_lookup_respects_environment(self, client):
+        production_token = "e" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={
+                "token": production_token,
+                "environment": "production",
+                "device_id": "device-xyz",
+                "device_secret": "correct-secret-123",
+            },
+        )
+
+        r = client.post(
+            "/api/devices/apns-test-push",
+            json={
+                "device_id": "device-xyz",
+                "environment": "sandbox",
+                "device_secret": "correct-secret-123",
+            },
+        )
+
+        assert r.status_code == 404
+
+    def test_rejects_missing_token_and_device_id(self, client):
+        r = client.post(
+            "/api/devices/apns-test-push",
+            json={"device_secret": "secret-secret-secret"},
+        )
+        assert r.status_code == 400
+
 
 class TestListAPNSTokens:
     def test_list_empty_returns_empty(self, client):
