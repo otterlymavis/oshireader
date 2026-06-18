@@ -25,6 +25,17 @@ class TestHealth:
         assert r.json() == {"status": "ok"}
 
 
+class TestNotificationPreviewImage:
+    def test_returns_cacheable_png(self, client):
+        r = client.get("/api/notification-preview.png")
+
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/png"
+        assert r.headers["cache-control"] == "public, max-age=86400"
+        assert r.content.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(r.content) > 1_000
+
+
 class TestClientDiagnostics:
     def test_client_diagnostics_accepts_refresh_report(self, client, caplog):
         payload = {

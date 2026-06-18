@@ -283,6 +283,13 @@ final class OshiReaderUITests: XCTestCase {
             expandedMessage.waitForExistence(timeout: 5),
             "Expanded notification did not show the fuller message text"
         )
+        let previewMedia = springboard.images.matching(
+            identifier: "notification.previewMedia"
+        ).firstMatch
+        XCTAssertTrue(
+            previewMedia.waitForExistence(timeout: 8),
+            "Expanded notification did not show its media preview"
+        )
         let previewMetadata = springboard.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", "1 new")
         ).firstMatch

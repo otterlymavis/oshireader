@@ -125,6 +125,29 @@ class TestPayload:
         assert "thumbnail_url" not in payload
         assert _payload_size(payload) <= 3500
 
+    def test_payload_trimming_preserves_thumbnail_before_long_text(self):
+        thumbnail_url = "https://example.com/thumb.jpg"
+        payload = _payload(
+            self._term("Aiko"),
+            1,
+            {
+                "id": "youtube:1",
+                "platform": "youtube",
+                "url": "https://example.com/watch?" + ("u" * 1200),
+                "title": "Aiko update",
+                "content_text": "C" * 3000,
+                "author": "A" * 300,
+                "thumbnail_url": thumbnail_url,
+                "media_type": "video",
+                "published_at": "2026-06-17T12:00:00Z",
+            },
+        )
+
+        assert "item_content_text" not in payload
+        assert payload["thumbnail_url"] == thumbnail_url
+        assert payload["preview_item"]["thumbnail_url"] == thumbnail_url
+        assert _payload_size(payload) <= 3500
+
     def test_alert_does_not_expose_source_metadata(self):
         payload = _payload(
             self._term("Aiko"),
@@ -540,6 +563,7 @@ class TestSendTestPush:
              patch("app.apns.httpx.AsyncClient") as mock_client_class, \
              patch("app.apns.settings") as s:
             s.apns_topic = "com.example.app"
+            s.backend_public_url = "https://backend.example.com"
             mock_client_class.return_value.__aenter__.return_value = client
             await send_test_push(db_session)
 
@@ -548,6 +572,7 @@ class TestSendTestPush:
         assert payload["aps"]["mutable-content"] == 1
         assert payload["preview_item"]["id"] == "oshireader:test-preview"
         assert payload["item_title"] == "通知プレビューのテスト"
+        assert payload["thumbnail_url"] == "https://backend.example.com/api/notification-preview.png"
         headers = client.post.call_args.kwargs["headers"]
         assert headers["apns-collapse-id"] == "oshireader-test"
 
@@ -563,6 +588,7 @@ class TestSendTestPush:
              patch("app.apns.httpx.AsyncClient") as mock_client_class, \
              patch("app.apns.settings") as s:
             s.apns_topic = "com.example.app"
+            s.backend_public_url = "https://backend.example.com"
             mock_client_class.return_value.__aenter__.return_value = client
             await send_test_push_to_device(db_session, device)
 

@@ -118,10 +118,9 @@ def _drop_path(payload: dict, *path: str) -> None:
 
 
 def _shrink_payload(payload: dict) -> dict:
-    # Preserve item_id/item_url for tap-through. Trim optional preview richness first.
+    # Preserve item_id/item_url for tap-through and keep the thumbnail whenever
+    # possible so the expanded notification can render its media preview.
     drop_order = [
-        ("thumbnail_url",),
-        ("preview_item", "thumbnail_url"),
         ("item_content_text",),
         ("preview_item", "content_text"),
         ("item_author",),
@@ -134,6 +133,8 @@ def _shrink_payload(payload: dict) -> dict:
         ("item_platform",),
         ("preview_item", "platform"),
         ("aps", "target-content-id"),
+        ("thumbnail_url",),
+        ("preview_item", "thumbnail_url"),
     ]
     for path in drop_order:
         if _payload_size(payload) <= _APNS_PAYLOAD_SOFT_LIMIT_BYTES:
@@ -241,6 +242,7 @@ def _collapse_id(term: WatchTerm) -> str:
 def _test_payload() -> dict:
     term = WatchTerm(keyword="OshiReader")
     term.id = 0
+    preview_image_url = f"{settings.backend_public_url.rstrip('/')}/api/notification-preview.png"
     return _payload(
         term,
         1,
@@ -251,6 +253,7 @@ def _test_payload() -> dict:
             "title": "通知プレビューのテスト",
             "content_text": "新着結果のタイトル、本文、リンクが通知内に表示されます。",
             "author": "OshiReader",
+            "thumbnail_url": preview_image_url,
             "media_type": "article",
         },
     )

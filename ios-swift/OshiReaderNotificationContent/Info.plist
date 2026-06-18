@@ -27,7 +27,7 @@
 			<key>UNNotificationExtensionCategory</key>
 			<string>OSHI_RESULT_PREVIEW</string>
 			<key>UNNotificationExtensionDefaultContentHidden</key>
-			<false/>
+			<true/>
 			<key>UNNotificationExtensionInitialContentSizeRatio</key>
 			<real>0.24</real>
 		</dict>

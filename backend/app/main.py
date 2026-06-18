@@ -1,10 +1,14 @@
 import asyncio
 import logging
+import struct
+import zlib
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import AsyncGenerator
 
 from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -54,6 +58,45 @@ app.include_router(devices.router)
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/notification-preview.png")
+def notification_preview_image() -> Response:
+    return Response(
+        content=_notification_preview_png(),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@lru_cache(maxsize=1)
+def _notification_preview_png() -> bytes:
+    width, height = 640, 360
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)
+        for x in range(width):
+            glow = max(0, 110 - int(((x - 470) ** 2 + (y - 90) ** 2) ** 0.5))
+            rows.extend((
+                min(255, 25 + x * 55 // width + glow),
+                min(255, 20 + y * 35 // height + glow // 3),
+                min(255, 52 + x * 75 // width + glow),
+            ))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(bytes(rows), level=9))
+        + chunk(b"IEND", b"")
+    )
 
 
 @app.post("/api/client-diagnostics")

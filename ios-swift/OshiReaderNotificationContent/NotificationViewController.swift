@@ -11,17 +11,21 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
     private let container = UIStackView()
     private var imageWidthConstraint: NSLayoutConstraint?
     private var imageHeightConstraint: NSLayoutConstraint?
-    private var isCompactLayout = false
+    private var imageTask: URLSessionDataTask?
+    private let maximumImageBytes = 10 * 1024 * 1024
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
 
-        imageView.contentMode = .scaleAspectFill
+        imageView.contentMode = .scaleAspectFit
         imageView.clipsToBounds = true
         imageView.layer.cornerRadius = 8
         imageView.backgroundColor = .secondarySystemBackground
         imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.isAccessibilityElement = true
+        imageView.accessibilityIdentifier = "notification.previewMedia"
+        imageView.accessibilityLabel = "Notification media preview"
 
         titleLabel.font = .preferredFont(forTextStyle: .headline)
         titleLabel.numberOfLines = 2
@@ -38,15 +42,15 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
         textStack.translatesAutoresizingMaskIntoConstraints = false
         [titleLabel, bodyLabel, metaLabel].forEach(textStack.addArrangedSubview)
 
-        container.axis = .horizontal
+        container.axis = .vertical
         container.spacing = 12
-        container.alignment = .top
+        container.alignment = .fill
         container.translatesAutoresizingMaskIntoConstraints = false
         [imageView, textStack].forEach(container.addArrangedSubview)
         view.addSubview(container)
 
-        let imageWidthConstraint = imageView.widthAnchor.constraint(equalToConstant: 92)
-        let imageHeightConstraint = imageView.heightAnchor.constraint(equalToConstant: 92)
+        let imageWidthConstraint = imageView.widthAnchor.constraint(equalToConstant: 1)
+        let imageHeightConstraint = imageView.heightAnchor.constraint(equalToConstant: 180)
         self.imageWidthConstraint = imageWidthConstraint
         self.imageHeightConstraint = imageHeightConstraint
 
@@ -87,24 +91,30 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
         titleLabel.text = title
         bodyLabel.text = body == title ? nil : body
         metaLabel.text = metaText(from: content.userInfo)
+        imageTask?.cancel()
+        imageTask = nil
         imageView.image = image(from: content.attachments.first)
         imageView.isHidden = imageView.image == nil
         bodyLabel.isHidden = bodyLabel.text?.isEmpty ?? true
         metaLabel.isHidden = metaLabel.text?.isEmpty ?? true
         updateLayout(for: view.bounds.width)
         updatePreferredContentSize()
+
+        if imageView.image == nil, let thumbnailURL = thumbnailURL(from: userInfo) {
+            loadImage(from: thumbnailURL)
+        }
     }
 
     private func updateLayout(for width: CGFloat) {
-        let compact = width > 0 && width < 360
-        guard compact != isCompactLayout else { return }
-        isCompactLayout = compact
-
-        container.axis = compact ? .vertical : .horizontal
-        container.alignment = compact ? .fill : .top
-        imageView.contentMode = compact ? .scaleAspectFit : .scaleAspectFill
-        imageWidthConstraint?.constant = compact ? max(1, width - 28) : 92
-        imageHeightConstraint?.constant = compact ? 140 : 92
+        guard width > 0 else { return }
+        let availableWidth = max(1, width - 28)
+        imageWidthConstraint?.constant = availableWidth
+        if let image = imageView.image, image.size.width > 0, image.size.height > 0 {
+            let aspectHeight = availableWidth * image.size.height / image.size.width
+            imageHeightConstraint?.constant = min(240, max(140, aspectHeight))
+        } else {
+            imageHeightConstraint?.constant = min(200, max(140, availableWidth * 9 / 16))
+        }
     }
 
     private func updatePreferredContentSize() {
@@ -141,6 +151,42 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
         }
         guard let data = try? Data(contentsOf: attachment.url) else { return nil }
         return UIImage(data: data)
+    }
+
+    private func thumbnailURL(from userInfo: [AnyHashable: Any]) -> URL? {
+        let previewItem = dictionaryValue(userInfo["preview_item"])
+        let rawURL = firstNonEmpty(
+            stringValue(userInfo["thumbnail_url"]),
+            stringValue(previewItem?["thumbnail_url"])
+        )
+        guard let rawURL,
+              let url = URL(string: rawURL),
+              ["http", "https"].contains(url.scheme?.lowercased())
+        else { return nil }
+        return url
+    }
+
+    private func loadImage(from url: URL) {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        imageTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let self,
+                  let data,
+                  data.count <= self.maximumImageBytes,
+                  let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  http.mimeType?.lowercased().hasPrefix("image/") == true,
+                  let image = UIImage(data: data)
+            else { return }
+
+            DispatchQueue.main.async {
+                self.imageView.image = image
+                self.imageView.isHidden = false
+                self.updateLayout(for: self.view.bounds.width)
+                self.updatePreferredContentSize()
+            }
+        }
+        imageTask?.resume()
     }
 
     private func stringValue(_ value: Any?) -> String? {
