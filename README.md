@@ -102,7 +102,29 @@ The backend scheduler currently registers these connectors:
 | Girls Channel | Forum topic scraping |
 | Togetter | Curation page scraping |
 | ModelPress | ModelPress article search |
+| Oricon | Oricon article RSS/search |
 | YahooNews | Yahoo News article search through a text mirror for EEA-safe access |
 | News/RSS | Curated Japanese entertainment RSS feeds |
+| SmartNews | Google News site-restricted article search |
+| Ameblo | Google News site-restricted article search |
+| AERA | Google News site-restricted article search |
+| Hochi | Google News site-restricted article search |
+| Sponichi | Google News site-restricted article search |
+| Livedoor | Google News site-restricted article search |
+| Mantan Web | Google News site-restricted article search |
+| BARKS | Direct RSS with Google News fallback |
+| Real Sound | Google News site-restricted article search |
+| CinemaCafe | Google News site-restricted article search |
+| Twitter/X | Optional Twitter API connector when credentials are configured |
 
 Watch terms support aliases. The scheduler searches the primary keyword and each alias while storing matches against the original watch term.
+
+### Source Relevance Smoke Check
+
+When a source appears to return unrelated articles, run the smoke helper against the suspicious platform. It fetches raw connector output, applies the same primary-text relevance rule used by ingestion, and shows which items would be kept or dropped.
+
+```bash
+python3 backend/scripts/smoke_sources.py --keyword '吉沢亮' --platform livedoor --platform realsound --samples 2
+```
+
+`DROP` rows mean the raw source returned broad results, but ingestion would filter those items before they reach the feed. `ERROR` rows mean the connector itself failed.
