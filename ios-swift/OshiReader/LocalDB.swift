@@ -24,7 +24,7 @@ class LocalDB: ObservableObject {
     private let iso8601 = ISO8601DateFormatter()
 
     // Bump this whenever a migration step is added below.
-    private static let currentSchemaVersion = 1
+    private static let currentSchemaVersion = 2
     private static let schemaVersionKey = "localdb_schema_version"
 
     init(directory: URL) {
@@ -76,8 +76,32 @@ class LocalDB: ObservableObject {
                 subscribedPlatforms.append(contentsOf: missing)
                 saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
             }
+        case 2:
+            pruneIrrelevantCachedArticleItems()
         default:
             AppLogger.persistence.warning("No migration handler for schema v\(version)")
+        }
+    }
+
+    private func pruneIrrelevantCachedArticleItems() {
+        let termsByKeyword = Dictionary(uniqueKeysWithValues: terms.map { ($0.keyword, $0) })
+        let originalCount = self.feedItems.count
+        self.feedItems.removeAll { item in
+            guard Platform.forRawValue(item.platform)?.usesStrictKeywordMatching == true,
+                  !item.watch_term_keyword.isEmpty else {
+                return false
+            }
+            guard let term = termsByKeyword[item.watch_term_keyword] else {
+                return true
+            }
+            let candidates = [term.keyword] + term.aliases
+            return !candidates.contains(where: { self.matchesKeyword(item: item, kw: $0) })
+        }
+        if self.feedItems.count != originalCount {
+            saveToFile(name: "feed_items", value: self.feedItems)
+            AppLogger.persistence.info(
+                "Pruned \(originalCount - self.feedItems.count) irrelevant cached feed items"
+            )
         }
     }
 
@@ -322,7 +346,8 @@ class LocalDB: ObservableObject {
     }
 
     private func matchesKeyword(item: FeedItem, kw: String) -> Bool {
-        let haystack = "\(item.title ?? "") \(item.content_text ?? "")".lowercased()
+        let primaryText = item.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let haystack = ((primaryText?.isEmpty == false ? primaryText : item.content_text) ?? "").lowercased()
         let needle = kw.lowercased()
         if needle.isEmpty { return true }
         if haystack.contains(needle) { return true }

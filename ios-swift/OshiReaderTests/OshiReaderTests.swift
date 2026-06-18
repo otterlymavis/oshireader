@@ -496,6 +496,28 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(querySub.count, 1) // Only TVer yesterday item remains
         XCTAssertEqual(querySub.first?.id, "tver:yesterday")
     }
+
+    func testStrictArticleSourceIgnoresSummaryOnlyKeywordMatch() throws {
+        db.setSubscribedPlatforms(platforms: ["livedoor"])
+        _ = db.saveTerm(keyword: "吉沢亮")
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "livedoor:summary-only",
+            platform: "livedoor",
+            url: "https://news.livedoor.com/example",
+            title: "杉野遥亮、『世にも奇妙な物語』で初主演",
+            content_text: "吉沢亮の関連記事も紹介",
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: "吉沢亮",
+            fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [item])
+
+        XCTAssertTrue(db.queryFeed(keyword: "吉沢亮", days: 30).isEmpty)
+    }
     
     // MARK: - skipDateCutoff flag: forum platforms always pass date filter
     func testSkipDateCutoffAllowsOldForumItems() throws {
@@ -507,7 +529,7 @@ final class OshiReaderTests: XCTestCase {
         // 60-day-old 5ch thread — should bypass 30-day cutoff
         let forumItem = FeedItem(
             id: "5ch:old-thread", platform: "5ch", url: "https://5ch.net/t/old",
-            title: "Old thread", content_text: nil, author: nil, thumbnail_url: nil,
+            title: "Aiko old thread", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "article", published_at: old, watch_term_keyword: "Aiko", fetched_at: old
         )
         // 60-day-old news article — should be filtered out
@@ -675,6 +697,36 @@ final class OshiReaderTests: XCTestCase {
                       "Migration should have added missing 'oricon' platform")
 
         // Clean up the version key so subsequent tests see a clean state
+        UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
+    }
+
+    func testSchemaMigrationPrunesSummaryOnlyArticleMatch() throws {
+        let term = WatchTerm(keyword: "吉沢亮")
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "livedoor:cached-noise",
+            platform: "livedoor",
+            url: "https://news.livedoor.com/example",
+            title: "杉野遥亮、『世にも奇妙な物語』で初主演",
+            content_text: "吉沢亮の関連記事も紹介",
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: "吉沢亮",
+            fetched_at: now
+        )
+        try JSONEncoder().encode([term]).write(
+            to: tempDir.appendingPathComponent("terms.json")
+        )
+        try JSONEncoder().encode([item]).write(
+            to: tempDir.appendingPathComponent("feed_items.json")
+        )
+        UserDefaults.standard.set(1, forKey: "localdb_schema_version")
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertTrue(freshDB.feedItems.isEmpty)
         UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
     }
 
@@ -1987,6 +2039,55 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(first.first?.id, second.first?.id,
                        "GNews scraper IDs must be stable across refreshes to prevent duplicates")
         XCTAssertFalse(first.first?.id.contains("-") == true, "ID should not contain UUID hyphens")
+    }
+
+    func testScrapeRSSFallbackGNewsRejectsSummaryOnlyMatch() async {
+        let emptyXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        let gnewsXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>杉野遥亮、『世にも奇妙な物語』で初主演</title>
+              <link>https://news.google.com/rss/articles/summary-only</link>
+              <description>吉沢亮の関連記事も紹介</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { request in
+            let isGNews = request.url?.host?.contains("google.com") == true
+            return (Data((isGNews ? gnewsXml : emptyXml).utf8), Self.response(status: 200))
+        }
+
+        let items = await NetworkManager.shared.scrapeRSSFallback(keyword: "吉沢亮")
+        XCTAssertTrue(items.isEmpty)
+    }
+
+    func testScrapeGoogleNewsSiteRejectsSummaryOnlyMatch() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>杉野遥亮、『世にも奇妙な物語』で初主演 - Livedoor</title>
+              <link>https://news.google.com/rss/articles/livedoor-summary-only</link>
+              <description>吉沢亮の関連記事も紹介</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { _ in (Data(xml.utf8), Self.response(status: 200)) }
+
+        let items = await NetworkManager.shared.scrapeGoogleNewsSite(
+            keyword: "吉沢亮",
+            site: "news.livedoor.com",
+            platform: "livedoor"
+        )
+        XCTAssertTrue(items.isEmpty)
     }
 
     func testScrapeRSSFallbackReturnsEmptyOnNetworkError() async {

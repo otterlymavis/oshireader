@@ -124,7 +124,7 @@ extension NetworkManager {
 
         if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml"),
            let nhkItems = try? await parseRss(url: nhkUrl) {
-            for item in nhkItems where matchesKeyword(title: item.title, desc: item.description, kw: keyword) {
+            for item in nhkItems where titleMatchesKeyword(item.title, keyword: keyword) {
                 results.append(FeedItem(
                     id: "news:nhk:\(stableIdHash(item.link))",
                     platform: "news",
@@ -145,11 +145,13 @@ extension NetworkManager {
         if let gnewsUrl = URL(string: "https://news.google.com/rss/search?q=\(encodedKeyword)&hl=ja&gl=JP&ceid=JP%3Aja"),
            let gnewsItems = try? await parseRss(url: gnewsUrl) {
             for item in gnewsItems {
+                let cleanedTitle = cleanNewsTitle(item.title)
+                guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { continue }
                 results.append(FeedItem(
                     id: "news:gnews:\(stableIdHash(item.link))",
                     platform: "news",
                     url: item.link,
-                    title: cleanNewsTitle(item.title),
+                    title: cleanedTitle,
                     content_text: item.description.isEmpty ? nil : item.description,
                     author: "Google News",
                     thumbnail_url: nil,
@@ -289,6 +291,7 @@ extension NetworkManager {
         return items.compactMap { item in
             guard !item.link.isEmpty else { return nil }
             let cleanedTitle = cleanNewsTitle(item.title)
+            guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { return nil }
             return FeedItem(
                 id: "\(platform):gnews:\(stableIdHash(item.link))",
                 platform: platform,
@@ -330,12 +333,12 @@ extension NetworkManager {
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func matchesKeyword(title: String, desc: String, kw: String) -> Bool {
-        let haystack = "\(title) \(desc)".lowercased()
-        let needle = kw.lowercased()
+    private func titleMatchesKeyword(_ title: String, keyword: String) -> Bool {
+        let haystack = title.lowercased()
+        let needle = keyword.lowercased()
         if needle.isEmpty { return true }
         if haystack.contains(needle) { return true }
-        let parts = kw.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        let parts = keyword.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         return parts.count > 1 && parts.allSatisfy { haystack.contains($0.lowercased()) }
     }
 }

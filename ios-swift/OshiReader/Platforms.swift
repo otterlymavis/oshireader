@@ -47,28 +47,28 @@ struct Platform {
             bg: Color(red: 0.9, green: 0.97, blue: 0.95),
             fg: Color(red: 0.1, green: 0.7, blue: 0.5),
             rawPlatformValues: ["note"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
             id: "girlschannel", name: "GirlsChannel", icon: "👭",
             accent: .pink, bg: Color(red: 1.0, green: 0.92, blue: 0.95), fg: .pink,
             rawPlatformValues: ["girlschannel"],
-            usesStrictKeywordMatching: false, skipDateCutoff: true,
+            usesStrictKeywordMatching: true, skipDateCutoff: true,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
             id: "5ch", name: "5ch", icon: "💬",
             accent: .orange, bg: Color(red: 1.0, green: 0.95, blue: 0.9), fg: .orange,
             rawPlatformValues: ["5ch"],
-            usesStrictKeywordMatching: false, skipDateCutoff: true,
+            usesStrictKeywordMatching: true, skipDateCutoff: true,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
             id: "togetter", name: "Togetter", icon: "🐧",
             accent: .green, bg: Color(red: 0.9, green: 0.98, blue: 0.92), fg: .green,
             rawPlatformValues: ["togetter"],
-            usesStrictKeywordMatching: false, skipDateCutoff: true,
+            usesStrictKeywordMatching: true, skipDateCutoff: true,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -100,7 +100,7 @@ struct Platform {
             bg: Color(red: 1.0, green: 0.92, blue: 0.94),
             fg: Color(red: 0.86, green: 0.12, blue: 0.22),
             rawPlatformValues: ["oricon"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -109,7 +109,7 @@ struct Platform {
             bg: Color(red: 1.0, green: 0.92, blue: 0.92),
             fg: Color(red: 0.80, green: 0.00, blue: 0.00),
             rawPlatformValues: ["smartnews"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -118,7 +118,7 @@ struct Platform {
             bg: Color(red: 1.0, green: 0.94, blue: 0.88),
             fg: Color(red: 1.00, green: 0.42, blue: 0.00),
             rawPlatformValues: ["ameblo"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -127,7 +127,7 @@ struct Platform {
             bg: Color(red: 0.90, green: 0.94, blue: 1.0),
             fg: Color(red: 0.00, green: 0.27, blue: 0.58),
             rawPlatformValues: ["aera"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -136,7 +136,7 @@ struct Platform {
             bg: Color(red: 1.0, green: 0.92, blue: 0.92),
             fg: Color(red: 0.82, green: 0.10, blue: 0.10),
             rawPlatformValues: ["hochi"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -145,7 +145,7 @@ struct Platform {
             bg: Color(red: 0.90, green: 0.94, blue: 1.0),
             fg: Color(red: 0.00, green: 0.27, blue: 0.60),
             rawPlatformValues: ["sponichi"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -154,7 +154,7 @@ struct Platform {
             bg: Color(red: 1.0, green: 0.92, blue: 0.94),
             fg: Color(red: 0.88, green: 0.00, blue: 0.20),
             rawPlatformValues: ["livedoor"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -163,7 +163,7 @@ struct Platform {
             bg: Color(red: 0.90, green: 1.0, blue: 0.93),
             fg: Color(red: 0.07, green: 0.53, blue: 0.25),
             rawPlatformValues: ["mantanweb"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
@@ -172,7 +172,7 @@ struct Platform {
             bg: Color(red: 0.93, green: 0.93, blue: 0.93),
             fg: Color(red: 0.13, green: 0.13, blue: 0.13),
             rawPlatformValues: ["barks"],
-            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true
         ),
         Platform(
