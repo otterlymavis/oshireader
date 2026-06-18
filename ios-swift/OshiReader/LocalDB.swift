@@ -398,24 +398,88 @@ class LocalDB: ObservableObject {
         .sorted { lhs, rhs in
             sortDate(for: lhs) > sortDate(for: rhs)
         }
-        .reduce(into: ([FeedItem](), Set<String>(), Set<String>())) { acc, item in
+        .reduce(into: (items: [FeedItem](), urls: Set<String>(), platformTitles: Set<String>(), articleTitles: Set<String>())) { acc, item in
             // Deduplicate the same article arriving from two paths — e.g. a backend copy
             // with a direct URL and a device-scraped Google News copy with a news.google
-            // URL (different ids/URLs, same story). Exact URLs are global duplicates even
-            // when source labels append different title suffixes. Normalized titles still
-            // catch direct-vs-redirect copies within the same canonical platform.
-            let urlKey = item.url.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard urlKey.isEmpty || acc.1.insert(urlKey).inserted else { return }
+            // URL (different ids/URLs, same story). Canonical URLs are global duplicates
+            // even when tracking params or wrapper params differ. Normalized titles still
+            // catch direct-vs-redirect copies within the same canonical platform, and a
+            // stricter article title key catches cross-source syndication.
+            let urlKey = Self.normalizedURLKey(item.url)
+            guard urlKey.isEmpty || acc.urls.insert(urlKey).inserted else { return }
 
             let titleKey = Self.normalizedTitleKey(item.title)
             let platformTitleKey = titleKey.isEmpty
                 ? ""
                 : "\(Platform.normalize(item.platform))|\(titleKey)"
-            guard platformTitleKey.isEmpty || acc.2.insert(platformTitleKey).inserted else { return }
-            acc.0.append(item)
-        }.0
+            guard platformTitleKey.isEmpty || acc.platformTitles.insert(platformTitleKey).inserted else { return }
+
+            let articleTitleKey = Self.normalizedArticleTitleKey(item.title)
+            if Self.shouldDeduplicateArticleTitle(item), articleTitleKey.count >= 10 {
+                guard acc.articleTitles.insert(articleTitleKey).inserted else { return }
+            }
+
+            acc.items.append(item)
+        }.items
 
         return Self.diversifiedFeedOrder(deduped)
+    }
+
+    static func normalizedURLKey(_ rawURL: String) -> String {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        guard var components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return trimmed.lowercased()
+        }
+
+        let host = (components.host ?? "").lowercased()
+        guard !host.isEmpty,
+              host.contains(".") || host == "localhost" || host.allSatisfy(\.isNumber) else {
+            return ""
+        }
+        if host == "youtu.be" {
+            let videoId = components.path
+                .split(separator: "/")
+                .first
+                .map(String.init) ?? ""
+            if !videoId.isEmpty { return "https://youtube.com/watch?v=\(videoId)" }
+        }
+
+        if host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com" {
+            let queryItems = components.queryItems ?? []
+            if components.path == "/watch",
+               let videoId = queryItems.first(where: { $0.name == "v" })?.value,
+               !videoId.isEmpty {
+                return "https://youtube.com/watch?v=\(videoId)"
+            }
+        }
+
+        // Public web links routinely bounce between HTTP and HTTPS while identifying
+        // the same page. Prefer the secure form so those variants share one key.
+        components.scheme = "https"
+        components.host = normalizedHost(host)
+        components.fragment = nil
+        if (scheme == "https" && components.port == 443) || (scheme == "http" && components.port == 80) {
+            components.port = nil
+        }
+
+        var path = components.percentEncodedPath
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        components.percentEncodedPath = path
+
+        let queryItems = (components.queryItems ?? [])
+            .filter { !isIgnoredURLQueryItem($0.name) }
+            .sorted {
+                if $0.name != $1.name { return $0.name < $1.name }
+                return ($0.value ?? "") < ($1.value ?? "")
+            }
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+
+        return (components.url?.absoluteString ?? trimmed).lowercased()
     }
 
     // Collapses a title to a comparison key: lowercased, alphanumerics only (keeps CJK,
@@ -423,6 +487,68 @@ class LocalDB: ObservableObject {
     static func normalizedTitleKey(_ title: String?) -> String {
         guard let t = title?.lowercased(), !t.isEmpty else { return "" }
         return String(t.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
+    }
+
+    static func normalizedArticleTitleKey(_ title: String?) -> String {
+        guard var text = cleanDisplayText(title)?.lowercased(), !text.isEmpty else { return "" }
+
+        for separator in [" - ", " | ", "｜"] {
+            guard let range = text.range(of: separator, options: .backwards) else { continue }
+            let prefix = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let suffix = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if prefix.count >= 8, suffix.count <= 40, publisherSuffixLooksLikely(suffix) {
+                text = prefix
+                break
+            }
+        }
+
+        text = strippingTrailingPublisherParenthetical(text)
+        return normalizedTitleKey(text)
+    }
+
+    private static func normalizedHost(_ host: String) -> String {
+        var value = host
+        if value.hasPrefix("www.") { value.removeFirst(4) }
+        if value.hasPrefix("m.") { value.removeFirst(2) }
+        return value
+    }
+
+    private static func isIgnoredURLQueryItem(_ rawName: String) -> Bool {
+        let name = rawName.lowercased()
+        return name.hasPrefix("utm_") || [
+            "fbclid", "gclid", "yclid", "igshid", "mc_cid", "mc_eid",
+            "ref", "ref_src", "spm", "oc", "hl", "gl", "ceid"
+        ].contains(name)
+    }
+
+    private static func shouldDeduplicateArticleTitle(_ item: FeedItem) -> Bool {
+        if item.media_type == "article" || item.media_type == "text" { return true }
+        return Platform.forRawValue(item.platform)?.usesStrictKeywordMatching == true
+    }
+
+    private static func publisherSuffixLooksLikely(_ suffix: String) -> Bool {
+        if suffix.isEmpty { return false }
+        let knownWords = [
+            "news", "ニュース", "新聞", "online", "web", "press", "times",
+            "ナタリー", "oricon", "mdpr", "modelpress", "yahoo", "google"
+        ]
+        if knownWords.contains(where: { suffix.contains($0) }) { return true }
+        return suffix.count <= 14 && !suffix.contains(" ")
+    }
+
+    private static func strippingTrailingPublisherParenthetical(_ text: String) -> String {
+        let pairs: [(Character, Character)] = [(")", "("), ("）", "（")]
+        var current = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for (closing, opening) in pairs where current.last == closing {
+            guard let openIndex = current.lastIndex(of: opening) else { continue }
+            let prefix = String(current[..<openIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let suffix = String(current[current.index(after: openIndex)..<current.index(before: current.endIndex)])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if prefix.count >= 8, suffix.count <= 40, publisherSuffixLooksLikely(suffix) {
+                current = prefix
+            }
+        }
+        return current
     }
 
     private static func diversifiedFeedOrder(_ items: [FeedItem]) -> [FeedItem] {

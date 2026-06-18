@@ -1254,6 +1254,98 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.queryFeed(keyword: nil, days: 30).count, 1)
     }
 
+    func testQueryFeedDeduplicatesNormalizedUrlVariants() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["news"])
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "news:direct-clean", platform: "news",
+                url: "http://example.com/articles/aiko-story",
+                title: "Aiko announces a new film", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+            FeedItem(
+                id: "news:direct-tracked", platform: "news",
+                url: "https://www.example.com/articles/aiko-story/?utm_source=gnews&fbclid=abc#comments",
+                title: "Aiko announces a new film", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+        ])
+
+        XCTAssertEqual(db.feedItems.count, 2)
+        XCTAssertEqual(db.queryFeed(keyword: nil, days: 30).count, 1)
+    }
+
+    func testQueryFeedDeduplicatesDirectAndPublisherSuffixedArticleTitles() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["news", "yahoonews"])
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "news:direct-title", platform: "news",
+                url: "https://example.com/articles/aiko-film",
+                title: "Aiko announces a new film",
+                content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+            FeedItem(
+                id: "yahoonews:suffixed-title", platform: "yahoonews",
+                url: "https://news.google.com/rss/articles/aiko-film?oc=5",
+                title: "Aiko announces a new film - Example News",
+                content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+        ])
+
+        XCTAssertEqual(db.feedItems.count, 2)
+        XCTAssertEqual(db.queryFeed(keyword: nil, days: 30).count, 1)
+    }
+
+    func testQueryFeedDeduplicatesYoutubeUrlAliases() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "youtube:abc123", platform: "youtube",
+                url: "https://www.youtube.com/watch?v=abc123&utm_source=share",
+                title: "Aiko live clip", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+            FeedItem(
+                id: "youtube:gnews:abc123", platform: "youtube",
+                url: "https://youtu.be/abc123?t=30",
+                title: "Aiko live clip", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+        ])
+
+        XCTAssertEqual(db.feedItems.count, 2)
+        XCTAssertEqual(db.queryFeed(keyword: nil, days: 30).count, 1)
+    }
+
+    func testQueryFeedDeduplicatesCrossSourcePublisherTitleVariants() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["news", "yahoonews"])
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "news:publisher-copy", platform: "news",
+                url: "https://news.google.com/rss/articles/source-a?oc=5",
+                title: "Aiko announces a new film - Example News",
+                content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+            FeedItem(
+                id: "yahoonews:publisher-copy", platform: "yahoonews",
+                url: "https://news.google.com/rss/articles/source-b?oc=5",
+                title: "Aiko announces a new film（Example News） - Yahoo!ニュース",
+                content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            ),
+        ])
+
+        XCTAssertEqual(db.feedItems.count, 2)
+        XCTAssertEqual(db.queryFeed(keyword: nil, days: 30).count, 1)
+    }
+
     // MARK: - URL scheme security
     func testAddCustomUrlRejectsNonHttpSchemes() throws {
         db.addCustomUrl(url: "javascript:alert(1)", title: "XSS")
