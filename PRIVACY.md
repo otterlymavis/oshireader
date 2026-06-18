@@ -24,7 +24,7 @@ OshiReader+ sends limited information needed to provide its core features:
 
 - Watch keywords, aliases, notification preferences, and collection settings may be sent to the configured OshiReader backend so feeds can be collected and synced.
 - Search terms, translation text, public article URLs, and public feed requests may be sent to the backend or relevant public content providers when you use search, translation, feed, reader, or avatar features.
-- If you enable notifications, your Apple Push Notification service device token, notification environment, and device identifier may be sent to the backend so OshiReader+ can send keyword alerts.
+- If you enable notifications, your Apple Push Notification service device token, notification environment, device identifier, and per-install device secret may be sent to the backend so OshiReader+ can send keyword alerts and authenticate device-scoped background refresh requests.
 - If you use app features that retrieve public content, the websites and services you request may receive normal network information such as your IP address and request metadata.
 
 The app does not require you to create an account and does not intentionally collect your name, email address, precise location, contacts, health data, camera data, microphone data, or payment information.

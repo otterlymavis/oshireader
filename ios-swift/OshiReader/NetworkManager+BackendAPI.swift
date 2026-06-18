@@ -220,6 +220,43 @@ extension NetworkManager {
         try await apiVoid(URL(string: "\(apiBase)/api/admin/poll")!, method: "POST", authorized: true, timeout: timeout)
     }
 
+    func triggerBackgroundPoll(timeout: TimeInterval = 90) async throws {
+        if isUITesting { return }
+        do {
+            try await triggerDeviceBackgroundRefresh(timeout: timeout)
+        } catch {
+            guard !Task.isCancelled else { throw error }
+            AppLogger.network.warning("Device-scoped background refresh failed: \(error.localizedDescription)")
+            try await triggerPoll(timeout: timeout)
+        }
+    }
+
+    private func triggerDeviceBackgroundRefresh(timeout: TimeInterval) async throws {
+        let body: [String: String]
+        if hasRegisteredAPNSDeviceForCurrentEnvironment,
+           let token = registeredAPNSDeviceToken,
+           !token.isEmpty {
+            body = [
+                "token": token,
+                "device_secret": apnsDeviceSecret,
+            ]
+        } else {
+            let deviceId = await apnsDeviceId()
+            body = [
+                "device_id": deviceId,
+                "environment": apnsEnvironment,
+                "device_secret": apnsDeviceSecret,
+            ]
+        }
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        try await apiVoid(
+            URL(string: "\(apiBase)/api/devices/background-refresh")!,
+            method: "POST",
+            body: bodyData,
+            timeout: timeout
+        )
+    }
+
     func sendClientDiagnostic(_ report: ClientDiagnosticReport) async {
         guard !isUITesting else { return }
         do {

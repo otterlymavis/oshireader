@@ -56,7 +56,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         AppLogger.network.notice("Silent push requested a background refresh")
         Task { @MainActor in
-            let refreshed = await BackgroundRefreshManager.shared.refreshFromBackend()
+            let shouldTriggerPoll = BackgroundRefreshPolicy.shouldTriggerPoll(forRemoteNotification: userInfo)
+            let refreshed = await BackgroundRefreshManager.shared.refreshFromBackend(triggerPoll: shouldTriggerPoll)
             AppLogger.network.notice("Silent push background refresh completed success=\(refreshed)")
             completionHandler(refreshed ? .newData : .failed)
         }

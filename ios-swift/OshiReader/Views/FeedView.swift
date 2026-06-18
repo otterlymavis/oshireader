@@ -723,8 +723,34 @@ struct FeedView: View {
     private func deepFallback(triggerBackendPoll: Bool) async -> FeedRefreshReport {
         var report = FeedRefreshReport()
         if triggerBackendPoll {
-            Task { try? await NetworkManager.shared.triggerPoll() }
-            report.record(strategy: "backend_poll", status: "queued")
+            do {
+                try await NetworkManager.shared.triggerBackgroundPoll(timeout: 45)
+                report.record(strategy: "backend_poll", status: "ok")
+            } catch {
+                report.record(
+                    strategy: "backend_poll",
+                    status: "failed",
+                    detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
+                )
+            }
+            do {
+                let days = daysFilter == 0 ? 0 : 90
+                let items = try await NetworkManager.shared.fetchFeed(limit: 200, days: days)
+                let added = db.mergeItems(newItems: items)
+                report.record(
+                    strategy: "backend_feed_after_poll",
+                    status: items.isEmpty ? "empty" : "items",
+                    itemCount: items.count,
+                    addedCount: added,
+                    detail: "days=\(days)"
+                )
+            } catch {
+                report.record(
+                    strategy: "backend_feed_after_poll",
+                    status: "failed",
+                    detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
+                )
+            }
         }
         let activeTerms = db.terms.filter { $0.is_active }
         await withTaskGroup(of: [FeedItem].self) { group in

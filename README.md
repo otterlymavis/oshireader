@@ -75,7 +75,12 @@ The app is a universal iPhone and iPad build. Use schemes to choose the backend 
 
 The backend URL is injected through `OshiReaderAPIBaseURL` in `Info.plist`, with values generated from `ios-swift/project.yml`.
 
-Remote push notifications use APNs. The Swift app registers its APNs device token after notification permission is granted, then posts that token to `/api/devices/apns-token`. The backend sends remote notifications for new matches only when the watch term has notifications enabled.
+Remote push notifications use APNs. The Swift app registers its APNs device token after notification permission is granted, then posts that token, APNs environment, device identifier, and per-install `device_secret` to `/api/devices/apns-token`. The backend sends remote notifications for new matches only when the watch term has notifications enabled.
+
+Background refresh uses two paths:
+
+- Scheduled iOS refresh submits a device-scoped `/api/devices/background-refresh` request authenticated with the registered APNs token or device identifier plus `device_secret`, then fetches feed items after the backend poll has finished.
+- New-match APNs payloads include `content-available: 1`, so iOS can wake the app and fetch the already-created matches without triggering a duplicate backend poll.
 
 ### Push Notification Release Checklist
 
@@ -85,7 +90,7 @@ Before shipping a build that relies on background/rich notifications:
 2. Deploy backend migrations before testing pushes. The APNs device table must include `device_secret`.
 3. Launch the updated iOS app once after deployment and allow notifications, so the app re-registers the APNs token with `device_secret` and its APNs environment.
 4. In Settings, send a test notification on a physical device or TestFlight build. The notification should use the rich preview category, and repeated tests should collapse into one diagnostic notification.
-5. Trigger a real poll that creates a new match. Confirm the notification arrives while the app is backgrounded, expands with preview UI, opens the result on tap, and saves via the notification action.
+5. Trigger a real poll that creates a new match. Confirm the notification arrives while the app is backgrounded, expands with preview UI, wakes the app to refresh the feed, opens the result on tap, and saves via the notification action.
 6. Check `/api/admin/stats` for APNs configuration and token environment counts when diagnosing delivery issues.
 
 ## Supported Backend Sources

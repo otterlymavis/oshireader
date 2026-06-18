@@ -18,11 +18,20 @@ enum BackgroundRefreshPolicy {
     static let operationDeadline: TimeInterval = 25
     static let pollTimeout: TimeInterval = 12
 
-    static func shouldScheduleLocalFallback(registeredRemoteToken: String?) -> Bool {
-        guard let token = registeredRemoteToken?.trimmingCharacters(in: .whitespacesAndNewlines) else {
-            return true
-        }
-        return token.isEmpty
+    static func shouldScheduleLocalFallback(hasRegisteredRemoteDeviceForCurrentEnvironment: Bool) -> Bool {
+        !hasRegisteredRemoteDeviceForCurrentEnvironment
+    }
+
+    static func shouldNotifyLocallyFromBackground(
+        hasRegisteredRemoteDeviceForCurrentEnvironment: Bool,
+        hadItemsInitially: Bool,
+        hasPendingNotificationItems: Bool
+    ) -> Bool {
+        shouldScheduleLocalFallback(
+            hasRegisteredRemoteDeviceForCurrentEnvironment: hasRegisteredRemoteDeviceForCurrentEnvironment
+        ) &&
+            hadItemsInitially &&
+            hasPendingNotificationItems
     }
 
     static func notificationItems(
@@ -42,6 +51,15 @@ enum BackgroundRefreshPolicy {
 
     static func itemKey(_ item: FeedItem) -> String {
         "\(item.id)::\(item.watch_term_keyword)"
+    }
+
+    static func shouldTriggerPoll(forRemoteNotification userInfo: [AnyHashable: Any]) -> Bool {
+        if userInfo["new_count"] != nil ||
+            userInfo["watch_term_keyword"] != nil ||
+            userInfo["preview_item"] != nil {
+            return false
+        }
+        return true
     }
 }
 
@@ -113,7 +131,7 @@ final class BackgroundRefreshManager {
     }
 
     @discardableResult
-    func refreshFromBackend() async -> Bool {
+    func refreshFromBackend(triggerPoll: Bool = true) async -> Bool {
         guard !isRefreshing else {
             AppLogger.network.notice("Background refresh skipped because another refresh is running")
             return false
@@ -128,7 +146,7 @@ final class BackgroundRefreshManager {
 
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask { @MainActor in
-                await self.performRefreshFromBackend()
+                await self.performRefreshFromBackend(triggerPoll: triggerPoll)
             }
             group.addTask {
                 try? await Task.sleep(
@@ -143,7 +161,7 @@ final class BackgroundRefreshManager {
         }
     }
 
-    private func performRefreshFromBackend() async -> Bool {
+    private func performRefreshFromBackend(triggerPoll: Bool) async -> Bool {
         let db = LocalDB.shared
 
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
@@ -153,9 +171,9 @@ final class BackgroundRefreshManager {
 
         guard !db.terms.filter(\.is_active).isEmpty else { return true }
 
-        Task {
+        if triggerPoll {
             do {
-                try await NetworkManager.shared.triggerPoll(timeout: BackgroundRefreshPolicy.pollTimeout)
+                try await NetworkManager.shared.triggerBackgroundPoll(timeout: BackgroundRefreshPolicy.pollTimeout)
             } catch {
                 AppLogger.network.warning("Background poll trigger failed: \(error.localizedDescription)")
             }
@@ -227,7 +245,12 @@ final class BackgroundRefreshManager {
                 }
             }
 
-            if hadItemsInitially, !pendingNotificationItems.isEmpty {
+            let shouldNotifyLocally = BackgroundRefreshPolicy.shouldNotifyLocallyFromBackground(
+                hasRegisteredRemoteDeviceForCurrentEnvironment: NetworkManager.shared.hasRegisteredAPNSDeviceForCurrentEnvironment,
+                hadItemsInitially: hadItemsInitially,
+                hasPendingNotificationItems: !pendingNotificationItems.isEmpty
+            )
+            if shouldNotifyLocally {
                 await NotificationManager.shared.notifyForNewItems(
                     pendingNotificationItems,
                     terms: db.terms,

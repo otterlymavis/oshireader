@@ -304,11 +304,74 @@ final class OshiReaderTests: XCTestCase {
     }
 
     func testBackgroundRefreshUsesLocalFallbackOnlyWithoutRemoteToken() {
-        XCTAssertTrue(BackgroundRefreshPolicy.shouldScheduleLocalFallback(registeredRemoteToken: nil))
-        XCTAssertTrue(BackgroundRefreshPolicy.shouldScheduleLocalFallback(registeredRemoteToken: "  "))
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldScheduleLocalFallback(
+                hasRegisteredRemoteDeviceForCurrentEnvironment: false
+            )
+        )
         XCTAssertFalse(
             BackgroundRefreshPolicy.shouldScheduleLocalFallback(
-                registeredRemoteToken: String(repeating: "a", count: 64)
+                hasRegisteredRemoteDeviceForCurrentEnvironment: true
+            )
+        )
+    }
+
+    func testBackgroundRefreshLocalNotificationRequiresFallbackState() {
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldNotifyLocallyFromBackground(
+                hasRegisteredRemoteDeviceForCurrentEnvironment: false,
+                hadItemsInitially: true,
+                hasPendingNotificationItems: true
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldNotifyLocallyFromBackground(
+                hasRegisteredRemoteDeviceForCurrentEnvironment: true,
+                hadItemsInitially: true,
+                hasPendingNotificationItems: true
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldNotifyLocallyFromBackground(
+                hasRegisteredRemoteDeviceForCurrentEnvironment: false,
+                hadItemsInitially: false,
+                hasPendingNotificationItems: true
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldNotifyLocallyFromBackground(
+                hasRegisteredRemoteDeviceForCurrentEnvironment: false,
+                hadItemsInitially: true,
+                hasPendingNotificationItems: false
+            )
+        )
+    }
+
+    func testRemoteNotificationNewMatchPayloadSkipsDuplicatePoll() {
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldTriggerPoll(
+                forRemoteNotification: [
+                    "watch_term_keyword": "Aiko",
+                    "new_count": 1,
+                ]
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldTriggerPoll(
+                forRemoteNotification: [
+                    "preview_item": ["id": "youtube:1"],
+                ]
+            )
+        )
+    }
+
+    func testGenericRemoteNotificationStillTriggersPoll() {
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldTriggerPoll(forRemoteNotification: [:]))
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldTriggerPoll(
+                forRemoteNotification: [
+                    "aps": ["content-available": 1],
+                ]
             )
         )
     }
@@ -1876,6 +1939,7 @@ final class NetworkManagerTests: XCTestCase {
         MockURLProtocol.handler = nil
         MockURLProtocol.errorHandler = nil
         KeychainHelper.delete(key: "apns_device_token")
+        KeychainHelper.delete(key: "apns_device_environment")
         KeychainHelper.delete(key: "apns_device_secret")
         try super.tearDownWithError()
     }
@@ -2384,6 +2448,58 @@ final class NetworkManagerTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is URLError)
         }
+    }
+
+    func testTriggerBackgroundPollUsesDeviceScopedEndpointWhenTokenRegistered() async throws {
+        let token = String(repeating: "a", count: 64)
+        KeychainHelper.write(key: "apns_device_token", value: token)
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+
+        var capturedPath: String?
+        var capturedAuthHeader: String?
+        var capturedTimeout: TimeInterval?
+        var capturedBody: [String: Any]?
+        MockURLProtocol.handler = { req in
+            capturedPath = req.url?.path
+            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
+            capturedTimeout = req.timeoutInterval
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return (Data(), Self.response(status: 200))
+        }
+
+        try await NetworkManager.shared.triggerBackgroundPoll(timeout: 12)
+
+        XCTAssertEqual(capturedPath, "/api/devices/background-refresh")
+        XCTAssertNil(capturedAuthHeader)
+        XCTAssertEqual(capturedTimeout, 12)
+        XCTAssertEqual(capturedBody?["token"] as? String, token)
+        XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
+    }
+
+    func testTriggerBackgroundPollFallsBackToAdminPollWhenDeviceEndpointFails() async throws {
+        NetworkManager.shared.setAdminApiToken("admin-secret")
+        defer { NetworkManager.shared.setAdminApiToken(nil) }
+
+        var paths: [String] = []
+        var authHeaders: [String?] = []
+        MockURLProtocol.handler = { req in
+            let path = req.url?.path ?? ""
+            paths.append(path)
+            authHeaders.append(req.value(forHTTPHeaderField: "Authorization"))
+            if path == "/api/devices/background-refresh" {
+                return (Data(), Self.response(status: 404))
+            }
+            return (Data(), Self.response(status: 200))
+        }
+
+        try await NetworkManager.shared.triggerBackgroundPoll(timeout: 12)
+
+        XCTAssertEqual(paths, ["/api/devices/background-refresh", "/api/admin/poll"])
+        XCTAssertNil(authHeaders.first ?? nil)
+        XCTAssertEqual(authHeaders.last ?? nil, "Bearer admin-secret")
     }
 
     // Japanese text is returned unchanged without a network call.

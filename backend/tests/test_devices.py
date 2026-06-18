@@ -1,6 +1,8 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+from app.api import devices as devices_api
 from app.models import APNSDeviceToken
 
 _DEVICE_SECRET = "device-secret-123"
@@ -261,6 +263,96 @@ class TestDeviceScopedTestPush:
             json={"device_secret": "secret-secret-secret"},
         )
         assert r.status_code == 400
+
+
+class TestDeviceScopedBackgroundRefresh:
+    def test_rejects_unregistered_token(self, client):
+        r = client.post(
+            "/api/devices/background-refresh",
+            json={"token": "a" * 64, "device_secret": "secret-secret-secret"},
+        )
+        assert r.status_code == 404
+
+    def test_rejects_wrong_secret(self, client):
+        token = "a" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "sandbox", "device_secret": "correct-secret-123"},
+        )
+        r = client.post(
+            "/api/devices/background-refresh",
+            json={"token": token, "device_secret": "wrong-secret-123"},
+        )
+        assert r.status_code == 404
+
+    def test_runs_poll_for_registered_device(self, client):
+        token = "b" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        with patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll:
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll completed"}
+        mock_poll.assert_awaited_once()
+
+    def test_returns_busy_without_starting_second_poll(self, client):
+        token = "c" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "sandbox", "device_secret": "correct-secret-123"},
+        )
+
+        class BusyLock:
+            def locked(self):
+                return True
+
+        with patch("app.ingestion.scheduler._poll_lock", BusyLock()), \
+             patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll:
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll already running"}
+        mock_poll.assert_not_awaited()
+
+    def test_throttles_repeated_refresh_for_same_device(self, client):
+        token = "f" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        with patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll:
+            first = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+            second = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert first.status_code == 200
+        assert first.json() == {"status": "poll completed"}
+        assert second.status_code == 200
+        assert second.json() == {"status": "poll throttled"}
+        mock_poll.assert_awaited_once()
+
+    def test_refresh_throttle_prunes_stale_attempts(self):
+        now = datetime.now(timezone.utc)
+        devices_api._background_refresh_attempts.clear()
+        devices_api._background_refresh_attempts["stale-token"] = now - timedelta(minutes=11)
+
+        assert devices_api._recent_background_refresh_attempt("fresh-token", now) is False
+        assert "stale-token" not in devices_api._background_refresh_attempts
+        assert devices_api._background_refresh_attempts["fresh-token"] == now
 
 
 class TestListAPNSTokens:

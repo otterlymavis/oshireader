@@ -36,6 +36,7 @@ class TestPayload:
     def test_payload_structure(self):
         payload = _payload(self._term("Miku"), 3)
         assert payload["aps"]["alert"]["title"] == "Miku の新着"
+        assert payload["aps"]["content-available"] == 1
         assert payload["watch_term_keyword"] == "Miku"
         assert payload["new_count"] == 3
 
@@ -70,6 +71,7 @@ class TestPayload:
             },
         )
         assert payload["aps"]["mutable-content"] == 1
+        assert payload["aps"]["content-available"] == 1
         assert payload["aps"]["category"] == "OSHI_RESULT_PREVIEW"
         assert payload["aps"]["thread-id"] == "oshireader-1"
         assert payload["aps"]["target-content-id"] == "youtube:1"

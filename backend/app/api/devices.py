@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
@@ -13,6 +14,10 @@ from app.models import APNSDeviceToken
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
+
+_BACKGROUND_REFRESH_MIN_INTERVAL = timedelta(seconds=60)
+_BACKGROUND_REFRESH_ATTEMPT_TTL = timedelta(minutes=10)
+_background_refresh_attempts: dict[str, datetime] = {}
 
 
 def _normalize_token(token: str) -> str:
@@ -31,6 +36,44 @@ def _secret_matches(stored_secret: str | None, provided_secret: str) -> bool:
         return True
     # Upgrade tokens registered before secrets were stored as hashes.
     return secrets.compare_digest(stored_secret, provided_secret)
+
+
+def _find_authenticated_device(body: APNSDeviceTestPush, db: Session) -> APNSDeviceToken:
+    stored: APNSDeviceToken | None = None
+    if body.token:
+        token = _normalize_token(body.token)
+        if not token or len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
+            raise HTTPException(400, "Invalid APNs device token")
+        stored = db.get(APNSDeviceToken, token)
+    elif body.device_id:
+        stored = (
+            db.query(APNSDeviceToken)
+            .filter(
+                APNSDeviceToken.device_id == body.device_id,
+                APNSDeviceToken.environment == body.environment,
+            )
+            .order_by(APNSDeviceToken.last_seen_at.desc(), APNSDeviceToken.token.desc())
+            .first()
+        )
+    else:
+        raise HTTPException(400, "APNs device token or device_id is required")
+
+    if not stored or not _secret_matches(stored.device_secret, body.device_secret):
+        raise HTTPException(404, "APNs device token not registered")
+    return stored
+
+
+def _recent_background_refresh_attempt(token: str, now: datetime) -> bool:
+    stale_before = now - _BACKGROUND_REFRESH_ATTEMPT_TTL
+    for stored_token, attempted_at in list(_background_refresh_attempts.items()):
+        if attempted_at < stale_before:
+            _background_refresh_attempts.pop(stored_token, None)
+
+    last_attempt = _background_refresh_attempts.get(token)
+    if last_attempt and now - last_attempt < _BACKGROUND_REFRESH_MIN_INTERVAL:
+        return True
+    _background_refresh_attempts[token] = now
+    return False
 
 
 @router.post("/apns-token", response_model=APNSDeviceTokenOut, status_code=201)
@@ -57,30 +100,28 @@ def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)
 
 @router.post("/apns-test-push")
 async def send_device_test_push(body: APNSDeviceTestPush, db: Session = Depends(get_db)) -> dict:
-    stored: APNSDeviceToken | None = None
-    if body.token:
-        token = _normalize_token(body.token)
-        if not token or len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
-            raise HTTPException(400, "Invalid APNs device token")
-        stored = db.get(APNSDeviceToken, token)
-    elif body.device_id:
-        stored = (
-            db.query(APNSDeviceToken)
-            .filter(
-                APNSDeviceToken.device_id == body.device_id,
-                APNSDeviceToken.environment == body.environment,
-            )
-            .order_by(APNSDeviceToken.last_seen_at.desc(), APNSDeviceToken.token.desc())
-            .first()
-        )
-    else:
-        raise HTTPException(400, "APNs device token or device_id is required")
-
-    if not stored or not _secret_matches(stored.device_secret, body.device_secret):
-        raise HTTPException(404, "APNs device token not registered")
+    stored = _find_authenticated_device(body, db)
 
     from app.apns import send_test_push_to_device
     return await send_test_push_to_device(db, stored)
+
+
+@router.post("/background-refresh")
+async def request_device_background_refresh(body: APNSDeviceTestPush, db: Session = Depends(get_db)) -> dict:
+    stored = _find_authenticated_device(body, db)
+
+    from app.ingestion import scheduler as ingestion_scheduler
+
+    if ingestion_scheduler._poll_lock.locked():
+        return {"status": "poll already running"}
+    now = datetime.now(timezone.utc)
+    if _recent_background_refresh_attempt(stored.token, now):
+        return {"status": "poll throttled"}
+    try:
+        await asyncio.wait_for(ingestion_scheduler.poll_once(), timeout=20.0)
+        return {"status": "poll completed"}
+    except asyncio.TimeoutError:
+        return {"status": "poll timed out (partial progress saved)"}
 
 
 @router.delete("/apns-token/{token}", status_code=204)

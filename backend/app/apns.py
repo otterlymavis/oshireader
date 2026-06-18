@@ -187,6 +187,7 @@ def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> d
         "aps": {
             "alert": alert,
             "sound": "default",
+            "content-available": 1,
             "mutable-content": 1,
             "category": "OSHI_RESULT_PREVIEW",
             "thread-id": f"oshireader-{term.id}",
