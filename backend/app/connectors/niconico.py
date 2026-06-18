@@ -35,13 +35,13 @@ class NicoNicoConnector(BaseConnector):
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         items = await self._fetch_rss(keyword)
-        if not items:
+        if items is None:
             items = await self._fetch_tag_rss(keyword)
         if not items:
             items = await self._fetch_gnews(keyword)
         return items
 
-    async def _fetch_rss(self, keyword: str) -> list[SourceItemCreate]:
+    async def _fetch_rss(self, keyword: str) -> list[SourceItemCreate] | None:
         """NicoNico keyword search RSS feed (newest first)."""
         encoded = quote(keyword)
         url = f"https://www.nicovideo.jp/search/{encoded}?sort=f&order=d&rss=2.0&lang=ja-jp"
@@ -49,16 +49,16 @@ class NicoNicoConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=_HEADERS) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
-                    log.warning("NicoNico search RSS returned status %d", resp.status_code)
-                    return []
+                    log.debug("NicoNico search RSS returned status %d", resp.status_code)
+                    return None
             feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
-            log.warning("NicoNico search RSS fetch error: %s", exc)
-            return []
+            log.debug("NicoNico search RSS fetch error: %s", exc)
+            return None
 
         return self._parse_feed(feed, keyword, "rss_search")
 
-    async def _fetch_tag_rss(self, keyword: str) -> list[SourceItemCreate]:
+    async def _fetch_tag_rss(self, keyword: str) -> list[SourceItemCreate] | None:
         """NicoNico tag RSS — finds videos where keyword is an exact tag."""
         encoded = quote(keyword)
         url = f"https://www.nicovideo.jp/tag/{encoded}?sort=f&order=d&rss=2.0&lang=ja-jp"
@@ -66,12 +66,12 @@ class NicoNicoConnector(BaseConnector):
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=_HEADERS) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
-                    log.warning("NicoNico tag RSS returned status %d", resp.status_code)
-                    return []
+                    log.debug("NicoNico tag RSS returned status %d", resp.status_code)
+                    return None
             feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
-            log.warning("NicoNico tag RSS fetch error: %s", exc)
-            return []
+            log.debug("NicoNico tag RSS fetch error: %s", exc)
+            return None
 
         return self._parse_feed(feed, keyword, "rss_tag")
 

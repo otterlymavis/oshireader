@@ -14,7 +14,7 @@ from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
-from app.connectors.news_sites import CinemaCafeConnector, LivedoorConnector, RealSoundConnector
+from app.connectors.news_sites import AmebloConnector, CinemaCafeConnector, LivedoorConnector, RealSoundConnector
 from app.connectors.niconico import NicoNicoConnector
 from app.connectors.note import NoteConnector
 from app.connectors.oricon import OriconConnector
@@ -775,6 +775,75 @@ class TestRSSConnectorFetch:
 
 
 class TestNewsSiteFetch:
+    def _ameba_html(self, entries):
+        state = {"blogEntry": {"blogEntryMap": {str(entry["entryId"]): entry for entry in entries}}}
+        return f"<html><script>window.__STATE__={_json_mod.dumps(state, ensure_ascii=False)};</script></html>"
+
+    @pytest.mark.asyncio
+    async def test_ameblo_fetches_direct_search_entries(self):
+        html = self._ameba_html([
+            {
+                "entryId": 12969666351,
+                "amebaId": "ps-jj-myonsun",
+                "entryCreatedDatetime": 1717200000000,
+                "blogTitle": "クムルクダ子のブログ",
+                "entryTitle": "日本映画『国宝』視聴♪",
+                "entryContent": "キャスト:<span>吉沢亮</span>(立花喜久雄)",
+                "firstImageUrl": "https://stat.ameba.jp/image.jpg",
+            }
+        ])
+        connector = AmebloConnector()
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=html)), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock()) as gnews:
+            result = await connector.fetch("吉沢亮", "all_info")
+        assert len(result) == 1
+        assert result[0].platform == "ameblo"
+        assert result[0].item_id == "12969666351"
+        assert result[0].url == "https://ameblo.jp/ps-jj-myonsun/entry-12969666351.html"
+        assert "吉沢亮" in result[0].title
+        assert result[0].content_text == "キャスト: 吉沢亮 (立花喜久雄)"
+        assert result[0].author == "クムルクダ子のブログ"
+        assert result[0].thumbnail_url == "https://stat.ameba.jp/image.jpg"
+        assert result[0].raw_payload["source"] == "ameba_search"
+        gnews.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ameblo_filters_direct_entries_without_keyword(self):
+        html = self._ameba_html([
+            {
+                "entryId": 129,
+                "amebaId": "blog",
+                "entryCreatedDatetime": 1717200000000,
+                "blogTitle": "映画ブログ",
+                "entryTitle": "日本映画『国宝』視聴♪",
+                "entryContent": "横浜流星の感想",
+            }
+        ])
+        connector = AmebloConnector()
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=html)), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock(return_value=[])):
+            result = await connector.fetch("吉沢亮", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_ameblo_falls_back_to_google_news_when_direct_search_empty(self):
+        connector = AmebloConnector()
+        fallback = [
+            SourceItemCreate(
+                platform="ameblo",
+                item_id="gnews-1",
+                url="https://news.google.com/rss/articles/1",
+                published_at=datetime.now(timezone.utc),
+                media_type="article",
+                title="吉沢亮のブログ記事",
+            )
+        ]
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text="<html></html>")), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock(side_effect=[fallback])) as gnews:
+            result = await connector.fetch("吉沢亮", "all_info")
+        assert result == fallback
+        gnews.assert_awaited_once_with("吉沢亮")
+
     @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
         fake_feed = _FakeFeed([

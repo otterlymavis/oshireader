@@ -21,9 +21,9 @@ _HEADERS = {
 
 # Curated public RSS feeds — Japanese entertainment / idol news, no login needed.
 # sponichi and hochi removed their RSS feeds; natalie/tv removed their TV section feed.
+# natalie/eiga currently returns HTTP 500, so use the healthy public feeds.
 FEEDS: list[tuple[str, str, str]] = [
     ("news", "natalie", "https://natalie.mu/music/feed/news"),
-    ("news", "natalie", "https://natalie.mu/eiga/feed/news"),
     ("news", "natalie", "https://natalie.mu/stage/feed/news"),
 ]
 
@@ -43,7 +43,7 @@ class RSSConnector(BaseConnector):
                 async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=_HEADERS) as client:
                     resp = await client.get(url)
                     if not resp.is_success:
-                        log.warning("RSS feed returned status=%d source=%s", resp.status_code, source)
+                        log.debug("RSS feed returned status=%d source=%s", resp.status_code, source)
                         return
                 feed = await asyncio.to_thread(feedparser.parse, resp.content)
                 for entry in feed.entries:
@@ -75,10 +75,11 @@ class RSSConnector(BaseConnector):
                         )
                     )
             except Exception as exc:
-                log.warning("RSS feed failed source=%s: %s", source, exc)
+                log.debug("RSS feed failed source=%s feed_url=%s: %s", source, url, exc)
 
         await asyncio.gather(*[_one(platform, source, url) for platform, source, url in FEEDS])
         if not results:
+            log.debug("RSS feeds returned no results for keyword=%r; using Google News history fallback", keyword)
             results = await self._fetch_google_news_history(keyword)
         return results
 
