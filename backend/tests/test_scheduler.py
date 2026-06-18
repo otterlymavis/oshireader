@@ -7,13 +7,14 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 from app.database import Base
 from unittest.mock import patch
 
 from app.ingestion.scheduler import _build_connectors, _fetch_one, _prune_old_items, _search_terms_for
-from app.connectors.news_sites import CinemaCafeConnector, RealSoundConnector
+from app.connectors import news_sites
 from app.connectors.youtube import YouTubeConnector
 from app.connectors.twitter import TwitterConnector
 from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
@@ -278,14 +279,20 @@ class TestPruneExceptionHandling:
 
 
 class TestBuildConnectors:
-    def test_strict_news_site_connectors_include_newer_sites(self, db):
+    def test_all_google_news_site_connectors_are_registered(self, db):
         with patch("app.ingestion.scheduler.settings") as s:
             s.youtube_api_key = ""
             s.twitter_bearer_token = ""
             connectors = _build_connectors(db)
 
-        assert any(isinstance(c, RealSoundConnector) for c in connectors)
-        assert any(isinstance(c, CinemaCafeConnector) for c in connectors)
+        registered = {type(connector).PLATFORM for connector in connectors}
+        expected = {
+            cls.PLATFORM
+            for _, cls in inspect.getmembers(news_sites, inspect.isclass)
+            if issubclass(cls, news_sites._GNewsSiteConnector)
+            and cls is not news_sites._GNewsSiteConnector
+        }
+        assert expected <= registered
 
     def test_uses_youtube_api_key_from_db_when_env_is_empty(self, db):
         cred = PlatformCredential(platform="youtube", api_key="db-yt-key")
