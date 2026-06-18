@@ -544,6 +544,21 @@ final class OshiReaderTests: XCTestCase {
 
         XCTAssertTrue(db.queryFeed(keyword: "吉沢亮", days: 30).isEmpty)
     }
+
+    func testLocalGoogleNewsFallbacksCoverStrictArticleSources() throws {
+        let backendOnly = Set(["note", "girlschannel", "togetter"])
+        let rssFallback = Set(["news"])
+        let expected = Set(
+            Platform.all
+                .filter { $0.usesStrictKeywordMatching && !$0.isMediaPlatform }
+                .map(\.id)
+        )
+        .subtracting(backendOnly)
+        .subtracting(rssFallback)
+        let actual = Set(NetworkManager.googleNewsFallbackSites.map(\.platform))
+
+        XCTAssertEqual(actual, expected)
+    }
     
     // MARK: - skipDateCutoff flag: forum platforms always pass date filter
     func testSkipDateCutoffAllowsOldForumItems() throws {

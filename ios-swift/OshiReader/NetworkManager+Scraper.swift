@@ -242,30 +242,41 @@ extension NetworkManager {
 
     // MARK: - Consolidated Local Fallback
 
+    static let googleNewsFallbackSites: [(site: String, platform: String)] = [
+        ("news.yahoo.co.jp", "yahoonews"),
+        ("mdpr.jp", "mdpr"),
+        ("oricon.co.jp", "oricon"),
+        // NOTE: girlschannel is intentionally omitted because the backend serves it
+        // via direct scrape, and scraping it here too creates duplicate per-oshi rows.
+        ("5ch.net", "5ch"),
+        // Newer sources often only populate from the device's own network.
+        ("smartnews.com", "smartnews"),
+        ("ameblo.jp", "ameblo"),
+        ("dot.asahi.com", "aera"),
+        ("hochi.news", "hochi"),
+        ("sponichi.co.jp", "sponichi"),
+        ("news.livedoor.com", "livedoor"),
+        ("mantan-web.jp", "mantanweb"),
+        ("barks.jp", "barks"),
+        ("realsound.jp", "realsound"),
+        ("cinemacafe.net", "cinemacafe"),
+    ]
+
     func scrapeLocalFallbacks(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
         let tag = tagKeyword ?? keyword
         return await withTaskGroup(of: [FeedItem].self) { group in
             group.addTask { await self.scrapeRSSFallback(keyword: keyword, tagKeyword: tag) }
             group.addTask { await self.scrapeNiconicoRSS(keyword: keyword, tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.yahoo.co.jp", platform: "yahoonews", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mdpr.jp", platform: "mdpr", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "oricon.co.jp", platform: "oricon", tagKeyword: tag) }
-            // NOTE: girlschannel is intentionally omitted — the backend serves it via
-            // direct scrape (its datacenter IP isn't blocked there), and scraping it
-            // here too would create duplicates (the per-oshi keyword view doesn't dedupe).
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "5ch.net", platform: "5ch", tagKeyword: tag) }
-            // Newer sources — the backend's datacenter IP is blocked by Google News (503),
-            // so these only populate when fetched from the device's own network.
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "smartnews.com", platform: "smartnews", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "ameblo.jp", platform: "ameblo", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "dot.asahi.com", platform: "aera", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "hochi.news", platform: "hochi", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "sponichi.co.jp", platform: "sponichi", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "news.livedoor.com", platform: "livedoor", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "mantan-web.jp", platform: "mantanweb", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "barks.jp", platform: "barks", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "realsound.jp", platform: "realsound", tagKeyword: tag) }
-            group.addTask { await self.scrapeGoogleNewsSite(keyword: keyword, site: "cinemacafe.net", platform: "cinemacafe", tagKeyword: tag) }
+            for fallback in Self.googleNewsFallbackSites {
+                group.addTask {
+                    await self.scrapeGoogleNewsSite(
+                        keyword: keyword,
+                        site: fallback.site,
+                        platform: fallback.platform,
+                        tagKeyword: tag
+                    )
+                }
+            }
             var all = [FeedItem]()
             for await items in group { all.append(contentsOf: items) }
             return all
