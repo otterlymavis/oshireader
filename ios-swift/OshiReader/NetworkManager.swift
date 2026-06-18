@@ -1,11 +1,20 @@
 import Foundation
 
+enum APIClientError: Error {
+    case httpStatus(Int)
+}
+
 class NetworkManager {
     static let shared = NetworkManager()
     private init() {}
 
     var isUITesting: Bool {
         ProcessInfo.processInfo.arguments.contains("--uitesting")
+    }
+
+    var isUnitTesting: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
     }
 
     // MARK: - Backend URL Config
@@ -55,11 +64,52 @@ class NetworkManager {
     }
 
     var apnsEnvironment: String {
+        if let provisionedEnvironment = provisionedAPNSEnvironment() {
+            return provisionedEnvironment
+        }
+        if let configuredEnvironment = Self.normalizedAPNSEnvironment(
+            configuredBundleValue(forKey: "OshiReaderAPNSEnvironment")
+        ) {
+            return configuredEnvironment
+        }
         #if DEBUG
         return "sandbox"
         #else
         return "production"
         #endif
+    }
+
+    static func normalizedAPNSEnvironment(_ value: String?) -> String? {
+        guard let value else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "development", "sandbox":
+            return "sandbox"
+        case "production":
+            return "production"
+        default:
+            return nil
+        }
+    }
+
+    private func provisionedAPNSEnvironment() -> String? {
+        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .isoLatin1),
+              let plistStart = text.range(of: "<plist"),
+              let plistEnd = text.range(of: "</plist>")
+        else { return nil }
+
+        let plistXML = String(text[plistStart.lowerBound..<plistEnd.upperBound])
+        guard let plistData = plistXML.data(using: .utf8),
+              let plist = try? PropertyListSerialization.propertyList(
+                from: plistData,
+                options: [],
+                format: nil
+              ) as? [String: Any],
+              let entitlements = plist["Entitlements"] as? [String: Any]
+        else { return nil }
+
+        return Self.normalizedAPNSEnvironment(entitlements["aps-environment"] as? String)
     }
 
     func applyAdminAuthorization(to request: inout URLRequest) {

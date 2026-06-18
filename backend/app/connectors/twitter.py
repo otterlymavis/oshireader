@@ -3,7 +3,7 @@ from datetime import datetime
 
 import httpx
 
-from app.connectors.base import BaseConnector, SourceItemCreate
+from app.connectors.base import BaseConnector, SourceItemCreate, contains_keyword
 from app.models import CollectionMode
 
 log = logging.getLogger(__name__)
@@ -49,8 +49,10 @@ class TwitterConnector(BaseConnector):
 
         items: list[SourceItemCreate] = []
         for tweet in data.get("data", []):
-            tweet_id = tweet["id"]
             user = users.get(tweet.get("author_id", ""), {})
+            if not contains_keyword(keyword, tweet.get("text"), user.get("name"), user.get("username")):
+                continue
+            tweet_id = tweet["id"]
             username = user.get("username", "")
             created = datetime.fromisoformat(tweet["created_at"].replace("Z", "+00:00"))
 

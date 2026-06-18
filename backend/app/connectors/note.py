@@ -7,7 +7,13 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
+from app.connectors.base import (
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    parse_feed_date,
+    title_contains_keyword,
+)
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +52,11 @@ class NoteConnector(BaseConnector):
             link = entry.get("link", "")
             if not link:
                 continue
+            title = entry.get("title")
+            summary = entry.get("summary") or ""
+            author = entry.get("author")
+            if not title_contains_keyword(keyword, title):
+                continue
             item_id = entry.get("id") or link.rstrip("/").split("/")[-1] or link
             thumb = None
             for enc in entry.get("enclosures", []):
@@ -62,9 +73,9 @@ class NoteConnector(BaseConnector):
                     url=link,
                     published_at=parse_feed_date(entry),
                     media_type="article",
-                    author=entry.get("author"),
-                    title=entry.get("title"),
-                    content_text=entry.get("summary") or None,
+                    author=author,
+                    title=title,
+                    content_text=summary or None,
                     thumbnail_url=thumb,
                     raw_payload={"feed_url": url},
                 )

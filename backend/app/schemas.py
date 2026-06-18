@@ -160,6 +160,26 @@ class APNSDeviceTestPush(BaseModel):
     device_secret: str = Field(min_length=16, max_length=200)
 
 
+class ClientDiagnosticEvent(BaseModel):
+    strategy: str = Field(max_length=80)
+    status: str = Field(max_length=40)
+    item_count: int = Field(default=0, ge=0, le=10000)
+    added_count: int = Field(default=0, ge=0, le=10000)
+    detail: Optional[str] = Field(default=None, max_length=500)
+
+
+class ClientDiagnosticIn(BaseModel):
+    reason: str = Field(max_length=120)
+    environment: str = Field(max_length=80)
+    api_base: str = Field(max_length=300)
+    app_version: Optional[str] = Field(default=None, max_length=80)
+    build: Optional[str] = Field(default=None, max_length=80)
+    active_terms_count: int = Field(default=0, ge=0, le=1000)
+    subscribed_platforms: list[str] = Field(default=[], max_length=80)
+    cached_feed_count: int = Field(default=0, ge=0, le=10000)
+    events: list[ClientDiagnosticEvent] = Field(default=[], max_length=80)
+
+
 class FeedItemOut(BaseModel):
     match_id: int
     watch_term_id: int

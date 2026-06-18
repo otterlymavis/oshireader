@@ -486,10 +486,16 @@ struct AvatarEditorView: View {
         guard !layers.isEmpty, !settingWallpaper else { return }
         settingWallpaper = true
         defer { settingWallpaper = false }
+
+        db.setOshiComposition(keyword: keyword, layers: layers)
+        if let topLayer = layers.sorted(by: { $0.zIndex < $1.zIndex }).last {
+            db.setOshiAvatar(keyword: keyword, imageUrl: topLayer.imageUrl)
+        }
+
         // Flatten the whole composition (all layers, with their position / scale / crop /
         // rotation) into a single image and use that as the wallpaper — not just the top
         // sticker. Falls back to the top layer's URL if rendering fails.
-        if let fileUrl = await renderCompositionToFile(layers: layers, baseSize: baseSize) {
+        if let fileUrl = await CompositionRenderer.renderToFile(layers: layers, baseSize: baseSize) {
             db.setWallpaper(url: fileUrl.absoluteString)
         } else if let topLayer = layers.sorted(by: { $0.zIndex < $1.zIndex }).last {
             db.setWallpaper(url: topLayer.imageUrl)
@@ -557,26 +563,42 @@ struct AvatarEditorView: View {
         .accessibilityIdentifier(a11y ?? "")
     }
 
-    // MARK: - Composition Flattening (for wallpaper)
+}
 
-    /// Downloads every layer's image, renders the full composition to a PNG on disk,
-    /// and returns its file URL. Runs on the main actor because ImageRenderer requires it.
+// Flattens an avatar composition (all layers, with position / scale / crop / rotation)
+// into a single image. Mirrors the editor canvas geometry on a 300×300 logical canvas.
+// Kept as a standalone helper so it can be unit-tested without the full editor view.
+enum CompositionRenderer {
+    /// Renders the composition to a UIImage. MainActor because ImageRenderer requires it.
     @MainActor
-    private func renderCompositionToFile(layers: [AvatarLayer], baseSize: Double) async -> URL? {
-        var images: [String: UIImage] = [:]
-        for layer in layers where images[layer.imageUrl] == nil {
-            if let img = await Self.loadImage(layer.imageUrl) {
-                images[layer.imageUrl] = img
-            }
-        }
+    static func renderImage(
+        layers: [AvatarLayer],
+        images: [String: UIImage],
+        baseSize: Double,
+        canvas: Double = 300,
+        scale: CGFloat = 3
+    ) -> UIImage? {
         guard !images.isEmpty else { return nil }
-
-        let canvas = 300.0
         let renderer = ImageRenderer(
             content: _CompositionCanvas(layers: layers, images: images, baseSize: baseSize, canvas: canvas)
         )
-        renderer.scale = 3.0  // ~900×900 output
-        guard let image = renderer.uiImage, let data = image.pngData() else { return nil }
+        renderer.scale = scale
+        renderer.isOpaque = false
+        return renderer.uiImage
+    }
+
+    /// Downloads every layer image, renders the composition, writes a PNG to Documents,
+    /// and returns its file URL. Returns nil if no layer image could be loaded/rendered.
+    @MainActor
+    static func renderToFile(layers: [AvatarLayer], baseSize: Double) async -> URL? {
+        var images: [String: UIImage] = [:]
+        for layer in layers where images[layer.imageUrl] == nil {
+            if let img = await loadImage(layer.imageUrl) {
+                images[layer.imageUrl] = img
+            }
+        }
+        guard let image = renderImage(layers: layers, images: images, baseSize: baseSize),
+              let data = image.pngData() else { return nil }
 
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         // Clean up previous wallpaper renders so they don't accumulate.
@@ -585,7 +607,7 @@ struct AvatarEditorView: View {
                 try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
             }
         }
-        // Unique filename so AsyncImage / UIImage don't serve a stale cached copy.
+        // Unique filename so a cached UIImage isn't served for a new wallpaper.
         let url = dir.appendingPathComponent("oshi_wallpaper_\(Int(Date().timeIntervalSince1970)).png")
         do {
             try data.write(to: url)
@@ -596,7 +618,7 @@ struct AvatarEditorView: View {
         }
     }
 
-    private static func loadImage(_ urlString: String) async -> UIImage? {
+    static func loadImage(_ urlString: String) async -> UIImage? {
         guard let url = URL(string: urlString) else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -607,16 +629,17 @@ struct AvatarEditorView: View {
     }
 }
 
-// Flattened, non-interactive render of an avatar composition — mirrors the editor
-// canvas geometry (300×300 logical) so the wallpaper matches what the user arranged.
-private struct _CompositionCanvas: View {
+// Non-interactive render of a composition. Layers are placed by their top-left (x, y)
+// via offset from the top-leading corner — more reliable under ImageRenderer than
+// .position — matching the editor canvas exactly.
+struct _CompositionCanvas: View {
     let layers: [AvatarLayer]
     let images: [String: UIImage]
     let baseSize: Double
     let canvas: Double
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             Color.clear.frame(width: canvas, height: canvas)
             ForEach(layers.sorted(by: { $0.zIndex < $1.zIndex })) { layer in
                 let size = baseSize * layer.scale
@@ -631,11 +654,10 @@ private struct _CompositionCanvas: View {
                         .frame(width: size, height: size)
                         .clipped()
                         .rotationEffect(Angle(degrees: rotation))
-                        .frame(width: size, height: size)
-                        .position(x: layer.x + size / 2.0, y: layer.y + size / 2.0)
+                        .offset(x: layer.x, y: layer.y)
                 }
             }
         }
-        .frame(width: canvas, height: canvas)
+        .frame(width: canvas, height: canvas, alignment: .topLeading)
     }
 }

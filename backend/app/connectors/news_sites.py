@@ -12,7 +12,13 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
+from app.connectors.base import (
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    parse_feed_date,
+    title_contains_keyword,
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +62,10 @@ class _GNewsSiteConnector(BaseConnector):
             title = (entry.get("title") or "").strip()
             if self.TITLE_SUFFIX_RE:
                 title = self.TITLE_SUFFIX_RE.sub("", title).strip()
+            summary = entry.get("summary") or ""
             if not title:
+                continue
+            if not title_contains_keyword(keyword, title):
                 continue
             items.append(
                 SourceItemCreate(
@@ -66,7 +75,7 @@ class _GNewsSiteConnector(BaseConnector):
                     published_at=parse_feed_date(entry),
                     media_type="article",
                     title=title,
-                    content_text=entry.get("summary") or None,
+                    content_text=summary or None,
                     raw_payload={"site": self.SITE, "keyword": keyword},
                 )
             )
@@ -74,7 +83,6 @@ class _GNewsSiteConnector(BaseConnector):
 
     async def _fetch_direct_rss(self, rss_url: str, keyword: str) -> list[SourceItemCreate]:
         """Fetch a direct RSS feed and keyword-filter the entries."""
-        kw = keyword.lower()
         try:
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
                 resp = await client.get(rss_url)
@@ -91,7 +99,7 @@ class _GNewsSiteConnector(BaseConnector):
         for entry in feed.entries:
             title = (entry.get("title") or "").strip()
             summary = entry.get("summary") or ""
-            if kw not in title.lower() and kw not in summary.lower():
+            if not title_contains_keyword(keyword, title):
                 continue
             link = entry.get("link", "")
             if not link:

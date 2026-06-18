@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.database import get_db
-from app.models import Match, SourceItem, WatchTerm
+from app.models import BackendEvent, Match, SourceItem, WatchTerm
 
 
 class TestGetDb:
@@ -25,6 +25,35 @@ class TestHealth:
         assert r.json() == {"status": "ok"}
 
 
+class TestClientDiagnostics:
+    def test_client_diagnostics_accepts_refresh_report(self, client, caplog):
+        payload = {
+            "reason": "feed_refresh_no_results_after_fallbacks",
+            "environment": "Debug",
+            "api_base": "http://127.0.0.1:8000",
+            "app_version": "1.0",
+            "build": "1",
+            "active_terms_count": 1,
+            "subscribed_platforms": ["youtube", "news"],
+            "cached_feed_count": 0,
+            "events": [
+                {
+                    "strategy": "backend_feed_days_90",
+                    "status": "empty",
+                    "item_count": 0,
+                    "added_count": 0,
+                    "detail": None,
+                }
+            ],
+        }
+
+        r = client.post("/api/client-diagnostics", json=payload)
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "received"}
+        assert "client diagnostic reason=feed_refresh_no_results_after_fallbacks" in caplog.text
+
+
 class TestAdminStats:
     def test_stats_empty_db(self, client):
         r = client.get("/api/admin/stats")
@@ -35,6 +64,7 @@ class TestAdminStats:
         assert data["watch_terms"] == []
         assert data["items_by_platform"] == {}
         assert data["apns"]["backend_public_url"]
+        assert data["recent_events"] == []
 
     def test_stats_counts_reflect_db_content(self, client, db_session):
         term = WatchTerm(keyword="Aiko")
@@ -80,6 +110,23 @@ class TestAdminStats:
         data = r.json()
         assert data["items_by_platform"]["youtube"] == 2
         assert data["items_by_platform"]["twitter"] == 1
+
+    def test_stats_includes_recent_backend_events(self, client, db_session):
+        db_session.add(BackendEvent(
+            kind="apns",
+            status="attempted",
+            message="APNs notification attempted",
+            payload={"new_count": 2, "device_count": 1},
+        ))
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        event = r.json()["recent_events"][0]
+        assert event["kind"] == "apns"
+        assert event["status"] == "attempted"
+        assert event["payload"] == {"new_count": 2, "device_count": 1}
 
 
 class TestAdminPoll:
@@ -185,3 +232,43 @@ class TestAdminTestFetch:
             r = client.get("/api/admin/test-fetch")
         assert r.status_code == 200
         assert r.json() == {}
+
+    def test_test_fetch_does_not_count_non_matching_connector_results(self, client):
+        from app.connectors.base import SourceItemCreate
+
+        mock_item = SourceItemCreate(
+            platform="youtube", item_id="v1",
+            url="https://yt.be/v1",
+            published_at=datetime.now(timezone.utc),
+            media_type="video",
+            title="unrelated video",
+        )
+        mock_connector = MagicMock()
+        mock_connector.PLATFORM = "youtube"
+        mock_connector.fetch = AsyncMock(return_value=[mock_item])
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]):
+            r = client.get("/api/admin/test-fetch", params={"keyword": "Aiko"})
+
+        assert r.status_code == 200
+        assert r.json() == {"youtube": 0}
+
+    def test_test_fetch_counts_matching_connector_results(self, client):
+        from app.connectors.base import SourceItemCreate
+
+        mock_item = SourceItemCreate(
+            platform="youtube", item_id="v1",
+            url="https://yt.be/v1",
+            published_at=datetime.now(timezone.utc),
+            media_type="video",
+            title="Aiko video",
+        )
+        mock_connector = MagicMock()
+        mock_connector.PLATFORM = "youtube"
+        mock_connector.fetch = AsyncMock(return_value=[mock_item])
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]):
+            r = client.get("/api/admin/test-fetch", params={"keyword": "Aiko"})
+
+        assert r.status_code == 200
+        assert r.json() == {"youtube": 1}

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+import unicodedata
 
 import feedparser
 
@@ -20,6 +21,22 @@ def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
             except Exception:
                 pass
     return datetime.now(timezone.utc)
+
+
+def contains_keyword(keyword: str, *values: object) -> bool:
+    needle = unicodedata.normalize("NFKC", keyword.strip()).casefold()
+    if not needle:
+        return False
+    return any(
+        needle in unicodedata.normalize("NFKC", str(value)).casefold()
+        for value in values
+        if value
+    )
+
+
+def title_contains_keyword(keyword: str, title: object) -> bool:
+    """Use for feed/search results where summaries can contain unrelated cluster text."""
+    return contains_keyword(keyword, title)
 
 
 @dataclass

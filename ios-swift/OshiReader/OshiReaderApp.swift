@@ -10,7 +10,11 @@ struct OshiReaderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            if NetworkManager.shared.isUnitTesting {
+                Color.clear
+            } else {
+                ContentView()
+            }
         }
     }
 }

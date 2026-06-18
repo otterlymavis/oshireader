@@ -5,16 +5,30 @@ on:
     - cron: '*/15 * * * *'  # every 15 minutes
   workflow_dispatch:          # allow manual trigger from GitHub Actions tab
 
+concurrency:
+  group: poll-feed
+  cancel-in-progress: false
+
 jobs:
   poll:
     runs-on: ubuntu-latest
+    env:
+      BACKEND_URL: https://oshireader.onrender.com
+      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
     steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$ADMIN_API_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
       - name: Trigger backend poll
         run: |
           BODY=$(mktemp)
-          STATUS=$(curl -s -o "$BODY" -w "%{http_code} time=%{time_total}s" -X POST \
-            https://oshireader.onrender.com/api/admin/poll \
-            -H "Authorization: Bearer ${{ secrets.ADMIN_API_TOKEN }}" \
+          STATUS=$(curl -sS -o "$BODY" -w "%{http_code} time=%{time_total}s" -X POST \
+            "$BACKEND_URL/api/admin/poll" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             -H "Content-Type: application/json" \
             --max-time 120)
           echo "Response status: $STATUS"
@@ -24,3 +38,34 @@ jobs:
             echo "Poll request failed with status $CODE"
             exit 1
           fi
+
+      - name: Print backend notification diagnostics
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl -sS -o "$BODY" -w "%{http_code}" \
+            "$BACKEND_URL/api/admin/stats" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+            --max-time 30)
+          if [ "$STATUS" != "200" ]; then
+            echo "Stats request failed with status $STATUS"
+            echo "Response body: $(cat "$BODY")"
+            exit 1
+          fi
+          python3 - "$BODY" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              data = json.load(fh)
+
+          apns = data.get("apns", {})
+          summary = {
+              "items_total": data.get("items_total"),
+              "matches_total": data.get("matches_total"),
+              "apns_configured": apns.get("configured"),
+              "apns_server_environment": apns.get("server_environment"),
+              "device_tokens_by_environment": apns.get("device_tokens_by_environment", {}),
+              "recent_events": data.get("recent_events", [])[:10],
+          }
+          print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+          PY

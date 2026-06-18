@@ -1,21 +1,9 @@
 from __future__ import annotations
 
-import unicodedata
-
 from sqlalchemy import text
 
+from app.connectors.base import contains_keyword
 from app.models import Match, SourceItem, WatchTerm
-
-
-def contains_keyword(keyword: str, *values: object) -> bool:
-    needle = unicodedata.normalize("NFKC", keyword.strip()).casefold()
-    if not needle:
-        return False
-    return any(
-        needle in unicodedata.normalize("NFKC", str(value)).casefold()
-        for value in values
-        if value
-    )
 
 
 def primary_text_matches(search_term: str, item) -> bool:

@@ -1,5 +1,59 @@
 import SwiftUI
 
+private struct FeedRefreshAttempt {
+    let strategy: String
+    let status: String
+    let itemCount: Int
+    let addedCount: Int
+    let detail: String?
+
+    var diagnosticEvent: ClientDiagnosticEvent {
+        ClientDiagnosticEvent(
+            strategy: strategy,
+            status: status,
+            item_count: itemCount,
+            added_count: addedCount,
+            detail: detail
+        )
+    }
+}
+
+private struct FeedRefreshReport {
+    var attempts: [FeedRefreshAttempt] = []
+    var backendReturnedItems = false
+    var addedCount = 0
+
+    mutating func record(
+        strategy: String,
+        status: String,
+        itemCount: Int = 0,
+        addedCount: Int = 0,
+        detail: String? = nil
+    ) {
+        attempts.append(FeedRefreshAttempt(
+            strategy: strategy,
+            status: status,
+            itemCount: itemCount,
+            addedCount: addedCount,
+            detail: detail
+        ))
+        if itemCount > 0 { backendReturnedItems = true }
+        self.addedCount += addedCount
+    }
+
+    mutating func append(_ attempt: FeedRefreshAttempt) {
+        attempts.append(attempt)
+        if attempt.itemCount > 0 { backendReturnedItems = true }
+        addedCount += attempt.addedCount
+    }
+
+    mutating func append(_ other: FeedRefreshReport) {
+        attempts.append(contentsOf: other.attempts)
+        backendReturnedItems = backendReturnedItems || other.backendReturnedItems
+        addedCount += other.addedCount
+    }
+}
+
 struct FeedView: View {
     @StateObject private var db = LocalDB.shared
     @StateObject private var theme = ThemeManager.shared
@@ -72,29 +126,11 @@ struct FeedView: View {
         ZStack {
             theme.colors.bg.ignoresSafeArea()
             
-            // Custom Wallpaper (from localDB) — may be a remote URL or a locally
-            // rendered composition file (file://). Load local files directly since
-            // AsyncImage is unreliable with file URLs.
-            if let wallpaperUrl = db.wallpaper, let url = URL(string: wallpaperUrl) {
-                if url.isFileURL {
-                    if let ui = UIImage(contentsOfFile: url.path) {
-                        Image(uiImage: ui)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .opacity(0.12)
-                            .ignoresSafeArea()
-                    }
-                } else {
-                    AsyncImage(url: url) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .opacity(0.12)
-                            .ignoresSafeArea()
-                    } placeholder: {
-                        EmptyView()
-                    }
-                }
+            // Custom Wallpaper (from localDB) — a remote URL or a locally rendered
+            // composition file (file://). Loaded off the main thread and cached so the
+            // feed body doesn't read disk on every render.
+            if let wallpaperUrl = db.wallpaper {
+                WallpaperBackgroundView(urlString: wallpaperUrl)
             }
             
             if horizontalSizeClass == .regular {
@@ -310,12 +346,16 @@ struct FeedView: View {
                 }
 
                 // Main Feed List
-                if isRefreshing && filteredItems.isEmpty {
+                let currentFilteredItems = filteredItems
+                let currentVisibleItems = Array(currentFilteredItems.prefix(displayedCount))
+                let currentCanLoadMore = displayedCount < min(currentFilteredItems.count, 100)
+
+                if isRefreshing && currentFilteredItems.isEmpty {
                     Spacer()
                     ProgressView()
                         .tint(theme.colors.primary)
                     Spacer()
-                } else if filteredItems.isEmpty {
+                } else if currentFilteredItems.isEmpty {
                     Spacer()
                     VStack(spacing: 12) {
                         Text("≽՞•ﻌ•՞≼")
@@ -332,7 +372,7 @@ struct FeedView: View {
                     Spacer()
                 } else {
                     List {
-                        ForEach(visibleItems) { item in
+                        ForEach(currentVisibleItems) { item in
                             if horizontalSizeClass == .regular {
                                 Button(action: { selectedItem = item }) {
                                     FeedCard(item: item, isSaved: savedItemIds.contains(item.id), theme: theme)
@@ -342,6 +382,7 @@ struct FeedView: View {
                                         )
                                 }
                                 .buttonStyle(PlainButtonStyle())
+                                .accessibilityIdentifier("feed.card")
                                 .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
@@ -367,6 +408,7 @@ struct FeedView: View {
                                     FeedCard(item: item, isSaved: savedItemIds.contains(item.id), theme: theme)
                                 }
                                 .buttonStyle(PlainButtonStyle())
+                                .accessibilityIdentifier("feed.card")
                                 .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
@@ -389,13 +431,13 @@ struct FeedView: View {
                             }
                         }
 
-                        if canLoadMore {
+                        if currentCanLoadMore {
                             Button {
                                 displayedCount = min(displayedCount + 20, 100)
                             } label: {
                                 HStack {
                                     Spacer()
-                                    Text(i18n.tFormat("feedLoadMoreFmt", min(filteredItems.count, 100) - displayedCount))
+                                    Text(i18n.tFormat("feedLoadMoreFmt", min(currentFilteredItems.count, 100) - displayedCount))
                                         .font(.subheadline)
                                         .foregroundColor(theme.colors.primary)
                                     Spacer()
@@ -515,38 +557,60 @@ struct FeedView: View {
         refreshErrorMessage = nil
         defer { isRefreshing = false; isScrapingFallback = false }
 
-        _ = await quickRefresh()
+        var report = await quickRefresh()
         isRefreshing = false
 
         guard !Task.isCancelled else { return }
         // Scrape device-side after the backend pass. The backend's Render datacenter IP is
         // blocked by Google News (503) and niconico (403), so many sources (niconico, 5ch,
-        // smartnews, ameblo, aera, hochi, sponichi, livedoor, mantanweb, barks, mdpr,
-        // oricon, yahoo) only return data when fetched from the device's own network.
+        // smartnews, ameblo, aera, hochi, sponichi, livedoor, mantanweb, barks,
+        // realsound, cinemacafe, mdpr, oricon, yahoo) only return data when fetched
+        // from the device's own network.
         // mergeItems() dedupes against the backend results.
         //
-        // Throttle it: each run fires ~13 Google News requests from the phone and kicks an
-        // ~80s backend poll, so skip on rapid successive refreshes (but always run on a
-        // cold/empty cache). Without this the device risks the same 503 rate-limiting.
+        // Throttle it: each run fires ~15 Google News requests from the phone, so skip on
+        // rapid successive refreshes (but always run on a cold/empty cache). Without this
+        // the device risks the same 503 rate-limiting.
+        let cacheIsEmpty = db.feedItems.isEmpty
+
         let elapsed = Self.lastDeviceScrapeAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
-        guard db.feedItems.isEmpty || elapsed > Self.deviceScrapeThrottle else { return }
+        guard cacheIsEmpty || elapsed > Self.deviceScrapeThrottle else {
+            report.record(strategy: "device_scrape", status: "throttled", detail: "\(Int(elapsed))s since last run")
+            await sendNoResultsDiagnosticIfNeeded(report)
+            return
+        }
         Self.lastDeviceScrapeAt = Date()
         isScrapingFallback = true
-        await deepFallback()
+        report.append(await deepFallback(triggerBackendPoll: !report.backendReturnedItems))
+        await sendNoResultsDiagnosticIfNeeded(report)
     }
 
     // Device-side scrape throttle — shared across FeedView instances for the session.
-    private static var lastDeviceScrapeAt: Date?
-    private static let deviceScrapeThrottle: TimeInterval = 150
+    private static let lastDeviceScrapeAtKey = "feed.last_device_scrape_at"
+    private static var lastDeviceScrapeAt: Date? {
+        get {
+            let timestamp = UserDefaults.standard.double(forKey: lastDeviceScrapeAtKey)
+            return timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : nil
+        }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: lastDeviceScrapeAtKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: lastDeviceScrapeAtKey)
+            }
+        }
+    }
+    private static let deviceScrapeThrottle: TimeInterval = 30 * 60
 
     // Syncs terms, fetches backend feed + per-platform items, and scrapes custom URLs.
-    // Returns true if the backend returned any feed items.
-    private func quickRefresh() async -> Bool {
+    private func quickRefresh() async -> FeedRefreshReport {
+        var report = FeedRefreshReport()
+
         // 0. Bidirectional term sync
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
-        guard !Task.isCancelled else { return false }
+        guard !Task.isCancelled else { return report }
         await NetworkManager.shared.syncTermsFromBackend()
-        guard !Task.isCancelled else { return false }
+        guard !Task.isCancelled else { return report }
 
         // 1. Determine fetch window.
         //    First load (empty cache): fetch 90 days of history.
@@ -563,46 +627,105 @@ struct FeedView: View {
         }()
         let fetchDays = wantsFullHistory ? 0 : (db.feedItems.isEmpty ? 90 : 30)
 
-        // 2. Main backend feed fetch
-        let freshItems: [FeedItem]
+        // 2. Main backend feed fetch. If the incremental fetch is empty, retry with
+        // broader windows before declaring "no results".
         do {
+            let freshItems: [FeedItem]
             if let since = latestSince {
                 freshItems = try await NetworkManager.shared.fetchFeed(limit: 200, since: since)
+                let added = db.mergeItems(newItems: freshItems)
+                report.record(
+                    strategy: "backend_feed_since",
+                    status: freshItems.isEmpty ? "empty" : "items",
+                    itemCount: freshItems.count,
+                    addedCount: added,
+                    detail: since
+                )
             } else {
                 freshItems = try await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays)
+                let added = db.mergeItems(newItems: freshItems)
+                report.record(
+                    strategy: "backend_feed_days_\(fetchDays)",
+                    status: freshItems.isEmpty ? "empty" : "items",
+                    itemCount: freshItems.count,
+                    addedCount: added
+                )
             }
         } catch {
             AppLogger.network.error("fetchFeed failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
             refreshErrorMessage = Self.refreshErrorLabel(error)
-            freshItems = []
+            report.record(
+                strategy: latestSince == nil ? "backend_feed_days_\(fetchDays)" : "backend_feed_since",
+                status: "failed",
+                detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
+            )
         }
-        if !freshItems.isEmpty {
-            _ = db.mergeItems(newItems: freshItems)
+
+        if !report.backendReturnedItems {
+            let retryDays = [fetchDays, 90, 180, 0].reduce(into: [Int]()) { values, days in
+                if !values.contains(days) { values.append(days) }
+            }
+            for days in retryDays {
+                guard !Task.isCancelled, !report.backendReturnedItems else { break }
+                do {
+                    let items = try await NetworkManager.shared.fetchFeed(limit: 200, days: days)
+                    let added = db.mergeItems(newItems: items)
+                    report.record(
+                        strategy: "backend_feed_retry_days_\(days)",
+                        status: items.isEmpty ? "empty" : "items",
+                        itemCount: items.count,
+                        addedCount: added
+                    )
+                } catch {
+                    report.record(
+                        strategy: "backend_feed_retry_days_\(days)",
+                        status: "failed",
+                        detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
+                    )
+                }
+            }
         }
-        guard !Task.isCancelled else { return !freshItems.isEmpty }
+        guard !Task.isCancelled else { return report }
 
         // 3. Per-platform fetches in parallel
         let platformsToFetch = Array(Set(db.subscribedPlatforms.filter { $0 != "custom" }))
-        await withTaskGroup(of: Void.self) { group in
+        await withTaskGroup(of: FeedRefreshAttempt.self) { group in
             for platform in platformsToFetch {
-                group.addTask { await self.fetchBackendPlatform(platform, since: latestSince) }
+                let platformSince = latestFetchedAt(for: platform)
+                group.addTask {
+                    await self.fetchBackendPlatform(
+                        platform,
+                        since: platformSince,
+                        days: platformSince == nil ? fetchDays : 30
+                    )
+                }
+            }
+            for await attempt in group {
+                report.append(attempt)
             }
         }
-        guard !Task.isCancelled else { return !freshItems.isEmpty }
+        guard !Task.isCancelled else { return report }
 
         // 4. Custom URL cards
         let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
         if !customItems.isEmpty {
-            _ = db.mergeItems(newItems: customItems)
+            let added = db.mergeItems(newItems: customItems)
+            report.record(strategy: "custom_urls", status: "items", itemCount: customItems.count, addedCount: added)
+        } else if !db.customUrls.isEmpty {
+            report.record(strategy: "custom_urls", status: "empty")
         }
 
-        return !freshItems.isEmpty
+        return report
     }
 
-    // Runs local RSS/scraper fallbacks when the backend returned nothing (offline / cold start).
-    // Kick the backend scheduler first so fresh data is ready on the next pull.
-    private func deepFallback() async {
-        Task { try? await NetworkManager.shared.triggerPoll() }
+    // Runs local RSS/scraper fallbacks for sources blocked from the backend network.
+    // If the backend returned nothing, also kick its scheduler for the next pull.
+    private func deepFallback(triggerBackendPoll: Bool) async -> FeedRefreshReport {
+        var report = FeedRefreshReport()
+        if triggerBackendPoll {
+            Task { try? await NetworkManager.shared.triggerPoll() }
+            report.record(strategy: "backend_poll", status: "queued")
+        }
         let activeTerms = db.terms.filter { $0.is_active }
         await withTaskGroup(of: [FeedItem].self) { group in
             for term in activeTerms {
@@ -615,20 +738,66 @@ struct FeedView: View {
             }
             for await items in group where !items.isEmpty {
                 guard !Task.isCancelled else { break }
-                _ = db.mergeItems(newItems: items)
+                let added = db.mergeItems(newItems: items)
+                report.record(strategy: "device_local_scrapers", status: "items", itemCount: items.count, addedCount: added)
             }
+        }
+        if !report.attempts.contains(where: { $0.strategy == "device_local_scrapers" }) {
+            report.record(strategy: "device_local_scrapers", status: "empty")
+        }
+        return report
+    }
+
+    private func fetchBackendPlatform(_ platformId: String, since: String? = nil, days: Int = 30) async -> FeedRefreshAttempt {
+        do {
+            let items: [FeedItem]
+            if let since {
+                items = try await NetworkManager.shared.fetchFeed(platform: platformId, limit: 60, since: since)
+            } else {
+                items = try await NetworkManager.shared.fetchFeed(platform: platformId, limit: 60, days: days)
+            }
+            let added: Int
+            if !items.isEmpty {
+                added = db.mergeItems(newItems: items)
+            } else {
+                added = 0
+            }
+            return FeedRefreshAttempt(
+                strategy: "backend_platform_\(platformId)",
+                status: items.isEmpty ? "empty" : "items",
+                itemCount: items.count,
+                addedCount: added,
+                detail: since ?? "days=\(days)"
+            )
+        } catch {
+            AppLogger.network.warning("fetchBackendPlatform(\(platformId)) failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
+            return FeedRefreshAttempt(
+                strategy: "backend_platform_\(platformId)",
+                status: "failed",
+                itemCount: 0,
+                addedCount: 0,
+                detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
+            )
         }
     }
 
-    private func fetchBackendPlatform(_ platformId: String, since: String? = nil) async {
-        do {
-            let items = try await NetworkManager.shared.fetchFeed(platform: platformId, limit: 60, since: since)
-            if !items.isEmpty {
-                _ = db.mergeItems(newItems: items)
-            }
-        } catch {
-            AppLogger.network.warning("fetchBackendPlatform(\(platformId)) failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
-        }
+    private func sendNoResultsDiagnosticIfNeeded(_ report: FeedRefreshReport) async {
+        let activeTermsCount = db.terms.filter { $0.is_active }.count
+        guard activeTermsCount > 0, db.feedItems.isEmpty, report.addedCount == 0 else { return }
+        let info = Bundle.main.infoDictionary
+        let diagnostic = ClientDiagnosticReport(
+            reason: "feed_refresh_no_results_after_fallbacks",
+            environment: NetworkManager.shared.environmentName,
+            api_base: NetworkManager.shared.apiBase,
+            app_version: info?["CFBundleShortVersionString"] as? String,
+            build: info?["CFBundleVersion"] as? String,
+            active_terms_count: activeTermsCount,
+            subscribed_platforms: db.subscribedPlatforms,
+            cached_feed_count: db.feedItems.count,
+            events: report.attempts.map(\.diagnosticEvent)
+        )
+        AppLogger.network.error("No feed results after \(report.attempts.count) strategies; sending diagnostic")
+        await NetworkManager.shared.sendClientDiagnostic(diagnostic)
     }
 
     // Returns a short machine-readable category string for log triage.
@@ -664,6 +833,14 @@ struct FeedView: View {
         db.feedItems.contains { matchesPlatform($0, platformId: platformId) }
     }
 
+    private func latestFetchedAt(for platformId: String) -> String? {
+        db.feedItems
+            .filter { matchesPlatform($0, platformId: platformId) }
+            .compactMap { parseISO8601Date($0.fetched_at) }
+            .max()
+            .map { _ISO8601Cache.withoutFractional.string(from: $0) }
+    }
+
     private func matchesPlatform(_ item: FeedItem, platformId: String) -> Bool {
         Platform.normalize(item.platform) == platformId
     }
@@ -676,10 +853,11 @@ struct PillView: View {
     var bgColor: Color? = nil
     var fgColor: Color? = nil
     var theme: ThemeManager? = nil
+    @StateObject private var appearance = AppearanceManager.shared
     
     var body: some View {
         Text(text)
-            .font(.caption2)
+            .font(appearance.font(size: 11))
             .fontWeight(.medium)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -693,6 +871,7 @@ struct FeedCard: View {
     let item: FeedItem
     let isSaved: Bool
     let theme: ThemeManager
+    @StateObject private var appearance = AppearanceManager.shared
     
     var body: some View {
         let meta = theme.metadata(for: item.platform)
@@ -705,9 +884,10 @@ struct FeedCard: View {
                 // Platform tag badge
                 HStack(spacing: 3) {
                     Text(meta.icon)
-                        .font(.caption)
+                        .font(appearance.font(size: 12))
                     Text(meta.name)
-                        .font(.system(size: 11, weight: .bold))
+                        .font(appearance.font(size: 11))
+                        .fontWeight(.bold)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
@@ -717,7 +897,8 @@ struct FeedCard: View {
                 
                 if !item.watch_term_keyword.isEmpty {
                     Text(item.watch_term_keyword)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(appearance.font(size: 11))
+                        .fontWeight(.semibold)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
                         .background(theme.colors.divider)
@@ -734,7 +915,7 @@ struct FeedCard: View {
                 }
                 
                 Text(relativeTime(from: item.published_at))
-                    .font(.caption2)
+                    .font(appearance.font(size: 11))
                     .foregroundColor(theme.colors.textMuted)
             }
             
@@ -742,7 +923,7 @@ struct FeedCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if let title = cleanDisplayText(item.title) {
                         Text(title)
-                            .font(.subheadline)
+                            .font(appearance.font(size: 15))
                             .fontWeight(.bold)
                             .foregroundColor(titleColor)
                             .lineLimit(2)
@@ -751,7 +932,7 @@ struct FeedCard: View {
                     
                     if let author = cleanDisplayText(item.author) {
                         Text(author)
-                            .font(.caption)
+                            .font(appearance.font(size: 12))
                             .fontWeight(.medium)
                             .foregroundColor(theme.colors.textMuted)
                             .lineLimit(1)
@@ -759,7 +940,7 @@ struct FeedCard: View {
                     
                     if let content = cleanDisplayText(item.content_text) {
                         Text(content)
-                            .font(.caption)
+                            .font(appearance.font(size: 12))
                             .foregroundColor(theme.colors.textSub)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
@@ -1086,6 +1267,38 @@ struct ReorderSourcesSheet: View {
                 }
             }
             .background(theme.colors.bg)
+        }
+    }
+}
+
+// Faint feed wallpaper. Loads the image off the main thread (file:// or remote) and
+// caches it in state so the feed body never reads disk during a render pass.
+private struct WallpaperBackgroundView: View {
+    let urlString: String
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .opacity(0.20)
+                    .ignoresSafeArea()
+            }
+        }
+        .task(id: urlString) { await load() }
+    }
+
+    private func load() async {
+        guard let url = URL(string: urlString) else { image = nil; return }
+        if url.isFileURL {
+            let path = url.path
+            image = await Task.detached(priority: .utility) { UIImage(contentsOfFile: path) }.value
+        } else if let (data, _) = try? await URLSession.shared.data(from: url) {
+            image = UIImage(data: data)
+        } else {
+            image = nil
         }
     }
 }

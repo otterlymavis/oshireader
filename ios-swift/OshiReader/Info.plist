@@ -28,13 +28,24 @@
 	<string>OshiReader saves images you choose from the reader into your Photos library.</string>
 	<key>OshiReaderAPIBaseURL</key>
 	<string>$(OSHIREADER_API_BASE_URL)</string>
+	<key>OshiReaderAPNSEnvironment</key>
+	<string>$(APNS_ENVIRONMENT)</string>
 	<key>OshiReaderEnvironment</key>
 	<string>$(OSHIREADER_ENVIRONMENT)</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.otterpia.oshireader.plus.feed-refresh</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

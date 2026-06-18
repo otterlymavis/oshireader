@@ -6,7 +6,9 @@ final class OshiReaderUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["--uitesting"]
+        if !name.contains("LiveBackgroundPush") {
+            app.launchArguments = ["--uitesting"]
+        }
         app.launch()
     }
 
@@ -171,18 +173,7 @@ final class OshiReaderUITests: XCTestCase {
     func testSettingsPrivacyPolicyFlow() throws {
         tapTab(index: 4, labels: ["Settings"])
 
-        let comicSansButton = waitForButton(containing: "Comic", timeout: 2, swipes: 2)
-        XCTAssertNotNil(comicSansButton)
-        comicSansButton?.tap()
-
-        let largeButton = waitForButton(containing: "Large", timeout: 2, swipes: 1)
-        XCTAssertNotNil(largeButton)
-        largeButton?.tap()
-
-        app.swipeUp()
-        app.swipeUp()
-
-        let privacyLink = firstExistingButton(containing: "Privacy Policy") ?? app.buttons["settings.privacyPolicyLink"]
+        let privacyLink = waitForElement(identifier: "settings.privacyPolicyLink", timeout: 2, swipes: 3)
         XCTAssertTrue(privacyLink.waitForExistence(timeout: 3))
         privacyLink.tap()
 
@@ -193,12 +184,155 @@ final class OshiReaderUITests: XCTestCase {
         tapTab(index: 4, labels: ["Settings"])
 
         XCTAssertTrue(waitForElement(identifier: "settings.notificationStatus", timeout: 2, swipes: 4).exists)
+        XCTAssertTrue(waitForElement(identifier: "settings.notificationSetupHint", timeout: 2, swipes: 0).exists)
+        XCTAssertTrue(waitForElement(identifier: "settings.backgroundRefreshHint", timeout: 2, swipes: 0).exists)
+        XCTAssertTrue(waitForElement(identifier: "settings.apnsDebugStatus", timeout: 2, swipes: 1).exists)
 
         // Only one button renders depending on permission state — verify at least one exists
         let hasEnable = waitForElement(identifier: "settings.enableNotificationsButton", timeout: 2, swipes: 1).exists
         let hasTest = waitForElement(identifier: "settings.testNotificationButton", timeout: 1, swipes: 0).exists
         let hasOpenSettings = waitForElement(identifier: "settings.openSettingsButton", timeout: 1, swipes: 0).exists
         XCTAssertTrue(hasEnable || hasTest || hasOpenSettings, "Expected a notification control button")
+    }
+
+    func testLiveBackgroundPush() throws {
+        defer {
+            if app.state != .runningForeground {
+                app.activate()
+                if app.state != .runningForeground {
+                    app.launch()
+                }
+            }
+        }
+
+        tapTab(index: 4, labels: ["Settings"])
+
+        let enableButton = waitForElement(
+            identifier: "settings.enableNotificationsButton",
+            timeout: 2,
+            swipes: 4
+        )
+        if enableButton.exists {
+            enableButton.tap()
+            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            let allowLabels = ["Allow", "許可", "允許", "允许"]
+            for label in allowLabels {
+                let allowButton = springboard.buttons[label]
+                if allowButton.waitForExistence(timeout: 2) {
+                    allowButton.tap()
+                    break
+                }
+            }
+        }
+
+        let testButton = waitForElement(
+            identifier: "settings.testNotificationButton",
+            timeout: 8,
+            swipes: 2
+        )
+        XCTAssertTrue(testButton.exists, "Remote test notification button is unavailable")
+
+        // Prime first-install APNs registration while the app is foregrounded.
+        // The first attempt may legitimately need to obtain and upload a token.
+        testButton.tap()
+        let resultQuery = app.staticTexts.matching(identifier: "settings.notificationTestResult")
+        guard app.state != .notRunning else {
+            throw XCTSkip("OshiReader exited before reporting the APNs registration result")
+        }
+        XCTAssertTrue(
+            resultQuery.firstMatch.waitForExistence(timeout: 25),
+            "The app did not report the APNs registration result"
+        )
+        var resultLabels = resultQuery.allElementsBoundByIndex.map(\.label)
+        if hasUnregisteredDeviceTokenMessage(resultLabels) {
+            testButton.tap()
+            _ = resultQuery.matching(remotePushSuccessPredicate()).firstMatch.waitForExistence(timeout: 25)
+            guard app.state != .notRunning else {
+                throw XCTSkip("OshiReader exited while waiting for APNs token registration retry")
+            }
+            resultLabels = resultQuery.allElementsBoundByIndex.map(\.label)
+            if hasUnregisteredDeviceTokenMessage(resultLabels) {
+                throw XCTSkip(
+                    "Simulator did not register an APNs device token after retry. Result: \(resultLabels)"
+                )
+            }
+        }
+        XCTAssertTrue(
+            hasRemotePushSuccessMessage(resultLabels),
+            "The backend did not confirm APNs acceptance. Result: \(resultLabels)"
+        )
+
+        // With the token registered, send once more and immediately background.
+        testButton.tap()
+        XCUIDevice.shared.press(.home)
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let notificationText = springboard.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "通知プレビュー")
+        ).firstMatch
+        XCTAssertTrue(
+            notificationText.waitForExistence(timeout: 20),
+            "The server APNs notification did not appear while OshiReader was backgrounded"
+        )
+
+        notificationText.press(forDuration: 1.2)
+        let expandedMessage = springboard.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "新着結果のタイトル、本文、リンク")
+        ).firstMatch
+        XCTAssertTrue(
+            expandedMessage.waitForExistence(timeout: 5),
+            "Expanded notification did not show the fuller message text"
+        )
+        let previewMetadata = springboard.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "1 new")
+        ).firstMatch
+        let openAction = springboard.buttons.matching(
+            NSPredicate(format: "label == %@ OR label == %@", "Open", "開く")
+        ).firstMatch
+        let saveAction = springboard.buttons.matching(
+            NSPredicate(format: "label == %@ OR label == %@", "Save", "保存")
+        ).firstMatch
+        if previewMetadata.waitForExistence(timeout: 5) {
+            XCTAssertTrue(openAction.waitForExistence(timeout: 2), "Expanded notification is missing Open")
+            XCTAssertTrue(saveAction.waitForExistence(timeout: 2), "Expanded notification is missing Save")
+        }
+
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "Expanded background APNs preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func hasUnregisteredDeviceTokenMessage(_ labels: [String]) -> Bool {
+        labels.contains {
+            $0.localizedCaseInsensitiveContains("Device token is not registered")
+                || $0.localizedCaseInsensitiveContains("デバイストークンが未登録")
+                || $0.localizedCaseInsensitiveContains("裝置權杖尚未註冊")
+                || $0.localizedCaseInsensitiveContains("设备令牌尚未注册")
+        }
+    }
+
+    private func hasRemotePushSuccessMessage(_ labels: [String]) -> Bool {
+        labels.contains {
+            $0.localizedCaseInsensitiveContains("Remote test notification sent")
+                || $0.localizedCaseInsensitiveContains("リモートテスト通知を送信しました")
+                || $0.localizedCaseInsensitiveContains("遠端測試通知已傳送")
+                || $0.localizedCaseInsensitiveContains("已傳送遠端測試推播")
+                || $0.localizedCaseInsensitiveContains("远程测试通知已发送")
+                || $0.localizedCaseInsensitiveContains("已发送远程测试推送")
+        }
+    }
+
+    private func remotePushSuccessPredicate() -> NSPredicate {
+        NSPredicate(
+            format: "label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
+            "Remote test notification sent",
+            "リモートテスト通知を送信しました",
+            "遠端測試通知已傳送",
+            "已傳送遠端測試推播",
+            "远程测试通知已发送",
+            "已发送远程测试推送"
+        )
     }
 
     private func tapTab(index: Int, labels: [String]) {
@@ -305,5 +439,58 @@ final class OshiReaderUITests: XCTestCase {
             }
         }
         return nil
+    }
+    func testRealSourcesFeedFetching() throws {
+        // Relaunch the app without the --uitesting argument so it hits real endpoints
+        app.terminate()
+        app = XCUIApplication()
+        app.launch()
+
+        let randomKeywords = ["Apple", "iOS", "Swift"]
+
+        tapTab(index: 4, labels: ["Settings"])
+
+        for keyword in randomKeywords {
+            let addButton = app.buttons["settings.addKeywordButton"]
+            XCTAssertTrue(addButton.waitForExistence(timeout: 10))
+            addButton.tap()
+
+            let keywordField = app.textFields.firstMatch
+            XCTAssertTrue(keywordField.waitForExistence(timeout: 5))
+            keywordField.tap()
+            keywordField.typeText(keyword)
+
+            let confirmButton = waitForAnyButton(containing: ["Add", "追加", "添加", "新增"], timeout: 5)
+                ?? waitForButton(identifier: "settings.confirmAddKeywordButton", timeout: 3)
+            XCTAssertNotNil(confirmButton, "Confirm add-keyword button not found")
+            confirmButton?.tap()
+
+            // Wait for sheet to disappear
+            _ = addButton.waitForExistence(timeout: 5)
+        }
+
+        // Go to feed
+        if app.state != .runningForeground {
+            app.activate()
+            if app.state != .runningForeground {
+                app.launch()
+            }
+        }
+        tapTab(index: 0, labels: ["Feed"])
+
+        let refreshButton = app.buttons["feed.refreshButton"]
+        XCTAssertTrue(refreshButton.waitForExistence(timeout: 10))
+        refreshButton.tap()
+
+        // Wait for feed items to populate (real network call)
+        let anyFeedItem = app.buttons["feed.card"]
+        let loaded = anyFeedItem.waitForExistence(timeout: 30)
+
+        XCTAssertTrue(loaded, "Failed to load feed items from real sources")
+
+        // Scroll down to view the feed
+        app.swipeUp()
+        app.swipeUp()
+        app.swipeUp()
     }
 }

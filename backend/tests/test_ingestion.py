@@ -20,6 +20,7 @@ def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate
         published_at=datetime.now(timezone.utc),
         media_type="video",
         title="Aiko Haruka Test Item",
+        content_text="Aiko Haruka",
     )
     defaults.update(kwargs)
     return SourceItemCreate(platform=platform, item_id=item_id, **defaults)
@@ -107,6 +108,37 @@ class TestIngestionNewItems:
         db_session.expire_all()
         matches = db_session.query(Match).all()
         assert len(matches) == 2
+
+    @pytest.mark.asyncio
+    async def test_item_without_search_term_is_not_ingested(self, db_engine, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        item = _make_item(item_id="miss", content_text="unrelated", title="Other Item")
+        connector = _mock_connector("youtube", [item])
+        await _run_poll(db_engine, [connector])
+
+        db_session.expire_all()
+        assert db_session.get(SourceItem, "youtube:miss") is None
+        assert db_session.query(Match).count() == 0
+
+    @pytest.mark.asyncio
+    async def test_item_matching_alias_is_ingested_for_watch_term(self, db_engine, db_session):
+        term = WatchTerm(keyword="Aiko", aliases=["Haruka"])
+        db_session.add(term)
+        db_session.commit()
+
+        item = _make_item(item_id="alias-hit", title="Haruka interview")
+        connector = _mock_connector("youtube", [item])
+        await _run_poll(db_engine, [connector])
+
+        db_session.expire_all()
+        source = db_session.get(SourceItem, "youtube:alias-hit")
+        match = db_session.query(Match).filter(Match.watch_term_id == term.id).first()
+        assert source is not None
+        assert match is not None
+        assert match.source_item_id == "youtube:alias-hit"
 
 
 class TestIngestionNotifications:

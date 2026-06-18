@@ -1,0 +1,274 @@
+import BackgroundTasks
+import Foundation
+import UIKit
+
+protocol BackgroundTaskSchedulerClient {
+    func register(
+        forTaskWithIdentifier identifier: String,
+        using queue: DispatchQueue?,
+        launchHandler: @escaping (BGTask) -> Void
+    ) -> Bool
+    func cancel(taskRequestWithIdentifier identifier: String)
+    func submit(_ taskRequest: BGTaskRequest) throws
+}
+
+extension BGTaskScheduler: BackgroundTaskSchedulerClient {}
+
+enum BackgroundRefreshPolicy {
+    static let operationDeadline: TimeInterval = 25
+    static let pollTimeout: TimeInterval = 12
+
+    static func shouldScheduleLocalFallback(registeredRemoteToken: String?) -> Bool {
+        guard let token = registeredRemoteToken?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return true
+        }
+        return token.isEmpty
+    }
+
+    static func notificationItems(
+        incoming: [FeedItem],
+        existingKeys: Set<String>,
+        survivingKeys: Set<String>
+    ) -> [FeedItem] {
+        var itemsByKey: [String: FeedItem] = [:]
+        for item in incoming {
+            let key = itemKey(item)
+            if !existingKeys.contains(key), survivingKeys.contains(key) {
+                itemsByKey[key] = item
+            }
+        }
+        return Array(itemsByKey.values)
+    }
+
+    static func itemKey(_ item: FeedItem) -> String {
+        "\(item.id)::\(item.watch_term_keyword)"
+    }
+}
+
+@MainActor
+final class BackgroundRefreshManager {
+    static let shared = BackgroundRefreshManager()
+
+    static let taskIdentifier = "com.otterpia.oshireader.plus.feed-refresh"
+    static let minimumInterval: TimeInterval = 15 * 60
+
+    private let scheduler: BackgroundTaskSchedulerClient
+    private var isRegistered = false
+    private var isRefreshing = false
+
+    init(scheduler: BackgroundTaskSchedulerClient = BGTaskScheduler.shared) {
+        self.scheduler = scheduler
+    }
+
+    func register() {
+        guard !NetworkManager.shared.isUITesting, !isRegistered else { return }
+        isRegistered = scheduler.register(
+            forTaskWithIdentifier: Self.taskIdentifier,
+            using: nil
+        ) { task in
+            guard let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            Task { @MainActor in
+                await self.handle(task: refreshTask)
+            }
+        }
+        if !isRegistered {
+            AppLogger.network.warning("Background refresh registration failed for \(Self.taskIdentifier)")
+        }
+    }
+
+    func schedule() {
+        guard !NetworkManager.shared.isUITesting, isRegistered else { return }
+
+        scheduler.cancel(taskRequestWithIdentifier: Self.taskIdentifier)
+
+        let request = BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: Self.minimumInterval)
+
+        do {
+            try scheduler.submit(request)
+            AppLogger.network.info("Background refresh scheduled")
+        } catch {
+            AppLogger.network.warning("Background refresh schedule failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func handle(task: BGAppRefreshTask) async {
+        AppLogger.network.notice("Background scheduled refresh started")
+        schedule()
+
+        let operation = Task { @MainActor in
+            await refreshFromBackend()
+        }
+
+        task.expirationHandler = {
+            operation.cancel()
+        }
+
+        let success = await operation.value
+        AppLogger.network.notice("Background scheduled refresh completed success=\(success)")
+        task.setTaskCompleted(success: success)
+    }
+
+    @discardableResult
+    func refreshFromBackend() async -> Bool {
+        guard !isRefreshing else {
+            AppLogger.network.notice("Background refresh skipped because another refresh is running")
+            return false
+        }
+        AppLogger.network.notice("Background refresh started")
+        isRefreshing = true
+        defer {
+            isRefreshing = false
+            schedule()
+            AppLogger.network.notice("Background refresh finished")
+        }
+
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask { @MainActor in
+                await self.performRefreshFromBackend()
+            }
+            group.addTask {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(BackgroundRefreshPolicy.operationDeadline * 1_000_000_000)
+                )
+                return false
+            }
+
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func performRefreshFromBackend() async -> Bool {
+        let db = LocalDB.shared
+
+        await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+        guard !Task.isCancelled else { return false }
+        _ = await NetworkManager.shared.syncTermsFromBackend()
+        guard !Task.isCancelled else { return false }
+
+        guard !db.terms.filter(\.is_active).isEmpty else { return true }
+
+        Task {
+            do {
+                try await NetworkManager.shared.triggerPoll(timeout: BackgroundRefreshPolicy.pollTimeout)
+            } catch {
+                AppLogger.network.warning("Background poll trigger failed: \(error.localizedDescription)")
+            }
+        }
+        guard !Task.isCancelled else { return false }
+
+        let latestSince = latestFetchedAt(in: db.feedItems)
+        let hadItemsInitially = !db.feedItems.isEmpty
+        var pendingNotificationItems: [FeedItem] = []
+        var pendingNotificationKeys = Set<String>()
+
+        do {
+            let items: [FeedItem]
+            if let latestSince {
+                items = try await NetworkManager.shared.fetchFeed(limit: 200, since: latestSince)
+            } else {
+                items = try await NetworkManager.shared.fetchFeed(limit: 120, days: 90)
+            }
+            guard !Task.isCancelled else { return false }
+            if !items.isEmpty {
+                let existingKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
+                _ = db.mergeItems(newItems: items, notifyOnNew: false)
+                appendNewNotificationItems(
+                    from: items,
+                    existingKeys: existingKeys,
+                    db: db,
+                    into: &pendingNotificationItems,
+                    seenKeys: &pendingNotificationKeys
+                )
+            }
+
+            let platformsToFetch = db.subscribedPlatforms
+                .filter { $0 != "custom" }
+                .sorted { lhs, rhs in
+                    let lhsHasItems = latestFetchedAt(in: db.feedItems, platformId: lhs) != nil
+                    let rhsHasItems = latestFetchedAt(in: db.feedItems, platformId: rhs) != nil
+                    if lhsHasItems != rhsHasItems { return !lhsHasItems }
+                    return lhs < rhs
+                }
+
+            await withTaskGroup(of: [FeedItem].self) { group in
+                for platform in platformsToFetch {
+                    let platformSince = latestFetchedAt(in: db.feedItems, platformId: platform)
+                    group.addTask {
+                        do {
+                            if let platformSince {
+                                return try await NetworkManager.shared.fetchFeed(platform: platform, limit: 60, since: platformSince)
+                            } else {
+                                return try await NetworkManager.shared.fetchFeed(platform: platform, limit: 60, days: 30)
+                            }
+                        } catch {
+                            AppLogger.network.warning("Background platform refresh \(platform) failed: \(error.localizedDescription)")
+                            return []
+                        }
+                    }
+                }
+
+                for await platformItems in group where !platformItems.isEmpty {
+                    guard !Task.isCancelled else { break }
+                    let existingKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
+                    _ = db.mergeItems(newItems: platformItems, notifyOnNew: false)
+                    appendNewNotificationItems(
+                        from: platformItems,
+                        existingKeys: existingKeys,
+                        db: db,
+                        into: &pendingNotificationItems,
+                        seenKeys: &pendingNotificationKeys
+                    )
+                }
+            }
+
+            if hadItemsInitially, !pendingNotificationItems.isEmpty {
+                await NotificationManager.shared.notifyForNewItems(
+                    pendingNotificationItems,
+                    terms: db.terms,
+                    includeAttachments: false
+                )
+            }
+            return true
+        } catch {
+            AppLogger.network.warning("Background refresh failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func appendNewNotificationItems(
+        from incoming: [FeedItem],
+        existingKeys: Set<String>,
+        db: LocalDB,
+        into pending: inout [FeedItem],
+        seenKeys: inout Set<String>
+    ) {
+        let survivingKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
+        let notificationItems = BackgroundRefreshPolicy.notificationItems(
+            incoming: incoming,
+            existingKeys: existingKeys,
+            survivingKeys: survivingKeys
+        )
+        for item in notificationItems {
+            let key = BackgroundRefreshPolicy.itemKey(item)
+            guard seenKeys.insert(key).inserted else { continue }
+            pending.append(item)
+        }
+    }
+
+    private func latestFetchedAt(in items: [FeedItem], platformId: String? = nil) -> String? {
+        items
+            .filter { item in
+                guard let platformId else { return true }
+                return Platform.normalize(item.platform) == platformId
+            }
+            .compactMap { parseISO8601Date($0.fetched_at) }
+            .max()
+            .map { _ISO8601Cache.withoutFractional.string(from: $0) }
+    }
+}

@@ -9,12 +9,12 @@ import httpx as _httpx_mod
 import json as _json_mod
 import pytest
 
-from app.connectors.base import SourceItemCreate, parse_feed_date
+from app.connectors.base import SourceItemCreate, contains_keyword, parse_feed_date, title_contains_keyword
 from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
-from app.connectors.news_sites import CinemaCafeConnector
+from app.connectors.news_sites import CinemaCafeConnector, LivedoorConnector, RealSoundConnector
 from app.connectors.niconico import NicoNicoConnector
 from app.connectors.note import NoteConnector
 from app.connectors.oricon import OriconConnector
@@ -120,6 +120,28 @@ class TestSourceItemCreateCompositeId:
             media_type="article",
         )
         assert item.composite_id == "news:https://example.com/article?id=42"
+
+
+class TestContainsKeyword:
+    def test_matches_case_insensitively_across_visible_fields(self):
+        assert contains_keyword("Aiko", None, "new AIKO story", "author")
+
+    def test_ignores_empty_keyword(self):
+        assert contains_keyword("   ", "anything") is False
+
+    def test_returns_false_when_visible_fields_do_not_contain_keyword(self):
+        assert contains_keyword("Aiko", "other idol", "unrelated summary") is False
+
+    def test_normalizes_unicode_width_variants(self):
+        assert contains_keyword("ABC123", "ＡＢＣ１２３ latest news")
+
+
+class TestTitleContainsKeyword:
+    def test_matches_title_only(self):
+        assert title_contains_keyword("Aiko", "new AIKO story")
+
+    def test_ignores_summary_like_extra_text(self):
+        assert title_contains_keyword("Aiko", "unrelated story") is False
 
 
 class TestParseTverDate:
@@ -339,6 +361,16 @@ class TestConnectorMediaOnlyEarlyReturn:
         assert result == []
 
     @pytest.mark.asyncio
+    async def test_realsound_connector_returns_empty_for_media_only(self):
+        result = await RealSoundConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_cinemacafe_connector_returns_empty_for_media_only(self):
+        result = await CinemaCafeConnector().fetch("Aiko", "media_only")
+        assert result == []
+
+    @pytest.mark.asyncio
     async def test_togetter_connector_returns_empty_for_media_only(self):
         result = await TogetterConnector().fetch("Aiko", "media_only")
         assert result == []
@@ -374,6 +406,18 @@ class TestTwitterConnectorNoToken:
 
 class TestFiveChFetch:
     @pytest.mark.asyncio
+    async def test_filters_keyword_found_only_in_google_news_summary(self):
+        entry = _rss_entry(
+            link="https://5ch.net/test/read.cgi/news/1",
+            title="unrelated thread",
+            summary="Aiko appears elsewhere in the Google News cluster",
+        )
+        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.fivech.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
     async def test_returns_items_on_success(self):
         valid = _rss_entry(link="https://5ch.net/t1", title="Aiko thread")
         no_link = _FeedEntry(id="nl", link="", title="skip me")
@@ -406,13 +450,21 @@ class TestFiveChFetch:
 
     @pytest.mark.asyncio
     async def test_deduplicates_by_item_id(self):
-        e1 = _rss_entry(link="https://5ch.net/t1", item_id="dup_id", title="A")
-        e2 = _rss_entry(link="https://5ch.net/t2", item_id="dup_id", title="B")
+        e1 = _rss_entry(link="https://5ch.net/t1", item_id="dup_id", title="Aiko A")
+        e2 = _rss_entry(link="https://5ch.net/t2", item_id="dup_id", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
         with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
             result = await FiveChConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_filters_google_news_items_without_keyword(self):
+        fake_feed = _FakeFeed([_rss_entry(link="https://5ch.net/t1", title="unrelated thread")])
+        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+        assert result == []
 
 
 class TestGirlsChannelFetch:
@@ -424,7 +476,7 @@ class TestGirlsChannelFetch:
         <time datetime="2024-06-15T10:30:00+09:00">2024年6月15日</time>
       </li>
       <li>
-        <h3><a href="/topics/99999/">Another thread</a></h3>
+        <h3><a href="/topics/99999/">Another アイコ thread</a></h3>
       </li>
     </body></html>
     """
@@ -455,9 +507,9 @@ class TestGirlsChannelFetch:
     @pytest.mark.asyncio
     async def test_direct_scrape_deduplicates_by_topic_id(self):
         html = """<html><body>
-          <a href="/topics/100/">T1</a>
-          <a href="/topics/100/">T1 again</a>
-          <a href="/topics/101/">T2</a>
+          <a href="/topics/100/">Aiko T1</a>
+          <a href="/topics/100/">Aiko T1 again</a>
+          <a href="/topics/101/">Aiko T2</a>
         </body></html>"""
         with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(text=html)):
             result = await GirlsChannelConnector().fetch("Aiko", "all_info")
@@ -509,6 +561,25 @@ class TestGirlsChannelFetch:
         result = await GirlsChannelConnector().fetch("Aiko", "media_only")
         assert result == []
 
+    def test_direct_parser_filters_items_without_keyword(self):
+        html = """<html><body>
+          <li><h3><a href="/topics/12345/">unrelated thread</a></h3></li>
+        </body></html>"""
+        result = GirlsChannelConnector()._parse_html(html, "Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_gnews_filters_keyword_found_only_in_summary(self):
+        entry = _rss_entry(
+            link="https://girlschannel.net/topics/12345/",
+            title="unrelated thread",
+            summary="Aiko appears elsewhere in the Google News cluster",
+        )
+        with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.girlschannel.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await GirlsChannelConnector()._fetch_gnews("Aiko")
+        assert result == []
+
 
 class TestMdprFetch:
     @pytest.mark.asyncio
@@ -543,19 +614,39 @@ class TestMdprFetch:
 
     @pytest.mark.asyncio
     async def test_deduplicates_by_item_id(self):
-        e1 = _rss_entry(link="https://mdpr.jp/a1", item_id="dup", title="A")
-        e2 = _rss_entry(link="https://mdpr.jp/a2", item_id="dup", title="B")
+        e1 = _rss_entry(link="https://mdpr.jp/a1", item_id="dup", title="Aiko A")
+        e2 = _rss_entry(link="https://mdpr.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
         with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
 
+    @pytest.mark.asyncio
+    async def test_filters_google_news_items_without_keyword(self):
+        fake_feed = _FakeFeed([_rss_entry(link="https://mdpr.jp/a1", title="unrelated - モデルプレス")])
+        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_keyword_found_only_in_google_news_summary(self):
+        entry = _rss_entry(
+            link="https://mdpr.jp/a1",
+            title="unrelated - モデルプレス",
+            summary="Aiko appears elsewhere in the Google News cluster",
+        )
+        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.mdpr.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+        assert result == []
+
 
 class TestOriconFetch:
     @pytest.mark.asyncio
     async def test_returns_items_with_title_cleaned_and_author_set(self):
-        valid = _rss_entry(link="https://oricon.co.jp/a1", title="受賞 - ORICON NEWS")
+        valid = _rss_entry(link="https://oricon.co.jp/a1", title="Aiko 受賞 - ORICON NEWS")
         no_link = _FeedEntry(id="nl", link="", title="skip")
         empty_title = _rss_entry(link="https://oricon.co.jp/a2", title="  - ORICON NEWS")
         fake_feed = _FakeFeed([valid, no_link, empty_title])
@@ -563,8 +654,20 @@ class TestOriconFetch:
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
-        assert result[0].title == "受賞"
+        assert result[0].title == "Aiko 受賞"
         assert result[0].author == "ORICON NEWS"
+
+    @pytest.mark.asyncio
+    async def test_filters_keyword_found_only_in_google_news_summary(self):
+        entry = _rss_entry(
+            link="https://oricon.co.jp/a1",
+            title="unrelated - ORICON NEWS",
+            summary="Aiko appears elsewhere in the Google News cluster",
+        )
+        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_http_error(self):
@@ -586,13 +689,21 @@ class TestOriconFetch:
 
     @pytest.mark.asyncio
     async def test_deduplicates_by_item_id(self):
-        e1 = _rss_entry(link="https://oricon.co.jp/a1", item_id="dup", title="A")
-        e2 = _rss_entry(link="https://oricon.co.jp/a2", item_id="dup", title="B")
+        e1 = _rss_entry(link="https://oricon.co.jp/a1", item_id="dup", title="Aiko A")
+        e2 = _rss_entry(link="https://oricon.co.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
         with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_filters_google_news_items_without_keyword(self):
+        fake_feed = _FakeFeed([_rss_entry(link="https://oricon.co.jp/a1", title="受賞 - ORICON NEWS")])
+        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+        assert result == []
 
 
 class TestRSSConnectorFetch:
@@ -644,12 +755,65 @@ class TestRSSConnectorFetch:
             result = await RSSConnector().fetch("aiko", "all_info")
         assert result == []
 
+    @pytest.mark.asyncio
+    async def test_filters_items_when_keyword_only_appears_in_summary(self):
+        entry = _rss_entry(
+            link="https://natalie.mu/1",
+            title="unrelated entertainment story",
+            summary="Aiko appears in the feed summary",
+        )
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
+            result = await RSSConnector().fetch("aiko", "all_info")
+        assert result == []
+
+
+class TestNewsSiteFetch:
+    @pytest.mark.asyncio
+    async def test_filters_google_news_items_without_keyword(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(link="https://realsound.jp/a1", title="unrelated entertainment news")
+        ])
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await RealSoundConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_google_news_items_when_keyword_only_appears_in_summary(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link="https://realsound.jp/a1",
+                title="杉野遥亮、『世にも奇妙な物語』で初主演",
+                summary="吉沢亮 appears in a related Google News cluster item",
+            )
+        ])
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await RealSoundConnector().fetch("吉沢亮", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_livedoor_filters_google_news_summary_only_matches(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link="https://news.livedoor.com/article/detail/1/",
+                title="別の芸能ニュース - ライブドアニュース",
+                summary="Aiko appears in a related Google News cluster item",
+            )
+        ])
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await LivedoorConnector().fetch("Aiko", "all_info")
+        assert result == []
+
 
 _TOGETTER_HTML = """
 <html><body><ul>
   <li>
-    <h3>アイコの人気まとめ</h3>
-    <a href="https://togetter.com/li/1234567">アイコのまとめ</a>
+    <h3>Aikoの人気まとめ</h3>
+    <a href="https://togetter.com/li/1234567">Aikoのまとめ</a>
     <time datetime="2024-01-15T12:00:00+00:00">Jan 15</time>
     <img src="https://i.togetter.com/t.jpg" />
   </li>
@@ -666,7 +830,7 @@ class TestTogetterFetch:
         assert len(result) == 1
         assert result[0].platform == "togetter"
         assert result[0].item_id == "1234567"
-        assert result[0].title == "アイコの人気まとめ"
+        assert result[0].title == "Aikoの人気まとめ"
         assert result[0].thumbnail_url == "https://i.togetter.com/t.jpg"
 
     @pytest.mark.asyncio
@@ -691,11 +855,11 @@ class TestTogetterFetch:
     async def test_deduplicates_same_togetter_id(self):
         html = """
         <html><body><ul>
-          <li><h3>Title A</h3>
-            <a href="https://togetter.com/li/99999">TA</a>
+          <li><h3>Aiko Title A</h3>
+            <a href="https://togetter.com/li/99999">Aiko TA</a>
           </li>
-          <li><h3>Title B</h3>
-            <a href="https://togetter.com/li/99999">TB</a>
+          <li><h3>Aiko Title B</h3>
+            <a href="https://togetter.com/li/99999">Aiko TB</a>
           </li>
         </ul></body></html>
         """
@@ -722,7 +886,7 @@ class TestTogetterFetch:
     @pytest.mark.asyncio
     async def test_caps_at_25_items(self):
         entries = "\n".join(
-            f'<li><h3>Title {i}</h3><a href="https://togetter.com/li/{i:05d}">T{i}</a></li>'
+            f'<li><h3>Aiko Title {i}</h3><a href="https://togetter.com/li/{i:05d}">Aiko T{i}</a></li>'
             for i in range(1, 30)
         )
         html = f"<html><body><ul>{entries}</ul></body></html>"
@@ -737,8 +901,8 @@ class TestTogetterFetch:
         html = """
         <html><body><ul>
           <li>
-            <h3>タイトル</h3>
-            <a href="https://togetter.com/li/22222">T</a>
+            <h3>Aiko タイトル</h3>
+            <a href="https://togetter.com/li/22222">Aiko T</a>
             <time datetime="not-a-valid-date">text</time>
           </li>
         </ul></body></html>
@@ -749,12 +913,26 @@ class TestTogetterFetch:
         assert len(result) == 1
         assert result[0].item_id == "22222"
 
+    @pytest.mark.asyncio
+    async def test_filters_items_without_keyword(self):
+        html = """
+        <html><body><ul>
+          <li><h3>unrelated title</h3>
+            <a href="https://togetter.com/li/33333">unrelated body</a>
+          </li>
+        </ul></body></html>
+        """
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(text=html, is_success=True)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert result == []
+
 
 _JINA_MARKDOWN = """
 # Yahoo News Search Results
 
 1. [アイコの新曲情報](https://news.yahoo.co.jp/articles/abc123)
-2. [別のニュース](https://news.yahoo.co.jp/articles/xyz789)
+2. [アイコの別ニュース](https://news.yahoo.co.jp/articles/xyz789)
 3. [重複エントリ](https://news.yahoo.co.jp/articles/abc123)
 """
 
@@ -797,6 +975,19 @@ class TestYahooNewsFetch:
         assert result[0].platform == "yahoonews"
         assert result[0].content_text == "アイコの最新情報 Yahoo!ニュース"
         assert "https://" not in result[0].content_text
+
+    @pytest.mark.asyncio
+    async def test_gnews_filters_keyword_found_only_in_summary(self):
+        entry = _FeedEntry(
+            id="https://news.yahoo.co.jp/articles/abc123",
+            link="https://news.yahoo.co.jp/articles/abc123",
+            title="関係のないニュース",
+            summary="<p>アイコ appears elsewhere in the Google News cluster</p>",
+        )
+        with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await YahooNewsConnector()._fetch_gnews_rss("アイコ")
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_falls_back_to_jina_when_gnews_empty(self):
@@ -854,7 +1045,7 @@ class TestYahooNewsFetch:
     @pytest.mark.asyncio
     async def test_jina_caps_at_25_items(self):
         entries = "\n".join(
-            f"{i+1}. [Title{i}](https://news.yahoo.co.jp/articles/art{i:03d})"
+            f"{i+1}. [アイコ Title{i}](https://news.yahoo.co.jp/articles/art{i:03d})"
             for i in range(30)
         )
         empty_feed = _FakeFeed([])
@@ -876,12 +1067,12 @@ class TestYahooNewsFetch:
         dup1 = _FeedEntry(
             id="https://news.yahoo.co.jp/articles/dup",
             link="https://news.yahoo.co.jp/articles/dup",
-            title="Dup A",
+            title="アイコ Dup A",
         )
         dup2 = _FeedEntry(
             id="https://news.yahoo.co.jp/articles/dup",
             link="https://news.yahoo.co.jp/articles/dup",
-            title="Dup B",
+            title="アイコ Dup B",
         )
         empty_title = _FeedEntry(
             id="https://news.yahoo.co.jp/articles/et",
@@ -894,6 +1085,31 @@ class TestYahooNewsFetch:
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
         # valid + dup1 survive; no_link, dup2, empty_title are skipped
         assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_gnews_rss_filters_items_without_keyword(self):
+        fake_feed = _FakeFeed([
+            _FeedEntry(
+                id="https://news.yahoo.co.jp/articles/abc1",
+                link="https://news.yahoo.co.jp/articles/abc1",
+                title="unrelated title",
+                summary="unrelated summary",
+            )
+        ])
+        with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=fake_feed):
+            result = await YahooNewsConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_jina_filters_items_without_keyword(self):
+        empty_feed = _FakeFeed([])
+        markdown = "1. [unrelated title](https://news.yahoo.co.jp/articles/abc123)"
+        with patch("app.connectors.yahoonews.httpx.AsyncClient",
+                   _http_mock(content=b"<rss/>", text=markdown)), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
+            result = await YahooNewsConnector().fetch("Aiko", "all_info")
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -918,6 +1134,18 @@ def _nico_ctx(side_effect=None, rss_content=b"<rss/>"):
 
 
 class TestNicoNicoFetch:
+    @pytest.mark.asyncio
+    async def test_gnews_filters_keyword_found_only_in_summary(self):
+        entry = _rss_entry(
+            link="https://www.nicovideo.jp/watch/sm12345",
+            title="unrelated video",
+            summary="Aiko appears elsewhere in the Google News cluster",
+        )
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await NicoNicoConnector()._fetch_gnews("Aiko")
+        assert result == []
+
     @pytest.mark.asyncio
     async def test_rss_returns_items_on_success(self):
         entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm12345", title="Aiko cover")
@@ -952,7 +1180,7 @@ class TestNicoNicoFetch:
             call_count[0] += 1
             return fail_resp if call_count[0] == 1 else ok_resp
 
-        entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm42", title="Tag video")
+        entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm42", title="Aiko Tag video")
         fake_feed = _FakeFeed([entry])
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
@@ -970,7 +1198,7 @@ class TestNicoNicoFetch:
             call_count[0] += 1
             return fail_resp if call_count[0] <= 2 else ok_resp
 
-        gnews_entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm88", title="GNews video")
+        gnews_entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm88", title="Aiko GNews video")
         fake_feed = _FakeFeed([gnews_entry])
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
@@ -991,7 +1219,7 @@ class TestNicoNicoFetch:
     @pytest.mark.asyncio
     async def test_skips_entries_without_title(self):
         entries = [
-            _rss_entry(link="https://www.nicovideo.jp/watch/sm1", title="Good"),
+            _rss_entry(link="https://www.nicovideo.jp/watch/sm1", title="Aiko Good"),
             _rss_entry(link="https://www.nicovideo.jp/watch/sm2", title=""),
             _FeedEntry(id="nl", link="", title="no link"),
         ]
@@ -1004,8 +1232,8 @@ class TestNicoNicoFetch:
 
     @pytest.mark.asyncio
     async def test_deduplicates_by_video_id(self):
-        e1 = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="V1")
-        e2 = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="V2")
+        e1 = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="Aiko V1")
+        e2 = _rss_entry(link="https://www.nicovideo.jp/watch/sm99", title="Aiko V2")
         fake_feed = _FakeFeed([e1, e2])
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
              patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
@@ -1016,6 +1244,15 @@ class TestNicoNicoFetch:
     async def test_feedparser_exception_returns_empty(self):
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
              patch("app.connectors.niconico.feedparser.parse", side_effect=ValueError("bad")):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_rss_filters_items_without_keyword(self):
+        entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm12345", title="unrelated video")
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
             result = await NicoNicoConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1082,7 +1319,7 @@ class TestNoteFetch:
         no_link = _FeedEntry(id="nl", link="", title="skip")
         with_enclosure = _FeedEntry(
             id="enc1", link="https://note.com/u/n/enc1",
-            title="Article with thumb",
+            title="Aiko Article with thumb",
             enclosures=[{"type": "image/jpeg", "href": "https://assets.st-note.com/enc/t.jpg"}],
         )
         fake_feed = _FakeFeed([no_link, with_enclosure])
@@ -1104,7 +1341,7 @@ class TestNoteFetch:
     async def test_rss_extracts_thumbnail_from_media_thumbnail(self):
         entry = _FeedEntry(
             id="nid1", link="https://note.com/u/n/nid1",
-            title="Article",
+            title="Aiko Article",
             media_thumbnail=[{"url": "https://assets.st-note.com/media/t.jpg"}],
         )
         fake_feed = _FakeFeed([entry])
@@ -1120,6 +1357,49 @@ class TestNoteFetch:
              patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
         assert result[0].thumbnail_url == "https://assets.st-note.com/media/t.jpg"
+
+    @pytest.mark.asyncio
+    async def test_rss_filters_items_without_keyword(self):
+        entry = _FeedEntry(
+            id="nid1",
+            link="https://note.com/u/n/nid1",
+            title="unrelated article",
+            summary="unrelated summary",
+        )
+        fake_feed = _FakeFeed([entry])
+        rss_resp = MagicMock()
+        rss_resp.is_success = True
+        rss_resp.content = b"<rss/>"
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=rss_resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_rss_filters_keyword_found_only_in_summary_or_author(self):
+        entry = _FeedEntry(
+            id="nid1",
+            link="https://note.com/u/n/nid1",
+            title="unrelated article",
+            summary="Aiko appears only in the article summary",
+            author="Aiko fan",
+        )
+        fake_feed = _FakeFeed([entry])
+        rss_resp = MagicMock(is_success=True, content=b"<rss/>")
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=rss_resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
+            result = await NoteConnector().fetch("Aiko", "all_info")
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -1200,7 +1480,7 @@ class TestTwitterFetch:
             tweets=[{
                 "id": "t_photo",
                 "author_id": "u_photo",
-                "text": "Photo tweet!",
+                "text": "Aiko photo tweet!",
                 "created_at": "2024-01-15T12:00:00Z",
                 "attachments": {"media_keys": ["mk_photo"]},
             }],
@@ -1227,7 +1507,7 @@ class TestTwitterFetch:
             tweets=[{
                 "id": "t3",
                 "author_id": "u_unknown",
-                "text": "Tweet",
+                "text": "Aiko Tweet",
                 "created_at": "2024-01-15T14:00:00Z",
                 "attachments": {},
             }],
@@ -1264,6 +1544,30 @@ class TestTwitterFetch:
     async def test_network_exception_returns_empty(self):
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(side_effect=Exception("connection refused"))
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_tweets_without_keyword(self):
+        data = _twitter_api_data(
+            tweets=[{
+                "id": "t1",
+                "author_id": "u1",
+                "text": "unrelated tweet",
+                "created_at": "2024-01-15T10:00:00Z",
+                "attachments": {},
+            }],
+            users=[{"id": "u1", "username": "otherfan", "name": "Other Fan"}],
+        )
+        resp = MagicMock()
+        resp.is_success = True
+        resp.json.return_value = data
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
         with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
@@ -1347,7 +1651,7 @@ def _tver_ep(ep_id="ep001", title="Aiko Drama", ep_type="episode",
         "title": title,
         "publishedAt": published_at_unix,
         "broadcasterName": author,
-        "description": "desc",
+        "description": "Aiko desc",
     }
     if thumb:
         content["thumbnailUrl"] = thumb
@@ -1506,6 +1810,17 @@ class TestTVERFetch:
         assert len(result) == 1
         assert result[0].item_id == "ep012"
 
+    @pytest.mark.asyncio
+    async def test_filters_episodes_without_keyword(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="ep013", title="unrelated episode")
+        ep["content"]["description"] = "unrelated description"
+        ep["content"]["broadcasterName"] = "Other"
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+        assert result == []
+
 
 # ─── YouTube helpers ──────────────────────────────────────────────────────────
 
@@ -1521,10 +1836,10 @@ _YT_SCRAPE_DATA = {
                                     {
                                         "videoRenderer": {
                                             "videoId": "scr001",
-                                            "title": {"runs": [{"text": "Scraped Video"}]},
+                                            "title": {"runs": [{"text": "Aiko Scraped Video"}]},
                                             "ownerText": {"runs": [{"text": "ScrapedChannel"}]},
                                             "detailedMetadataSnippets": [
-                                                {"snippetText": {"runs": [{"text": "desc text"}]}}
+                                                {"snippetText": {"runs": [{"text": "Aiko desc text"}]}}
                                             ],
                                             "thumbnail": {"thumbnails": [{"url": "https://i.ytimg.com/vi/scr001/hq.jpg"}]},
                                             "publishedTimeText": {"simpleText": "1 day ago"},
@@ -1631,7 +1946,7 @@ def _yt_gnews_ctx(content=b"", is_success=True, get_exc=None):
     return MagicMock(return_value=ctx)
 
 
-def _yt_api_item(vid_id="v001", title="Test MV", channel="Test Ch",
+def _yt_api_item(vid_id="v001", title="Aiko Test MV", channel="Test Ch",
                  published="2024-01-15T10:00:00Z",
                  thumb="https://i.ytimg.com/vi/v001/thumb.jpg"):
     return {
@@ -1640,7 +1955,7 @@ def _yt_api_item(vid_id="v001", title="Test MV", channel="Test Ch",
             "title": title,
             "channelTitle": channel,
             "publishedAt": published,
-            "description": "description",
+            "description": "Aiko description",
             "thumbnails": {"medium": {"url": thumb}},
         },
     }
@@ -1709,6 +2024,14 @@ class TestYouTubeApiFetch:
             with pytest.raises(httpx.ConnectError):
                 await YouTubeConnector(api_key="key")._fetch_api("Aiko")
 
+    @pytest.mark.asyncio
+    async def test_filters_api_items_without_keyword(self):
+        item = _yt_api_item(title="unrelated video", channel="Other Ch")
+        item["snippet"]["description"] = "unrelated description"
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_api_ctx(items=[item])):
+            result = await YouTubeConnector(api_key="key")._fetch_api("Aiko")
+        assert result == []
+
 
 class TestYouTubeScrapeFetch:
     @pytest.mark.asyncio
@@ -1718,7 +2041,7 @@ class TestYouTubeScrapeFetch:
             result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
         assert len(result) == 1
         assert result[0].item_id == "scr001"
-        assert result[0].title == "Scraped Video"
+        assert result[0].title == "Aiko Scraped Video"
         assert result[0].author == "ScrapedChannel"
         assert result[0].thumbnail_url == "https://i.ytimg.com/vi/scr001/hq.jpg"
         assert result[0].platform == "youtube"
@@ -1753,8 +2076,28 @@ class TestYouTubeScrapeFetch:
             result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
         assert result == []
 
+    @pytest.mark.asyncio
+    async def test_filters_scraped_items_without_keyword(self):
+        with patch("app.connectors.youtube.httpx.AsyncClient",
+                   _yt_scrape_ctx(html=_YT_SCRAPE_HTML)):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Missing")
+        assert result == []
+
 
 class TestYouTubeGnewsFetch:
+    @pytest.mark.asyncio
+    async def test_filters_keyword_found_only_in_summary(self):
+        entry = _FeedEntry(
+            link="https://www.youtube.com/watch?v=gnews001",
+            id="gnews001",
+            title="unrelated video",
+            summary="Aiko appears elsewhere in the Google News cluster",
+        )
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
     @pytest.mark.asyncio
     async def test_success_returns_items(self):
         entry = _FeedEntry(
@@ -1795,7 +2138,7 @@ class TestYouTubeGnewsFetch:
 
     @pytest.mark.asyncio
     async def test_dedup_prevents_duplicate_items(self):
-        entry = _FeedEntry(link="https://youtube.com/watch?v=dup", id="dup", title="Dup Video")
+        entry = _FeedEntry(link="https://youtube.com/watch?v=dup", id="dup", title="Aiko Dup Video")
         fake_feed = _FakeFeed([entry, entry])
         with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
              patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
@@ -1815,6 +2158,15 @@ class TestYouTubeGnewsFetch:
     async def test_skip_entry_without_title(self):
         no_title = _FeedEntry(link="https://youtube.com/watch?v=notitle", id="notitle", title="")
         fake_feed = _FakeFeed([no_title])
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_gnews_items_without_keyword(self):
+        entry = _FeedEntry(link="https://youtube.com/watch?v=other", id="other", title="unrelated video")
+        fake_feed = _FakeFeed([entry])
         with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
              patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
             result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")

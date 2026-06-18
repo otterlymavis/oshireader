@@ -22,6 +22,10 @@ class LocalDB: ObservableObject {
     private let queue = DispatchQueue(label: "com.otterlymavis.oshireader.db", qos: .userInitiated)
     private let decoder = JSONDecoder()
     private let iso8601 = ISO8601DateFormatter()
+    private let maxContentCacheFiles = 120
+    private let maxContentCacheBytes = 1_000_000
+    private let maxFeedItems = 600
+    private let minFeedItemsPerSubscribedPlatform = 8
 
     // Bump this whenever a migration step is added below.
     private static let currentSchemaVersion = 2
@@ -31,6 +35,7 @@ class LocalDB: ObservableObject {
         self.storeDirectory = directory
         loadAll()
         runMigrationsIfNeeded()
+        pruneContentCache()
     }
 
     // MARK: - File Paths
@@ -119,11 +124,19 @@ class LocalDB: ObservableObject {
 
     private func saveToFile<T: Encodable>(name: String, value: T) {
         let url = fileURL(for: name)
-        queue.async {
+        queue.async { [weak self] in
+            guard self != nil else { return }
+            guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) else { return }
             do {
                 let data = try JSONEncoder().encode(value)
                 try data.write(to: url, options: [.atomic])
             } catch {
+                let nsError = error as NSError
+                if nsError.domain == NSCocoaErrorDomain,
+                   nsError.code == CocoaError.Code.fileNoSuchFile.rawValue {
+                    return
+                }
+                guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) else { return }
                 AppLogger.persistence.error("Failed to save \(name): \(error.localizedDescription)")
             }
         }
@@ -172,7 +185,7 @@ class LocalDB: ObservableObject {
     }
 
     // MARK: - Feed Items & Merging
-    func mergeItems(newItems: [FeedItem]) -> Int {
+    func mergeItems(newItems: [FeedItem], notifyOnNew: Bool = true) -> Int {
         // On a fresh install / cleared cache the whole first fetch is "new"; don't fire a
         // burst of notifications for content the user is seeing for the first time anyway.
         let wasFirstLoad = feedItems.isEmpty
@@ -227,15 +240,27 @@ class LocalDB: ObservableObject {
             }
         }
 
-        let sorted = currentMap.values.sorted(by: {
-            (parseISO8601Date($0.published_at) ?? .distantPast) >
-            (parseISO8601Date($1.published_at) ?? .distantPast)
-        })
-        let finalItems = Array(sorted.prefix(600)) // Replicate MAX_ITEMS = 600
+        let sorted = currentMap.values.sorted { lhs, rhs in
+            let lhsDate = parseISO8601Date(lhs.published_at) ?? .distantPast
+            let rhsDate = parseISO8601Date(rhs.published_at) ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+
+            // Keep ordering deterministic when multiple items share the same timestamp.
+            // Without stable tie-breakers, background refreshes can rewrite the same
+            // 600 objects in a new order, forcing SwiftUI to churn the feed list.
+            let lhsKey = itemKey(lhs)
+            let rhsKey = itemKey(rhs)
+            if lhsKey != rhsKey { return lhsKey < rhsKey }
+            return lhs.url < rhs.url
+        }
+        let finalItems = cappedFeedItemsPreservingSubscribedPlatforms(sorted)
 
         // Only notify for items that survived the cap — avoids pinging for articles
         // that were immediately evicted as too old.
-        if !addedItems.isEmpty && !wasFirstLoad {
+        let shouldScheduleLocalFallback = BackgroundRefreshPolicy.shouldScheduleLocalFallback(
+            registeredRemoteToken: NetworkManager.shared.registeredAPNSDeviceToken
+        )
+        if notifyOnNew, shouldScheduleLocalFallback, !addedItems.isEmpty, !wasFirstLoad {
             let survivedKeys = Set(finalItems.map { itemKey($0) })
             let notifyItems = addedItems.filter { survivedKeys.contains(itemKey($0)) }
             if !notifyItems.isEmpty {
@@ -245,6 +270,8 @@ class LocalDB: ObservableObject {
                 }
             }
         }
+
+        guard finalItems != feedItems else { return addedCount }
 
         feedItems = finalItems
         saveToFile(name: "feed_items", value: feedItems)
@@ -257,6 +284,46 @@ class LocalDB: ObservableObject {
         saveToFile(name: "hidden_items", value: Array(hiddenItems))
         feedItems.removeAll(where: { $0.id == id && $0.watch_term_keyword == watchTermKeyword })
         saveToFile(name: "feed_items", value: feedItems)
+    }
+
+    private func cappedFeedItemsPreservingSubscribedPlatforms(_ sortedItems: [FeedItem]) -> [FeedItem] {
+        guard sortedItems.count > maxFeedItems else { return sortedItems }
+
+        var selected: [FeedItem] = []
+        var selectedKeys = Set<String>()
+        let itemKey = { (item: FeedItem) in "\(item.id)::\(item.watch_term_keyword)" }
+        let subscribed = Set(subscribedPlatforms.filter { $0 != "custom" })
+
+        // Keep a small slice of every subscribed source before filling the rest by date.
+        // Otherwise high-volume sources can crowd out lower-volume sources like TVer even
+        // when those items were fetched successfully.
+        for platformId in subscribed.sorted() {
+            var keptForPlatform = 0
+            for item in sortedItems where Platform.normalize(item.platform) == platformId {
+                let key = itemKey(item)
+                guard selectedKeys.insert(key).inserted else { continue }
+                selected.append(item)
+                keptForPlatform += 1
+                if keptForPlatform >= minFeedItemsPerSubscribedPlatform { break }
+            }
+        }
+
+        for item in sortedItems {
+            guard selected.count < maxFeedItems else { break }
+            let key = itemKey(item)
+            guard selectedKeys.insert(key).inserted else { continue }
+            selected.append(item)
+        }
+
+        return selected.sorted { lhs, rhs in
+            let lhsDate = parseISO8601Date(lhs.published_at) ?? .distantPast
+            let rhsDate = parseISO8601Date(rhs.published_at) ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+            let lhsKey = itemKey(lhs)
+            let rhsKey = itemKey(rhs)
+            if lhsKey != rhsKey { return lhsKey < rhsKey }
+            return lhs.url < rhs.url
+        }
     }
 
     // Sort every item by its real published / last-updated date — never by fetch time.
@@ -274,15 +341,23 @@ class LocalDB: ObservableObject {
         // days == 0 means "All Time" — no cutoff applied
         let cutoffDate = days > 0 ? Calendar.current.date(byAdding: .day, value: -days, to: now) : nil
 
-        return feedItems.filter { item in
+        let subscribedPlatformSet = Set(subscribedPlatforms)
+        let termsByKeyword = terms.reduce(into: [String: WatchTerm]()) { result, term in
+            result[term.keyword] = term
+        }
+
+        let deduped = feedItems.filter { item in
             let key = "\(item.id)::\(item.watch_term_keyword)"
             if hiddenItems.contains(key) { return false }
 
             // Search pages fallbacks
             if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return false }
 
-            // Bare address item (Yahoo News fallback checking)
-            if item.platform == "yahoonews" && (item.title?.contains("https://") == true || item.content_text?.contains("https://") == true) {
+            // Hide broken Yahoo fallback cards whose readable field is only a URL.
+            // Valid Google News summaries contain an HTML anchor, so checking for any
+            // "https://" substring incorrectly removed every Yahoo article.
+            if item.platform == "yahoonews"
+                && (Self.isBareWebAddress(item.title) || Self.isBareWebAddress(item.content_text)) {
                 return false
             }
 
@@ -306,7 +381,7 @@ class LocalDB: ObservableObject {
 
             // Strict keyword matching — news-type platforms require keyword/alias to appear in content
             if platformDef?.usesStrictKeywordMatching == true, !item.watch_term_keyword.isEmpty {
-                let term = terms.first(where: { $0.keyword == item.watch_term_keyword })
+                let term = termsByKeyword[item.watch_term_keyword]
                 let candidates = [item.watch_term_keyword] + (term?.aliases ?? [])
                 if !candidates.contains(where: { matchesKeyword(item: item, kw: $0) }) {
                     return false
@@ -315,15 +390,15 @@ class LocalDB: ObservableObject {
 
             // Subscribed platforms
             let platformKey = Platform.normalize(item.platform)
-            if !subscribedPlatforms.contains(platformKey) {
+            if !subscribedPlatformSet.contains(platformKey) {
                 return false
             }
 
             return true
         }
-        .sorted(by: { lhs, rhs in
+        .sorted { lhs, rhs in
             sortDate(for: lhs) > sortDate(for: rhs)
-        })
+        }
         .reduce(into: ([FeedItem](), Set<String>())) { acc, item in
             // Deduplicate the same article arriving from two paths — e.g. a backend copy
             // with a direct URL and a device-scraped Google News copy with a news.google
@@ -336,6 +411,8 @@ class LocalDB: ObservableObject {
                 : "t:\(Platform.normalize(item.platform))|\(titleKey)"
             if acc.1.insert(dedupKey).inserted { acc.0.append(item) }
         }.0
+
+        return Self.diversifiedFeedOrder(deduped)
     }
 
     // Collapses a title to a comparison key: lowercased, alphanumerics only (keeps CJK,
@@ -343,6 +420,85 @@ class LocalDB: ObservableObject {
     static func normalizedTitleKey(_ title: String?) -> String {
         guard let t = title?.lowercased(), !t.isEmpty else { return "" }
         return String(t.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
+    }
+
+    private static func diversifiedFeedOrder(_ items: [FeedItem]) -> [FeedItem] {
+        guard items.count > 2 else { return items }
+
+        var remaining = items
+        var ordered: [FeedItem] = []
+        ordered.reserveCapacity(items.count)
+
+        while !remaining.isEmpty {
+            let searchLimit = min(remaining.count, 12)
+            var bestIndex = 0
+            var bestScore = repetitionScore(for: remaining[0], after: ordered)
+
+            if bestScore > 0, searchLimit > 1 {
+                for index in 1..<searchLimit {
+                    let score = repetitionScore(for: remaining[index], after: ordered)
+                    if score < bestScore {
+                        bestIndex = index
+                        bestScore = score
+                        if score == 0 { break }
+                    }
+                }
+            }
+
+            ordered.append(remaining.remove(at: bestIndex))
+        }
+
+        return ordered
+    }
+
+    private static func repetitionScore(for item: FeedItem, after ordered: [FeedItem]) -> Int {
+        guard !ordered.isEmpty else { return 0 }
+
+        let platform = Platform.normalize(item.platform)
+        let keyword = normalizedKeywordKey(item.watch_term_keyword)
+        let titleCluster = titleClusterKey(item.title)
+        let recent = ordered.suffix(4)
+        var score = 0
+
+        if let previous = ordered.last {
+            if Platform.normalize(previous.platform) == platform { score += 3 }
+            if normalizedKeywordKey(previous.watch_term_keyword) == keyword, !keyword.isEmpty { score += 2 }
+            if titleClusterKey(previous.title) == titleCluster, !titleCluster.isEmpty { score += 8 }
+        }
+
+        if recent.filter({ Platform.normalize($0.platform) == platform }).count >= 2 { score += 4 }
+        if !keyword.isEmpty,
+           recent.filter({ normalizedKeywordKey($0.watch_term_keyword) == keyword }).count >= 3 {
+            score += 2
+        }
+
+        if !titleCluster.isEmpty {
+            let matchingRecentStories = ordered.suffix(8).filter { titleClusterKey($0.title) == titleCluster }.count
+            if matchingRecentStories > 0 { score += 6 + matchingRecentStories }
+        }
+
+        return score
+    }
+
+    private static func normalizedKeywordKey(_ keyword: String) -> String {
+        keyword.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func titleClusterKey(_ title: String?) -> String {
+        let key = normalizedTitleKey(title)
+        guard key.count >= 24 else { return key }
+        return String(key.prefix(32))
+    }
+
+    private static func isBareWebAddress(_ value: String?) -> Bool {
+        guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let url = URL(string: text),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else {
+            return false
+        }
+        return !text.contains(where: \.isWhitespace)
     }
 
     private func matchesKeyword(item: FeedItem, kw: String) -> Bool {
@@ -535,8 +691,14 @@ class LocalDB: ObservableObject {
 
     // MARK: - Content Cache (Offline Pages)
     func saveContentCache(id: String, html: String) {
+        guard html.utf8.count <= maxContentCacheBytes else {
+            AppLogger.persistence.info("Skipped oversized content cache for \(id)")
+            return
+        }
+
         let name = "cache_\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
         saveToFile(name: name, value: html)
+        pruneContentCache()
     }
 
     func getContentCache(id: String) -> String? {
@@ -550,6 +712,32 @@ class LocalDB: ObservableObject {
         let url = fileURL(for: name)
         queue.async {
             if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    private func pruneContentCache() {
+        let storeDirectory = storeDirectory
+        let maxFiles = maxContentCacheFiles
+        queue.async {
+            guard let urls = try? FileManager.default.contentsOfDirectory(
+                at: storeDirectory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { return }
+
+            let cacheUrls = urls
+                .filter { $0.lastPathComponent.hasPrefix("cache_") && $0.pathExtension == "json" }
+                .sorted { lhs, rhs in
+                    let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return lhsDate > rhsDate
+                }
+
+            guard cacheUrls.count > maxFiles else { return }
+
+            for url in cacheUrls.dropFirst(maxFiles) {
                 try? FileManager.default.removeItem(at: url)
             }
         }

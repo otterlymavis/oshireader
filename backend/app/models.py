@@ -77,6 +77,17 @@ class Match(Base):
     __table_args__ = (UniqueConstraint("watch_term_id", "source_item_id"),)
 
 
+class BackendEvent(Base):
+    __tablename__ = "backend_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, index=True)
+    message = Column(Text)
+    payload = Column(JSON)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
 class MigrationLog(Base):
     """Tracks one-time migrations so they never re-run on subsequent boots."""
     __tablename__ = "migration_log"

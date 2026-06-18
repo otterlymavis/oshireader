@@ -6,6 +6,7 @@ protocol NotificationCenterClient {
     func authorizationStatus() async -> UNAuthorizationStatus
     func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
     func add(_ request: UNNotificationRequest) async throws
+    func setNotificationCategories(_ categories: Set<UNNotificationCategory>)
 }
 
 extension UNUserNotificationCenter: NotificationCenterClient {
@@ -17,13 +18,26 @@ extension UNUserNotificationCenter: NotificationCenterClient {
 @MainActor
 final class NotificationManager: ObservableObject {
     static let shared = NotificationManager()
+    nonisolated static let resultPreviewCategoryIdentifier = "OSHI_RESULT_PREVIEW"
+    nonisolated static let openResultActionIdentifier = "OPEN_RESULT"
+    nonisolated static let saveResultActionIdentifier = "SAVE_RESULT"
 
     @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
+    @Published private(set) var lastRemoteRegistrationError: String?
 
     private let center: NotificationCenterClient
+    private let maximumAttachmentBytes: Int64 = 10 * 1024 * 1024
+    private var lastRegisteredDeviceToken: String?
+    private var tokenRegistrationWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
-    init(center: NotificationCenterClient = UNUserNotificationCenter.current()) {
+    init(
+        center: NotificationCenterClient = UNUserNotificationCenter.current(),
+        initialRegisteredDeviceToken: String? = NetworkManager.shared.hasRegisteredAPNSDeviceForCurrentEnvironment
+            ? NetworkManager.shared.registeredAPNSDeviceToken
+            : nil
+    ) {
         self.center = center
+        self.lastRegisteredDeviceToken = initialRegisteredDeviceToken
         Task {
             await refreshAuthorizationStatus()
         }
@@ -51,6 +65,37 @@ final class NotificationManager: ObservableObject {
         authorizationStatus == .authorized || authorizationStatus == .provisional || authorizationStatus == .ephemeral
     }
 
+    var hasRemoteDeviceToken: Bool {
+        lastRegisteredDeviceToken != nil || NetworkManager.shared.hasRegisteredAPNSDeviceForCurrentEnvironment
+    }
+
+    var remoteDeviceTokenSuffix: String? {
+        let token = lastRegisteredDeviceToken ?? NetworkManager.shared.registeredAPNSDeviceToken
+        guard let token, !token.isEmpty else { return nil }
+        return String(token.suffix(8))
+    }
+
+    func registerNotificationCategories() {
+        let i18n = I18nManager.shared
+        let openAction = UNNotificationAction(
+            identifier: Self.openResultActionIdentifier,
+            title: i18n.t("notifActionOpen"),
+            options: [.foreground]
+        )
+        let saveAction = UNNotificationAction(
+            identifier: Self.saveResultActionIdentifier,
+            title: i18n.t("notifActionSave"),
+            options: []
+        )
+        let previewCategory = UNNotificationCategory(
+            identifier: Self.resultPreviewCategoryIdentifier,
+            actions: [openAction, saveAction],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+        center.setNotificationCategories([previewCategory])
+    }
+
     func refreshAuthorizationStatus() async {
         authorizationStatus = await center.authorizationStatus()
     }
@@ -75,15 +120,33 @@ final class NotificationManager: ObservableObject {
         guard canScheduleNotifications else { return }
 
         let i18n = I18nManager.shared
+        let now = _ISO8601Cache.withoutFractional.string(from: Date())
+        let previewItem = FeedItem(
+            id: "oshireader-test-preview",
+            platform: "web",
+            url: NetworkManager.shared.apiBase,
+            title: i18n.t("notifTestBody"),
+            content_text: nil,
+            author: "OshiReader",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: "OshiReader",
+            fetched_at: now
+        )
         let content = UNMutableNotificationContent()
-        content.title = "OshiReader"
-        content.body = i18n.t("notifTestBody")
+        content.title = i18n.tFormat("notifNewItemsTitle", "OshiReader")
+        content.body = notificationBody(for: previewItem, count: 1)
         content.sound = .default
+        content.categoryIdentifier = Self.resultPreviewCategoryIdentifier
+        content.userInfo = notificationUserInfo(for: previewItem, keyword: "OshiReader", count: 1)
+        content.threadIdentifier = notificationThreadIdentifier(for: "OshiReader")
+        content.targetContentIdentifier = previewItem.id
 
         let request = UNNotificationRequest(
             identifier: "oshireader-test-\(UUID().uuidString)",
             content: content,
-            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)
         )
         try await center.add(request)
     }
@@ -96,6 +159,31 @@ final class NotificationManager: ObservableObject {
         }
     }
 
+    func ensureRemoteNotificationsRegisteredIfAllowed(timeout: TimeInterval = 8) async -> Bool {
+        await refreshAuthorizationStatus()
+        guard canScheduleNotifications else { return false }
+        if lastRegisteredDeviceToken != nil { return true }
+
+        return await withCheckedContinuation { continuation in
+            let id = UUID()
+            tokenRegistrationWaiters[id] = continuation
+            UIApplication.shared.registerForRemoteNotifications()
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if let continuation = tokenRegistrationWaiters.removeValue(forKey: id) {
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+    }
+
+    func resetRemoteNotificationRegistrationCache() {
+        lastRegisteredDeviceToken = nil
+        lastRemoteRegistrationError = nil
+        NetworkManager.shared.clearRegisteredAPNSDeviceToken()
+    }
+
     nonisolated static func deviceTokenString(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
     }
@@ -104,12 +192,35 @@ final class NotificationManager: ObservableObject {
         let token = Self.deviceTokenString(deviceToken)
         do {
             try await NetworkManager.shared.registerAPNSDeviceToken(token)
+            lastRegisteredDeviceToken = token
+            lastRemoteRegistrationError = nil
+            completeTokenRegistrationWaiters(success: true)
         } catch {
             AppLogger.notifications.error("APNs device token registration failed: \(error.localizedDescription)")
+            lastRemoteRegistrationError = error.localizedDescription
+            completeTokenRegistrationWaiters(success: false)
         }
     }
 
-    func notifyForNewItems(_ items: [FeedItem], terms: [WatchTerm]) async {
+    func handleRemoteNotificationRegistrationFailed(_ error: Error) {
+        AppLogger.notifications.error("APNs registration failed: \(error.localizedDescription)")
+        lastRemoteRegistrationError = error.localizedDescription
+        completeTokenRegistrationWaiters(success: false)
+    }
+
+    private func completeTokenRegistrationWaiters(success: Bool) {
+        let waiters = tokenRegistrationWaiters.values
+        tokenRegistrationWaiters.removeAll()
+        for continuation in waiters {
+            continuation.resume(returning: success)
+        }
+    }
+
+    func notifyForNewItems(
+        _ items: [FeedItem],
+        terms: [WatchTerm],
+        includeAttachments: Bool = true
+    ) async {
         guard !items.isEmpty else { return }
         await refreshAuthorizationStatus()
         guard canScheduleNotifications else { return }
@@ -119,16 +230,29 @@ final class NotificationManager: ObservableObject {
 
         let counts = Dictionary(grouping: items.filter { notifiedKeywords.contains($0.watch_term_keyword) }) {
             $0.watch_term_keyword
-        }.mapValues(\.count)
+        }
 
         let i18n = I18nManager.shared
-        for (keyword, count) in counts where count > 0 {
+        for (keyword, keywordItems) in counts where !keywordItems.isEmpty {
+            let count = keywordItems.count
+            let previewItem = keywordItems.sorted {
+                (parseISO8601Date($0.published_at) ?? .distantPast) >
+                (parseISO8601Date($1.published_at) ?? .distantPast)
+            }.first
             let content = UNMutableNotificationContent()
             content.title = i18n.tFormat("notifNewItemsTitle", keyword)
-            content.body = count == 1
-                ? i18n.t("notifNewItemsBodyOne")
-                : i18n.tFormat("notifNewItemsBodyMany", count)
+            content.body = notificationBody(for: previewItem, count: count)
             content.sound = .default
+            content.categoryIdentifier = Self.resultPreviewCategoryIdentifier
+            content.userInfo = notificationUserInfo(for: previewItem, keyword: keyword, count: count)
+            content.threadIdentifier = notificationThreadIdentifier(for: keyword)
+            if let previewItem {
+                content.targetContentIdentifier = previewItem.id
+            }
+            if includeAttachments,
+               let attachment = await notificationAttachment(for: previewItem) {
+                content.attachments = [attachment]
+            }
 
             let request = UNNotificationRequest(
                 identifier: "oshireader-new-\(keyword)",
@@ -140,6 +264,114 @@ final class NotificationManager: ObservableObject {
             } catch {
                 AppLogger.notifications.error("Notification scheduling failed for \(keyword): \(error.localizedDescription)")
             }
+        }
+    }
+
+    private func notificationBody(for item: FeedItem?, count: Int) -> String {
+        let i18n = I18nManager.shared
+        let preview = cleanDisplayText(item?.title)
+            ?? cleanDisplayText(item?.content_text)
+            ?? item?.url
+            ?? (count == 1 ? i18n.t("notifNewItemsBodyOne") : i18n.tFormat("notifNewItemsBodyMany", count))
+        let limitedPreview = preview.count > 140 ? "\(preview.prefix(137))..." : preview
+        guard count > 1 else { return limitedPreview }
+        return "\(limitedPreview)\n\(i18n.tFormat("notifNewItemsMoreFmt", count - 1))"
+    }
+
+    private func notificationUserInfo(for item: FeedItem?, keyword: String, count: Int) -> [AnyHashable: Any] {
+        var userInfo: [AnyHashable: Any] = [
+            "watch_term_keyword": keyword,
+            "new_count": count,
+        ]
+        guard let item else { return userInfo }
+        userInfo["item_id"] = item.id
+        userInfo["item_url"] = item.url
+        userInfo["item_platform"] = item.platform
+        userInfo["item_media_type"] = item.media_type
+        userInfo["item_published_at"] = item.published_at
+        var previewItem: [String: Any] = [
+            "id": item.id,
+            "url": item.url,
+            "platform": item.platform,
+            "media_type": item.media_type,
+            "published_at": item.published_at,
+        ]
+        if let title = cleanDisplayText(item.title) {
+            userInfo["item_title"] = title
+            previewItem["title"] = title
+        }
+        if let contentText = cleanDisplayText(item.content_text) {
+            userInfo["item_content_text"] = contentText
+            previewItem["content_text"] = contentText
+        }
+        if let author = cleanDisplayText(item.author) {
+            userInfo["item_author"] = author
+            previewItem["author"] = author
+        }
+        if let thumbnail = item.thumbnail_url {
+            userInfo["thumbnail_url"] = thumbnail
+            previewItem["thumbnail_url"] = thumbnail
+        }
+        userInfo["preview_item"] = previewItem
+        return userInfo
+    }
+
+    private func notificationThreadIdentifier(for keyword: String) -> String {
+        let normalized = keyword
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized.isEmpty ? "oshireader-new-items" : "oshireader-\(normalized)"
+    }
+
+    private func notificationAttachment(for item: FeedItem?) async -> UNNotificationAttachment? {
+        guard let rawURL = item?.thumbnail_url,
+              let url = URL(string: rawURL),
+              ["http", "https"].contains(url.scheme?.lowercased())
+        else { return nil }
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5
+            let (tempURL, response) = try await URLSession.shared.download(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  http.mimeType?.lowercased().hasPrefix("image/") == true,
+                  http.expectedContentLength <= 0 || http.expectedContentLength <= maximumAttachmentBytes,
+                  notificationFileSize(at: tempURL) <= maximumAttachmentBytes
+            else {
+                return nil
+            }
+
+            let extensionHint = notificationAttachmentExtension(for: http, url: url)
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("oshireader-notification-\(UUID().uuidString).\(extensionHint)")
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: tempURL, to: destination)
+            return try UNNotificationAttachment(identifier: "preview", url: destination)
+        } catch {
+            AppLogger.notifications.warning("Notification preview attachment failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func notificationFileSize(at url: URL) -> Int64 {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+        return Int64(values?.fileSize ?? Int.max)
+    }
+
+    private func notificationAttachmentExtension(for response: HTTPURLResponse, url: URL) -> String {
+        switch response.mimeType?.lowercased() {
+        case "image/png":
+            return "png"
+        case "image/gif":
+            return "gif"
+        case "image/webp":
+            return "webp"
+        case "image/heic", "image/heif":
+            return "heic"
+        default:
+            let ext = url.pathExtension.lowercased()
+            return ["jpg", "jpeg"].contains(ext) ? ext : "jpg"
         }
     }
 }

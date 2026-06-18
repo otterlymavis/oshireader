@@ -42,6 +42,7 @@ class TestApplyStartupMigrations:
         assert "matches" in tables
         assert "platform_credentials" in tables
         assert "apns_device_tokens" in tables
+        assert "backend_events" in tables
         assert "migration_log" in tables
         assert "device_secret" in _column_names(fresh_engine, "apns_device_tokens")
 

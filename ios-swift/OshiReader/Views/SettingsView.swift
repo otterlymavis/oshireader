@@ -13,6 +13,9 @@ struct SettingsView: View {
     @State private var newCollectionMode = CollectionMode.allInfo
     @State private var addingAliasForId: String? = nil
     @State private var newAliasText = ""
+    @State private var notificationTestMessage: String? = nil
+    @State private var notificationTestSucceeded = false
+    @State private var isSendingNotificationTest = false
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     
     var allPlatforms: [(String, String)] {
@@ -198,24 +201,34 @@ struct SettingsView: View {
                 }
                 
                 // Section: Subscribed Platforms
-                Section(header: Text(i18n.t("platformSettings"))) {
-                    ForEach(allPlatforms, id: \.0) { key, label in
-                        let isSubscribed = db.subscribedPlatforms.contains(key)
-                        Toggle(label, isOn: Binding(
-                            get: { isSubscribed },
-                            set: { value in
-                                var list = db.subscribedPlatforms
-                                if value {
-                                    if !list.contains(key) { list.append(key) }
-                                } else {
-                                    list.removeAll(where: { $0 == key })
-                                }
-                                db.setSubscribedPlatforms(platforms: list)
-                            }
-                        ))
-                        .tint(theme.colors.primary)
-                        .accessibilityIdentifier("settings.platformToggle.\(key)")
+                Section {
+                    Menu {
+                        ForEach(allPlatforms, id: \.0) { key, label in
+                            Toggle(
+                                label,
+                                isOn: Binding(
+                                    get: { db.subscribedPlatforms.contains(key) },
+                                    set: { isSubscribed in
+                                        setPlatformSubscription(key, isSubscribed: isSubscribed)
+                                    }
+                                )
+                            )
+                            .accessibilityIdentifier("settings.platformToggle.\(key)")
+                        }
+                    } label: {
+                        HStack {
+                            Label(i18n.t("platformSettings"), systemImage: "dot.radiowaves.left.and.right")
+                                .foregroundColor(theme.colors.text)
+                            Spacer()
+                            Text("\(db.subscribedPlatforms.count)/\(allPlatforms.count)")
+                                .font(.subheadline)
+                                .foregroundColor(theme.colors.textMuted)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundColor(theme.colors.textMuted)
+                        }
                     }
+                    .accessibilityIdentifier("settings.platformMenu")
                 }
 
                 Section(header: Text(i18n.t("notificationsSection"))) {
@@ -226,6 +239,16 @@ struct SettingsView: View {
                             .foregroundColor(notifications.canScheduleNotifications ? theme.colors.primary : theme.colors.textMuted)
                     }
                     .accessibilityIdentifier("settings.notificationStatus")
+
+                    Label(i18n.t("notificationSetupHint"), systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundColor(theme.colors.textMuted)
+                        .accessibilityIdentifier("settings.notificationSetupHint")
+
+                    Label(i18n.t("backgroundRefreshSettingHint"), systemImage: "arrow.clockwise.circle")
+                        .font(.caption)
+                        .foregroundColor(theme.colors.textMuted)
+                        .accessibilityIdentifier("settings.backgroundRefreshHint")
 
                     switch notifications.authorizationStatus {
                     case .notDetermined:
@@ -248,13 +271,55 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings.openSettingsButton")
                     default:
                         Button {
-                            Task { try? await notifications.sendTestNotification() }
+                            Task { await sendTestNotification() }
                         } label: {
-                            Label(i18n.t("sendTestNotification"), systemImage: "paperplane.fill")
+                            Label(
+                                isSendingNotificationTest ? i18n.t("notifRemoteChecking") : i18n.t("sendTestNotification"),
+                                systemImage: isSendingNotificationTest ? "antenna.radiowaves.left.and.right" : "paperplane.fill"
+                            )
                                 .foregroundColor(theme.colors.primary)
                         }
+                        .disabled(isSendingNotificationTest)
                         .accessibilityIdentifier("settings.testNotificationButton")
                     }
+
+                    if let notificationTestMessage {
+                        Label(
+                            notificationTestMessage,
+                            systemImage: notificationTestSucceeded ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundColor(notificationTestSucceeded ? theme.colors.primary : .orange)
+                        .accessibilityIdentifier("settings.notificationTestResult")
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(i18n.t("apnsEnvironment"))
+                            Spacer()
+                            Text(NetworkManager.shared.apnsEnvironment)
+                                .foregroundColor(theme.colors.textMuted)
+                        }
+                        HStack {
+                            Text(i18n.t("apnsDeviceToken"))
+                            Spacer()
+                            if let suffix = notifications.remoteDeviceTokenSuffix {
+                                Text("…\(suffix)")
+                                    .foregroundColor(theme.colors.primary)
+                            } else {
+                                Text(i18n.t("notRegistered"))
+                                    .foregroundColor(theme.colors.textMuted)
+                            }
+                        }
+                        if let error = notifications.lastRemoteRegistrationError, !error.isEmpty {
+                            Text(i18n.tFormat("apnsLastErrorFmt", error))
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                                .lineLimit(3)
+                        }
+                    }
+                    .font(.caption)
+                    .accessibilityIdentifier("settings.apnsDebugStatus")
                 }
 
                 Section(header: Text(i18n.t("readerSection"))) {
@@ -334,7 +399,7 @@ struct SettingsView: View {
                 }
                 
             }
-            .font(.system(size: 13))
+            .font(appearance.font(size: 13))
             .accessibilityIdentifier("settings.screen")
             .navigationTitle(i18n.t("settingsTitle"))
             .navigationBarTitleDisplayMode(.inline)
@@ -412,6 +477,114 @@ struct SettingsView: View {
                 Text(i18n.t("clearAllDataMessage"))
             }
         }
+    }
+
+    private func sendTestNotification() async {
+        guard !isSendingNotificationTest else { return }
+        isSendingNotificationTest = true
+        defer { isSendingNotificationTest = false }
+
+        notificationTestMessage = i18n.t("notifRemoteChecking")
+        notificationTestSucceeded = false
+
+        if !notifications.canScheduleNotifications {
+            _ = await notifications.requestAuthorization()
+        }
+
+        do {
+            try await notifications.sendTestNotification()
+            notificationTestSucceeded = true
+        } catch {
+            AppLogger.notifications.warning("Local notification test failed: \(error.localizedDescription)")
+            notificationTestMessage = i18n.t("notifLocalTestFailed")
+            return
+        }
+
+        var remoteRegistrationReady = await notifications.ensureRemoteNotificationsRegisteredIfAllowed(timeout: 4)
+        if !remoteRegistrationReady {
+            // A freshly installed build can receive the APNs callback just after
+            // the first wait expires. Retry once, but do not block the UI for
+            // too long: the backend can also test a device-scoped stored token.
+            remoteRegistrationReady = await notifications.ensureRemoteNotificationsRegisteredIfAllowed(timeout: 8)
+        }
+
+        do {
+            let report = try await NetworkManager.shared.sendRemoteTestPush()
+            let result = notificationTestResult(for: report)
+            notificationTestMessage = result.message
+            notificationTestSucceeded = result.succeeded
+            if result.succeeded {
+                return
+            }
+        } catch {
+            if case APIClientError.httpStatus(404) = error {
+                if remoteRegistrationReady, await retryRemoteTestAfterTokenRefresh() {
+                    return
+                }
+                notificationTestMessage = i18n.t("notifRemoteNoDevices")
+                return
+            }
+            AppLogger.notifications.warning("Remote APNs test failed: \(error.localizedDescription)")
+            notificationTestMessage = remoteRegistrationReady
+                ? i18n.t("notifRemoteTestRequestFailed")
+                : i18n.t("notifRemoteTokenMissing")
+        }
+    }
+
+    private func retryRemoteTestAfterTokenRefresh() async -> Bool {
+        notifications.resetRemoteNotificationRegistrationCache()
+        guard await notifications.ensureRemoteNotificationsRegisteredIfAllowed() else {
+            return false
+        }
+        do {
+            let report = try await NetworkManager.shared.sendRemoteTestPush()
+            let result = notificationTestResult(for: report)
+            notificationTestMessage = result.message
+            notificationTestSucceeded = result.succeeded
+            return result.succeeded
+        } catch {
+            AppLogger.notifications.warning("Remote APNs retry failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func setPlatformSubscription(_ key: String, isSubscribed: Bool) {
+        var platforms = db.subscribedPlatforms
+        if isSubscribed {
+            if !platforms.contains(key) {
+                platforms.append(key)
+            }
+        } else {
+            platforms.removeAll(where: { $0 == key })
+        }
+        db.setSubscribedPlatforms(platforms: platforms)
+    }
+
+    private func notificationTestResult(for report: APNSTestPushReport) -> (succeeded: Bool, message: String) {
+        guard report.configured else {
+            return (false, i18n.t("notifRemoteNotConfigured"))
+        }
+        guard !report.results.isEmpty else {
+            return (false, i18n.t("notifRemoteNoDevices"))
+        }
+        if report.results.contains(where: { $0.status == 200 || $0.status == 201 }) {
+            return (true, i18n.t("notifRemoteTestSent"))
+        }
+
+        let firstFailure = report.results.first { ($0.status ?? 200) >= 300 || $0.reason != nil || $0.error != nil }
+        if let reason = firstFailure?.reason, !reason.isEmpty {
+            if reason == "BadEnvironmentKeyInToken" {
+                return (false, i18n.t("notifRemoteEnvironmentKeyMismatch"))
+            }
+            return (false, i18n.tFormat("notifRemoteRejectedFmt", reason))
+        }
+        if let error = firstFailure?.error, !error.isEmpty {
+            return (false, i18n.tFormat("notifRemoteErrorFmt", error))
+        }
+        if let status = firstFailure?.status {
+            return (false, i18n.tFormat("notifRemoteStatusFmt", status))
+        }
+        return (false, i18n.t("notifRemoteUnknownFailure"))
     }
 }
 

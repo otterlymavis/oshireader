@@ -10,7 +10,14 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
+from app.connectors.base import (
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    contains_keyword,
+    parse_feed_date,
+    title_contains_keyword,
+)
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +83,8 @@ class YahooNewsConnector(BaseConnector):
             item_id = m.group(3)
             if not title or item_id in seen:
                 continue
+            if not contains_keyword(keyword, title):
+                continue
             seen.add(item_id)
             items.append(
                 SourceItemCreate(
@@ -118,7 +127,10 @@ class YahooNewsConnector(BaseConnector):
                 continue
             seen.add(item_id)
             title = (entry.get("title") or "").strip()
+            summary = _clean_html_summary(entry.get("summary"))
             if not title:
+                continue
+            if not title_contains_keyword(keyword, title):
                 continue
             items.append(
                 SourceItemCreate(
@@ -128,7 +140,7 @@ class YahooNewsConnector(BaseConnector):
                     published_at=parse_feed_date(entry),
                     media_type="article",
                     title=title,
-                    content_text=_clean_html_summary(entry.get("summary")),
+                    content_text=summary,
                     raw_payload={"keyword": keyword, "source": "google_news"},
                 )
             )

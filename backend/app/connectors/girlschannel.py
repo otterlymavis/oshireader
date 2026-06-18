@@ -8,9 +8,16 @@ from urllib.parse import quote
 
 import feedparser
 import httpx
-from bs4 import BeautifulSoup
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
+from app.connectors.base import (
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    contains_keyword,
+    parse_feed_date,
+    title_contains_keyword,
+)
+from app.connectors.scrapling_helpers import attr_of, first, scrapling_page, text_of
 
 log = logging.getLogger(__name__)
 
@@ -99,12 +106,12 @@ class GirlsChannelConnector(BaseConnector):
         return []
 
     def _parse_html(self, html: str, keyword: str) -> list[SourceItemCreate]:
-        soup = BeautifulSoup(html, "lxml")
+        page = scrapling_page(html, "https://girlschannel.net/topics/search/")
         items: list[SourceItemCreate] = []
         seen: set[str] = set()
 
-        for a in soup.find_all("a", href=_TOPIC_ID_RE):
-            href = a.get("href", "")
+        for a in page.css("a[href]"):
+            href = attr_of(a, "href")
             m = _TOPIC_ID_RE.search(href)
             if not m:
                 continue
@@ -117,22 +124,24 @@ class GirlsChannelConnector(BaseConnector):
 
             # Title: heading in nearest container, or nested text of the anchor
             title = ""
-            container = a.find_parent(["article", "li", "div", "section"])
+            container = a.find_ancestor(lambda node: node.tag in {"article", "li", "div", "section"})
             if container:
-                h = container.find(["h2", "h3", "h4", "h5"])
+                h = first(container.css("h2, h3, h4, h5"))
                 if h:
-                    title = h.get_text(strip=True)
+                    title = text_of(h)
             if not title:
-                title = a.get_text(strip=True)
+                title = text_of(a)
             if not title:
+                continue
+            if not contains_keyword(keyword, title):
                 continue
 
             # Date: <time datetime="..."> or plain text date nearby
             published: datetime | None = None
             if container:
-                time_el = container.find("time")
+                time_el = first(container.css("time"))
                 if time_el:
-                    dt_str = (time_el.get("datetime") or "").strip()
+                    dt_str = attr_of(time_el, "datetime")
                     if dt_str:
                         try:
                             parsed = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
@@ -140,10 +149,10 @@ class GirlsChannelConnector(BaseConnector):
                         except (ValueError, AttributeError):
                             pass
                     if not published:
-                        published = _parse_jp_date(time_el.get_text(strip=True))
+                        published = _parse_jp_date(text_of(time_el))
                 if not published:
-                    for el in container.find_all(["span", "p", "small", "time"]):
-                        published = _parse_jp_date(el.get_text(strip=True))
+                    for el in container.css("span, p, small, time"):
+                        published = _parse_jp_date(text_of(el))
                         if published:
                             break
 
@@ -200,7 +209,10 @@ class GirlsChannelConnector(BaseConnector):
                 continue
             seen.add(item_id)
             title = (entry.get("title") or "").strip()
+            summary = entry.get("summary") or ""
             if not title:
+                continue
+            if not title_contains_keyword(keyword, title):
                 continue
             items.append(
                 SourceItemCreate(
@@ -210,7 +222,7 @@ class GirlsChannelConnector(BaseConnector):
                     published_at=parse_feed_date(entry),
                     media_type="text",
                     title=title,
-                    content_text=entry.get("summary") or None,
+                    content_text=summary or None,
                     thumbnail_url=None,
                     raw_payload={"source": "google_news", "keyword": keyword},
                 )

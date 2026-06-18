@@ -216,3 +216,41 @@ struct Credential: Codable, Hashable {
     let has_api_secret: Bool
     let updated_at: String?
 }
+
+// MARK: - APNs Diagnostics
+struct APNSTestPushResult: Codable, Hashable {
+    let token: String?
+    let environment: String?
+    let host: String?
+    let status: Int?
+    let reason: String?
+    let error: String?
+}
+
+struct APNSTestPushReport: Codable, Hashable {
+    let configured: Bool
+    let results: [APNSTestPushResult]
+    let note: String?
+    let pruned_tokens: Int?
+}
+
+// MARK: - Client Diagnostics
+struct ClientDiagnosticEvent: Codable, Hashable {
+    let strategy: String
+    let status: String
+    let item_count: Int
+    let added_count: Int
+    let detail: String?
+}
+
+struct ClientDiagnosticReport: Codable, Hashable {
+    let reason: String
+    let environment: String
+    let api_base: String
+    let app_version: String?
+    let build: String?
+    let active_terms_count: Int
+    let subscribed_platforms: [String]
+    let cached_feed_count: Int
+    let events: [ClientDiagnosticEvent]
+}

@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import UserNotifications
+import BackgroundTasks
 @testable import OshiReader
 
 @MainActor
@@ -267,14 +268,195 @@ final class OshiReaderTests: XCTestCase {
 
         XCTAssertEqual(center.authorizationRequestCount, 1)
         XCTAssertEqual(center.requests.count, 1)
-        XCTAssertEqual(center.requests.first?.content.title, "OshiReader")
+        XCTAssertEqual(center.requests.first?.content.title, I18nManager.shared.tFormat("notifNewItemsTitle", "OshiReader"))
         XCTAssertEqual(center.requests.first?.content.body, I18nManager.shared.t("notifTestBody"))
+        XCTAssertEqual(center.requests.first?.content.categoryIdentifier, NotificationManager.resultPreviewCategoryIdentifier)
+        XCTAssertEqual(center.requests.first?.content.targetContentIdentifier, "oshireader-test-preview")
+        let previewItem = center.requests.first?.content.userInfo["preview_item"] as? [String: Any]
+        XCTAssertEqual(previewItem?["id"] as? String, "oshireader-test-preview")
+        XCTAssertEqual(previewItem?["title"] as? String, I18nManager.shared.t("notifTestBody"))
         XCTAssertNotNil(center.requests.first?.trigger)
     }
 
     func testAPNSDeviceTokenStringUsesLowercaseHex() throws {
         let data = Data([0x00, 0x0f, 0xa1, 0xff])
         XCTAssertEqual(NotificationManager.deviceTokenString(data), "000fa1ff")
+    }
+
+    func testAPNSEnvironmentNormalizationUsesAPNsHostNames() throws {
+        XCTAssertEqual(NetworkManager.normalizedAPNSEnvironment("development"), "sandbox")
+        XCTAssertEqual(NetworkManager.normalizedAPNSEnvironment("sandbox"), "sandbox")
+        XCTAssertEqual(NetworkManager.normalizedAPNSEnvironment("production"), "production")
+        XCTAssertEqual(NetworkManager.normalizedAPNSEnvironment("  PRODUCTION  "), "production")
+        XCTAssertNil(NetworkManager.normalizedAPNSEnvironment("invalid"))
+        XCTAssertNil(NetworkManager.normalizedAPNSEnvironment(nil))
+    }
+
+    @MainActor
+    func testNotificationManagerUsesPersistedRegisteredToken() async throws {
+        let manager = NotificationManager(
+            center: MockNotificationCenter(status: .authorized),
+            initialRegisteredDeviceToken: String(repeating: "a", count: 64)
+        )
+
+        let registered = await manager.ensureRemoteNotificationsRegisteredIfAllowed(timeout: 0.01)
+        XCTAssertTrue(registered)
+    }
+
+    func testBackgroundRefreshUsesLocalFallbackOnlyWithoutRemoteToken() {
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldScheduleLocalFallback(registeredRemoteToken: nil))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldScheduleLocalFallback(registeredRemoteToken: "  "))
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldScheduleLocalFallback(
+                registeredRemoteToken: String(repeating: "a", count: 64)
+            )
+        )
+    }
+
+    @MainActor
+    func testBackgroundRefreshRegistersAndSchedulesTask() throws {
+        let scheduler = MockBackgroundTaskScheduler()
+        let manager = BackgroundRefreshManager(scheduler: scheduler)
+        let before = Date()
+
+        manager.register()
+        manager.schedule()
+
+        XCTAssertEqual(scheduler.registeredIdentifier, BackgroundRefreshManager.taskIdentifier)
+        XCTAssertEqual(scheduler.cancelledIdentifiers, [BackgroundRefreshManager.taskIdentifier])
+        let request = try XCTUnwrap(scheduler.submittedRequests.first as? BGAppRefreshTaskRequest)
+        XCTAssertEqual(request.identifier, BackgroundRefreshManager.taskIdentifier)
+        let earliest = try XCTUnwrap(request.earliestBeginDate)
+        XCTAssertGreaterThanOrEqual(earliest.timeIntervalSince(before), 14.9 * 60)
+    }
+
+    func testBackgroundRefreshBudgetLeavesTimeForCompletion() {
+        XCTAssertLessThan(BackgroundRefreshPolicy.pollTimeout, BackgroundRefreshPolicy.operationDeadline)
+        XCTAssertLessThanOrEqual(BackgroundRefreshPolicy.operationDeadline, 25)
+    }
+
+    func testBackgroundRefreshNotificationItemsAreNewSurvivingAndDeduplicated() {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let existing = FeedItem(
+            id: "youtube:existing", platform: "youtube", url: "https://example.com/existing",
+            title: "Existing", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let fresh = FeedItem(
+            id: "youtube:fresh", platform: "youtube", url: "https://example.com/fresh",
+            title: "Fresh", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+        let evicted = FeedItem(
+            id: "youtube:evicted", platform: "youtube", url: "https://example.com/evicted",
+            title: "Evicted", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+
+        let candidates = BackgroundRefreshPolicy.notificationItems(
+            incoming: [existing, fresh, fresh, evicted],
+            existingKeys: [BackgroundRefreshPolicy.itemKey(existing)],
+            survivingKeys: [
+                BackgroundRefreshPolicy.itemKey(existing),
+                BackgroundRefreshPolicy.itemKey(fresh),
+            ]
+        )
+
+        XCTAssertEqual(candidates.map(\.id), ["youtube:fresh"])
+    }
+
+    @MainActor
+    func testBackgroundFallbackCanSkipAttachments() async throws {
+        let center = MockNotificationCenter(status: .authorized)
+        let manager = NotificationManager(center: center, initialRegisteredDeviceToken: nil)
+        let now = ISO8601DateFormatter().string(from: Date())
+        let term = WatchTerm(id: "t1", keyword: "Aiko", notify_on_new: true)
+        let item = FeedItem(
+            id: "youtube:background", platform: "youtube", url: "https://example.com/item",
+            title: "Background item", content_text: nil, author: nil,
+            thumbnail_url: "https://example.invalid/never-downloaded.jpg",
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+        )
+
+        await manager.notifyForNewItems([item], terms: [term], includeAttachments: false)
+
+        XCTAssertEqual(center.requests.count, 1)
+        XCTAssertTrue(center.requests[0].content.attachments.isEmpty)
+    }
+
+    @MainActor
+    func testNotificationNavigationUsesRemotePreviewPayload() throws {
+        let manager = NotificationNavigationManager.shared
+        manager.selectedItem = nil
+        let itemID = "youtube:\(UUID().uuidString)"
+
+        manager.openNotification(userInfo: [
+            "watch_term_keyword": "Aiko",
+            "new_count": 2,
+            "thumbnail_url": "https://img.example.com/thumb.jpg",
+            "preview_item": [
+                "id": itemID,
+                "platform": "youtube",
+                "url": "https://youtube.com/watch?v=preview",
+                "title": "Preview title",
+                "content_text": "Preview description",
+                "author": "Aiko Channel",
+                "media_type": "video",
+                "published_at": "2026-06-17T12:00:00Z",
+            ],
+        ])
+
+        XCTAssertEqual(manager.selectedItem?.id, itemID)
+        XCTAssertEqual(manager.selectedItem?.url, "https://youtube.com/watch?v=preview")
+        XCTAssertEqual(manager.selectedItem?.title, "Preview title")
+        XCTAssertEqual(manager.selectedItem?.content_text, "Preview description")
+        XCTAssertEqual(manager.selectedItem?.author, "Aiko Channel")
+        XCTAssertEqual(manager.selectedItem?.thumbnail_url, "https://img.example.com/thumb.jpg")
+        XCTAssertEqual(manager.selectedItem?.media_type, "video")
+        XCTAssertEqual(manager.selectedItem?.published_at, "2026-06-17T12:00:00Z")
+        XCTAssertEqual(manager.selectedItem?.watch_term_keyword, "Aiko")
+        manager.selectedItem = nil
+    }
+
+    @MainActor
+    func testNotificationNavigationCanSaveRemotePreviewPayload() throws {
+        let manager = NotificationNavigationManager.shared
+        let itemID = "note:\(UUID().uuidString)"
+        LocalDB.shared.removeSaved(id: itemID)
+
+        let userInfo: [AnyHashable: Any] = [
+            "watch_term_keyword": "Aiko",
+            "preview_item": [
+                "id": itemID,
+                "platform": "note",
+                "url": "https://note.com/preview",
+                "title": "Saved from notification",
+                "media_type": "article",
+                "published_at": "2026-06-17T12:00:00Z",
+            ],
+        ]
+
+        XCTAssertTrue(manager.saveNotificationItem(userInfo: userInfo))
+        XCTAssertTrue(LocalDB.shared.savedPages.contains(where: { $0.id == itemID }))
+        XCTAssertFalse(manager.saveNotificationItem(userInfo: userInfo))
+
+        LocalDB.shared.removeSaved(id: itemID)
+    }
+
+    @MainActor
+    func testNotificationCategoriesIncludeOpenAndSaveActions() throws {
+        let center = MockNotificationCenter(status: .authorized)
+        let manager = NotificationManager(center: center)
+
+        manager.registerNotificationCategories()
+
+        let category = center.categories.first(where: {
+            $0.identifier == NotificationManager.resultPreviewCategoryIdentifier
+        })
+        XCTAssertNotNil(category)
+        let actionIDs = Set(category?.actions.map(\.identifier) ?? [])
+        XCTAssertTrue(actionIDs.contains(NotificationManager.openResultActionIdentifier))
+        XCTAssertTrue(actionIDs.contains(NotificationManager.saveResultActionIdentifier))
     }
 
     func testDebugSchemeUsesLocalBackendConfiguration() throws {
@@ -293,7 +475,9 @@ final class OshiReaderTests: XCTestCase {
         let items = [
             FeedItem(
                 id: "youtube:enabled-1", platform: "youtube", url: "https://youtube.com/1",
-                title: "Enabled first", content_text: nil, author: nil, thumbnail_url: nil,
+                title: "Enabled first", content_text: "Expanded message preview",
+                author: "Source label that must stay hidden",
+                thumbnail_url: "https://img.example.com/preview.jpg",
                 media_type: "video", published_at: nowString, watch_term_keyword: enabledTerm.keyword,
                 fetched_at: nowString
             ),
@@ -311,11 +495,34 @@ final class OshiReaderTests: XCTestCase {
             )
         ]
 
-        await manager.notifyForNewItems(items, terms: [enabledTerm, disabledTerm])
+        await manager.notifyForNewItems(
+            items,
+            terms: [enabledTerm, disabledTerm],
+            includeAttachments: false
+        )
 
         XCTAssertEqual(center.requests.count, 1)
         XCTAssertEqual(center.requests.first?.content.title, I18nManager.shared.tFormat("notifNewItemsTitle", "Enabled Oshi"))
-        XCTAssertEqual(center.requests.first?.content.body, I18nManager.shared.tFormat("notifNewItemsBodyMany", 2))
+        XCTAssertEqual(center.requests.first?.content.body, "Enabled first\n\(I18nManager.shared.tFormat("notifNewItemsMoreFmt", 1))")
+        XCTAssertEqual(center.requests.first?.content.subtitle, "")
+        XCTAssertEqual(center.requests.first?.content.categoryIdentifier, NotificationManager.resultPreviewCategoryIdentifier)
+        XCTAssertEqual(center.requests.first?.content.threadIdentifier, "oshireader-enabled oshi")
+        XCTAssertEqual(center.requests.first?.content.targetContentIdentifier, "youtube:enabled-1")
+        XCTAssertEqual(center.requests.first?.content.userInfo["item_url"] as? String, "https://youtube.com/1")
+        XCTAssertEqual(center.requests.first?.content.userInfo["item_media_type"] as? String, "video")
+        XCTAssertEqual(center.requests.first?.content.userInfo["item_published_at"] as? String, nowString)
+        let previewItem = center.requests.first?.content.userInfo["preview_item"] as? [String: Any]
+        XCTAssertEqual(previewItem?["id"] as? String, "youtube:enabled-1")
+        XCTAssertEqual(previewItem?["url"] as? String, "https://youtube.com/1")
+        XCTAssertEqual(previewItem?["platform"] as? String, "youtube")
+        XCTAssertEqual(previewItem?["title"] as? String, "Enabled first")
+        XCTAssertEqual(previewItem?["content_text"] as? String, "Expanded message preview")
+        XCTAssertEqual(previewItem?["thumbnail_url"] as? String, "https://img.example.com/preview.jpg")
+        XCTAssertEqual(
+            center.requests.first?.content.userInfo["thumbnail_url"] as? String,
+            "https://img.example.com/preview.jpg"
+        )
+        XCTAssertEqual(center.requests.first?.content.userInfo["new_count"] as? Int, 2)
         XCTAssertNil(center.requests.first?.trigger)
     }
 
@@ -386,7 +593,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(ids.contains("oshireader-new-Oshi A"))
         XCTAssertTrue(ids.contains("oshireader-new-Oshi B"))
         let bodyA = center.requests.first(where: { $0.identifier == "oshireader-new-Oshi A" })?.content.body
-        XCTAssertEqual(bodyA, I18nManager.shared.tFormat("notifNewItemsBodyMany", 2))
+        XCTAssertEqual(bodyA, "A1\n\(I18nManager.shared.tFormat("notifNewItemsMoreFmt", 1))")
     }
 
     @MainActor
@@ -618,6 +825,59 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(mdprResults.count, 1, "Same article from backend + device should appear once")
     }
 
+    func testQueryFeedDiversifiesConsecutivePlatformClusters() throws {
+        db.setSubscribedPlatforms(platforms: ["youtube", "tver"])
+        let fmt = ISO8601DateFormatter()
+        let now = Date()
+
+        let makeItem = { (id: String, platform: String, title: String, hoursAgo: Int) -> FeedItem in
+            let published = fmt.string(from: Calendar.current.date(byAdding: .hour, value: -hoursAgo, to: now)!)
+            return FeedItem(
+                id: id, platform: platform, url: "https://example.com/\(id)",
+                title: title, content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: platform == "tver" ? "video" : "article",
+                published_at: published, watch_term_keyword: "Aiko", fetched_at: published
+            )
+        }
+
+        _ = db.mergeItems(newItems: [
+            makeItem("youtube:1", "youtube", "Aiko upload 1", 1),
+            makeItem("youtube:2", "youtube", "Aiko upload 2", 2),
+            makeItem("youtube:3", "youtube", "Aiko upload 3", 3),
+            makeItem("tver:1", "tver", "Aiko TV episode", 4),
+        ])
+
+        let results = db.queryFeed(keyword: nil, days: 30)
+
+        XCTAssertEqual(results.map(\.id), ["youtube:1", "tver:1", "youtube:2", "youtube:3"])
+    }
+
+    func testQueryFeedSeparatesNearDuplicateTitleClusters() throws {
+        db.setSubscribedPlatforms(platforms: ["youtube", "niconico", "tver"])
+        let fmt = ISO8601DateFormatter()
+        let now = Date()
+
+        let makeItem = { (id: String, platform: String, title: String, hoursAgo: Int) -> FeedItem in
+            let published = fmt.string(from: Calendar.current.date(byAdding: .hour, value: -hoursAgo, to: now)!)
+            return FeedItem(
+                id: id, platform: platform, url: "https://example.com/\(id)",
+                title: title, content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video",
+                published_at: published, watch_term_keyword: "Aiko", fetched_at: published
+            )
+        }
+
+        _ = db.mergeItems(newItems: [
+            makeItem("youtube:tour", "youtube", "Aiko announces first arena tour and new single", 1),
+            makeItem("niconico:tour", "niconico", "Aiko announces first arena tour and new single - fan reaction", 2),
+            makeItem("tver:episode", "tver", "Aiko guest appearance on music talk", 3),
+        ])
+
+        let results = db.queryFeed(keyword: nil, days: 30)
+
+        XCTAssertEqual(results.map(\.id), ["youtube:tour", "tver:episode", "niconico:tour"])
+    }
+
     // MARK: - Custom platform keyword-filter bypass
     func testCustomPlatformItemsPassKeywordFilter() throws {
         // custom items have a different watch_term_keyword (e.g. "") but should appear
@@ -745,9 +1005,9 @@ final class OshiReaderTests: XCTestCase {
         let term = WatchTerm(keyword: "吉沢亮")
         let now = ISO8601DateFormatter().string(from: Date())
         let item = FeedItem(
-            id: "livedoor:cached-noise",
-            platform: "livedoor",
-            url: "https://news.livedoor.com/example",
+            id: "realsound:cached-noise",
+            platform: "realsound",
+            url: "https://realsound.jp/example",
             title: "杉野遥亮、『世にも奇妙な物語』で初主演",
             content_text: "吉沢亮の関連記事も紹介",
             author: nil,
@@ -858,12 +1118,25 @@ final class OshiReaderTests: XCTestCase {
             media_type: "article", published_at: now,
             watch_term_keyword: "Aiko", fetched_at: now
         )
+        let googleNewsSummary = FeedItem(
+            id: "yahoonews:google-summary", platform: "yahoonews",
+            url: "https://news.google.com/rss/articles/ABC?oc=5",
+            title: "Aiko announces a new tour - Yahoo! News",
+            content_text: """
+            <a href="https://news.google.com/rss/articles/ABC?oc=5" target="_blank">\
+            Aiko announces a new tour</a>&nbsp;&nbsp;<font color="#6f6f6f">Yahoo! News</font>
+            """,
+            author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: now,
+            watch_term_keyword: "Aiko", fetched_at: now
+        )
 
-        _ = db.mergeItems(newItems: [bareUrlTitle, bareUrlContent, normalArticle])
+        _ = db.mergeItems(newItems: [bareUrlTitle, bareUrlContent, normalArticle, googleNewsSummary])
         let results = db.queryFeed(keyword: nil, days: 30)
 
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results.first?.id, "yahoonews:normal")
+        XCTAssertEqual(results.count, 2)
+        XCTAssertTrue(results.contains { $0.id == "yahoonews:normal" })
+        XCTAssertTrue(results.contains { $0.id == "yahoonews:google-summary" })
     }
 
     func testQueryFeedDeduplicatesByUrlWhenNoKeywordFilter() throws {
@@ -1557,7 +1830,7 @@ final class OshiReaderTests: XCTestCase {
                     id: "\(source):mock:\(kw)",
                     platform: source,
                     url: "https://mock.com/\(source)/\(kw)",
-                    title: "Random update from \(source)",
+                    title: "\(kw) random update from \(source)",
                     content_text: "Summary of \(kw) on \(source)",
                     author: "Mock User",
                     thumbnail_url: nil,
@@ -1602,6 +1875,8 @@ final class NetworkManagerTests: XCTestCase {
         NetworkManager.shared.session = savedSession
         MockURLProtocol.handler = nil
         MockURLProtocol.errorHandler = nil
+        KeychainHelper.delete(key: "apns_device_token")
+        KeychainHelper.delete(key: "apns_device_secret")
         try super.tearDownWithError()
     }
 
@@ -1848,14 +2123,178 @@ final class NetworkManagerTests: XCTestCase {
     // registerAPNSDeviceToken sends POST and succeeds on 201
     func testRegisterAPNSDeviceTokenSendsPost() async throws {
         var capturedMethod: String?
+        var capturedBody: [String: Any]?
         MockURLProtocol.handler = { req in
             capturedMethod = req.httpMethod
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
             return (Data(), Self.response(status: 201))
         }
 
         do { try await NetworkManager.shared.registerAPNSDeviceToken(String(repeating: "a", count: 64)) }
         catch { XCTFail("Unexpected error: \(error)") }
         XCTAssertEqual(capturedMethod, "POST")
+        XCTAssertEqual(capturedBody?["token"] as? String, String(repeating: "a", count: 64))
+        XCTAssertEqual(capturedBody?["environment"] as? String, NetworkManager.shared.apnsEnvironment)
+        XCTAssertNotNil(capturedBody?["device_secret"] as? String)
+        XCTAssertEqual(NetworkManager.shared.registeredAPNSDeviceToken, String(repeating: "a", count: 64))
+        XCTAssertEqual(NetworkManager.shared.registeredAPNSDeviceEnvironment, NetworkManager.shared.apnsEnvironment)
+    }
+
+    @MainActor
+    func testNotificationManagerUploadsRegisteredDeviceToken() async throws {
+        var capturedPath: String?
+        var capturedBody: [String: Any]?
+        MockURLProtocol.handler = { req in
+            capturedPath = req.url?.path
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return (Data(), Self.response(status: 201))
+        }
+
+        let manager = NotificationManager(center: MockNotificationCenter(status: .authorized))
+        await manager.handleRegisteredDeviceToken(Data(repeating: 0xab, count: 32))
+
+        XCTAssertEqual(capturedPath, "/api/devices/apns-token")
+        XCTAssertEqual(capturedBody?["token"] as? String, String(repeating: "ab", count: 32))
+        XCTAssertNotNil(capturedBody?["environment"] as? String)
+        XCTAssertNotNil(capturedBody?["device_id"] as? String)
+    }
+
+    func testSendRemoteTestPushUsesDeviceScopedEndpointWhenTokenStored() async throws {
+        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+        var capturedMethod: String?
+        var capturedPath: String?
+        var capturedAuthHeader: String?
+        var capturedBody: [String: Any]?
+        let body = Data(#"{"configured":true,"results":[{"token":"abcd1234","environment":"production","host":"https://api.push.apple.com","status":200}],"pruned_tokens":0}"#.utf8)
+        MockURLProtocol.handler = { req in
+            capturedMethod = req.httpMethod
+            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
+            capturedPath = req.url?.path
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return (body, Self.response(status: 200))
+        }
+
+        let report = try await NetworkManager.shared.sendRemoteTestPush()
+
+        XCTAssertEqual(capturedMethod, "POST")
+        XCTAssertNil(capturedAuthHeader)
+        XCTAssertEqual(capturedPath, "/api/devices/apns-test-push")
+        XCTAssertEqual(capturedBody?["token"] as? String, String(repeating: "a", count: 64))
+        XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
+        XCTAssertTrue(report.configured)
+        XCTAssertEqual(report.results.first?.status, 200)
+    }
+
+    func testSendRemoteTestPushUsesDeviceScopedFallbackWhenEnvironmentChanged() async throws {
+        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
+        KeychainHelper.write(
+            key: "apns_device_environment",
+            value: NetworkManager.shared.apnsEnvironment == "sandbox" ? "production" : "sandbox"
+        )
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+
+        var capturedPath: String?
+        var capturedAuthHeader: String?
+        var capturedBody: [String: Any]?
+        let body = Data(#"{"configured":true,"results":[],"pruned_tokens":0}"#.utf8)
+        MockURLProtocol.handler = { req in
+            capturedPath = req.url?.path
+            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return (body, Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.sendRemoteTestPush()
+
+        XCTAssertEqual(capturedPath, "/api/devices/apns-test-push")
+        XCTAssertNil(capturedAuthHeader)
+        XCTAssertNil(capturedBody?["token"])
+        XCTAssertNotNil(capturedBody?["device_id"] as? String)
+        XCTAssertEqual(capturedBody?["environment"] as? String, NetworkManager.shared.apnsEnvironment)
+        XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
+    }
+
+    func testUnregisterAPNSDeviceTokenUsesDeviceSecret() async throws {
+        let token = String(repeating: "a", count: 64)
+        KeychainHelper.write(key: "apns_device_token", value: token)
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+        var capturedMethod: String?
+        var capturedPath: String?
+        var capturedSecret: String?
+        MockURLProtocol.handler = { request in
+            capturedMethod = request.httpMethod
+            capturedPath = request.url?.path
+            capturedSecret = request.value(forHTTPHeaderField: "X-Device-Secret")
+            return (Data(), Self.response(status: 204))
+        }
+
+        try await NetworkManager.shared.unregisterAPNSDeviceToken()
+
+        XCTAssertEqual(capturedMethod, "DELETE")
+        XCTAssertEqual(capturedPath, "/api/devices/apns-token/\(token)")
+        XCTAssertEqual(capturedSecret, "device-secret")
+        XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceToken)
+        XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceEnvironment)
+    }
+
+    func testSendRemoteTestPushClearsStoredTokenOnDeviceScopedNotFound() async throws {
+        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+        MockURLProtocol.handler = { _ in
+            (Data(#"{"detail":"APNs device token not registered"}"#.utf8), Self.response(status: 404))
+        }
+
+        do {
+            _ = try await NetworkManager.shared.sendRemoteTestPush()
+            XCTFail("Expected APIClientError not thrown")
+        } catch APIClientError.httpStatus(let status) {
+            XCTAssertEqual(status, 404)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceToken)
+    }
+
+    func testSendRemoteTestPushFallsBackToDeviceScopedEndpointWithoutStoredToken() async throws {
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+        var capturedMethod: String?
+        var capturedAuthHeader: String?
+        var capturedPath: String?
+        var capturedBody: [String: Any]?
+        let body = Data(#"{"configured":true,"results":[{"token":"abcd1234","environment":"production","host":"https://api.push.apple.com","status":200}],"pruned_tokens":0}"#.utf8)
+        MockURLProtocol.handler = { req in
+            capturedMethod = req.httpMethod
+            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
+            capturedPath = req.url?.path
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return (body, Self.response(status: 200))
+        }
+
+        let report = try await NetworkManager.shared.sendRemoteTestPush()
+
+        XCTAssertEqual(capturedMethod, "POST")
+        XCTAssertNil(capturedAuthHeader)
+        XCTAssertEqual(capturedPath, "/api/devices/apns-test-push")
+        XCTAssertNil(capturedBody?["token"])
+        XCTAssertNotNil(capturedBody?["device_id"] as? String)
+        XCTAssertEqual(capturedBody?["environment"] as? String, NetworkManager.shared.apnsEnvironment)
+        XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
+        XCTAssertTrue(report.configured)
+        XCTAssertEqual(report.results.first?.status, 200)
     }
 
     // checkHealth returns true when backend says {"status":"ok"}
@@ -1918,9 +2357,11 @@ final class NetworkManagerTests: XCTestCase {
     func testTriggerPollSendsAuthorizedPost() async throws {
         var capturedMethod: String?
         var capturedAuthHeader: String?
+        var capturedTimeout: TimeInterval?
         MockURLProtocol.handler = { req in
             capturedMethod = req.httpMethod
             capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
+            capturedTimeout = req.timeoutInterval
             return (Data(), Self.response(status: 200))
         }
         NetworkManager.shared.setAdminApiToken("admin-secret")
@@ -1930,6 +2371,7 @@ final class NetworkManagerTests: XCTestCase {
         catch { XCTFail("Unexpected error: \(error)") }
         XCTAssertEqual(capturedMethod, "POST")
         XCTAssertEqual(capturedAuthHeader, "Bearer admin-secret")
+        XCTAssertEqual(capturedTimeout, 90)
     }
 
     // triggerPoll propagates server error as URLError
@@ -1988,7 +2430,6 @@ final class NetworkManagerTests: XCTestCase {
 
     // MARK: - scrapeRSSFallback
     func testScrapeRSSFallbackNHKFiltersByKeyword() async {
-        // NHK section applies keyword filter; GNews section does not (search results are pre-filtered).
         // Return an RSS with one matching item and one non-matching item from the NHK URL,
         // and empty RSS from GNews, so we can isolate NHK filtering.
         let nhkXml = """
@@ -2114,8 +2555,8 @@ final class NetworkManagerTests: XCTestCase {
         <rss version="2.0">
           <channel>
             <item>
-              <title>杉野遥亮、『世にも奇妙な物語』で初主演 - Livedoor</title>
-              <link>https://news.google.com/rss/articles/livedoor-summary-only</link>
+              <title>杉野遥亮、『世にも奇妙な物語』で初主演 - Real Sound</title>
+              <link>https://news.google.com/rss/articles/realsound-summary-only</link>
               <description>吉沢亮の関連記事も紹介</description>
             </item>
           </channel>
@@ -2125,8 +2566,8 @@ final class NetworkManagerTests: XCTestCase {
 
         let items = await NetworkManager.shared.scrapeGoogleNewsSite(
             keyword: "吉沢亮",
-            site: "news.livedoor.com",
-            platform: "livedoor"
+            site: "realsound.jp",
+            platform: "realsound"
         )
         XCTAssertTrue(items.isEmpty)
     }
@@ -2418,6 +2859,7 @@ private final class MockNotificationCenter: NotificationCenterClient {
     private let grantsAuthorization: Bool
     private(set) var authorizationRequestCount = 0
     private(set) var requests: [UNNotificationRequest] = []
+    private(set) var categories: Set<UNNotificationCategory> = []
 
     init(status: UNAuthorizationStatus, grantsAuthorization: Bool = true) {
         self.status = status
@@ -2438,5 +2880,79 @@ private final class MockNotificationCenter: NotificationCenterClient {
 
     func add(_ request: UNNotificationRequest) async throws {
         requests.append(request)
+    }
+
+    func setNotificationCategories(_ categories: Set<UNNotificationCategory>) {
+        self.categories = categories
+    }
+}
+
+private final class MockBackgroundTaskScheduler: BackgroundTaskSchedulerClient {
+    private(set) var registeredIdentifier: String?
+    private(set) var cancelledIdentifiers: [String] = []
+    private(set) var submittedRequests: [BGTaskRequest] = []
+    private var launchHandler: ((BGTask) -> Void)?
+
+    func register(
+        forTaskWithIdentifier identifier: String,
+        using queue: DispatchQueue?,
+        launchHandler: @escaping (BGTask) -> Void
+    ) -> Bool {
+        registeredIdentifier = identifier
+        self.launchHandler = launchHandler
+        return true
+    }
+
+    func cancel(taskRequestWithIdentifier identifier: String) {
+        cancelledIdentifiers.append(identifier)
+    }
+
+    func submit(_ taskRequest: BGTaskRequest) throws {
+        submittedRequests.append(taskRequest)
+    }
+}
+
+// MARK: - Composition (wallpaper) rendering
+final class CompositionRendererTests: XCTestCase {
+    private func solidImage(_ color: UIColor, size: CGFloat = 50) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { ctx in
+            color.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        }
+    }
+
+    // Returns true if any pixel in the image is non-transparent.
+    private func hasVisiblePixels(_ image: UIImage) -> Bool {
+        guard let cg = image.cgImage else { return false }
+        let w = cg.width, h = cg.height
+        guard w > 0, h > 0 else { return false }
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        for i in stride(from: 3, to: px.count, by: 4) where px[i] > 0 { return true }
+        return false
+    }
+
+    @MainActor
+    func testRendersNonEmptyImageFromLayers() throws {
+        let red = solidImage(.red)
+        let layer = AvatarLayer(imageUrl: "sticker://red", x: 100, y: 100, scale: 1.0, zIndex: 0)
+        let image = try XCTUnwrap(
+            CompositionRenderer.renderImage(
+                layers: [layer], images: ["sticker://red": red], baseSize: 90, canvas: 300, scale: 2
+            )
+        )
+        XCTAssertEqual(image.size.width, 300, accuracy: 1, "logical canvas size")
+        XCTAssertEqual(image.size.height, 300, accuracy: 1)
+        XCTAssertTrue(hasVisiblePixels(image), "the rendered sticker should produce visible pixels")
+    }
+
+    @MainActor
+    func testReturnsNilWhenNoImagesLoaded() {
+        let layer = AvatarLayer(imageUrl: "sticker://missing", x: 0, y: 0, scale: 1.0, zIndex: 0)
+        XCTAssertNil(CompositionRenderer.renderImage(layers: [layer], images: [:], baseSize: 90))
     }
 }

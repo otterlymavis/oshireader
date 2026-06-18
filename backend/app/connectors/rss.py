@@ -4,7 +4,13 @@ import logging
 import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, parse_feed_date
+from app.connectors.base import (
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    parse_feed_date,
+    title_contains_keyword,
+)
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +35,6 @@ class RSSConnector(BaseConnector):
         if mode == CollectionMode.MEDIA_ONLY:
             return []
 
-        kw = keyword.lower()
         results: list[SourceItemCreate] = []
 
         async def _one(platform: str, source: str, url: str) -> None:
@@ -46,7 +51,7 @@ class RSSConnector(BaseConnector):
                     link: str = entry.get("link", "")
                     if not link:
                         continue
-                    if kw not in title.lower() and kw not in summary.lower():
+                    if not title_contains_keyword(keyword, title):
                         continue
                     published = parse_feed_date(entry)
                     thumb = None

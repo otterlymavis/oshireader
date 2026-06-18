@@ -8,30 +8,41 @@
 
 /* Begin PBXBuildFile section */
 		0AADB4A33250AC604852BABC /* OshiReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BBAB62B30911CFD45062E6 /* OshiReaderTests.swift */; };
-		1A2B3C4D5E6F7A8B9C0D1E2F /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3B4C5D6E7F8A9B0C1D2E3F /* AppLogger.swift */; };
-		3C4D5E6F7A8B9C0D1E2F3A4B /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C5D6E7F8A9B0C1D2E3F4A5B /* KeychainHelper.swift */; };
-		5E6F7A8B9C0D1E2F3A4B5C6D /* NetworkManager+BackendAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F7A8B9C0D1E2F3A4B5C6D7E /* NetworkManager+BackendAPI.swift */; };
-		7A8B9C0D1E2F3A4B5C6D7E8F /* NetworkManager+ExternalAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9C0D1E2F3A4B5C6D7E8F9A /* NetworkManager+ExternalAPI.swift */; };
-		9C0D1E2F3A4B5C6D7E8F9A0B /* NetworkManager+Scraper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D1E2F3A4B5C6D7E8F9A0B1C /* NetworkManager+Scraper.swift */; };
-		1E2F3A4B5C6D7E8F9A0B1C2D /* Platforms.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F3A4B5C6D7E8F9A0B1C2D3E /* Platforms.swift */; };
 		15E2283EDF51A13E2895271E /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 866A42C8B01CDE66550FBC36 /* ReaderView.swift */; };
+		20BB076B535F4FFE599E7E50 /* NetworkManager+BackendAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA909E29A2DB4391E35C761 /* NetworkManager+BackendAPI.swift */; };
+		327B36C567E87CCAD097DC4C /* OshiReaderNotificationContent.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 283CC012C9E18599FBD8C1E7 /* OshiReaderNotificationContent.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		39D58DDFF3BFD26E44F9B8BA /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3772D9B136A80213A2F20005 /* NotificationService.swift */; };
+		3AB3254733131B0DD9FF3935 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B0DBC0B647BE9C319275510 /* KeychainHelper.swift */; };
 		3FA51D07DCDCD47A84902360 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA093C93D4514C0B73101C23 /* NotificationManager.swift */; };
 		41EE0967EF025AA3908FA6E5 /* OshiReaderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC07FF11F19D7FE9B1FAE96 /* OshiReaderUITests.swift */; };
 		45853A8BCEBA615F1B1717A4 /* FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84500A11E3895A0801822A4E /* FeedView.swift */; };
+		472825D9F56EF337324626C3 /* MainInterface.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 44E39475BA19C302F4FA4E34 /* MainInterface.storyboard */; };
 		521B9F54ADF3291B01EE3EAA /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7757DA33C395BD65387A4309 /* PrivacyInfo.xcprivacy */; };
 		5616A4D24B025D3B258D8EFD /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB07A4A295E6B82E88BBEB7 /* SearchView.swift */; };
 		56ECEE1891E6C7AD085796BB /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C7AB5D135169FD79851DA6 /* Theme.swift */; };
 		6272FB99110FEDA507C0F5D8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C607233A1D4F78BDDD5A7C4 /* ContentView.swift */; };
+		635EBE03ED7A372F86F74361 /* OshiReaderUITests+RealSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D38A66124C68835AA8F2676 /* OshiReaderUITests+RealSources.swift */; };
 		6969C73B8C9DA16AC4C8F726 /* I18n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75492232667474AE9C22A904 /* I18n.swift */; };
+		6D45589EEAE5938D4A146332 /* NotificationViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EF0BA8188C3E098C537A3D4 /* NotificationViewController.swift */; };
+		826EC19F1D7063EA95A52C98 /* OshiReaderNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B646777321341E655C843687 /* OshiReaderNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8EFD82EA18F7989551999231 /* UserNotificationsUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 71403B2E353A802934EBD54F /* UserNotificationsUI.framework */; };
 		92793B84417591C6F67CB6B4 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14C7E2AD85F46D55CDAD349D /* Models.swift */; };
 		A0AC4C89B94E168EE1AC6027 /* OshiReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F57F75DAE62F1BBB02535FA4 /* OshiReaderApp.swift */; };
+		A7035FB1A2FDB1D897C437ED /* Platforms.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8117EA7CC6770476B138CA83 /* Platforms.swift */; };
+		B468454A79713BFE933B3371 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8451BE642CEFB0250CC38029 /* UserNotifications.framework */; };
 		B55A10C99E20507DE0F3834E /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3A059DFAA25028841278FC4 /* AppDelegate.swift */; };
 		BB6B0B05CAB681EA2070F9FD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 281B85D31BF641436C65758B /* Assets.xcassets */; };
 		BE3D630219B70EABDAEA04BA /* NetworkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA4656BA51F509A9A84ED250 /* NetworkManager.swift */; };
+		C54E4D63689B313AC505AD0C /* NetworkManager+Scraper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B6F98D804B065CD5F986DCA /* NetworkManager+Scraper.swift */; };
+		C7723609DB5D7D2D1F9AFEB2 /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02418F20B46B959DA941B54A /* AppLogger.swift */; };
 		CB45E12713243928A5088590 /* LocalDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC815F05EA634BBCAB4CCF02 /* LocalDB.swift */; };
 		D52495292898CC66D9765714 /* OshiView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16205C1ECDAC6AB69095DEDA /* OshiView.swift */; };
 		D8BD58B8DC06664C491F0D70 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA8B03E51A432B46649B6225 /* SettingsView.swift */; };
+		DB8D0FBCCF101C3203585F90 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8451BE642CEFB0250CC38029 /* UserNotifications.framework */; };
+		DF209DB68817A4F2F8248D5B /* NotificationNavigationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 720597F8B0D3B8680AAB2C90 /* NotificationNavigationManager.swift */; };
 		F46CEBC6E65E66A628181196 /* AvatarEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22EE2906443FC7711C23B3A /* AvatarEditorView.swift */; };
+		F5552C78BFC7538E35202795 /* BackgroundRefreshManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB4698197160905DBD0B1085 /* BackgroundRefreshManager.swift */; };
+		F832F9E5D3F257243B41A467 /* NetworkManager+ExternalAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A19057C8EA99195476C316C6 /* NetworkManager+ExternalAPI.swift */; };
 		FB106A1DD6864D2F0B84A86E /* SavedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 170F57BD3D60F9B8037B9376 /* SavedView.swift */; };
 /* End PBXBuildFile section */
 
@@ -43,6 +54,20 @@
 			remoteGlobalIDString = C35ABC27BEDEE333AA00BCE2;
 			remoteInfo = OshiReader;
 		};
+		8B65F9BE888D93C20ECE50A3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 014C1E0D44500F428608C94B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 56148717A94AA5C8BEE2F769;
+			remoteInfo = OshiReaderNotificationContent;
+		};
+		DA32B2949C14A752192ADB4D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 014C1E0D44500F428608C94B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6492BCDA6B78E8BA67AFD9E0;
+			remoteInfo = OshiReaderNotificationService;
+		};
 		F46FDB6E07DD1595E6C4A109 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 014C1E0D44500F428608C94B /* Project object */;
@@ -52,45 +77,112 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		1B4DA3D6E58117D3A06DCD5B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				826EC19F1D7063EA95A52C98 /* OshiReaderNotificationService.appex in Embed Foundation Extensions */,
+				327B36C567E87CCAD097DC4C /* OshiReaderNotificationContent.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		02418F20B46B959DA941B54A /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
+		0EF0BA8188C3E098C537A3D4 /* NotificationViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationViewController.swift; sourceTree = "<group>"; };
 		0FB8EFA6D9E090CC83802EFF /* OshiReader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OshiReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		14C7E2AD85F46D55CDAD349D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		16205C1ECDAC6AB69095DEDA /* OshiView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiView.swift; sourceTree = "<group>"; };
 		170F57BD3D60F9B8037B9376 /* SavedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedView.swift; sourceTree = "<group>"; };
 		1DE2FB251822D2F52EAA70E7 /* OshiReaderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OshiReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		25C91E0529FF073A180EBAAB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		281B85D31BF641436C65758B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		283CC012C9E18599FBD8C1E7 /* OshiReaderNotificationContent.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = OshiReaderNotificationContent.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		2EA909E29A2DB4391E35C761 /* NetworkManager+BackendAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkManager+BackendAPI.swift"; sourceTree = "<group>"; };
+		3772D9B136A80213A2F20005 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		44E39475BA19C302F4FA4E34 /* MainInterface.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = MainInterface.storyboard; sourceTree = "<group>"; };
 		49BBAB62B30911CFD45062E6 /* OshiReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiReaderTests.swift; sourceTree = "<group>"; };
 		56F97FCE5F8F2EFBC98E2310 /* OshiReader.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OshiReader.entitlements; sourceTree = "<group>"; };
 		5C607233A1D4F78BDDD5A7C4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5CC07FF11F19D7FE9B1FAE96 /* OshiReaderUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiReaderUITests.swift; sourceTree = "<group>"; };
 		5FB07A4A295E6B82E88BBEB7 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		6B6F98D804B065CD5F986DCA /* NetworkManager+Scraper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkManager+Scraper.swift"; sourceTree = "<group>"; };
+		71403B2E353A802934EBD54F /* UserNotificationsUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotificationsUI.framework; path = System/Library/Frameworks/UserNotificationsUI.framework; sourceTree = SDKROOT; };
+		720597F8B0D3B8680AAB2C90 /* NotificationNavigationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigationManager.swift; sourceTree = "<group>"; };
 		75492232667474AE9C22A904 /* I18n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = I18n.swift; sourceTree = "<group>"; };
 		7757DA33C395BD65387A4309 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		8117EA7CC6770476B138CA83 /* Platforms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platforms.swift; sourceTree = "<group>"; };
 		84500A11E3895A0801822A4E /* FeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedView.swift; sourceTree = "<group>"; };
+		8451BE642CEFB0250CC38029 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		866A42C8B01CDE66550FBC36 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
 		970DE2739F781561F643F1C3 /* OshiReaderUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OshiReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9B0DBC0B647BE9C319275510 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
+		9D38A66124C68835AA8F2676 /* OshiReaderUITests+RealSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OshiReaderUITests+RealSources.swift"; sourceTree = "<group>"; };
+		A19057C8EA99195476C316C6 /* NetworkManager+ExternalAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkManager+ExternalAPI.swift"; sourceTree = "<group>"; };
 		A3A059DFAA25028841278FC4 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B3C7AB5D135169FD79851DA6 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		B646777321341E655C843687 /* OshiReaderNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = OshiReaderNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA4656BA51F509A9A84ED250 /* NetworkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkManager.swift; sourceTree = "<group>"; };
 		BA8B03E51A432B46649B6225 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C96792D04C20B7635508EF1E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		CA093C93D4514C0B73101C23 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		D22EE2906443FC7711C23B3A /* AvatarEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarEditorView.swift; sourceTree = "<group>"; };
+		EB4698197160905DBD0B1085 /* BackgroundRefreshManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRefreshManager.swift; sourceTree = "<group>"; };
+		F2EA60B439F8E93F0758A810 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F57F75DAE62F1BBB02535FA4 /* OshiReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OshiReaderApp.swift; sourceTree = "<group>"; };
 		FC815F05EA634BBCAB4CCF02 /* LocalDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDB.swift; sourceTree = "<group>"; };
-		2A3B4C5D6E7F8A9B0C1D2E3F /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
-		4C5D6E7F8A9B0C1D2E3F4A5B /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
-		6F7A8B9C0D1E2F3A4B5C6D7E /* NetworkManager+BackendAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkManager+BackendAPI.swift"; sourceTree = "<group>"; };
-		8B9C0D1E2F3A4B5C6D7E8F9A /* NetworkManager+ExternalAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkManager+ExternalAPI.swift"; sourceTree = "<group>"; };
-		0D1E2F3A4B5C6D7E8F9A0B1C /* NetworkManager+Scraper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkManager+Scraper.swift"; sourceTree = "<group>"; };
-		2F3A4B5C6D7E8F9A0B1C2D3E /* Platforms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platforms.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		938D6C402312A946F300D2B5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DB8D0FBCCF101C3203585F90 /* UserNotifications.framework in Frameworks */,
+				8EFD82EA18F7989551999231 /* UserNotificationsUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B51AB92E1F982DB9B4C6BCE5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B468454A79713BFE933B3371 /* UserNotifications.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
+		30CA23E1DC81A5A27F5927B3 /* OshiReaderNotificationContent */ = {
+			isa = PBXGroup;
+			children = (
+				25C91E0529FF073A180EBAAB /* Info.plist */,
+				44E39475BA19C302F4FA4E34 /* MainInterface.storyboard */,
+				0EF0BA8188C3E098C537A3D4 /* NotificationViewController.swift */,
+			);
+			path = OshiReaderNotificationContent;
+			sourceTree = "<group>";
+		};
+		3D3C49F0DC118CFF82B1EA0F /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				8451BE642CEFB0250CC38029 /* UserNotifications.framework */,
+				71403B2E353A802934EBD54F /* UserNotificationsUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		5B908BEB27B6EB8296577AA6 /* OshiReaderUITests */ = {
 			isa = PBXGroup;
 			children = (
 				5CC07FF11F19D7FE9B1FAE96 /* OshiReaderUITests.swift */,
+				9D38A66124C68835AA8F2676 /* OshiReaderUITests+RealSources.swift */,
 			);
 			path = OshiReaderUITests;
 			sourceTree = "<group>";
@@ -107,6 +199,8 @@
 			isa = PBXGroup;
 			children = (
 				0FB8EFA6D9E090CC83802EFF /* OshiReader.app */,
+				283CC012C9E18599FBD8C1E7 /* OshiReaderNotificationContent.appex */,
+				B646777321341E655C843687 /* OshiReaderNotificationService.appex */,
 				1DE2FB251822D2F52EAA70E7 /* OshiReaderTests.xctest */,
 				970DE2739F781561F643F1C3 /* OshiReaderUITests.xctest */,
 			);
@@ -117,8 +211,11 @@
 			isa = PBXGroup;
 			children = (
 				DFC8BCDAC0A7F65623D81E45 /* OshiReader */,
+				30CA23E1DC81A5A27F5927B3 /* OshiReaderNotificationContent */,
+				D98FFE61E8F05646B502B99A /* OshiReaderNotificationService */,
 				6B754EAE625CD9E292F2772E /* OshiReaderTests */,
 				5B908BEB27B6EB8296577AA6 /* OshiReaderUITests */,
+				3D3C49F0DC118CFF82B1EA0F /* Frameworks */,
 				C732DDAE3AF567A51275D5EC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -137,26 +234,37 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		D98FFE61E8F05646B502B99A /* OshiReaderNotificationService */ = {
+			isa = PBXGroup;
+			children = (
+				F2EA60B439F8E93F0758A810 /* Info.plist */,
+				3772D9B136A80213A2F20005 /* NotificationService.swift */,
+			);
+			path = OshiReaderNotificationService;
+			sourceTree = "<group>";
+		};
 		DFC8BCDAC0A7F65623D81E45 /* OshiReader */ = {
 			isa = PBXGroup;
 			children = (
 				A3A059DFAA25028841278FC4 /* AppDelegate.swift */,
-				2A3B4C5D6E7F8A9B0C1D2E3F /* AppLogger.swift */,
+				02418F20B46B959DA941B54A /* AppLogger.swift */,
 				281B85D31BF641436C65758B /* Assets.xcassets */,
+				EB4698197160905DBD0B1085 /* BackgroundRefreshManager.swift */,
 				5C607233A1D4F78BDDD5A7C4 /* ContentView.swift */,
 				75492232667474AE9C22A904 /* I18n.swift */,
 				C96792D04C20B7635508EF1E /* Info.plist */,
-				4C5D6E7F8A9B0C1D2E3F4A5B /* KeychainHelper.swift */,
+				9B0DBC0B647BE9C319275510 /* KeychainHelper.swift */,
 				FC815F05EA634BBCAB4CCF02 /* LocalDB.swift */,
 				14C7E2AD85F46D55CDAD349D /* Models.swift */,
 				BA4656BA51F509A9A84ED250 /* NetworkManager.swift */,
-				6F7A8B9C0D1E2F3A4B5C6D7E /* NetworkManager+BackendAPI.swift */,
-				8B9C0D1E2F3A4B5C6D7E8F9A /* NetworkManager+ExternalAPI.swift */,
-				0D1E2F3A4B5C6D7E8F9A0B1C /* NetworkManager+Scraper.swift */,
+				2EA909E29A2DB4391E35C761 /* NetworkManager+BackendAPI.swift */,
+				A19057C8EA99195476C316C6 /* NetworkManager+ExternalAPI.swift */,
+				6B6F98D804B065CD5F986DCA /* NetworkManager+Scraper.swift */,
 				CA093C93D4514C0B73101C23 /* NotificationManager.swift */,
+				720597F8B0D3B8680AAB2C90 /* NotificationNavigationManager.swift */,
 				56F97FCE5F8F2EFBC98E2310 /* OshiReader.entitlements */,
 				F57F75DAE62F1BBB02535FA4 /* OshiReaderApp.swift */,
-				2F3A4B5C6D7E8F9A0B1C2D3E /* Platforms.swift */,
+				8117EA7CC6770476B138CA83 /* Platforms.swift */,
 				7757DA33C395BD65387A4309 /* PrivacyInfo.xcprivacy */,
 				B3C7AB5D135169FD79851DA6 /* Theme.swift */,
 				CD701CC0B9C12A54B0C01FBE /* Views */,
@@ -167,6 +275,43 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		56148717A94AA5C8BEE2F769 /* OshiReaderNotificationContent */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 43C0D0F61EE094D715208E2B /* Build configuration list for PBXNativeTarget "OshiReaderNotificationContent" */;
+			buildPhases = (
+				5F7CF5D7713FA54DEE9FAE97 /* Sources */,
+				3958491D63FDA49C6E511FFE /* Resources */,
+				938D6C402312A946F300D2B5 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OshiReaderNotificationContent;
+			packageProductDependencies = (
+			);
+			productName = OshiReaderNotificationContent;
+			productReference = 283CC012C9E18599FBD8C1E7 /* OshiReaderNotificationContent.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		6492BCDA6B78E8BA67AFD9E0 /* OshiReaderNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7B7490C17F1A00E545C4B94D /* Build configuration list for PBXNativeTarget "OshiReaderNotificationService" */;
+			buildPhases = (
+				B49687065356AC9C1B2A11F9 /* Sources */,
+				B51AB92E1F982DB9B4C6BCE5 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OshiReaderNotificationService;
+			packageProductDependencies = (
+			);
+			productName = OshiReaderNotificationService;
+			productReference = B646777321341E655C843687 /* OshiReaderNotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		BD40A6A92E5C8727CD18CBD1 /* OshiReaderTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 90C8097AAF974A0C9F57A9C3 /* Build configuration list for PBXNativeTarget "OshiReaderTests" */;
@@ -191,10 +336,13 @@
 			buildPhases = (
 				8BCBCA1FAB00311B63262DF5 /* Sources */,
 				AD64A24A747E4D04927E879A /* Resources */,
+				1B4DA3D6E58117D3A06DCD5B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C399B2ED174F14AF28F693D7 /* PBXTargetDependency */,
+				F91E1DB90C3ACFF186F979F8 /* PBXTargetDependency */,
 			);
 			name = OshiReader;
 			packageProductDependencies = (
@@ -230,6 +378,14 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					56148717A94AA5C8BEE2F769 = {
+						DevelopmentTeam = D8H3TBWH7P;
+						ProvisioningStyle = Automatic;
+					};
+					6492BCDA6B78E8BA67AFD9E0 = {
+						DevelopmentTeam = D8H3TBWH7P;
+						ProvisioningStyle = Automatic;
+					};
 					BD40A6A92E5C8727CD18CBD1 = {
 						DevelopmentTeam = D8H3TBWH7P;
 						ProvisioningStyle = Automatic;
@@ -260,6 +416,8 @@
 			projectRoot = "";
 			targets = (
 				C35ABC27BEDEE333AA00BCE2 /* OshiReader */,
+				56148717A94AA5C8BEE2F769 /* OshiReaderNotificationContent */,
+				6492BCDA6B78E8BA67AFD9E0 /* OshiReaderNotificationService */,
 				BD40A6A92E5C8727CD18CBD1 /* OshiReaderTests */,
 				D868994E180CE582833E7AA4 /* OshiReaderUITests */,
 			);
@@ -267,6 +425,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		3958491D63FDA49C6E511FFE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				472825D9F56EF337324626C3 /* MainInterface.storyboard in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AD64A24A747E4D04927E879A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -283,6 +449,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				635EBE03ED7A372F86F74361 /* OshiReaderUITests+RealSources.swift in Sources */,
 				41EE0967EF025AA3908FA6E5 /* OshiReaderUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -295,32 +462,50 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5F7CF5D7713FA54DEE9FAE97 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6D45589EEAE5938D4A146332 /* NotificationViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8BCBCA1FAB00311B63262DF5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				B55A10C99E20507DE0F3834E /* AppDelegate.swift in Sources */,
-				1A2B3C4D5E6F7A8B9C0D1E2F /* AppLogger.swift in Sources */,
+				C7723609DB5D7D2D1F9AFEB2 /* AppLogger.swift in Sources */,
 				F46CEBC6E65E66A628181196 /* AvatarEditorView.swift in Sources */,
+				F5552C78BFC7538E35202795 /* BackgroundRefreshManager.swift in Sources */,
 				6272FB99110FEDA507C0F5D8 /* ContentView.swift in Sources */,
 				45853A8BCEBA615F1B1717A4 /* FeedView.swift in Sources */,
 				6969C73B8C9DA16AC4C8F726 /* I18n.swift in Sources */,
-				3C4D5E6F7A8B9C0D1E2F3A4B /* KeychainHelper.swift in Sources */,
+				3AB3254733131B0DD9FF3935 /* KeychainHelper.swift in Sources */,
 				CB45E12713243928A5088590 /* LocalDB.swift in Sources */,
 				92793B84417591C6F67CB6B4 /* Models.swift in Sources */,
+				20BB076B535F4FFE599E7E50 /* NetworkManager+BackendAPI.swift in Sources */,
+				F832F9E5D3F257243B41A467 /* NetworkManager+ExternalAPI.swift in Sources */,
+				C54E4D63689B313AC505AD0C /* NetworkManager+Scraper.swift in Sources */,
 				BE3D630219B70EABDAEA04BA /* NetworkManager.swift in Sources */,
-				5E6F7A8B9C0D1E2F3A4B5C6D /* NetworkManager+BackendAPI.swift in Sources */,
-				7A8B9C0D1E2F3A4B5C6D7E8F /* NetworkManager+ExternalAPI.swift in Sources */,
-				9C0D1E2F3A4B5C6D7E8F9A0B /* NetworkManager+Scraper.swift in Sources */,
 				3FA51D07DCDCD47A84902360 /* NotificationManager.swift in Sources */,
+				DF209DB68817A4F2F8248D5B /* NotificationNavigationManager.swift in Sources */,
 				A0AC4C89B94E168EE1AC6027 /* OshiReaderApp.swift in Sources */,
 				D52495292898CC66D9765714 /* OshiView.swift in Sources */,
-				1E2F3A4B5C6D7E8F9A0B1C2D /* Platforms.swift in Sources */,
+				A7035FB1A2FDB1D897C437ED /* Platforms.swift in Sources */,
 				15E2283EDF51A13E2895271E /* ReaderView.swift in Sources */,
 				FB106A1DD6864D2F0B84A86E /* SavedView.swift in Sources */,
 				5616A4D24B025D3B258D8EFD /* SearchView.swift in Sources */,
 				D8BD58B8DC06664C491F0D70 /* SettingsView.swift in Sources */,
 				56ECEE1891E6C7AD085796BB /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B49687065356AC9C1B2A11F9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				39D58DDFF3BFD26E44F9B8BA /* NotificationService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -332,10 +517,20 @@
 			target = C35ABC27BEDEE333AA00BCE2 /* OshiReader */;
 			targetProxy = F46FDB6E07DD1595E6C4A109 /* PBXContainerItemProxy */;
 		};
+		C399B2ED174F14AF28F693D7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6492BCDA6B78E8BA67AFD9E0 /* OshiReaderNotificationService */;
+			targetProxy = DA32B2949C14A752192ADB4D /* PBXContainerItemProxy */;
+		};
 		CB0BB1A3AA233B54E6ACE312 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = C35ABC27BEDEE333AA00BCE2 /* OshiReader */;
 			targetProxy = 5E5949798206C37781D34831 /* PBXContainerItemProxy */;
+		};
+		F91E1DB90C3ACFF186F979F8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 56148717A94AA5C8BEE2F769 /* OshiReaderNotificationContent */;
+			targetProxy = 8B65F9BE888D93C20ECE50A3 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -445,14 +640,93 @@
 			};
 			name = Debug;
 		};
+		5AF404DE192BCBD0686FB2BF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEVELOPMENT_TEAM = D8H3TBWH7P;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReaderNotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus.NotificationService;
+				PRODUCT_NAME = OshiReaderNotificationService;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6E435EC36A354B5BB6407807 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEVELOPMENT_TEAM = D8H3TBWH7P;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReaderNotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus.NotificationService;
+				PRODUCT_NAME = OshiReaderNotificationService;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		74EAD3DD968460591C73CB11 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEVELOPMENT_TEAM = D8H3TBWH7P;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReaderNotificationContent/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus.NotificationContent;
+				PRODUCT_NAME = OshiReaderNotificationContent;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		9A191B9E14DD6DA3ABD92C5C /* Staging */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APNS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OshiReader/OshiReader.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = D8H3TBWH7P;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OshiReader/Info.plist;
@@ -462,7 +736,6 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				APNS_ENVIRONMENT = development;
 				OSHIREADER_API_BASE_URL = "https://oshireader.onrender.com";
 				OSHIREADER_ENVIRONMENT = Staging;
 				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus;
@@ -476,11 +749,12 @@
 		A4FAC9608DEA9BE6590E2B77 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APNS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OshiReader/OshiReader.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = D8H3TBWH7P;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OshiReader/Info.plist;
@@ -490,7 +764,6 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				APNS_ENVIRONMENT = development;
 				OSHIREADER_API_BASE_URL = "http://127.0.0.1:8000";
 				OSHIREADER_ENVIRONMENT = Local;
 				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus;
@@ -501,14 +774,41 @@
 			};
 			name = Debug;
 		};
+		A97AE1D0D36B86A7D2DB16F1 /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEVELOPMENT_TEAM = D8H3TBWH7P;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReaderNotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus.NotificationService;
+				PRODUCT_NAME = OshiReaderNotificationService;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Staging;
+		};
 		B7351CD9A5C32BD1288FD5D5 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APNS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OshiReader/OshiReader.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = D8H3TBWH7P;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OshiReader/Info.plist;
@@ -518,7 +818,6 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				APNS_ENVIRONMENT = production;
 				OSHIREADER_API_BASE_URL = "https://oshireader.onrender.com";
 				OSHIREADER_ENVIRONMENT = Production;
 				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus;
@@ -528,6 +827,32 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		DD55FC53A7571F3D2F539CAE /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEVELOPMENT_TEAM = D8H3TBWH7P;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReaderNotificationContent/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus.NotificationContent;
+				PRODUCT_NAME = OshiReaderNotificationContent;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Staging;
 		};
 		DFBB345E1CF71D8AF2033F5A /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -646,6 +971,32 @@
 			};
 			name = Release;
 		};
+		FC10E31F11B45610C9B2C993 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEVELOPMENT_TEAM = D8H3TBWH7P;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OshiReaderNotificationContent/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.otterpia.oshireader.plus.NotificationContent;
+				PRODUCT_NAME = OshiReaderNotificationContent;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		FD06E40A906BFB7D6D6E8968 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -725,6 +1076,26 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		43C0D0F61EE094D715208E2B /* Build configuration list for PBXNativeTarget "OshiReaderNotificationContent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				74EAD3DD968460591C73CB11 /* Debug */,
+				FC10E31F11B45610C9B2C993 /* Release */,
+				DD55FC53A7571F3D2F539CAE /* Staging */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7B7490C17F1A00E545C4B94D /* Build configuration list for PBXNativeTarget "OshiReaderNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5AF404DE192BCBD0686FB2BF /* Debug */,
+				6E435EC36A354B5BB6407807 /* Release */,
+				A97AE1D0D36B86A7D2DB16F1 /* Staging */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		8D50B7D007BBBC4DA277D487 /* Build configuration list for PBXProject "OshiReader" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

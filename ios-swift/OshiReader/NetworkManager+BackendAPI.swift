@@ -91,11 +91,111 @@ extension NetworkManager {
 
     // MARK: - APNs Registration
 
+    private var apnsDeviceSecret: String {
+        let key = "apns_device_secret"
+        if let existing = KeychainHelper.read(key: key), !existing.isEmpty {
+            return existing
+        }
+        let generated = UUID().uuidString
+        KeychainHelper.write(key: key, value: generated)
+        return generated
+    }
+
+    private func apnsDeviceId() async -> String {
+        await MainActor.run { UIDevice.current.identifierForVendor?.uuidString ?? "" }
+    }
+
+    var registeredAPNSDeviceToken: String? {
+        KeychainHelper.read(key: "apns_device_token")
+    }
+
+    var registeredAPNSDeviceEnvironment: String? {
+        KeychainHelper.read(key: "apns_device_environment")
+    }
+
+    var hasRegisteredAPNSDeviceForCurrentEnvironment: Bool {
+        guard let token = registeredAPNSDeviceToken, !token.isEmpty else { return false }
+        return registeredAPNSDeviceEnvironment == apnsEnvironment
+    }
+
+    func clearRegisteredAPNSDeviceToken() {
+        KeychainHelper.delete(key: "apns_device_token")
+        KeychainHelper.delete(key: "apns_device_environment")
+    }
+
+    func unregisterAPNSDeviceToken() async throws {
+        guard let token = registeredAPNSDeviceToken, !token.isEmpty else { return }
+        let url = URL(string: "\(apiBase)/api/devices/apns-token/\(token)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 15
+        request.setValue(apnsDeviceSecret, forHTTPHeaderField: "X-Device-Secret")
+
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard http.statusCode == 204 || http.statusCode == 404 else {
+            throw APIClientError.httpStatus(http.statusCode)
+        }
+        clearRegisteredAPNSDeviceToken()
+    }
+
     func registerAPNSDeviceToken(_ token: String) async throws {
-        let deviceId = await MainActor.run { UIDevice.current.identifierForVendor?.uuidString ?? "" }
-        let body: [String: String] = ["token": token, "environment": apnsEnvironment, "device_id": deviceId]
+        let deviceId = await apnsDeviceId()
+        let body: [String: String] = [
+            "token": token,
+            "environment": apnsEnvironment,
+            "device_id": deviceId,
+            "device_secret": apnsDeviceSecret,
+        ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         try await apiVoid(URL(string: "\(apiBase)/api/devices/apns-token")!, method: "POST", body: bodyData)
+        KeychainHelper.write(key: "apns_device_token", value: token)
+        KeychainHelper.write(key: "apns_device_environment", value: apnsEnvironment)
+    }
+
+    func sendRemoteTestPush() async throws -> APNSTestPushReport {
+        if isUITesting {
+            return APNSTestPushReport(configured: false, results: [], note: "ui testing", pruned_tokens: 0)
+        }
+        if hasRegisteredAPNSDeviceForCurrentEnvironment,
+           let token = registeredAPNSDeviceToken,
+           !token.isEmpty {
+            let bodyData = try JSONSerialization.data(withJSONObject: [
+                "token": token,
+                "device_secret": apnsDeviceSecret,
+            ])
+            return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)
+        }
+        let deviceId = await apnsDeviceId()
+        let bodyData = try JSONSerialization.data(withJSONObject: [
+            "device_id": deviceId,
+            "environment": apnsEnvironment,
+            "device_secret": apnsDeviceSecret,
+        ])
+        return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)
+    }
+
+    private func sendDeviceScopedRemoteTestPush(bodyData: Data) async throws -> APNSTestPushReport {
+        let url = URL(string: "\(apiBase)/api/devices/apns-test-push")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.httpBody = bodyData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404 {
+                clearRegisteredAPNSDeviceToken()
+            }
+            throw APIClientError.httpStatus(http.statusCode)
+        }
+        return try JSONDecoder().decode(APNSTestPushReport.self, from: data)
     }
 
     // MARK: - Health & Admin
@@ -115,8 +215,23 @@ extension NetworkManager {
         return false
     }
 
-    func triggerPoll() async throws {
+    func triggerPoll(timeout: TimeInterval = 90) async throws {
         if isUITesting { return }
-        try await apiVoid(URL(string: "\(apiBase)/api/admin/poll")!, method: "POST", authorized: true)
+        try await apiVoid(URL(string: "\(apiBase)/api/admin/poll")!, method: "POST", authorized: true, timeout: timeout)
+    }
+
+    func sendClientDiagnostic(_ report: ClientDiagnosticReport) async {
+        guard !isUITesting else { return }
+        do {
+            let body = try JSONEncoder().encode(report)
+            try await apiVoid(
+                URL(string: "\(apiBase)/api/client-diagnostics")!,
+                method: "POST",
+                body: body,
+                timeout: 12
+            )
+        } catch {
+            AppLogger.network.warning("sendClientDiagnostic failed: \(error.localizedDescription)")
+        }
     }
 }
