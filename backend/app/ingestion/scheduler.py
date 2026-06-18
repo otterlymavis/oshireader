@@ -157,6 +157,9 @@ async def _poll_once_unlocked() -> None:
         )
 
         for term in terms:
+            term_new_count = 0
+            term_preview_item: dict | None = None
+            term_preview_published_at: datetime | None = None
             for search_term in _search_terms_for(term):
                 # Fetch all connectors in parallel — pure I/O, no DB contention.
                 all_results = await asyncio.gather(
@@ -167,7 +170,7 @@ async def _poll_once_unlocked() -> None:
                         continue
                     try:
                         new_count = 0
-                        preview_item: dict | None = None
+                        newest_candidate: tuple[datetime, dict] | None = None
                         ids = [raw.composite_id for raw in items]
                         now = datetime.now(timezone.utc)
 
@@ -257,25 +260,41 @@ async def _poll_once_unlocked() -> None:
                                 db.flush()
                                 existing_match_ids.add(raw.composite_id)
                                 new_count += 1
-                                if preview_item is None:
+                                published_at = raw.published_at
+                                if published_at.tzinfo is None:
+                                    published_at = published_at.replace(tzinfo=timezone.utc)
+                                if (
+                                    newest_candidate is None
+                                    or published_at > newest_candidate[0]
+                                ):
                                     public_base_url = settings.backend_public_url.rstrip("/")
-                                    preview_item = {
-                                        "id": raw.composite_id,
-                                        "match_id": match.id,
-                                        "platform": raw.platform,
-                                        "url": raw.url,
-                                        "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
-                                        "title": raw.title,
-                                        "content_text": raw.content_text,
-                                        "author": raw.author,
-                                        "thumbnail_url": raw.thumbnail_url,
-                                    }
+                                    newest_candidate = (
+                                        published_at,
+                                        {
+                                            "id": raw.composite_id,
+                                            "match_id": match.id,
+                                            "platform": raw.platform,
+                                            "url": raw.url,
+                                            "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
+                                            "title": raw.title,
+                                            "content_text": raw.content_text,
+                                            "author": raw.author,
+                                            "thumbnail_url": raw.thumbnail_url,
+                                            "media_type": raw.media_type,
+                                            "published_at": published_at.isoformat(),
+                                        },
+                                    )
 
                         db.flush()
                         db.commit()
                         if new_count:
                             total_new += new_count
-                            await send_new_match_notifications(db, term, new_count, preview_item)
+                            term_new_count += new_count
+                            if newest_candidate and (
+                                term_preview_published_at is None
+                                or newest_candidate[0] > term_preview_published_at
+                            ):
+                                term_preview_published_at, term_preview_item = newest_candidate
                         log.info(
                             "term=%r search=%r connector=%s fetched=%d new=%d",
                             term.keyword,
@@ -295,6 +314,17 @@ async def _poll_once_unlocked() -> None:
                             exc_info=True,
                         )
                         db.rollback()
+
+            # APNs collapses notifications by watch term. Send exactly one notification
+            # after every connector and alias has been processed, otherwise a later
+            # connector can replace a fresh preview with an older backfilled item.
+            if term_new_count:
+                await send_new_match_notifications(
+                    db,
+                    term,
+                    term_new_count,
+                    term_preview_item,
+                )
 
         _prune_irrelevant_matches(db, terms)
 

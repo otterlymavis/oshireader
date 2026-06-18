@@ -162,7 +162,95 @@ class TestIngestionNotifications:
         assert called_count == 1
         assert preview_item["title"] == "Aiko Haruka Test Item"
         assert preview_item["match_id"]
+        assert preview_item["media_type"] == "video"
+        assert preview_item["published_at"]
         assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
+
+    @pytest.mark.asyncio
+    async def test_notification_aggregates_connectors_and_previews_newest_item(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        newest = datetime.now(timezone.utc)
+        older = newest - timedelta(days=3)
+        fresh_connector = _mock_connector(
+            "youtube",
+            [_make_item(platform="youtube", item_id="fresh", published_at=newest, title="Aiko fresh")],
+        )
+        old_connector = _mock_connector(
+            "news",
+            [_make_item(platform="news", item_id="old", published_at=older, title="Aiko old")],
+        )
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[fresh_connector, old_connector],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=mock_notify,
+        ):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+        _, called_term, called_count, preview_item = mock_notify.call_args.args
+        assert called_term.keyword == "Aiko"
+        assert called_count == 2
+        assert preview_item["id"] == "youtube:fresh"
+        assert preview_item["title"] == "Aiko fresh"
+
+    @pytest.mark.asyncio
+    async def test_failed_connector_commit_is_not_included_in_notification(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        connector = _mock_connector(
+            "youtube",
+            [_make_item(platform="youtube", item_id="rolled-back", title="Aiko rollback")],
+        )
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+        from sqlalchemy.orm import Session as _Session
+        original_commit = _Session.commit
+        commit_calls = {"count": 0}
+
+        def fail_first_commit(session):
+            commit_calls["count"] += 1
+            if commit_calls["count"] == 1:
+                raise RuntimeError("simulated commit failure")
+            return original_commit(session)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[connector],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=mock_notify,
+        ), patch.object(
+            _Session,
+            "commit",
+            fail_first_commit,
+        ):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_notify_called_for_any_new_items(self, db_engine, db_session):
