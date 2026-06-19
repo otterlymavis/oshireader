@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import require_admin_auth
 from app.config import settings
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models import APNSDeviceToken
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
 
@@ -89,6 +89,25 @@ def _mark_verified(device: APNSDeviceToken) -> None:
     device.verified_at = datetime.now(timezone.utc)
 
 
+async def _send_delayed_device_test_push(token: str, delay_seconds: float) -> None:
+    if delay_seconds:
+        await asyncio.sleep(delay_seconds)
+
+    from app.apns import send_test_push_to_device
+
+    db = SessionLocal()
+    try:
+        stored = db.get(APNSDeviceToken, token)
+        if not stored:
+            return
+        report = await send_test_push_to_device(db, stored)
+        if any(result.get("status") in {200, 201} for result in report.get("results", [])):
+            _mark_verified(stored)
+            db.commit()
+    finally:
+        db.close()
+
+
 def _is_same_device_identity(stored: APNSDeviceToken, body: APNSDeviceTokenUpsert) -> bool:
     return bool(
         stored.device_id
@@ -139,6 +158,21 @@ async def send_device_test_push(body: APNSDeviceTestPush, db: Session = Depends(
     stored = _find_authenticated_device(body, db, require_verified=False)
 
     from app.apns import send_test_push_to_device
+    if body.return_before_delivery:
+        asyncio.create_task(_send_delayed_device_test_push(stored.token, body.delivery_delay_seconds))
+        return {
+            "configured": True,
+            "results": [
+                {
+                    "token": stored.token[-8:],
+                    "environment": stored.environment,
+                    "status": 202,
+                    "reason": "queued",
+                }
+            ],
+            "pruned_tokens": 0,
+            "note": "queued",
+        }
     if body.delivery_delay_seconds:
         await asyncio.sleep(body.delivery_delay_seconds)
     report = await send_test_push_to_device(db, stored)

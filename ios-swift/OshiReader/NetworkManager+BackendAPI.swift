@@ -256,6 +256,7 @@ extension NetworkManager {
             ]
             if isLiveBackgroundPushTesting {
                 body["delivery_delay_seconds"] = 4
+                body["return_before_delivery"] = true
             }
             let bodyData = try JSONSerialization.data(withJSONObject: body)
             return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)
@@ -268,6 +269,7 @@ extension NetworkManager {
         ]
         if isLiveBackgroundPushTesting {
             body["delivery_delay_seconds"] = 4
+            body["return_before_delivery"] = true
         }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)

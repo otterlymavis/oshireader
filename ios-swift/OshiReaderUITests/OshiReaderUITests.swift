@@ -268,8 +268,13 @@ final class OshiReaderUITests: XCTestCase {
             "The backend did not confirm APNs acceptance. Result: \(resultLabels)"
         )
 
-        // With the token registered, send once more and immediately background.
+        // With the token registered, queue one delayed server push, then background.
         testButton.tap()
+        let queuedResultLabels = waitForRemotePushResult(in: resultQuery, timeout: 10)
+        XCTAssertTrue(
+            hasRemotePushSuccessMessage(queuedResultLabels),
+            "The backend did not queue the background APNs test. Result: \(queuedResultLabels)"
+        )
         XCUIDevice.shared.press(.home)
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")

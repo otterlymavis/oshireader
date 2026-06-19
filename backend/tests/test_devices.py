@@ -249,6 +249,42 @@ class TestDeviceScopedTestPush:
         assert r.status_code == 200
         mock_sleep.assert_awaited_once_with(4)
 
+    def test_can_queue_delayed_test_push_before_delivery(self, client):
+        token = "1" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "sandbox", "device_secret": "correct-secret-123"},
+        )
+
+        created = []
+
+        async def fake_delayed_send(token_arg: str, delay_seconds: float) -> None:
+            pass
+
+        def fake_create_task(coro):
+            created.append(coro)
+            coro.close()
+            return object()
+
+        with patch("app.api.devices._send_delayed_device_test_push", side_effect=fake_delayed_send) as mock_send, \
+             patch("app.api.devices.asyncio.create_task", side_effect=fake_create_task) as mock_create_task:
+            r = client.post(
+                "/api/devices/apns-test-push",
+                json={
+                    "token": token,
+                    "device_secret": "correct-secret-123",
+                    "delivery_delay_seconds": 4,
+                    "return_before_delivery": True,
+                },
+            )
+
+        assert r.status_code == 200
+        assert r.json()["results"][0]["status"] == 202
+        assert r.json()["note"] == "queued"
+        mock_send.assert_called_once_with(token, 4)
+        mock_create_task.assert_called_once()
+        assert len(created) == 1
+
     def test_rejects_excessive_test_push_delay(self, client):
         r = client.post(
             "/api/devices/apns-test-push",

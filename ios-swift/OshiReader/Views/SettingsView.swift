@@ -550,7 +550,7 @@ struct SettingsView: View {
         guard !report.results.isEmpty else {
             return (false, i18n.t("notifRemoteNoDevices"))
         }
-        if report.results.contains(where: { $0.status == 200 || $0.status == 201 }) {
+        if report.results.contains(where: { $0.status == 200 || $0.status == 201 || $0.status == 202 }) {
             return (true, i18n.t("notifRemoteTestSent"))
         }
 
