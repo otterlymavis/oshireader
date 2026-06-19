@@ -210,7 +210,7 @@ class TestIngestionNotifications:
         assert preview_item["title"] == "Aiko fresh"
 
     @pytest.mark.asyncio
-    async def test_notification_preview_prefers_parsed_date_over_poll_time_placeholder(
+    async def test_notification_preview_matches_newest_feed_sort_date(
         self,
         db_engine,
         db_session,
@@ -261,7 +261,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_called_once()
         preview_item = mock_notify.call_args.args[3]
-        assert preview_item["id"] == "youtube:parsed"
+        assert preview_item["id"] == "yahoonews:estimated"
 
     @pytest.mark.asyncio
     async def test_notification_failure_is_isolated_and_retried_from_outbox(

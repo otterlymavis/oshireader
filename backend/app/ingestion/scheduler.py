@@ -177,9 +177,11 @@ def _candidate_is_newer(
         return True
     if current_published_at.tzinfo is None:
         current_published_at = current_published_at.replace(tzinfo=timezone.utc)
-    if candidate_is_estimated != current_is_estimated:
-        return not candidate_is_estimated
-    return candidate_published_at > current_published_at
+    if candidate_published_at != current_published_at:
+        return candidate_published_at > current_published_at
+    # Match the feed's date ordering first. For an exact tie, prefer the item
+    # backed by a parsed source date over a fetch-time estimate.
+    return current_is_estimated and not candidate_is_estimated
 
 
 def _queue_pending_notification(
