@@ -1,0 +1,29 @@
+name: Deploy Render
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+    steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Missing GitHub Actions secret: RENDER_DEPLOY_HOOK_URL"
+            echo "Create a Render deploy hook for the backend service, then save it as this repository secret."
+            exit 1
+          fi
+
+      - name: Trigger Render deploy
+        run: |
+          STATUS=$(curl -sS -o /tmp/render-deploy-response.json -w "%{http_code}" \
+            -X POST "$RENDER_DEPLOY_HOOK_URL" \
+            --max-time 30)
+          echo "Render deploy hook status: $STATUS"
+          echo "Response body: $(cat /tmp/render-deploy-response.json)"
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            exit 1
+          fi
