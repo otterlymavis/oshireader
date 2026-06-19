@@ -869,6 +869,50 @@ class TestNewsSiteFetch:
         assert result == []
 
     @pytest.mark.asyncio
+    async def test_realsound_uses_direct_search_results(self):
+        html = """
+        <article class="entry-summary">
+          <time datetime="2023-06-30T05:30"></time>
+          <h3 class="entry-title">
+            <a href="/2023/06/post-1364043.html">吉沢亮がゲスト出演</a>
+          </h3>
+          <p class="entry-excerpt">番組の出演者が発表された。</p>
+          <div class="entry-author">リアルサウンド編集部</div>
+          <img src="/wp-content/uploads/example.jpg">
+        </article>
+        """
+        connector = RealSoundConnector()
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=html)), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock()) as gnews:
+            result = await connector.fetch("吉沢亮", "all_info")
+
+        assert len(result) == 1
+        assert result[0].title == "吉沢亮がゲスト出演"
+        assert result[0].url == "https://realsound.jp/2023/06/post-1364043.html"
+        assert result[0].thumbnail_url == "https://realsound.jp/wp-content/uploads/example.jpg"
+        assert result[0].author == "リアルサウンド編集部"
+        assert result[0].published_at == datetime(2023, 6, 29, 20, 30, tzinfo=timezone.utc)
+        gnews.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_realsound_direct_search_filters_unrelated_titles(self):
+        html = """
+        <article class="entry-summary">
+          <h3 class="entry-title">
+            <a href="/2026/06/post-1.html">杉野遥亮がドラマ初主演</a>
+          </h3>
+          <p class="entry-excerpt">吉沢亮の関連記事。</p>
+        </article>
+        """
+        connector = RealSoundConnector()
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=html)), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock(return_value=[])) as gnews:
+            result = await connector.fetch("吉沢亮", "all_info")
+
+        assert result == []
+        assert gnews.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_livedoor_filters_google_news_summary_only_matches(self):
         fake_feed = _FakeFeed([
             _rss_entry(

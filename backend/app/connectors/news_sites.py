@@ -8,8 +8,8 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
-from urllib.parse import quote
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote, urljoin
 
 import feedparser
 import httpx
@@ -60,6 +60,18 @@ def _parse_ameba_timestamp(value: object) -> datetime:
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
         except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _parse_jst_datetime(value: str | None) -> datetime:
+    if value:
+        try:
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone(timedelta(hours=9)))
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
             pass
     return datetime.now(timezone.utc)
 
@@ -317,6 +329,73 @@ class MantanWebConnector(_GNewsSiteConnector):
 class RealSoundConnector(_GNewsSiteConnector):
     PLATFORM = "realsound"
     SITE = "realsound.jp"
+
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
+        if mode == CollectionMode.MEDIA_ONLY:
+            return []
+        items = await self._fetch_direct_search(keyword)
+        if items:
+            return items
+        return await super().fetch(keyword, mode)
+
+    async def _fetch_direct_search(self, keyword: str) -> list[SourceItemCreate]:
+        url = f"https://realsound.jp/?s={quote(keyword)}"
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+                response = await client.get(url)
+                if not response.is_success:
+                    log.warning("realsound direct search returned %d", response.status_code)
+                    return []
+        except Exception as exc:
+            log.warning("realsound direct search error: %s", exc)
+            return []
+
+        soup = BeautifulSoup(response.text, "lxml")
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for article in soup.select("article.entry-summary"):
+            title_link = article.select_one("h3.entry-title a[href]")
+            if title_link is None:
+                continue
+            title = title_link.get_text(" ", strip=True)
+            item_url = urljoin("https://realsound.jp/", title_link.get("href", ""))
+            if not title or not item_url or not title_contains_keyword(keyword, title):
+                continue
+            if item_url in seen:
+                continue
+            seen.add(item_url)
+
+            time_element = article.select_one("time[datetime]")
+            excerpt = article.select_one(".entry-excerpt")
+            author = article.select_one(".entry-author")
+            image = article.select_one("img[src]")
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=item_url,
+                    url=item_url,
+                    published_at=_parse_jst_datetime(
+                        time_element.get("datetime") if time_element else None
+                    ),
+                    media_type="article",
+                    author=author.get_text(" ", strip=True) if author else None,
+                    title=title,
+                    content_text=excerpt.get_text(" ", strip=True) if excerpt else None,
+                    thumbnail_url=(
+                        urljoin("https://realsound.jp/", image.get("src", ""))
+                        if image
+                        else None
+                    ),
+                    raw_payload={
+                        "site": self.SITE,
+                        "keyword": keyword,
+                        "source": "direct_search",
+                    },
+                )
+            )
+            if len(items) >= 25:
+                break
+        return items
 
 
 class CinemaCafeConnector(_GNewsSiteConnector):

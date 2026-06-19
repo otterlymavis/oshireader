@@ -217,6 +217,9 @@ final class OshiReaderUITests: XCTestCase {
         }
 
         tapTab(index: 4, labels: ["Settings"])
+        for _ in 0..<6 {
+            app.swipeDown()
+        }
 
         let enableButton = waitForElement(
             identifier: "settings.enableNotificationsButton",
@@ -236,6 +239,9 @@ final class OshiReaderUITests: XCTestCase {
             }
         }
 
+        for _ in 0..<6 {
+            app.swipeDown()
+        }
         let testButton = waitForElement(
             identifier: "settings.testNotificationButton",
             timeout: 8,
