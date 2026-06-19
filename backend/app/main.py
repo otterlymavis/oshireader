@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import struct
 import zlib
 from contextlib import asynccontextmanager
@@ -63,7 +64,10 @@ app.include_router(devices.router)
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    payload = {"status": "ok"}
+    if commit := os.getenv("RENDER_GIT_COMMIT"):
+        payload["commit"] = commit
+    return payload
 
 
 @app.get("/api/notification-preview.png")
