@@ -65,6 +65,10 @@ jobs:
               "apns_configured": apns.get("configured"),
               "apns_server_environment": apns.get("server_environment"),
               "device_tokens_by_environment": apns.get("device_tokens_by_environment", {}),
+              "device_tokens_by_environment_and_verification": apns.get(
+                  "device_tokens_by_environment_and_verification", {}
+              ),
+              "watch_terms": data.get("watch_terms", []),
               "recent_events": data.get("recent_events", [])[:10],
           }
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))

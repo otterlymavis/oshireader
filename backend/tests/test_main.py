@@ -123,10 +123,23 @@ class TestAdminStats:
         assert data["items_by_platform"]["twitter"] == 1
 
     def test_stats_includes_apns_verification_counts(self, client, db_session):
+        owner_secret = "owner-secret"
         db_session.add_all([
-            APNSDeviceToken(token="a" * 64, environment="sandbox", is_verified=True),
-            APNSDeviceToken(token="b" * 64, environment="sandbox", is_verified=False),
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token="b" * 64,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=False,
+            ),
             APNSDeviceToken(token="c" * 64, environment="production", is_verified=True),
+            WatchTerm(keyword="Owned", owner_device_secret=owner_secret),
+            WatchTerm(keyword="Global"),
         ])
         db_session.commit()
 
@@ -142,6 +155,13 @@ class TestAdminStats:
             "production": {"verified": 1, "unverified": 0},
             "sandbox": {"verified": 1, "unverified": 1},
         }
+        terms = {term["keyword"]: term for term in r.json()["watch_terms"]}
+        assert terms["Owned"]["owner_scoped"] is True
+        assert terms["Owned"]["notification_devices"] == 2
+        assert terms["Owned"]["notification_verified_devices"] == 1
+        assert terms["Global"]["owner_scoped"] is False
+        assert terms["Global"]["notification_devices"] == 3
+        assert terms["Global"]["notification_verified_devices"] == 2
 
     def test_stats_includes_recent_backend_events(self, client, db_session):
         db_session.add(BackendEvent(

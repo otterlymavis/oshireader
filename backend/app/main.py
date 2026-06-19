@@ -185,11 +185,30 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         BackendEvent.created_at.desc(),
         BackendEvent.id.desc(),
     ).limit(20).all()
+
+    def notification_device_counts(term: WatchTerm) -> dict:
+        query = db.query(APNSDeviceToken)
+        if term.owner_device_secret:
+            query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+        total = query.count()
+        verified = query.filter(APNSDeviceToken.is_verified == True).count()  # noqa: E712
+        return {
+            "owner_scoped": bool(term.owner_device_secret),
+            "notification_devices": total,
+            "notification_verified_devices": verified,
+        }
+
     return {
         "items_total": items_total,
         "matches_total": matches_total,
         "watch_terms": [
-            {"id": t.id, "keyword": t.keyword, "is_active": t.is_active, "notify_on_new": t.notify_on_new}
+            {
+                "id": t.id,
+                "keyword": t.keyword,
+                "is_active": t.is_active,
+                "notify_on_new": t.notify_on_new,
+                **notification_device_counts(t),
+            }
             for t in terms
         ],
         "items_by_platform": {p: c for p, c in by_platform},
