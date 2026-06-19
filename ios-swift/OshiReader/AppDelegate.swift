@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         NotificationManager.shared.registerNotificationCategories()
+        BackgroundRefreshLiveTestProbe.reset()
         if !NetworkManager.shared.isUnitTesting {
             application.setMinimumBackgroundFetchInterval(BackgroundRefreshManager.minimumInterval)
             BackgroundRefreshManager.shared.register()
@@ -55,9 +56,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
         AppLogger.network.notice("Silent push requested a background refresh")
+        BackgroundRefreshLiveTestProbe.recordStarted()
         Task { @MainActor in
             let shouldTriggerPoll = BackgroundRefreshPolicy.shouldTriggerPoll(forRemoteNotification: userInfo)
             let refreshed = await BackgroundRefreshManager.shared.refreshFromBackend(triggerPoll: shouldTriggerPoll)
+            BackgroundRefreshLiveTestProbe.recordCompleted(success: refreshed)
             AppLogger.network.notice("Silent push background refresh completed success=\(refreshed)")
             completionHandler(refreshed ? .newData : .failed)
         }

@@ -314,6 +314,22 @@ final class OshiReaderUITests: XCTestCase {
         attachment.name = "Expanded background APNs preview"
         attachment.lifetime = .keepAlways
         add(attachment)
+
+        app.activate()
+        let backgroundRefreshResult = waitForElement(
+            identifier: "settings.liveBackgroundRefreshResult",
+            timeout: 30,
+            swipes: 2
+        )
+        XCTAssertTrue(
+            backgroundRefreshResult.waitForExistence(timeout: 5),
+            "The content-available push did not report a completed background refresh"
+        )
+        XCTAssertEqual(
+            backgroundRefreshResult.label,
+            "completed:success",
+            "The content-available push reported an unsuccessful background refresh"
+        )
     }
 
     private func waitForRemotePushResult(

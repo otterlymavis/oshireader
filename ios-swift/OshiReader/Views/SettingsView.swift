@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var notificationTestSucceeded = false
     @State private var isSendingNotificationTest = false
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
+    @AppStorage(BackgroundRefreshLiveTestProbe.resultKey) private var liveBackgroundRefreshResult = ""
     
     var allPlatforms: [(String, String)] {
         Platform.all.map { ($0.id, "\($0.icon) \($0.name)") }
@@ -286,6 +287,13 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(notificationTestSucceeded ? theme.colors.primary : .orange)
                         .accessibilityIdentifier("settings.notificationTestResult")
+                    }
+
+                    if NetworkManager.shared.isLiveBackgroundPushTesting,
+                       !liveBackgroundRefreshResult.isEmpty {
+                        Text(liveBackgroundRefreshResult)
+                            .font(.caption)
+                            .accessibilityIdentifier("settings.liveBackgroundRefreshResult")
                     }
                 }
 

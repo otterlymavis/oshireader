@@ -89,6 +89,25 @@ enum BackgroundRefreshPolicy {
     }
 }
 
+enum BackgroundRefreshLiveTestProbe {
+    static let resultKey = "live_background_refresh_test_result"
+
+    static func reset() {
+        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        UserDefaults.standard.removeObject(forKey: resultKey)
+    }
+
+    static func recordStarted() {
+        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        UserDefaults.standard.set("started", forKey: resultKey)
+    }
+
+    static func recordCompleted(success: Bool) {
+        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        UserDefaults.standard.set(success ? "completed:success" : "completed:failure", forKey: resultKey)
+    }
+}
+
 @MainActor
 final class BackgroundRefreshManager {
     static let shared = BackgroundRefreshManager()
