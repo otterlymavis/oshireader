@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -457,6 +458,7 @@ async def send_test_push(db: Session) -> dict:
     payload = _test_payload()
     results: list[dict] = []
     dead: list[APNSDeviceToken] = []
+    collapse_id = f"oshireader-test-{uuid.uuid4().hex[:12]}"
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
         for device in devices:
             host = _host(device.environment)
@@ -465,7 +467,7 @@ async def send_test_push(db: Session) -> dict:
                 "apns-topic": settings.apns_topic,
                 "apns-push-type": "alert",
                 "apns-priority": "10",
-                "apns-collapse-id": "oshireader-test",
+                "apns-collapse-id": collapse_id,
             }
             entry = {"token": device.token[-8:], "environment": device.environment, "host": host}
             try:
@@ -506,7 +508,7 @@ async def send_test_push_to_device(db: Session, device: APNSDeviceToken) -> dict
         "apns-topic": settings.apns_topic,
         "apns-push-type": "alert",
         "apns-priority": "10",
-        "apns-collapse-id": "oshireader-test",
+        "apns-collapse-id": f"oshireader-test-{uuid.uuid4().hex[:12]}",
     }
     entry = {"token": device.token[-8:], "environment": device.environment, "host": host}
     should_delete = False

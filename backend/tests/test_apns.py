@@ -596,7 +596,8 @@ class TestSendTestPush:
         assert payload["item_title"] == "通知プレビューのテスト"
         assert payload["thumbnail_url"] == "https://backend.example.com/api/notification-preview.png"
         headers = client.post.call_args.kwargs["headers"]
-        assert headers["apns-collapse-id"] == "oshireader-test"
+        assert headers["apns-collapse-id"].startswith("oshireader-test-")
+        assert len(headers["apns-collapse-id"]) == len("oshireader-test-") + 12
 
     @pytest.mark.asyncio
     async def test_device_test_push_uses_preview_payload(self, db_session):
@@ -619,7 +620,8 @@ class TestSendTestPush:
         assert payload["aps"]["target-content-id"] == "oshireader:test-preview"
         assert payload["item_url"] == "https://oshireader.onrender.com"
         headers = client.post.call_args.kwargs["headers"]
-        assert headers["apns-collapse-id"] == "oshireader-test"
+        assert headers["apns-collapse-id"].startswith("oshireader-test-")
+        assert len(headers["apns-collapse-id"]) == len("oshireader-test-") + 12
 
 
 class TestAuthToken:
