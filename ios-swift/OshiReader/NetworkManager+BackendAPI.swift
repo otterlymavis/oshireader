@@ -5,8 +5,21 @@ extension NetworkManager {
 
     // MARK: - Watch Terms
 
+    private func firstTermByKeyword(_ terms: [WatchTerm]) -> [String: WatchTerm] {
+        var result: [String: WatchTerm] = [:]
+        for term in terms where result[term.keyword] == nil {
+            result[term.keyword] = term
+        }
+        return result
+    }
+
     func fetchWatchTerms() async throws -> [WatchTerm] {
-        try await apiRequest(URL(string: "\(apiBase)/api/watch-terms/")!, acceptRange: 200...200)
+        try await apiRequest(
+            URL(string: "\(apiBase)/api/watch-terms/")!,
+            authorized: true,
+            deviceAuthorized: true,
+            acceptRange: 200...200
+        )
     }
 
     // Pushes local watch terms missing from the backend (e.g. after a database reset).
@@ -15,10 +28,35 @@ extension NetworkManager {
         guard !isUITesting else { return false }
         guard !localTerms.isEmpty else { return true }
         guard let backendTerms = try? await fetchWatchTerms() else { return false }
-        let backendKeywords = Set(backendTerms.map { $0.keyword })
         var succeeded = true
-        for term in localTerms where !backendKeywords.contains(term.keyword) {
-            if let serverTerm = try? await createWatchTerm(keyword: term.keyword, collectionMode: term.collection_mode, aliases: term.aliases) {
+
+        let backendByKeyword = firstTermByKeyword(backendTerms)
+        for term in localTerms {
+            if let serverTerm = backendByKeyword[term.keyword] {
+                let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
+                    serverTerm.is_active != term.is_active ||
+                    serverTerm.notify_on_new != term.notify_on_new ||
+                    serverTerm.aliases != term.aliases
+                if needsUpdate,
+                   let updatedTerm = try? await updateWatchTerm(
+                    id: serverTerm.id,
+                    isActive: term.is_active,
+                    collectionMode: term.collection_mode,
+                    notifyOnNew: term.notify_on_new,
+                    aliases: term.aliases
+                   ) {
+                    await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm) }
+                } else {
+                    await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
+                    if needsUpdate { succeeded = false }
+                }
+            } else if let serverTerm = try? await createWatchTerm(
+                keyword: term.keyword,
+                collectionMode: term.collection_mode,
+                notifyOnNew: term.notify_on_new,
+                isActive: term.is_active,
+                aliases: term.aliases
+            ) {
                 await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
             } else {
                 succeeded = false
@@ -32,18 +70,40 @@ extension NetworkManager {
     func syncTermsFromBackend() async -> Bool {
         guard !isUITesting else { return false }
         guard let backendTerms = try? await fetchWatchTerms() else { return false }
-        let localKeywords = await MainActor.run { Set(LocalDB.shared.terms.map { $0.keyword }) }
-        var added = false
-        for term in backendTerms where !localKeywords.contains(term.keyword) {
-            await MainActor.run { LocalDB.shared.addTermFromBackend(term) }
-            added = true
+        let localByKeyword = await MainActor.run {
+            firstTermByKeyword(LocalDB.shared.terms)
         }
-        return added
+        var changed = false
+        for term in backendTerms {
+            if let localTerm = localByKeyword[term.keyword] {
+                if localTerm != term {
+                    await MainActor.run { LocalDB.shared.replaceTerm(localId: localTerm.id, with: term) }
+                    changed = true
+                }
+            } else {
+                await MainActor.run { LocalDB.shared.addTermFromBackend(term) }
+                changed = true
+            }
+        }
+        return changed
     }
 
-    func createWatchTerm(keyword: String, collectionMode: CollectionMode, aliases: [String] = []) async throws -> WatchTerm {
-        if isUITesting { return WatchTerm(keyword: keyword, collection_mode: collectionMode) }
-        var body: [String: Any] = ["keyword": keyword, "collection_mode": collectionMode.rawValue]
+    func createWatchTerm(keyword: String, collectionMode: CollectionMode, notifyOnNew: Bool = true, isActive: Bool = true, aliases: [String] = []) async throws -> WatchTerm {
+        if isUITesting {
+            return WatchTerm(
+                keyword: keyword,
+                collection_mode: collectionMode,
+                is_active: isActive,
+                notify_on_new: notifyOnNew,
+                aliases: aliases
+            )
+        }
+        var body: [String: Any] = [
+            "keyword": keyword,
+            "collection_mode": collectionMode.rawValue,
+            "notify_on_new": notifyOnNew,
+            "is_active": isActive,
+        ]
         if !aliases.isEmpty { body["aliases"] = aliases }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         return try await apiRequest(
@@ -93,7 +153,12 @@ extension NetworkManager {
         if let termId { queryItems.append(URLQueryItem(name: "term_id", value: String(termId))) }
         if let platform { queryItems.append(URLQueryItem(name: "platform", value: platform)) }
         components.queryItems = queryItems
-        let backendItems: [BackendFeedItem] = try await apiRequest(components.url!, acceptRange: 200...200)
+        let backendItems: [BackendFeedItem] = try await apiRequest(
+            components.url!,
+            authorized: true,
+            deviceAuthorized: true,
+            acceptRange: 200...200
+        )
         return backendItems.map { $0.toFeedItem() }
     }
 

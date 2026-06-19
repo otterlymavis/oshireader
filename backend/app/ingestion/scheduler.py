@@ -36,7 +36,14 @@ from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
 from app.diagnostics import prune_backend_events, record_backend_event
-from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
+from app.models import (
+    CollectionMode,
+    Match,
+    PendingNotification,
+    PlatformCredential,
+    SourceItem,
+    WatchTerm,
+)
 from app.relevance import primary_text_matches, prune_irrelevant_matches
 
 log = logging.getLogger(__name__)
@@ -124,7 +131,18 @@ def _search_terms_for(term: WatchTerm) -> list[str]:
 async def _fetch_one(connector: BaseConnector, search_term: str, mode: CollectionMode) -> list:
     """Run a single connector fetch; return [] on any error."""
     try:
-        items = await connector.fetch(search_term, mode)
+        items = await asyncio.wait_for(
+            connector.fetch(search_term, mode),
+            timeout=settings.connector_fetch_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "fetch timeout connector=%s term=%r timeout=%ss",
+            connector.PLATFORM,
+            search_term,
+            settings.connector_fetch_timeout_seconds,
+        )
+        return []
     except Exception as exc:
         log.warning("fetch error connector=%s term=%r: %s", connector.PLATFORM, search_term, exc)
         return []
@@ -141,11 +159,109 @@ async def _fetch_one(connector: BaseConnector, search_term: str, mode: Collectio
     return filtered
 
 
+def _published_at_is_estimated(raw, observed_at: datetime) -> bool:
+    marker = (raw.raw_payload or {}).get("date_parsed")
+    if marker is not None:
+        return not bool(marker)
+    return False
+
+
+def _candidate_is_newer(
+    *,
+    candidate_is_estimated: bool,
+    candidate_published_at: datetime,
+    current_is_estimated: bool,
+    current_published_at: datetime | None,
+) -> bool:
+    if current_published_at is None:
+        return True
+    if current_published_at.tzinfo is None:
+        current_published_at = current_published_at.replace(tzinfo=timezone.utc)
+    if candidate_is_estimated != current_is_estimated:
+        return not candidate_is_estimated
+    return candidate_published_at > current_published_at
+
+
+def _queue_pending_notification(
+    db,
+    term: WatchTerm,
+    new_count: int,
+    newest_candidate: tuple[bool, datetime, dict] | None,
+) -> None:
+    if new_count <= 0:
+        return
+
+    pending = db.get(PendingNotification, term.id)
+    if pending is None:
+        pending = PendingNotification(watch_term_id=term.id, new_count=0)
+        db.add(pending)
+    pending.new_count += new_count
+    pending.updated_at = datetime.now(timezone.utc)
+
+    if newest_candidate is None:
+        return
+    candidate_is_estimated, candidate_published_at, candidate_preview = newest_candidate
+    if _candidate_is_newer(
+        candidate_is_estimated=candidate_is_estimated,
+        candidate_published_at=candidate_published_at,
+        current_is_estimated=bool(pending.preview_is_estimated),
+        current_published_at=pending.preview_published_at,
+    ):
+        pending.preview_item = candidate_preview
+        pending.preview_published_at = candidate_published_at
+        pending.preview_is_estimated = candidate_is_estimated
+
+
+async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
+    pending = db.get(PendingNotification, term.id)
+    if pending is None:
+        return True
+    try:
+        should_clear = await send_new_match_notifications(
+            db,
+            term,
+            pending.new_count,
+            pending.preview_item,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        db.rollback()
+        log.warning(
+            "notification delivery failed term=%r count=%d: %s",
+            term.keyword,
+            pending.new_count,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+    if should_clear is False:
+        return False
+    db.delete(pending)
+    db.commit()
+    return True
+
+
+async def _flush_pending_notifications(db, exclude_term_ids: set[int] | None = None) -> None:
+    exclude_term_ids = exclude_term_ids or set()
+    for pending in db.query(PendingNotification).order_by(PendingNotification.updated_at).all():
+        if pending.watch_term_id in exclude_term_ids:
+            continue
+        term = db.get(WatchTerm, pending.watch_term_id)
+        if term is None:
+            db.delete(pending)
+            db.commit()
+            continue
+        await _deliver_pending_notification(db, term)
+
+
 async def _poll_once_unlocked() -> None:
     db = SessionLocal()
     try:
         connectors = _build_connectors(db)
         terms = db.query(WatchTerm).filter(WatchTerm.is_active == True).all()  # noqa: E712
+        processed_term_ids = {term.id for term in terms}
         total_new = 0
         failed_connectors = 0
         record_backend_event(
@@ -157,9 +273,6 @@ async def _poll_once_unlocked() -> None:
         )
 
         for term in terms:
-            term_new_count = 0
-            term_preview_item: dict | None = None
-            term_preview_published_at: datetime | None = None
             for search_term in _search_terms_for(term):
                 # Fetch all connectors in parallel — pure I/O, no DB contention.
                 all_results = await asyncio.gather(
@@ -170,7 +283,7 @@ async def _poll_once_unlocked() -> None:
                         continue
                     try:
                         new_count = 0
-                        newest_candidate: tuple[datetime, dict] | None = None
+                        newest_candidate: tuple[bool, datetime, dict] | None = None
                         ids = [raw.composite_id for raw in items]
                         now = datetime.now(timezone.utc)
 
@@ -263,12 +376,19 @@ async def _poll_once_unlocked() -> None:
                                 published_at = raw.published_at
                                 if published_at.tzinfo is None:
                                     published_at = published_at.replace(tzinfo=timezone.utc)
+                                published_at_is_estimated = _published_at_is_estimated(raw, now)
                                 if (
                                     newest_candidate is None
-                                    or published_at > newest_candidate[0]
+                                    or _candidate_is_newer(
+                                        candidate_is_estimated=published_at_is_estimated,
+                                        candidate_published_at=published_at,
+                                        current_is_estimated=newest_candidate[0],
+                                        current_published_at=newest_candidate[1],
+                                    )
                                 ):
                                     public_base_url = settings.backend_public_url.rstrip("/")
                                     newest_candidate = (
+                                        published_at_is_estimated,
                                         published_at,
                                         {
                                             "id": raw.composite_id,
@@ -285,16 +405,16 @@ async def _poll_once_unlocked() -> None:
                                         },
                                     )
 
+                        _queue_pending_notification(
+                            db,
+                            term,
+                            new_count,
+                            newest_candidate,
+                        )
                         db.flush()
                         db.commit()
                         if new_count:
                             total_new += new_count
-                            term_new_count += new_count
-                            if newest_candidate and (
-                                term_preview_published_at is None
-                                or newest_candidate[0] > term_preview_published_at
-                            ):
-                                term_preview_published_at, term_preview_item = newest_candidate
                         log.info(
                             "term=%r search=%r connector=%s fetched=%d new=%d",
                             term.keyword,
@@ -315,16 +435,12 @@ async def _poll_once_unlocked() -> None:
                         )
                         db.rollback()
 
-            # APNs collapses notifications by watch term. Send exactly one notification
-            # after every connector and alias has been processed, otherwise a later
-            # connector can replace a fresh preview with an older backfilled item.
-            if term_new_count:
-                await send_new_match_notifications(
-                    db,
-                    term,
-                    term_new_count,
-                    term_preview_item,
-                )
+            # Deliver once after every connector and alias has contributed to the
+            # database-backed outbox. If the poll is canceled or APNs raises, the
+            # pending row survives and is retried at the start of the next poll.
+            await _deliver_pending_notification(db, term)
+
+        await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids)
 
         _prune_irrelevant_matches(db, terms)
 

@@ -9,11 +9,17 @@ from app.auth import _require_bearer_token
 
 
 class TestRequireBearerToken:
-    def test_no_expected_token_always_passes(self):
-        """When no admin token is configured, all requests are allowed."""
-        _require_bearer_token("", None)
-        _require_bearer_token("", "Bearer wrong")
-        _require_bearer_token("", "garbage")
+    def test_no_expected_token_requires_explicit_dev_escape_hatch(self):
+        with pytest.raises(HTTPException) as exc_info:
+            _require_bearer_token("", None)
+        assert exc_info.value.status_code == 503
+
+    def test_no_expected_token_passes_when_dev_escape_hatch_enabled(self):
+        with patch("app.auth.settings") as mock_settings:
+            mock_settings.allow_unauthenticated_admin = True
+            _require_bearer_token("", None)
+            _require_bearer_token("", "Bearer wrong")
+            _require_bearer_token("", "garbage")
 
     def test_correct_bearer_passes(self):
         _require_bearer_token("secret", "Bearer secret")

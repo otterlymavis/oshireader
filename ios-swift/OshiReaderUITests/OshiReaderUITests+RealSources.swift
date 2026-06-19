@@ -5,6 +5,9 @@ class OshiReaderRealSourcesUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["OSHI_READER_RUN_LIVE_UI_TESTS"] == "1" else {
+            throw XCTSkip("Set OSHI_READER_RUN_LIVE_UI_TESTS=1 to run live source UI checks")
+        }
         app = XCUIApplication()
         // DO NOT add --uitesting so it hits real network
         app.launch()
@@ -14,13 +17,7 @@ class OshiReaderRealSourcesUITests: XCTestCase {
     func testRealSourcesFeedFetching() throws {
         let randomKeywords = ["Apple", "iOS", "Swift"]
 
-        // Navigate to settings using index 4 or Settings label
-        let settingsTab = app.tabBars.buttons["Settings"]
-        if !settingsTab.waitForExistence(timeout: 5) {
-            app.tabBars.buttons.element(boundBy: 4).tap()
-        } else {
-            settingsTab.tap()
-        }
+        tapTab(index: 4, identifier: "tab.settings", labels: ["Settings"])
 
         for keyword in randomKeywords {
             let addButton = app.buttons["settings.addKeywordButton"]
@@ -45,12 +42,7 @@ class OshiReaderRealSourcesUITests: XCTestCase {
 
         // Go to feed
         bringAppToForeground()
-        let feedTab = app.tabBars.buttons["Feed"]
-        if !feedTab.waitForExistence(timeout: 5) {
-            app.tabBars.buttons.element(boundBy: 0).tap()
-        } else {
-            feedTab.tap()
-        }
+        tapTab(index: 0, identifier: "tab.feed", labels: ["Feed"])
 
         let refreshButton = app.buttons["feed.refreshButton"]
         XCTAssertTrue(refreshButton.waitForExistence(timeout: 10))
@@ -74,6 +66,32 @@ class OshiReaderRealSourcesUITests: XCTestCase {
         if app.state != .runningForeground {
             app.launch()
         }
+    }
+
+    private func tapTab(index: Int, identifier: String, labels: [String]) {
+        let identifiedButtons = app.buttons.matching(identifier: identifier)
+        let identifiedButton = identifiedButtons.firstMatch
+        if identifiedButton.waitForExistence(timeout: 5) {
+            let target = identifiedButtons.allElementsBoundByIndex.first(where: { $0.isHittable }) ?? identifiedButton
+            target.tap()
+            return
+        }
+
+        for label in labels {
+            let button = app.tabBars.buttons[label]
+            if button.waitForExistence(timeout: 1) {
+                button.tap()
+                return
+            }
+        }
+
+        let indexedButton = app.tabBars.buttons.element(boundBy: index)
+        if indexedButton.waitForExistence(timeout: 2) {
+            indexedButton.tap()
+            return
+        }
+
+        XCTFail("Could not find tab at index \(index) with labels \(labels)")
     }
 
 }

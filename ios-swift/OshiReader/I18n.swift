@@ -438,16 +438,10 @@ class I18nManager: ObservableObject {
             "zh-CN": "推送通知"
         ],
         "notificationSetupHint": [
-            "en": "Open the app once and allow notifications so background alerts can be delivered.",
-            "ja": "バックグラウンド通知を受け取るには、一度アプリを開いて通知を許可してください。",
-            "zh-TW": "請先開啟一次 App 並允許通知，才能接收背景提醒。",
-            "zh-CN": "请先打开一次 App 并允许通知，才能接收后台提醒。"
-        ],
-        "backgroundRefreshSettingHint": [
-            "en": "iOS calls this Background App Refresh. If alerts stop, check Settings → General → Background App Refresh and keep it on for OshiReader.",
-            "ja": "iOSでは「Appのバックグラウンド更新」と表示されます。通知が止まる場合は、設定 → 一般 → Appのバックグラウンド更新でOshiReaderが有効か確認してください。",
-            "zh-TW": "iOS 會顯示為「背景 App 重新整理」。如果提醒停止，請到設定 → 一般 → 背景 App 重新整理，確認 OshiReader 已開啟。",
-            "zh-CN": "iOS 会显示为“后台 App 刷新”。如果提醒停止，请到设置 → 通用 → 后台 App 刷新，确认 OshiReader 已开启。"
+            "en": "Allow notifications to receive alerts for new matches.",
+            "ja": "新しい一致の通知を受け取るには、通知を許可してください。",
+            "zh-TW": "允許通知即可接收新相符項目的提醒。",
+            "zh-CN": "允许通知即可接收新匹配项目的提醒。"
         ],
         "notifStatusEnabled": [
             "en": "Enabled",
@@ -544,30 +538,6 @@ class I18nManager: ObservableObject {
             "ja": "バックエンドにデバイストークンがありません。代わりにローカル通知を送信しました。",
             "zh-TW": "後端沒有裝置權杖，已改送本機測試通知。",
             "zh-CN": "后端没有设备令牌，已改发本地测试通知。"
-        ],
-        "apnsEnvironment": [
-            "en": "APNs environment",
-            "ja": "APNs環境",
-            "zh-TW": "APNs 環境",
-            "zh-CN": "APNs 环境"
-        ],
-        "apnsDeviceToken": [
-            "en": "Device token",
-            "ja": "デバイストークン",
-            "zh-TW": "裝置權杖",
-            "zh-CN": "设备令牌"
-        ],
-        "notRegistered": [
-            "en": "Not registered",
-            "ja": "未登録",
-            "zh-TW": "尚未註冊",
-            "zh-CN": "未注册"
-        ],
-        "apnsLastErrorFmt": [
-            "en": "Last APNs error: %@",
-            "ja": "直近のAPNsエラー: %@",
-            "zh-TW": "最近 APNs 錯誤：%@",
-            "zh-CN": "最近 APNs 错误：%@"
         ],
         "notifRemoteTestRequestFailed": [
             "en": "Remote push test failed. Local test sent instead.",

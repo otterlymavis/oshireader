@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import os
+import hashlib
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
-from app.models import Match, SourceItem, WatchTerm
+from app.config import settings
+from app.models import APNSDeviceToken, Match, SourceItem, WatchTerm
 
 # Supply a token so admin endpoints work in tests.
 os.environ.setdefault("ADMIN_API_TOKEN", "test-token")
@@ -207,6 +210,45 @@ class TestFeedAPI:
         assert len(rows) == 1
         assert rows[0]["item"]["id"] == item.id
         assert rows[0]["watch_term_keyword"] == term.keyword
+
+    def test_registered_device_feed_is_scoped_to_owned_terms(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        other_secret = "other-device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        other_owner_secret = hashlib.sha256(other_secret.encode()).hexdigest()
+        db_session.add_all([
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token="b" * 64,
+                environment="sandbox",
+                device_secret=other_owner_secret,
+                is_verified=True,
+            ),
+        ])
+        owned_term = _make_term(db_session, keyword="Owned", owner_device_secret=owner_secret)
+        other_term = _make_term(db_session, keyword="Other", owner_device_secret=other_owner_secret)
+        owned_item = _make_item(db_session, item_id="owned", title="Owned item")
+        other_item = _make_item(db_session, item_id="other", title="Other item")
+        _make_match(db_session, owned_term, owned_item)
+        _make_match(db_session, other_term, other_item)
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.get(
+                "/api/feed/",
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0]["item"]["id"] == owned_item.id
+        assert rows[0]["watch_term_keyword"] == "Owned"
 
     def test_match_redirect_opens_source_url(self, client, db_session):
         term = _make_term(db_session)

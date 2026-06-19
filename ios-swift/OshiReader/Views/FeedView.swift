@@ -622,8 +622,9 @@ struct FeedView: View {
             guard !wantsFullHistory, !db.feedItems.isEmpty else { return nil }
             // Use fetched_at (reliable grab time) not published_at — items with a bad
             // published_at=now() would otherwise block older legitimate content.
-            guard let maxDate = db.feedItems.compactMap({ parseISO8601Date($0.fetched_at) }).max() else { return nil }
-            return _ISO8601Cache.withoutFractional.string(from: maxDate)
+            // Re-fetch a short overlap so device-clock skew or a local scrape cannot
+            // advance the cursor past a just-created backend match.
+            return BackgroundRefreshPolicy.incrementalSince(in: db.feedItems)
         }()
         let fetchDays = wantsFullHistory ? 0 : (db.feedItems.isEmpty ? 90 : 30)
 
@@ -860,11 +861,10 @@ struct FeedView: View {
     }
 
     private func latestFetchedAt(for platformId: String) -> String? {
-        db.feedItems
-            .filter { matchesPlatform($0, platformId: platformId) }
-            .compactMap { parseISO8601Date($0.fetched_at) }
-            .max()
-            .map { _ISO8601Cache.withoutFractional.string(from: $0) }
+        BackgroundRefreshPolicy.incrementalSince(
+            in: db.feedItems,
+            platformId: platformId
+        )
     }
 
     private func matchesPlatform(_ item: FeedItem, platformId: String) -> Bool {

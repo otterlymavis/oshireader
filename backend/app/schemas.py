@@ -30,6 +30,7 @@ class WatchTermCreate(BaseModel):
     aliases: list[str] = Field(default=[], max_length=20)
     language_hint: Optional[str] = Field(default=None, max_length=50)
     collection_mode: CollectionMode = CollectionMode.ALL_INFO
+    is_active: bool = True
     notify_on_new: bool = True
 
     @field_validator("keyword", mode="before")

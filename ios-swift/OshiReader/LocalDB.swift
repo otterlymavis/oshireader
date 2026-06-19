@@ -28,7 +28,7 @@ class LocalDB: ObservableObject {
     private let minFeedItemsPerSubscribedPlatform = 8
 
     // Bump this whenever a migration step is added below.
-    private static let currentSchemaVersion = 2
+    private static let currentSchemaVersion = 3
     private static let schemaVersionKey = "localdb_schema_version"
 
     init(directory: URL) {
@@ -73,18 +73,27 @@ class LocalDB: ObservableObject {
     private func migrate(to version: Int) {
         switch version {
         case 1:
-            // Ensure every platform defined in Platform.all is present in the subscription list.
-            // Handles installs that existed before a platform was added to the registry.
-            let allIds = Set(Platform.all.filter(\.subscribedByDefault).map(\.id))
-            let missing = allIds.subtracting(Set(subscribedPlatforms))
-            if !missing.isEmpty {
-                subscribedPlatforms.append(contentsOf: missing)
-                saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
-            }
+            addMissingDefaultPlatforms()
         case 2:
             pruneIrrelevantCachedArticleItems()
+        case 3:
+            // Add only the newly introduced source. Re-running the full v1 merge
+            // would re-enable older sources that the user intentionally disabled.
+            if !subscribedPlatforms.contains("twitter") {
+                subscribedPlatforms.append("twitter")
+                saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+            }
         default:
             AppLogger.persistence.warning("No migration handler for schema v\(version)")
+        }
+    }
+
+    private func addMissingDefaultPlatforms() {
+        let allIds = Set(Platform.all.filter(\.subscribedByDefault).map(\.id))
+        let missing = allIds.subtracting(Set(subscribedPlatforms))
+        if !missing.isEmpty {
+            subscribedPlatforms.append(contentsOf: missing.sorted())
+            saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
         }
     }
 

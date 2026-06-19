@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import require_admin_or_device_auth
+from app.auth import AuthContext, require_admin_or_device_auth
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll
 from app.models import WatchTerm
@@ -12,18 +14,49 @@ from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 router = APIRouter(prefix="/api/watch-terms", tags=["watch-terms"])
 
 
+def _term_with_keyword_exists(
+    db: Session,
+    *,
+    keyword: str,
+    owner_device_secret: str | None,
+    exclude_id: int | None = None,
+) -> bool:
+    query = db.query(WatchTerm).filter(WatchTerm.keyword == keyword)
+    if owner_device_secret is None:
+        query = query.filter(WatchTerm.owner_device_secret.is_(None))
+    else:
+        query = query.filter(WatchTerm.owner_device_secret == owner_device_secret)
+    if exclude_id is not None:
+        query = query.filter(WatchTerm.id != exclude_id)
+    return db.query(query.exists()).scalar()
+
+
 @router.get("/", response_model=list[WatchTermOut])
-def list_terms(db: Session = Depends(get_db)):
-    return db.query(WatchTerm).order_by(WatchTerm.created_at.desc()).all()
+def list_terms(
+    auth: AuthContext = Depends(require_admin_or_device_auth),
+    db: Session = Depends(get_db),
+):
+    query = db.query(WatchTerm)
+    if not auth.is_admin:
+        query = query.filter(WatchTerm.owner_device_secret == auth.device_secret)
+    return query.order_by(WatchTerm.created_at.desc()).all()
 
 
 @router.post("/", response_model=WatchTermOut, status_code=201)
 async def create_term(
     body: WatchTermCreate,
-    _: None = Depends(require_admin_or_device_auth),
+    auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
     term = WatchTerm(**body.model_dump())
+    if not auth.is_admin:
+        term.owner_device_secret = auth.device_secret
+    if _term_with_keyword_exists(
+        db,
+        keyword=term.keyword,
+        owner_device_secret=term.owner_device_secret,
+    ):
+        raise HTTPException(409, "A watch term with this keyword already exists")
     db.add(term)
     try:
         db.commit()
@@ -36,23 +69,35 @@ async def create_term(
 
 
 @router.patch("/{term_id}", response_model=WatchTermOut)
-def update_term(
+async def update_term(
     term_id: int,
     body: WatchTermUpdate,
-    _: None = Depends(require_admin_or_device_auth),
+    auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
     term = db.get(WatchTerm, term_id)
-    if not term:
+    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
         raise HTTPException(404, "Watch term not found")
     updates = body.model_dump(exclude_none=True)
+    if "keyword" in updates and _term_with_keyword_exists(
+        db,
+        keyword=updates["keyword"],
+        owner_device_secret=term.owner_device_secret,
+        exclude_id=term.id,
+    ):
+        raise HTTPException(409, "A watch term with this keyword already exists")
     for k, v in updates.items():
         setattr(term, k, v)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "A watch term with this keyword already exists")
     db.refresh(term)
     # Re-poll when changes affect what gets fetched on the next cycle.
     should_poll = (
-        "aliases" in updates
+        "keyword" in updates
+        or "aliases" in updates
         or "collection_mode" in updates
         or (updates.get("is_active") is True)
     )
@@ -64,11 +109,11 @@ def update_term(
 @router.delete("/{term_id}", status_code=204)
 def delete_term(
     term_id: int,
-    _: None = Depends(require_admin_or_device_auth),
+    auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
     term = db.get(WatchTerm, term_id)
-    if not term:
+    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
         raise HTTPException(404, "Watch term not found")
     db.delete(term)
     db.flush()

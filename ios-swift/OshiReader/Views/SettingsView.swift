@@ -245,11 +245,6 @@ struct SettingsView: View {
                         .foregroundColor(theme.colors.textMuted)
                         .accessibilityIdentifier("settings.notificationSetupHint")
 
-                    Label(i18n.t("backgroundRefreshSettingHint"), systemImage: "arrow.clockwise.circle")
-                        .font(.caption)
-                        .foregroundColor(theme.colors.textMuted)
-                        .accessibilityIdentifier("settings.backgroundRefreshHint")
-
                     switch notifications.authorizationStatus {
                     case .notDetermined:
                         Button {
@@ -292,34 +287,6 @@ struct SettingsView: View {
                         .foregroundColor(notificationTestSucceeded ? theme.colors.primary : .orange)
                         .accessibilityIdentifier("settings.notificationTestResult")
                     }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(i18n.t("apnsEnvironment"))
-                            Spacer()
-                            Text(NetworkManager.shared.apnsEnvironment)
-                                .foregroundColor(theme.colors.textMuted)
-                        }
-                        HStack {
-                            Text(i18n.t("apnsDeviceToken"))
-                            Spacer()
-                            if let suffix = notifications.remoteDeviceTokenSuffix {
-                                Text("…\(suffix)")
-                                    .foregroundColor(theme.colors.primary)
-                            } else {
-                                Text(i18n.t("notRegistered"))
-                                    .foregroundColor(theme.colors.textMuted)
-                            }
-                        }
-                        if let error = notifications.lastRemoteRegistrationError, !error.isEmpty {
-                            Text(i18n.tFormat("apnsLastErrorFmt", error))
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                                .lineLimit(3)
-                        }
-                    }
-                    .font(.caption)
-                    .accessibilityIdentifier("settings.apnsDebugStatus")
                 }
 
                 Section(header: Text(i18n.t("readerSection"))) {
@@ -444,7 +411,13 @@ struct SettingsView: View {
                             let savedTerm = db.saveTerm(keyword: trimmed, collectionMode: newCollectionMode)
 
                             Task {
-                                if let serverTerm = try? await NetworkManager.shared.createWatchTerm(keyword: savedTerm.keyword, collectionMode: savedTerm.collection_mode) {
+                                if let serverTerm = try? await NetworkManager.shared.createWatchTerm(
+                                    keyword: savedTerm.keyword,
+                                    collectionMode: savedTerm.collection_mode,
+                                    notifyOnNew: savedTerm.notify_on_new,
+                                    isActive: savedTerm.is_active,
+                                    aliases: savedTerm.aliases
+                                ) {
                                     db.replaceTerm(localId: savedTerm.id, with: serverTerm)
                                 }
                             }

@@ -74,7 +74,6 @@ struct ContentView: View {
                             .accessibilityIdentifier("tab.feed")
                     }
                     .tag(OshiTab.feed)
-                    .accessibilityIdentifier("tab.feed")
                 
                 SearchView()
                     .tabItem {
@@ -82,7 +81,6 @@ struct ContentView: View {
                             .accessibilityIdentifier("tab.search")
                     }
                     .tag(OshiTab.search)
-                    .accessibilityIdentifier("tab.search")
 
                 SavedView()
                     .tabItem {
@@ -90,7 +88,6 @@ struct ContentView: View {
                             .accessibilityIdentifier("tab.saved")
                     }
                     .tag(OshiTab.saved)
-                    .accessibilityIdentifier("tab.saved")
                 
                 OshiView()
                     .tabItem {
@@ -98,7 +95,6 @@ struct ContentView: View {
                             .accessibilityIdentifier("tab.oshi")
                     }
                     .tag(OshiTab.oshi)
-                    .accessibilityIdentifier("tab.oshi")
                 
                 SettingsView()
                     .tabItem {
@@ -106,7 +102,6 @@ struct ContentView: View {
                             .accessibilityIdentifier("tab.settings")
                     }
                     .tag(OshiTab.settings)
-                    .accessibilityIdentifier("tab.settings")
             }
             .tint(theme.colors.primary)
             // Ensure standard backgrounds

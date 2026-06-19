@@ -11,7 +11,7 @@ from app.connectors.base import SourceItemCreate
 import asyncio
 
 from app.ingestion.scheduler import _poll_lock, _poll_once_unlocked, poll_once, _prune_old_items
-from app.models import Match, SourceItem, WatchTerm
+from app.models import Match, PendingNotification, SourceItem, WatchTerm
 
 
 def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate:
@@ -21,6 +21,7 @@ def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate
         media_type="video",
         title="Aiko Haruka Test Item",
         content_text="Aiko Haruka",
+        raw_payload={"date_parsed": True},
     )
     defaults.update(kwargs)
     return SourceItemCreate(platform=platform, item_id=item_id, **defaults)
@@ -207,6 +208,150 @@ class TestIngestionNotifications:
         assert called_count == 2
         assert preview_item["id"] == "youtube:fresh"
         assert preview_item["title"] == "Aiko fresh"
+
+    @pytest.mark.asyncio
+    async def test_notification_preview_prefers_parsed_date_over_poll_time_placeholder(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        reliable = datetime.now(timezone.utc) - timedelta(hours=2)
+        parsed_connector = _mock_connector(
+            "youtube",
+            [
+                _make_item(
+                    platform="youtube",
+                    item_id="parsed",
+                    published_at=reliable,
+                    title="Aiko parsed",
+                    raw_payload={"date_parsed": True},
+                )
+            ],
+        )
+        estimated_connector = _mock_connector(
+            "yahoonews",
+            [
+                _make_item(
+                    platform="yahoonews",
+                    item_id="estimated",
+                    published_at=datetime.now(timezone.utc),
+                    title="Aiko estimated",
+                    raw_payload={"date_parsed": False},
+                )
+            ],
+        )
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[estimated_connector, parsed_connector],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=mock_notify,
+        ):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+        preview_item = mock_notify.call_args.args[3]
+        assert preview_item["id"] == "youtube:parsed"
+
+    @pytest.mark.asyncio
+    async def test_notification_failure_is_isolated_and_retried_from_outbox(
+        self,
+        db_engine,
+        db_session,
+    ):
+        first = WatchTerm(keyword="Aiko", notify_on_new=True)
+        second = WatchTerm(keyword="Haruka", notify_on_new=True)
+        db_session.add_all([first, second])
+        db_session.commit()
+
+        async def fetch(search_term, _mode):
+            return [
+                _make_item(
+                    item_id=search_term.lower(),
+                    title=f"{search_term} item",
+                    content_text=search_term,
+                )
+            ]
+
+        connector = MagicMock()
+        connector.PLATFORM = "youtube"
+        connector.fetch = fetch
+        mock_notify = AsyncMock(side_effect=[RuntimeError("bad APNs key"), None, None])
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[connector],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=mock_notify,
+        ):
+            await _poll_once_unlocked()
+            await _poll_once_unlocked()
+
+        assert mock_notify.call_count == 3
+        assert mock_notify.call_args_list[0].args[1].keyword == "Aiko"
+        assert mock_notify.call_args_list[1].args[1].keyword == "Haruka"
+        assert mock_notify.call_args_list[2].args[1].keyword == "Aiko"
+        retry_db = TestSession()
+        try:
+            assert retry_db.query(PendingNotification).count() == 0
+        finally:
+            retry_db.close()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_poll_keeps_committed_notification_in_outbox(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", aliases=["Haruka"], notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        async def fetch(search_term, _mode):
+            if search_term == "Aiko":
+                return [_make_item(item_id="committed-before-cancel")]
+            raise asyncio.CancelledError()
+
+        connector = MagicMock()
+        connector.PLATFORM = "youtube"
+        connector.fetch = fetch
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[connector],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=AsyncMock(),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await _poll_once_unlocked()
+
+        retry_db = TestSession()
+        try:
+            pending = retry_db.get(PendingNotification, term.id)
+            assert pending is not None
+            assert pending.new_count == 1
+        finally:
+            retry_db.close()
 
     @pytest.mark.asyncio
     async def test_failed_connector_commit_is_not_included_in_notification(

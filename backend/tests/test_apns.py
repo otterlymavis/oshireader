@@ -14,6 +14,7 @@ import httpx
 import tempfile, os
 
 from app.apns import (
+    APNSSendResult,
     _host,
     _payload,
     _payload_size,
@@ -181,6 +182,7 @@ def _device(token: str, environment: str = "sandbox") -> APNSDeviceToken:
     return APNSDeviceToken(
         token=token,
         environment=environment,
+        is_verified=True,
         last_seen_at=datetime.now(timezone.utc),
     )
 
@@ -241,7 +243,7 @@ class TestSendNewMatchNotifications:
 
         with patch("app.apns.apns_configured", return_value=True), \
              patch("app.apns.settings") as mock_settings, \
-             patch("app.apns._send_one", new=AsyncMock(return_value=False)) as mock_send:
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))) as mock_send:
             mock_settings.apns_use_sandbox = True
             await send_new_match_notifications(db_session, term, 3)
 
@@ -262,7 +264,7 @@ class TestSendNewMatchNotifications:
 
         with patch("app.apns.apns_configured", return_value=True), \
              patch("app.apns.settings") as mock_settings, \
-             patch("app.apns._send_one", new=AsyncMock(return_value=False)) as mock_send:
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))) as mock_send:
             mock_settings.apns_use_sandbox = True  # sandbox mode, but device is production
             await send_new_match_notifications(db_session, term, 1)
 
@@ -282,7 +284,7 @@ class TestSendNewMatchNotifications:
 
         with patch("app.apns.apns_configured", return_value=True), \
              patch("app.apns.settings") as mock_settings, \
-             patch("app.apns._send_one", new=AsyncMock(return_value=True)):
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(should_delete_token=True))):
             mock_settings.apns_use_sandbox = True
             await send_new_match_notifications(db_session, term, 2)
 
@@ -298,12 +300,32 @@ class TestSendNewMatchNotifications:
 
         with patch("app.apns.apns_configured", return_value=True), \
              patch("app.apns.settings") as mock_settings, \
-             patch("app.apns._send_one", new=AsyncMock(return_value=False)):
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))):
             mock_settings.apns_use_sandbox = True
             await send_new_match_notifications(db_session, term, 1)
 
         remaining = db_session.query(APNSDeviceToken).filter_by(token="d" * 64).first()
         assert remaining is not None
+
+    @pytest.mark.asyncio
+    async def test_device_owned_term_only_sends_to_owner_device(self, db_session):
+        owner_secret = "owner-secret-digest"
+        term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret=owner_secret)
+        owner_device = _device("e" * 64, environment="sandbox")
+        owner_device.device_secret = owner_secret
+        other_device = _device("f" * 64, environment="sandbox")
+        other_device.device_secret = "other-secret-digest"
+        db_session.add_all([term, owner_device, other_device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.settings") as mock_settings, \
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))) as mock_send:
+            mock_settings.apns_use_sandbox = True
+            await send_new_match_notifications(db_session, term, 1)
+
+        mock_send.assert_called_once()
+        assert mock_send.call_args.args[1].token == "e" * 64
 
 
 class TestApnsConfigured:
@@ -417,7 +439,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result is False  # keep token on network failure
+        assert result == APNSSendResult(retryable_failure=True)
         assert client.post.await_count == 3
 
     @pytest.mark.asyncio
@@ -434,7 +456,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             result = await _send_one(client, device, term, 1)
 
-        assert result is False
+        assert result == APNSSendResult(delivered=True)
         assert client.post.await_count == 2
         mock_sleep.assert_awaited_once()
 
@@ -448,7 +470,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             result = await _send_one(client, device, term, 1)
 
-        assert result is True
+        assert result == APNSSendResult(should_delete_token=True)
         client.post.assert_awaited_once()
         mock_sleep.assert_not_awaited()
 
@@ -461,7 +483,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result is False  # success — keep token
+        assert result == APNSSendResult(delivered=True)
 
     @pytest.mark.asyncio
     async def test_skips_send_when_preview_payload_exceeds_apns_limit(self):
@@ -478,7 +500,7 @@ class TestSendOne:
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1, huge_preview)
 
-        assert result is False
+        assert result == APNSSendResult()
         client.post.assert_not_called()
 
     @pytest.mark.asyncio
@@ -503,7 +525,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result is True  # delete token
+        assert result == APNSSendResult(should_delete_token=True)
 
     @pytest.mark.asyncio
     async def test_returns_true_for_unregistered(self):
@@ -514,7 +536,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result is True  # delete token
+        assert result == APNSSendResult(should_delete_token=True)
 
     @pytest.mark.asyncio
     async def test_returns_true_for_410_regardless_of_reason(self):
@@ -525,7 +547,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result is True  # 410 always means delete token
+        assert result == APNSSendResult(should_delete_token=True)
 
     @pytest.mark.asyncio
     async def test_returns_false_for_unknown_rejection_reason(self):
@@ -536,7 +558,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result is False  # not a bad-token error — keep it
+        assert result == APNSSendResult()
 
     @pytest.mark.asyncio
     async def test_returns_false_when_json_parse_fails(self):
@@ -547,7 +569,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result is False  # server error without bad-token reason — keep token
+        assert result == APNSSendResult(retryable_failure=True)
 
 
 class TestSendTestPush:

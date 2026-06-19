@@ -6,9 +6,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from unittest.mock import patch
 
 from app.database import Base, get_db
 from app.main import app
+from app.config import settings
 
 # StaticPool forces all checkouts to share one connection — required for
 # SQLite in-memory so that tables created by create_all remain visible
@@ -54,7 +56,21 @@ def client(db_session):
         finally:
             pass
 
+    original_allow_unauthenticated = settings.allow_unauthenticated_admin
+    original_admin_api_token = settings.admin_api_token
+    settings.allow_unauthenticated_admin = True
+    settings.admin_api_token = ""
     app.dependency_overrides[get_db] = _override_db
-    with TestClient(app, raise_server_exceptions=False) as c:
-        yield c
-    app.dependency_overrides.clear()
+    try:
+        # The production lifespan queues an immediate ingestion poll. API tests
+        # need deterministic control of that global poll lock and mock polling
+        # explicitly when the endpoint behavior is under test.
+        with patch("app.main.queue_poll"), TestClient(
+            app,
+            raise_server_exceptions=False,
+        ) as c:
+            yield c
+    finally:
+        settings.allow_unauthenticated_admin = original_allow_unauthenticated
+        settings.admin_api_token = original_admin_api_token
+        app.dependency_overrides.clear()

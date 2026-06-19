@@ -17,6 +17,7 @@ extension BGTaskScheduler: BackgroundTaskSchedulerClient {}
 enum BackgroundRefreshPolicy {
     static let operationDeadline: TimeInterval = 25
     static let pollTimeout: TimeInterval = 12
+    static let incrementalFetchOverlap: TimeInterval = 15 * 60
 
     static func shouldScheduleLocalFallback(hasRegisteredRemoteDeviceForCurrentEnvironment: Bool) -> Bool {
         !hasRegisteredRemoteDeviceForCurrentEnvironment
@@ -59,6 +60,31 @@ enum BackgroundRefreshPolicy {
             userInfo["preview_item"] != nil {
             return false
         }
+        return true
+    }
+
+    static func incrementalSince(
+        in items: [FeedItem],
+        platformId: String? = nil
+    ) -> String? {
+        items
+            .filter { item in
+                guard isBackendCursorCandidate(item) else { return false }
+                guard let platformId else { return true }
+                return Platform.normalize(item.platform) == platformId
+            }
+            .compactMap { parseISO8601Date($0.fetched_at) }
+            .max()
+            .map { latest in
+                let overlapped = latest.addingTimeInterval(-incrementalFetchOverlap)
+                return _ISO8601Cache.withoutFractional.string(from: overlapped)
+            }
+    }
+
+    static func isBackendCursorCandidate(_ item: FeedItem) -> Bool {
+        if Platform.normalize(item.platform) == "custom" { return false }
+        if item.id.contains(":gnews:") { return false }
+        if item.id.hasPrefix("news:nhk:") { return false }
         return true
     }
 }
@@ -285,13 +311,6 @@ final class BackgroundRefreshManager {
     }
 
     private func latestFetchedAt(in items: [FeedItem], platformId: String? = nil) -> String? {
-        items
-            .filter { item in
-                guard let platformId else { return true }
-                return Platform.normalize(item.platform) == platformId
-            }
-            .compactMap { parseISO8601Date($0.fetched_at) }
-            .max()
-            .map { _ISO8601Cache.withoutFractional.string(from: $0) }
+        BackgroundRefreshPolicy.incrementalSince(in: items, platformId: platformId)
     }
 }

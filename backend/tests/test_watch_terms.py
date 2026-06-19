@@ -45,6 +45,41 @@ class TestListWatchTerms:
         assert t["is_active"] is True
         assert t["collection_mode"] == "all_info"
 
+    def test_registered_device_only_lists_owned_terms(self, client, db_session):
+        token = "a" * 64
+        other_token = "b" * 64
+        secret = "device-secret-value"
+        other_secret = "other-device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        other_owner_secret = hashlib.sha256(other_secret.encode()).hexdigest()
+        db_session.add_all([
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token=other_token,
+                environment="sandbox",
+                device_secret=other_owner_secret,
+                is_verified=True,
+            ),
+            WatchTerm(keyword="Owned", owner_device_secret=owner_secret),
+            WatchTerm(keyword="Other", owner_device_secret=other_owner_secret),
+            WatchTerm(keyword="AdminOnly"),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.get(
+                "/api/watch-terms/",
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 200
+        assert [term["keyword"] for term in resp.json()] == ["Owned"]
+
 
 class TestCreateWatchTerm:
     def test_creates_term_returns_201(self, client):
@@ -104,6 +139,70 @@ class TestCreateWatchTerm:
             resp = client.post("/api/watch-terms/", json={"keyword": "Aiko"})
         assert resp.status_code == 409
 
+    def test_registered_devices_can_create_same_keyword_for_different_owners(self, client, db_session):
+        first_token = "a" * 64
+        second_token = "b" * 64
+        first_secret = "first-device-secret"
+        second_secret = "second-device-secret"
+        db_session.add_all([
+            APNSDeviceToken(
+                token=first_token,
+                environment="sandbox",
+                device_secret=hashlib.sha256(first_secret.encode()).hexdigest(),
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token=second_token,
+                environment="sandbox",
+                device_secret=hashlib.sha256(second_secret.encode()).hexdigest(),
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            first = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Token": first_token, "X-Device-Secret": first_secret},
+            )
+            second = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Token": second_token, "X-Device-Secret": second_secret},
+            )
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
+
+    def test_registered_device_duplicate_keyword_for_same_owner_returns_409(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        db_session.add(APNSDeviceToken(
+            token=token,
+            environment="sandbox",
+            device_secret=hashlib.sha256(secret.encode()).hexdigest(),
+            is_verified=True,
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+            duplicate = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert duplicate.status_code == 409
+
     def test_registered_device_can_create_when_admin_auth_is_enabled(self, client, db_session):
         token = "a" * 64
         secret = "device-secret-value"
@@ -111,6 +210,7 @@ class TestCreateWatchTerm:
             token=token,
             environment="sandbox",
             device_secret=hashlib.sha256(secret.encode()).hexdigest(),
+            is_verified=True,
         ))
         db_session.commit()
 
@@ -123,6 +223,27 @@ class TestCreateWatchTerm:
             )
 
         assert resp.status_code == 201
+
+    def test_unverified_device_is_rejected_when_admin_auth_is_enabled(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        db_session.add(APNSDeviceToken(
+            token=token,
+            environment="sandbox",
+            device_secret=hashlib.sha256(secret.encode()).hexdigest(),
+            is_verified=False,
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 401
 
     def test_unregistered_device_is_rejected_when_admin_auth_is_enabled(self, client):
         with patch.object(settings, "admin_api_token", "admin-secret"):
@@ -213,7 +334,7 @@ class TestUpdateWatchTerm:
             client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
         mock_poll.assert_not_called()
 
-    def test_update_keyword_alone_does_not_trigger_poll(self, client, db_session):
+    def test_update_keyword_alone_triggers_poll(self, client, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)
         db_session.commit()
@@ -221,7 +342,7 @@ class TestUpdateWatchTerm:
         with patch("app.api.watch_terms.queue_poll") as mock_poll:
             resp = client.patch(f"/api/watch-terms/{term.id}", json={"keyword": "Aiko Updated"})
         assert resp.status_code == 200
-        mock_poll.assert_not_called()
+        mock_poll.assert_called_once()
 
     def test_update_notify_on_new_alone_does_not_trigger_poll(self, client, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=False)

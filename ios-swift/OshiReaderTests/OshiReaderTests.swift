@@ -481,6 +481,181 @@ final class OshiReaderTests: XCTestCase {
         manager.selectedItem = nil
     }
 
+    func testNotificationNavigationPrefersPushOverStaleCachedItem() throws {
+        let cached = FeedItem(
+            id: "youtube:shared",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=old",
+            title: "Old cached title",
+            content_text: "Full cached description",
+            author: "Cached author",
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: "2026-06-01T12:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-01T12:05:00Z"
+        )
+        let notification = FeedItem(
+            id: "youtube:shared",
+            platform: "youtube",
+            url: "https://backend.example.com/api/feed/matches/99/redirect",
+            title: "Fresh push title",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: "https://img.example.com/fresh.jpg",
+            media_type: "video",
+            published_at: "2026-06-18T12:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-18T12:01:00Z"
+        )
+
+        let resolved = NotificationNavigationManager.preferredNotificationItem(
+            notification,
+            cachedItems: [cached]
+        )
+
+        XCTAssertEqual(resolved.url, notification.url)
+        XCTAssertEqual(resolved.title, "Fresh push title")
+        XCTAssertEqual(resolved.published_at, notification.published_at)
+        XCTAssertEqual(resolved.thumbnail_url, notification.thumbnail_url)
+        XCTAssertEqual(resolved.content_text, "Full cached description")
+    }
+
+    func testNotificationNavigationPreservesCachedMetadataOmittedFromPayload() throws {
+        let cached = FeedItem(
+            id: "youtube:trimmed",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=trimmed",
+            title: "Cached title",
+            content_text: "Cached description",
+            author: "Cached author",
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: "2026-06-01T12:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-01T12:05:00Z"
+        )
+        let payloadDefaults = FeedItem(
+            id: cached.id,
+            platform: "web",
+            url: "https://backend.example.com/api/feed/matches/101/redirect",
+            title: "Push title",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: "2026-06-19T00:00:00Z",
+            watch_term_keyword: "",
+            fetched_at: "2026-06-19T00:00:00Z"
+        )
+
+        let resolved = NotificationNavigationManager.preferredNotificationItem(
+            payloadDefaults,
+            cachedItems: [cached],
+            hasPlatform: false,
+            hasMediaType: false,
+            hasPublishedAt: false,
+            hasWatchTermKeyword: false
+        )
+
+        XCTAssertEqual(resolved.platform, cached.platform)
+        XCTAssertEqual(resolved.media_type, cached.media_type)
+        XCTAssertEqual(resolved.published_at, cached.published_at)
+        XCTAssertEqual(resolved.watch_term_keyword, cached.watch_term_keyword)
+        XCTAssertEqual(resolved.url, payloadDefaults.url)
+        XCTAssertEqual(resolved.title, payloadDefaults.title)
+    }
+
+    func testIncrementalSinceIncludesOverlapForClockSkew() throws {
+        let latest = "2026-06-18T12:30:00Z"
+        let item = FeedItem(
+            id: "youtube:cursor",
+            platform: "youtube",
+            url: "https://example.com/cursor",
+            title: "Cursor",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: latest,
+            watch_term_keyword: "Aiko",
+            fetched_at: latest
+        )
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.incrementalSince(in: [item]),
+            "2026-06-18T12:15:00Z"
+        )
+        XCTAssertNil(
+            BackgroundRefreshPolicy.incrementalSince(
+                in: [item],
+                platformId: "news"
+            )
+        )
+    }
+
+    func testIncrementalSinceIgnoresLocalOnlyCursorItems() throws {
+        let backendItem = FeedItem(
+            id: "youtube:cursor",
+            platform: "youtube",
+            url: "https://example.com/backend",
+            title: "Backend",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: "2026-06-18T11:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-18T11:00:00Z"
+        )
+        let localCustomItem = FeedItem(
+            id: "custom:local",
+            platform: "custom",
+            url: "https://example.com/custom",
+            title: "Custom",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: "2026-06-18T13:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-18T13:00:00Z"
+        )
+        let localGoogleNewsFallback = FeedItem(
+            id: "news:gnews:local",
+            platform: "news",
+            url: "https://example.com/gnews",
+            title: "Google News fallback",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: "2026-06-18T14:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-18T14:00:00Z"
+        )
+        let localNHKFallback = FeedItem(
+            id: "news:nhk:local",
+            platform: "news",
+            url: "https://example.com/nhk",
+            title: "NHK fallback",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: "2026-06-18T15:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-18T15:00:00Z"
+        )
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.incrementalSince(
+                in: [localCustomItem, localGoogleNewsFallback, localNHKFallback, backendItem]
+            ),
+            "2026-06-18T10:45:00Z"
+        )
+    }
+
     @MainActor
     func testNotificationNavigationCanSaveRemotePreviewPayload() throws {
         let manager = NotificationNavigationManager.shared
@@ -816,18 +991,27 @@ final class OshiReaderTests: XCTestCase {
     }
 
     func testLocalGoogleNewsFallbacksCoverStrictArticleSources() throws {
-        let backendOnly = Set(["note", "girlschannel", "togetter"])
+        let backendOnly = Set(["note", "girlschannel"])
         let rssFallback = Set(["news"])
-        let expected = Set(
+        let strictArticleFallbacks = Set(
             Platform.all
                 .filter { $0.usesStrictKeywordMatching && !$0.isMediaPlatform }
                 .map(\.id)
         )
         .subtracting(backendOnly)
         .subtracting(rssFallback)
+        let supplementalFallbacks = Set(["tver", "twitter"])
+        let expected = strictArticleFallbacks.union(supplementalFallbacks)
         let actual = Set(NetworkManager.googleNewsFallbackSites.map(\.platform))
 
         XCTAssertEqual(actual, expected)
+    }
+
+    func testLocalGoogleNewsFallbackPlatformsExistInRegistry() throws {
+        let fallbackPlatforms = Set(NetworkManager.googleNewsFallbackSites.map(\.platform))
+        let missing = fallbackPlatforms.filter { Platform.find($0) == nil }.sorted()
+
+        XCTAssertTrue(missing.isEmpty, "Missing platform definitions: \(missing)")
     }
     
     // MARK: - skipDateCutoff flag: forum platforms always pass date filter
@@ -1061,6 +1245,25 @@ final class OshiReaderTests: XCTestCase {
                       "Migration should have added missing 'oricon' platform")
 
         // Clean up the version key so subsequent tests see a clean state
+        UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
+    }
+
+    func testSchemaV3AddsTwitterToExistingSubscriptions() throws {
+        let platforms = Platform.all
+            .filter(\.subscribedByDefault)
+            .map(\.id)
+            .filter { $0 != "twitter" && $0 != "oricon" }
+        let data = try JSONEncoder().encode(platforms)
+        try data.write(to: tempDir.appendingPathComponent("subscribed_platforms.json"))
+        UserDefaults.standard.set(2, forKey: "localdb_schema_version")
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertTrue(freshDB.subscribedPlatforms.contains("twitter"))
+        XCTAssertFalse(
+            freshDB.subscribedPlatforms.contains("oricon"),
+            "Migration must preserve sources the user previously disabled"
+        )
         UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
     }
 
@@ -2150,20 +2353,34 @@ final class NetworkManagerTests: XCTestCase {
         var capturedDeviceSecret: String?
         let deviceToken = String(repeating: "a", count: 64)
         KeychainHelper.write(key: "apns_device_token", value: deviceToken)
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
         KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+        var capturedBody: [String: Any]?
         let expected = WatchTerm(id: "7", keyword: "Haruka", collection_mode: .allInfo)
         let responseData = try JSONEncoder().encode(expected)
         MockURLProtocol.handler = { req in
             capturedMethod = req.httpMethod
             capturedDeviceToken = req.value(forHTTPHeaderField: "X-Device-Token")
             capturedDeviceSecret = req.value(forHTTPHeaderField: "X-Device-Secret")
+            if let body = req.httpBody {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
             return (responseData, Self.response(status: 200))
         }
 
-        let created = try await NetworkManager.shared.createWatchTerm(keyword: "Haruka", collectionMode: .allInfo)
+        let created = try await NetworkManager.shared.createWatchTerm(
+            keyword: "Haruka",
+            collectionMode: .allInfo,
+            notifyOnNew: false,
+            isActive: false
+        )
         XCTAssertEqual(capturedMethod, "POST")
         XCTAssertEqual(capturedDeviceToken, deviceToken)
         XCTAssertEqual(capturedDeviceSecret, "device-secret")
+        XCTAssertEqual(capturedBody?["keyword"] as? String, "Haruka")
+        XCTAssertEqual(capturedBody?["collection_mode"] as? String, "all_info")
+        XCTAssertEqual(capturedBody?["notify_on_new"] as? Bool, false)
+        XCTAssertEqual(capturedBody?["is_active"] as? Bool, false)
         XCTAssertEqual(created.keyword, "Haruka")
     }
 
@@ -2334,12 +2551,16 @@ final class NetworkManagerTests: XCTestCase {
 
     @MainActor
     func testNotificationManagerUploadsRegisteredDeviceToken() async throws {
-        var capturedPath: String?
+        var capturedPaths: [String] = []
         var capturedBody: [String: Any]?
         MockURLProtocol.handler = { req in
-            capturedPath = req.url?.path
-            if let body = req.httpBody {
+            let path = req.url?.path ?? ""
+            capturedPaths.append(path)
+            if path == "/api/devices/apns-token", let body = req.httpBody {
                 capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            if path == "/api/watch-terms" {
+                return (Data("[]".utf8), Self.response(status: 200))
             }
             return (Data(), Self.response(status: 201))
         }
@@ -2347,7 +2568,8 @@ final class NetworkManagerTests: XCTestCase {
         let manager = NotificationManager(center: MockNotificationCenter(status: .authorized))
         await manager.handleRegisteredDeviceToken(Data(repeating: 0xab, count: 32))
 
-        XCTAssertEqual(capturedPath, "/api/devices/apns-token")
+        XCTAssertTrue(capturedPaths.contains("/api/devices/apns-token"))
+        XCTAssertTrue(capturedPaths.contains("/api/watch-terms"))
         XCTAssertEqual(capturedBody?["token"] as? String, String(repeating: "ab", count: 32))
         XCTAssertNotNil(capturedBody?["environment"] as? String)
         XCTAssertNotNil(capturedBody?["device_id"] as? String)

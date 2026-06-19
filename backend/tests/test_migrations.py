@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import patch
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -129,6 +130,96 @@ class TestApplyStartupMigrations:
             assert db.get(MigrationLog, "purge_irrelevant_matches_v1") is not None
         finally:
             db.close()
+
+    def test_backfills_required_columns_for_legacy_rows(self, fresh_engine):
+        with fresh_engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE watch_terms (
+                    id INTEGER PRIMARY KEY,
+                    keyword VARCHAR NOT NULL UNIQUE
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE source_items (
+                    id VARCHAR PRIMARY KEY,
+                    platform VARCHAR NOT NULL,
+                    item_id VARCHAR NOT NULL,
+                    url VARCHAR NOT NULL,
+                    published_at TIMESTAMP NOT NULL,
+                    author VARCHAR,
+                    title VARCHAR,
+                    content_text TEXT,
+                    media_type VARCHAR
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE matches (
+                    id INTEGER PRIMARY KEY,
+                    watch_term_id INTEGER NOT NULL,
+                    source_item_id VARCHAR NOT NULL
+                )
+            """))
+            published_at = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+            conn.execute(text("INSERT INTO watch_terms (id, keyword) VALUES (1, 'Legacy')"))
+            conn.execute(
+                text(
+                    "INSERT INTO source_items "
+                    "(id, platform, item_id, url, published_at, title, media_type) "
+                    "VALUES ('news:legacy', 'news', 'legacy', 'https://example.com/legacy', :published_at, 'Legacy news', 'article')"
+                ),
+                {"published_at": published_at.isoformat()},
+            )
+            conn.execute(text("INSERT INTO matches (id, watch_term_id, source_item_id) VALUES (1, 1, 'news:legacy')"))
+
+        Session = sessionmaker(bind=fresh_engine)
+        with patch("app.migrations.SessionLocal", Session):
+            apply_startup_migrations(fresh_engine)
+
+        db = Session()
+        try:
+            term = db.get(WatchTerm, 1)
+            match = db.get(Match, 1)
+            assert term.aliases == []
+            assert term.collection_mode == "all_info"
+            assert term.is_active is True
+            assert term.notify_on_new is True
+            assert term.created_at is not None
+            assert match.confidence == 1.0
+            assert match.created_at is not None
+        finally:
+            db.close()
+
+    def test_replaces_global_keyword_unique_with_owner_scoped_uniqueness(self, fresh_engine):
+        with fresh_engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE watch_terms (
+                    id INTEGER PRIMARY KEY,
+                    keyword VARCHAR NOT NULL UNIQUE,
+                    owner_device_secret VARCHAR
+                )
+            """))
+            conn.execute(text("INSERT INTO watch_terms (id, keyword) VALUES (1, 'Legacy')"))
+
+        Session = sessionmaker(bind=fresh_engine)
+        with patch("app.migrations.SessionLocal", Session):
+            apply_startup_migrations(fresh_engine)
+
+        with fresh_engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO watch_terms (keyword, owner_device_secret)"
+                " VALUES ('Aiko', 'owner-a')"
+            ))
+            conn.execute(text(
+                "INSERT INTO watch_terms (keyword, owner_device_secret)"
+                " VALUES ('Aiko', 'owner-b')"
+            ))
+
+        with pytest.raises(IntegrityError):
+            with fresh_engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO watch_terms (keyword, owner_device_secret)"
+                    " VALUES ('Aiko', 'owner-a')"
+                ))
 
 
 class TestAddMissingColumns:

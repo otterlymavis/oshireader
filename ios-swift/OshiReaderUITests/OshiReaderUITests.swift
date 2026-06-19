@@ -2,14 +2,21 @@ import XCTest
 
 final class OshiReaderUITests: XCTestCase {
     private var app: XCUIApplication!
+    private var liveUITestsEnabled: Bool {
+        ProcessInfo.processInfo.environment["OSHI_READER_RUN_LIVE_UI_TESTS"] == "1"
+    }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        if !name.contains("LiveBackgroundPush") {
-            app.launchArguments = ["--uitesting"]
+        if !name.contains("LiveBackgroundPush") || !liveUITestsEnabled {
+            app.launchArguments = uiTestingLaunchArguments()
         }
         app.launch()
+    }
+
+    private func uiTestingLaunchArguments(_ extraArguments: [String] = []) -> [String] {
+        ["--uitesting", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"] + extraArguments
     }
 
     func testAddKeywordFlow() throws {
@@ -70,7 +77,7 @@ final class OshiReaderUITests: XCTestCase {
 
     func testSearchFlow() throws {
         app.terminate()
-        app.launchArguments = ["--uitesting", "--uitesting-start-search"]
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-start-search"])
         app.launch()
 
         // Keyword chip from the seeded UITest term should be visible
@@ -82,7 +89,7 @@ final class OshiReaderUITests: XCTestCase {
 
     func testSearchClearShowsEmptyKeywordPrompt() throws {
         app.terminate()
-        app.launchArguments = ["--uitesting", "--uitesting-start-search"]
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-start-search"])
         app.launch()
 
         XCTAssertTrue(app.staticTexts["UITest Oshi"].waitForExistence(timeout: 3))
@@ -97,7 +104,7 @@ final class OshiReaderUITests: XCTestCase {
 
     func testSearchResultOpensReaderInWebMode() throws {
         app.terminate()
-        app.launchArguments = ["--uitesting", "--uitesting-start-search", "--uitesting-search-social"]
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-start-search", "--uitesting-search-social"])
         app.launch()
 
         let xSearchLink = app.buttons["search.link.x"]
@@ -117,7 +124,7 @@ final class OshiReaderUITests: XCTestCase {
 
     func testXSearchRendersRealContentNotBlank() throws {
         app.terminate()
-        app.launchArguments = ["--uitesting", "--uitesting-start-search", "--uitesting-search-social"]
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-start-search", "--uitesting-search-social"])
         app.launch()
 
         let xSearchLink = app.buttons["search.link.x"]
@@ -137,7 +144,7 @@ final class OshiReaderUITests: XCTestCase {
 
     func testXSearchSignInFallbackOffersInAppLoginAndReturn() throws {
         app.terminate()
-        app.launchArguments = ["--uitesting", "--uitesting-start-search", "--uitesting-search-social"]
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-start-search", "--uitesting-search-social"])
         app.launch()
 
         let xSearchLink = app.buttons["search.link.x"]
@@ -185,8 +192,6 @@ final class OshiReaderUITests: XCTestCase {
 
         XCTAssertTrue(waitForElement(identifier: "settings.notificationStatus", timeout: 2, swipes: 4).exists)
         XCTAssertTrue(waitForElement(identifier: "settings.notificationSetupHint", timeout: 2, swipes: 0).exists)
-        XCTAssertTrue(waitForElement(identifier: "settings.backgroundRefreshHint", timeout: 2, swipes: 0).exists)
-        XCTAssertTrue(waitForElement(identifier: "settings.apnsDebugStatus", timeout: 2, swipes: 1).exists)
 
         // Only one button renders depending on permission state — verify at least one exists
         let hasEnable = waitForElement(identifier: "settings.enableNotificationsButton", timeout: 2, swipes: 1).exists
@@ -196,6 +201,9 @@ final class OshiReaderUITests: XCTestCase {
     }
 
     func testLiveBackgroundPush() throws {
+        guard liveUITestsEnabled else {
+            throw XCTSkip("Set OSHI_READER_RUN_LIVE_UI_TESTS=1 to run live APNs UI checks")
+        }
         defer {
             if app.state != .runningForeground {
                 app.activate()
@@ -345,17 +353,32 @@ final class OshiReaderUITests: XCTestCase {
     private func tapTab(index: Int, labels: [String]) {
         let tabIdentifiers = ["tab.feed", "tab.search", "tab.saved", "tab.oshi", "tab.settings"]
         if tabIdentifiers.indices.contains(index) {
-            let tabElement = app.descendants(matching: .any)[tabIdentifiers[index]]
-            if tabElement.waitForExistence(timeout: 1) {
-                tabElement.tap()
+            let tabButtons = app.buttons.matching(identifier: tabIdentifiers[index])
+            let tabButton = tabButtons.firstMatch
+            if tabButton.waitForExistence(timeout: 1) {
+                let target = tabButtons.allElementsBoundByIndex.first(where: { $0.isHittable }) ?? tabButton
+                target.tap()
                 return
             }
         }
 
-        for label in labels {
+        let localizedLabels = [
+            ["Feed", "フィード", "動態", "动态"],
+            ["Search", "検索", "搜尋", "搜索"],
+            ["Saved", "保存済み", "已儲存", "已保存"],
+            ["My Oshi", "推し", "推"],
+            ["Settings", "設定", "设置"],
+        ]
+        let tabLabels = Array(Set(labels + (localizedLabels.indices.contains(index) ? localizedLabels[index] : [])))
+        for label in tabLabels {
             let button = app.tabBars.buttons[label]
             if button.waitForExistence(timeout: 1) {
                 button.tap()
+                return
+            }
+            let sidebarButton = app.buttons[label]
+            if sidebarButton.waitForExistence(timeout: 1), sidebarButton.isHittable {
+                sidebarButton.tap()
                 return
             }
         }
@@ -448,6 +471,9 @@ final class OshiReaderUITests: XCTestCase {
         return nil
     }
     func testRealSourcesFeedFetching() throws {
+        guard liveUITestsEnabled else {
+            throw XCTSkip("Set OSHI_READER_RUN_LIVE_UI_TESTS=1 to run live source UI checks")
+        }
         // Relaunch the app without the --uitesting argument so it hits real endpoints
         app.terminate()
         app = XCUIApplication()

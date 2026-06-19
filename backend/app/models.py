@@ -19,12 +19,13 @@ class WatchTerm(Base):
     __tablename__ = "watch_terms"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    keyword = Column(String, nullable=False, unique=True)
+    keyword = Column(String, nullable=False, index=True)
     aliases = Column(JSON, default=list)
     language_hint = Column(String)
     collection_mode = Column(String, default="all_info")  # all_info | media_only
     is_active = Column(Boolean, default=True)
     notify_on_new = Column(Boolean, default=True)
+    owner_device_secret = Column(String, index=True)
     created_at = Column(DateTime, default=_utcnow)
 
 
@@ -62,6 +63,8 @@ class APNSDeviceToken(Base):
     environment = Column(String, default="sandbox", index=True)
     device_id = Column(String, index=True)
     device_secret = Column(String, index=True)
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verified_at = Column(DateTime)
     last_seen_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
@@ -75,6 +78,21 @@ class Match(Base):
     created_at = Column(DateTime, default=_utcnow, index=True)
 
     __table_args__ = (UniqueConstraint("watch_term_id", "source_item_id"),)
+
+
+class PendingNotification(Base):
+    __tablename__ = "pending_notifications"
+
+    watch_term_id = Column(
+        Integer,
+        ForeignKey("watch_terms.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    new_count = Column(Integer, nullable=False, default=0)
+    preview_item = Column(JSON)
+    preview_published_at = Column(DateTime)
+    preview_is_estimated = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class BackendEvent(Base):

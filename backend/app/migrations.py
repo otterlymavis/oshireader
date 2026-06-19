@@ -53,6 +53,124 @@ def _add_missing_columns(engine: Engine, table_name: str, columns: dict[str, str
             conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {ddl}"))
 
 
+def _backfill_missing_defaults(engine: Engine) -> None:
+    aliases_default = _json_default(engine)
+    with engine.begin() as conn:
+        conn.execute(text(f"UPDATE watch_terms SET aliases = {aliases_default} WHERE aliases IS NULL"))
+        conn.execute(text("UPDATE watch_terms SET collection_mode = 'all_info' WHERE collection_mode IS NULL"))
+        conn.execute(text("UPDATE watch_terms SET is_active = TRUE WHERE is_active IS NULL"))
+        conn.execute(text("UPDATE watch_terms SET notify_on_new = TRUE WHERE notify_on_new IS NULL"))
+        conn.execute(text("UPDATE watch_terms SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+        conn.execute(text("UPDATE matches SET confidence = 1.0 WHERE confidence IS NULL"))
+        conn.execute(text("""
+            UPDATE matches
+            SET created_at = COALESCE(
+                (SELECT source_items.published_at FROM source_items WHERE source_items.id = matches.source_item_id),
+                CURRENT_TIMESTAMP
+            )
+            WHERE created_at IS NULL
+        """))
+
+
+def _sqlite_has_unique_keyword_index(engine: Engine) -> bool:
+    with engine.connect() as conn:
+        indexes = conn.execute(text("PRAGMA index_list('watch_terms')")).fetchall()
+        for index in indexes:
+            mapping = index._mapping
+            if not mapping.get("unique"):
+                continue
+            index_name = mapping["name"]
+            columns = [
+                row._mapping["name"]
+                for row in conn.execute(text(f"PRAGMA index_info('{index_name}')")).fetchall()
+            ]
+            if columns == ["keyword"]:
+                return True
+    return False
+
+
+def _rebuild_sqlite_watch_terms_without_keyword_unique(engine: Engine) -> None:
+    """SQLite cannot drop a UNIQUE column constraint in-place, so rebuild the table."""
+    log.info("Rebuilding watch_terms table without global keyword uniqueness")
+    columns = [
+        "id",
+        "keyword",
+        "aliases",
+        "language_hint",
+        "collection_mode",
+        "is_active",
+        "notify_on_new",
+        "owner_device_secret",
+        "created_at",
+    ]
+    existing_columns = _column_names(engine, "watch_terms")
+    copy_columns = [column for column in columns if column in existing_columns]
+    copy_sql = ", ".join(copy_columns)
+
+    with engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.commit()
+        with conn.begin():
+            conn.execute(text("""
+                CREATE TABLE watch_terms_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    keyword VARCHAR NOT NULL,
+                    aliases JSON DEFAULT '[]',
+                    language_hint VARCHAR,
+                    collection_mode VARCHAR DEFAULT 'all_info',
+                    is_active BOOLEAN DEFAULT TRUE,
+                    notify_on_new BOOLEAN DEFAULT TRUE,
+                    owner_device_secret VARCHAR,
+                    created_at TIMESTAMP
+                )
+            """))
+            conn.execute(text(
+                f"INSERT INTO watch_terms_new ({copy_sql}) "
+                f"SELECT {copy_sql} FROM watch_terms"
+            ))
+            conn.execute(text("DROP TABLE watch_terms"))
+            conn.execute(text("ALTER TABLE watch_terms_new RENAME TO watch_terms"))
+        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+        conn.commit()
+
+
+def _drop_global_watch_term_keyword_uniqueness(engine: Engine) -> None:
+    if "watch_terms" not in inspect(engine).get_table_names():
+        return
+    with engine.begin() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("ALTER TABLE watch_terms DROP CONSTRAINT IF EXISTS watch_terms_keyword_key"))
+            conn.execute(text("DROP INDEX IF EXISTS ix_watch_terms_keyword"))
+        elif engine.dialect.name == "sqlite":
+            conn.execute(text("DROP INDEX IF EXISTS ix_watch_terms_keyword"))
+
+    if engine.dialect.name == "sqlite" and _sqlite_has_unique_keyword_index(engine):
+        _rebuild_sqlite_watch_terms_without_keyword_unique(engine)
+
+
+def _create_watch_term_keyword_indexes(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_watch_terms_keyword"
+            " ON watch_terms (keyword)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_watch_terms_owner_device_secret"
+            " ON watch_terms (owner_device_secret)"
+        ))
+        if engine.dialect.name in {"postgresql", "sqlite"}:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_watch_terms_admin_keyword"
+                " ON watch_terms (keyword)"
+                " WHERE owner_device_secret IS NULL"
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_watch_terms_owner_keyword"
+                " ON watch_terms (owner_device_secret, keyword)"
+                " WHERE owner_device_secret IS NOT NULL"
+            ))
+
+
 def apply_startup_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
 
@@ -65,6 +183,7 @@ def apply_startup_migrations(engine: Engine) -> None:
             "collection_mode": "VARCHAR DEFAULT 'all_info'",
             "is_active": "BOOLEAN DEFAULT TRUE",
             "notify_on_new": "BOOLEAN DEFAULT FALSE",
+            "owner_device_secret": "VARCHAR",
             "created_at": "TIMESTAMP",
         },
     )
@@ -82,6 +201,8 @@ def apply_startup_migrations(engine: Engine) -> None:
         "apns_device_tokens",
         {
             "device_secret": "VARCHAR",
+            "is_verified": "BOOLEAN DEFAULT FALSE",
+            "verified_at": "TIMESTAMP",
         },
     )
     _add_missing_columns(
@@ -99,14 +220,13 @@ def apply_startup_migrations(engine: Engine) -> None:
             "updated_at": "TIMESTAMP",
         },
     )
+    _backfill_missing_defaults(engine)
+    _drop_global_watch_term_keyword_uniqueness(engine)
+    _create_watch_term_keyword_indexes(engine)
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_matches_source_item_id"
             " ON matches (source_item_id)"
-        ))
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_watch_terms_keyword"
-            " ON watch_terms (keyword)"
         ))
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_matches_created_at"

@@ -42,6 +42,13 @@ struct Platform {
             isMediaPlatform: true, subscribedByDefault: true
         ),
         Platform(
+            id: "twitter", name: "X", icon: "𝕏",
+            accent: .black, bg: .gray.opacity(0.2), fg: .primary,
+            rawPlatformValues: ["twitter", "x"],
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true
+        ),
+        Platform(
             id: "note", name: "Note", icon: "📝",
             accent: Color(red: 0.1, green: 0.7, blue: 0.5),
             bg: Color(red: 0.9, green: 0.97, blue: 0.95),

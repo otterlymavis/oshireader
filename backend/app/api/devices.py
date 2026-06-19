@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth import require_admin_auth
+from app.config import settings
 from app.database import get_db
 from app.models import APNSDeviceToken
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
@@ -38,7 +39,12 @@ def _secret_matches(stored_secret: str | None, provided_secret: str) -> bool:
     return secrets.compare_digest(stored_secret, provided_secret)
 
 
-def _find_authenticated_device(body: APNSDeviceTestPush, db: Session) -> APNSDeviceToken:
+def _find_authenticated_device(
+    body: APNSDeviceTestPush,
+    db: Session,
+    *,
+    require_verified: bool = True,
+) -> APNSDeviceToken:
     stored: APNSDeviceToken | None = None
     if body.token:
         token = _normalize_token(body.token)
@@ -60,6 +66,8 @@ def _find_authenticated_device(body: APNSDeviceTestPush, db: Session) -> APNSDev
 
     if not stored or not _secret_matches(stored.device_secret, body.device_secret):
         raise HTTPException(404, "APNs device token not registered")
+    if require_verified and not stored.is_verified:
+        raise HTTPException(404, "APNs device token not verified")
     return stored
 
 
@@ -76,15 +84,20 @@ def _recent_background_refresh_attempt(token: str, now: datetime) -> bool:
     return False
 
 
+def _mark_verified(device: APNSDeviceToken) -> None:
+    device.is_verified = True
+    device.verified_at = datetime.now(timezone.utc)
+
+
 @router.post("/apns-token", response_model=APNSDeviceTokenOut, status_code=201)
-def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)):
+async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)):
     token = _normalize_token(body.token)
     if not token or len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
         raise HTTPException(400, "Invalid APNs device token")
 
     stored = db.get(APNSDeviceToken, token)
     if not stored:
-        stored = APNSDeviceToken(token=token)
+        stored = APNSDeviceToken(token=token, is_verified=False)
         db.add(stored)
     elif stored.device_secret and not _secret_matches(stored.device_secret, body.device_secret):
         raise HTTPException(409, "APNs device token is registered to another device secret")
@@ -95,15 +108,29 @@ def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)
     stored.last_seen_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(stored)
+
+    from app.apns import validate_device_registration
+
+    if (
+        settings.allow_unauthenticated_admin
+        and not settings.admin_api_token
+    ) or await validate_device_registration(stored):
+        _mark_verified(stored)
+        db.commit()
+        db.refresh(stored)
     return stored
 
 
 @router.post("/apns-test-push")
 async def send_device_test_push(body: APNSDeviceTestPush, db: Session = Depends(get_db)) -> dict:
-    stored = _find_authenticated_device(body, db)
+    stored = _find_authenticated_device(body, db, require_verified=False)
 
     from app.apns import send_test_push_to_device
-    return await send_test_push_to_device(db, stored)
+    report = await send_test_push_to_device(db, stored)
+    if any(result.get("status") in {200, 201} for result in report.get("results", [])):
+        _mark_verified(stored)
+        db.commit()
+    return report
 
 
 @router.post("/background-refresh")

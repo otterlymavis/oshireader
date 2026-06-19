@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -29,6 +30,13 @@ _APNS_PAYLOAD_SOFT_LIMIT_BYTES = 3500
 _APNS_PAYLOAD_HARD_LIMIT_BYTES = 4096
 _APNS_MAX_ATTEMPTS = 3
 _APNS_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+@dataclass(frozen=True)
+class APNSSendResult:
+    delivered: bool = False
+    should_delete_token: bool = False
+    retryable_failure: bool = False
 
 
 def _private_key() -> str:
@@ -174,6 +182,50 @@ async def _post_with_retry(
     return response
 
 
+async def validate_device_registration(device: APNSDeviceToken) -> bool:
+    """Return True only when APNs accepts the registered token.
+
+    Registration remains unauthenticated so the iOS app can bootstrap a device
+    credential, but device-scoped write auth is only enabled after this server-side
+    APNs check succeeds.
+    """
+    if not apns_configured():
+        return False
+    host = _host(device.environment)
+    headers = {
+        "authorization": f"bearer {_cached_auth_token()}",
+        "apns-topic": settings.apns_topic,
+        "apns-push-type": "background",
+        "apns-priority": "5",
+        "apns-collapse-id": "oshireader-device-registration",
+    }
+    payload = {"aps": {"content-available": 1}, "registration_check": 1}
+    try:
+        async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
+            resp = await _post_with_retry(
+                client,
+                f"{host}/3/device/{device.token}",
+                payload,
+                headers,
+            )
+    except Exception as exc:
+        log.warning("APNs registration validation failed token=%s: %s", device.token[-8:], exc)
+        return False
+    if resp.status_code in {200, 201}:
+        return True
+    try:
+        reason = resp.json().get("reason")
+    except Exception:
+        reason = resp.text
+    log.warning(
+        "APNs registration validation rejected token=%s status=%d reason=%s",
+        device.token[-8:],
+        resp.status_code,
+        reason,
+    )
+    return False
+
+
 def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> dict:
     preview = _preview_text(preview_item)
     body = preview or (f"{count}件の新着があります。" if count != 1 else "1件の新着があります。")
@@ -265,7 +317,7 @@ async def _send_one(
     term: WatchTerm,
     count: int,
     preview_item: dict | None = None,
-) -> bool:
+) -> APNSSendResult:
     url = f"{_host(device.environment)}/3/device/{device.token}"
     headers = {
         "authorization": f"bearer {_cached_auth_token()}",
@@ -282,16 +334,16 @@ async def _send_one(
             term.id,
             _payload_size(payload),
         )
-        return False
+        return APNSSendResult()
 
     try:
         resp = await _post_with_retry(client, url, payload, headers)
     except Exception as exc:
         log.warning("APNs send failed token=%s: %s", device.token[-8:], exc)
-        return False
+        return APNSSendResult(retryable_failure=True)
 
     if resp.status_code in {200, 201}:
-        return False  # success — keep the token
+        return APNSSendResult(delivered=True)
 
     reason = None
     try:
@@ -299,7 +351,9 @@ async def _send_one(
     except Exception:
         reason = resp.text
     log.warning("APNs rejected token=%s status=%d reason=%s", device.token[-8:], resp.status_code, reason)
-    return reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"} or resp.status_code == 410
+    should_delete = reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"} or resp.status_code == 410
+    retryable = resp.status_code in _APNS_TRANSIENT_STATUS_CODES
+    return APNSSendResult(should_delete_token=should_delete, retryable_failure=retryable)
 
 
 async def send_new_match_notifications(
@@ -307,9 +361,9 @@ async def send_new_match_notifications(
     term: WatchTerm,
     count: int,
     preview_item: dict | None = None,
-) -> None:
+) -> bool:
     if count <= 0:
-        return
+        return True
     if not term.notify_on_new:
         record_backend_event(
             db,
@@ -319,7 +373,7 @@ async def send_new_match_notifications(
             {"term_id": term.id, "keyword": term.keyword, "new_count": count},
         )
         db.commit()
-        return
+        return True
     if not apns_configured():
         log.info("APNs not configured; skipping remote notification term=%r count=%d", term.keyword, count)
         record_backend_event(
@@ -330,13 +384,16 @@ async def send_new_match_notifications(
             {"term_id": term.id, "keyword": term.keyword, "new_count": count},
         )
         db.commit()
-        return
+        return True
 
     # Send to every registered device; _send_one routes each token to the APNs host
     # matching its own environment. Previously this filtered to a single global
     # environment, so a server set to "sandbox" never delivered to production
     # (TestFlight) tokens — and vice versa.
-    devices: list[APNSDeviceToken] = db.query(APNSDeviceToken).all()
+    query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+    if term.owner_device_secret:
+        query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+    devices: list[APNSDeviceToken] = query.all()
     if not devices:
         record_backend_event(
             db,
@@ -346,14 +403,22 @@ async def send_new_match_notifications(
             {"term_id": term.id, "keyword": term.keyword, "new_count": count},
         )
         db.commit()
-        return
+        return True
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
         results = await asyncio.gather(
             *[_send_one(client, device, term, count, preview_item) for device in devices]
         )
     pruned_tokens = 0
-    for device, should_delete in zip(devices, results):
-        if should_delete:
+    delivered_count = 0
+    retryable_failures = 0
+    for device, result in zip(devices, results):
+        if isinstance(result, bool):
+            result = APNSSendResult(should_delete_token=result)
+        if result.delivered:
+            delivered_count += 1
+        if result.retryable_failure:
+            retryable_failures += 1
+        if result.should_delete_token:
             db.delete(device)
             pruned_tokens += 1
     record_backend_event(
@@ -366,10 +431,13 @@ async def send_new_match_notifications(
             "keyword": term.keyword,
             "new_count": count,
             "device_count": len(devices),
+            "delivered_count": delivered_count,
+            "retryable_failures": retryable_failures,
             "pruned_tokens": pruned_tokens,
         },
     )
     db.commit()
+    return delivered_count > 0 or retryable_failures == 0
 
 
 async def send_test_push(db: Session) -> dict:
@@ -378,7 +446,11 @@ async def send_test_push(db: Session) -> dict:
     waiting for a new feed item."""
     if not apns_configured():
         return {"configured": False, "results": []}
-    devices: list[APNSDeviceToken] = db.query(APNSDeviceToken).all()
+    devices: list[APNSDeviceToken] = (
+        db.query(APNSDeviceToken)
+        .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+        .all()
+    )
     if not devices:
         return {"configured": True, "results": [], "note": "no device tokens registered"}
 

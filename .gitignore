@@ -13,6 +13,8 @@ otterpia.db-wal
 # iOS
 ios-swift/build/
 ios-swift/*.log
+ios-swift/**/*.xcuserstate
+ios-swift/**/xcuserdata/
 
 # Frontend
 frontend/node_modules/

@@ -154,9 +154,14 @@ final class NotificationManager: ObservableObject {
     func registerForRemoteNotificationsIfAllowed() async {
         await refreshAuthorizationStatus()
         guard canScheduleNotifications else { return }
-        await MainActor.run {
-            UIApplication.shared.registerForRemoteNotifications()
-        }
+        registerForRemoteNotificationsForDeviceAuthentication()
+    }
+
+    func registerForRemoteNotificationsForDeviceAuthentication() {
+        // APNs registration does not present the notification permission prompt.
+        // Keep a device credential available for watch-term synchronization even
+        // when the user has not granted alert presentation permission.
+        UIApplication.shared.registerForRemoteNotifications()
     }
 
     func ensureRemoteNotificationsRegisteredIfAllowed(timeout: TimeInterval = 8) async -> Bool {
@@ -195,6 +200,9 @@ final class NotificationManager: ObservableObject {
             lastRegisteredDeviceToken = token
             lastRemoteRegistrationError = nil
             completeTokenRegistrationWaiters(success: true)
+            _ = await NetworkManager.shared.syncWatchTermsToBackend(
+                localTerms: LocalDB.shared.terms
+            )
         } catch {
             AppLogger.notifications.error("APNs device token registration failed: \(error.localizedDescription)")
             lastRemoteRegistrationError = error.localizedDescription

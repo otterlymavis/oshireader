@@ -21,10 +21,14 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
 The API runs at `http://127.0.0.1:8000`, with interactive docs at `http://127.0.0.1:8000/docs`.
+The sample `.env` enables unauthenticated admin/write access for private local
+development only. Set `ADMIN_API_TOKEN` and disable
+`ALLOW_UNAUTHENTICATED_ADMIN` before using a shared or deployed backend.
 
 ### Configuration
 
@@ -35,7 +39,9 @@ Backend settings are loaded from environment variables or `backend/.env`.
 | `DATABASE_URL` | `sqlite:///./otterpia.db` | SQLAlchemy database URL. Use a PostgreSQL URL for production. |
 | `YOUTUBE_API_KEY` | empty | Optional YouTube Data API key. The connector falls back to scraping when absent. |
 | `POLL_INTERVAL_MINUTES` | `15` | Scheduler interval for automatic ingestion. |
-| `ADMIN_API_TOKEN` | empty | Optional bearer token required for admin, credential, and watch-term write endpoints. Set this in production. |
+| `CONNECTOR_FETCH_TIMEOUT_SECONDS` | `25.0` | Per-source fetch timeout. A timed-out connector is skipped for that term so one stalled source cannot hold the poll lock forever. |
+| `ADMIN_API_TOKEN` | empty | Bearer token required for admin, credential, and watch-term write endpoints. Set this before running any shared or deployed backend. |
+| `ALLOW_UNAUTHENTICATED_ADMIN` | `false` | Local-development escape hatch. Set to `true` only for a private local backend when you intentionally want admin/write endpoints open. |
 | `CORS_ALLOW_ORIGINS` | empty | Comma-separated browser origins allowed by CORS. Native iOS calls do not need CORS. |
 | `APNS_TEAM_ID` | empty | Apple Developer Team ID for remote push notifications. |
 | `APNS_KEY_ID` | empty | Apple APNs auth key ID. |
@@ -45,7 +51,7 @@ Backend settings are loaded from environment variables or `backend/.env`.
 | `APNS_USE_SANDBOX` | `false` | Fallback APNs host when a stored token has no environment. Device registrations include their own environment, so production and sandbox tokens can coexist. |
 | `BACKEND_PUBLIC_URL` | `https://oshireader.onrender.com` | Public backend origin used for compact notification redirect links. |
 
-When `ADMIN_API_TOKEN` is set, admin and credential requests must include:
+Admin and credential requests must include:
 
 ```text
 Authorization: Bearer <token>
@@ -77,9 +83,22 @@ The app is a universal iPhone and iPad build. Use schemes to choose the backend 
 | `OshiReader Staging` | `Staging` | production URL until a staging backend is deployed |
 | `OshiReader Production` | `Release` | `https://oshireader.onrender.com` |
 
+UI tests that hit live source endpoints or APNs are skipped by default. Run them
+only when you intentionally want external-network checks:
+
+```bash
+OSHI_READER_RUN_LIVE_UI_TESTS=1 xcodebuild test -project ios-swift/OshiReader.xcodeproj -scheme "OshiReader Local" -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:OshiReaderUITests
+```
+
 The backend URL is injected through `OshiReaderAPIBaseURL` in `Info.plist`, with values generated from `ios-swift/project.yml`.
 
-Remote push notifications use APNs. The Swift app registers its APNs device token after notification permission is granted, then posts that token, APNs environment, device identifier, and per-install `device_secret` to `/api/devices/apns-token`. The backend sends remote notifications for new matches only when the watch term has notifications enabled.
+Remote push notifications use APNs. The Swift app registers an APNs device token
+at launch and posts that token, APNs environment, device identifier, and
+per-install `device_secret` to `/api/devices/apns-token`; this device credential
+also authenticates watch-term synchronization. Notification permission controls
+whether alert notifications are presented. The backend sends remote
+notifications for new matches only when the watch term has notifications
+enabled.
 
 Background refresh uses two paths:
 
@@ -92,7 +111,7 @@ Before shipping a build that relies on background/rich notifications:
 
 1. Set production backend environment variables: `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY` or `APNS_PRIVATE_KEY_PATH`, `APNS_TOPIC=com.otterpia.oshireader.plus`, `APNS_USE_SANDBOX=false`, and `BACKEND_PUBLIC_URL` to the deployed backend origin.
 2. Deploy backend migrations before testing pushes. The APNs device table must include `device_secret`.
-3. Launch the updated iOS app once after deployment and allow notifications, so the app re-registers the APNs token with `device_secret` and its APNs environment.
+3. Launch the updated iOS app once after deployment so the app re-registers the APNs token with `device_secret` and its APNs environment; then allow notifications before validating visible alerts.
 4. In Settings, send a test notification on a physical device or TestFlight build. The notification should use the rich preview category, and repeated tests should collapse into one diagnostic notification.
 5. Trigger a real poll that creates a new match. Confirm the notification arrives while the app is backgrounded, expands with preview UI, wakes the app to refresh the feed, opens the result on tap, and saves via the notification action.
 6. Check `/api/admin/stats` for APNs configuration and token environment counts when diagnosing delivery issues.

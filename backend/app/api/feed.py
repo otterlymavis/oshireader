@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.auth import AuthContext, require_admin_or_device_auth
 from app.database import get_db
 from app.models import Match, SourceItem, WatchTerm
 from app.relevance import watch_term_matches
@@ -52,6 +53,7 @@ def get_feed(
     offset: int = Query(0, ge=0),
     days: int = Query(30, ge=0, le=365),
     since: Optional[datetime] = Query(None),
+    auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
     q = (
@@ -60,6 +62,8 @@ def get_feed(
         .join(WatchTerm, Match.watch_term_id == WatchTerm.id)
         .order_by(_FEED_SORT_KEY.desc())
     )
+    if not auth.is_admin:
+        q = q.filter(WatchTerm.owner_device_secret == auth.device_secret)
     # Timeless forum platforms (5ch/girlschannel/togetter) host long-lived threads
     # and are exempt from pruning, so they accumulate for months. Only let them
     # bypass the date window when the user explicitly opens that source's filter —

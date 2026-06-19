@@ -1,6 +1,7 @@
 """Tests for scheduler pruning logic and search-term building."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -307,6 +308,24 @@ class TestFetchOne:
         connector = self._connector(side_effect=RuntimeError("network error"))
         result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_on_timeout(self, caplog):
+        connector = MagicMock()
+        connector.PLATFORM = "mock"
+
+        async def slow_fetch(_search_term, _mode):
+            await asyncio.sleep(1)
+            return []
+
+        connector.fetch = slow_fetch
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.connector_fetch_timeout_seconds = 0.01
+            with caplog.at_level("WARNING", logger="app.ingestion.scheduler"):
+                result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+
+        assert result == []
+        assert "fetch timeout connector=mock" in caplog.text
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_on_http_error(self):
