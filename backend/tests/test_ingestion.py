@@ -264,6 +264,69 @@ class TestIngestionNotifications:
         assert preview_item["id"] == "yahoonews:estimated"
 
     @pytest.mark.asyncio
+    async def test_notification_preview_uses_stored_feed_item_date_for_existing_source(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        old_published_at = datetime.now(timezone.utc) - timedelta(days=365)
+        db_session.add_all(
+            [
+                term,
+                SourceItem(
+                    id="youtube:existing",
+                    platform="youtube",
+                    item_id="existing",
+                    url="https://youtube.example.com/existing",
+                    published_at=old_published_at,
+                    media_type="video",
+                    title="Aiko old stored item",
+                    content_text="Aiko Haruka",
+                    raw_payload={"date_parsed": True},
+                ),
+            ]
+        )
+        db_session.commit()
+
+        existing_connector_item = _make_item(
+            platform="youtube",
+            item_id="existing",
+            published_at=datetime.now(timezone.utc),
+            title="Aiko existing returned as new",
+            raw_payload={"date_parsed": False},
+        )
+        fresher_feed_item = _make_item(
+            platform="news",
+            item_id="fresher",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            title="Aiko fresher in feed",
+            raw_payload={"date_parsed": True},
+        )
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[
+                _mock_connector("youtube", [existing_connector_item]),
+                _mock_connector("news", [fresher_feed_item]),
+            ],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=mock_notify,
+        ):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+        _, _, called_count, preview_item = mock_notify.call_args.args
+        assert called_count == 2
+        assert preview_item["id"] == "news:fresher"
+
+    @pytest.mark.asyncio
     async def test_notification_failure_is_isolated_and_retried_from_outbox(
         self,
         db_engine,

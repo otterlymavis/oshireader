@@ -310,6 +310,9 @@ async def _poll_once_unlocked() -> None:
                         }
 
                         for raw in items:
+                            published_at = raw.published_at
+                            if published_at.tzinfo is None:
+                                published_at = published_at.replace(tzinfo=timezone.utc)
                             if raw.composite_id not in existing_source_ids:
                                 db.add(
                                     SourceItem(
@@ -317,7 +320,7 @@ async def _poll_once_unlocked() -> None:
                                         platform=raw.platform,
                                         item_id=raw.item_id,
                                         url=raw.url,
-                                        published_at=raw.published_at,
+                                        published_at=published_at,
                                         media_type=raw.media_type,
                                         author=raw.author,
                                         title=raw.title,
@@ -327,6 +330,7 @@ async def _poll_once_unlocked() -> None:
                                     )
                                 )
                                 existing_source_ids.add(raw.composite_id)
+                                existing_items[raw.composite_id] = published_at
                             else:
                                 # Update published_at when the connector returns a better date.
                                 # Discussion platforms: always update toward newer dates so
@@ -334,9 +338,7 @@ async def _poll_once_unlocked() -> None:
                                 # Other platforms: only heal when dates differ significantly
                                 # (avoids spurious updates from fetch-time placeholders).
                                 stored = existing_items.get(raw.composite_id)
-                                new_pub = raw.published_at
-                                if stored is not None and new_pub is not None:
-                                    new_aware = new_pub if new_pub.tzinfo else new_pub.replace(tzinfo=timezone.utc)
+                                if stored is not None:
                                     stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
                                     if raw.platform in _DISCUSSION_PLATFORMS:
                                         # Only heal toward a newer date when the connector
@@ -344,23 +346,24 @@ async def _poll_once_unlocked() -> None:
                                         # placeholder (date_parsed=False) is always ~now and
                                         # would otherwise re-pin the thread to the top every poll.
                                         date_parsed = (raw.raw_payload or {}).get("date_parsed", True)
-                                        should_update = date_parsed and new_aware > stored_aware
+                                        should_update = date_parsed and published_at > stored_aware
                                     else:
-                                        new_age = (now - new_aware).total_seconds()
-                                        diff = abs((new_aware - stored_aware).total_seconds())
+                                        new_age = (now - published_at).total_seconds()
+                                        diff = abs((published_at - stored_aware).total_seconds())
                                         should_update = new_age > 300 and diff > 300
                                     if should_update:
                                         db.query(SourceItem).filter(
                                             SourceItem.id == raw.composite_id
                                         ).update(
-                                            {"published_at": new_aware},
+                                            {"published_at": published_at},
                                             synchronize_session=False,
                                         )
+                                        existing_items[raw.composite_id] = published_at
                                         log.info(
                                             "healed published_at for %s: %s → %s",
                                             raw.composite_id,
                                             stored_aware.isoformat(),
-                                            new_aware.isoformat(),
+                                            published_at.isoformat(),
                                         )
 
                         # Flush source_items before inserting matches so that
@@ -375,10 +378,15 @@ async def _poll_once_unlocked() -> None:
                                 db.flush()
                                 existing_match_ids.add(raw.composite_id)
                                 new_count += 1
-                                published_at = raw.published_at
+                                source_item = db.get(SourceItem, raw.composite_id)
+                                if source_item is None:
+                                    raise RuntimeError(
+                                        f"source item disappeared before notification preview: {raw.composite_id}"
+                                    )
+                                published_at = source_item.published_at
                                 if published_at.tzinfo is None:
                                     published_at = published_at.replace(tzinfo=timezone.utc)
-                                published_at_is_estimated = _published_at_is_estimated(raw, now)
+                                published_at_is_estimated = _published_at_is_estimated(source_item, now)
                                 if (
                                     newest_candidate is None
                                     or _candidate_is_newer(
@@ -393,16 +401,16 @@ async def _poll_once_unlocked() -> None:
                                         published_at_is_estimated,
                                         published_at,
                                         {
-                                            "id": raw.composite_id,
+                                            "id": source_item.id,
                                             "match_id": match.id,
-                                            "platform": raw.platform,
-                                            "url": raw.url,
+                                            "platform": source_item.platform,
+                                            "url": source_item.url,
                                             "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
-                                            "title": raw.title,
-                                            "content_text": raw.content_text,
-                                            "author": raw.author,
-                                            "thumbnail_url": raw.thumbnail_url,
-                                            "media_type": raw.media_type,
+                                            "title": source_item.title,
+                                            "content_text": source_item.content_text,
+                                            "author": source_item.author,
+                                            "thumbnail_url": source_item.thumbnail_url,
+                                            "media_type": source_item.media_type,
                                             "published_at": published_at.isoformat(),
                                         },
                                     )
