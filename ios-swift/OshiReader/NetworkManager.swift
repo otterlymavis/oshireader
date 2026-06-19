@@ -26,7 +26,12 @@ class NetworkManager {
     private let fallbackProductionAPIBase = "https://oshireader.onrender.com"
 
     var apiBase: String {
-        configuredBundleValue(forKey: "OshiReaderAPIBaseURL") ?? fallbackProductionAPIBase
+        let envBase = ProcessInfo.processInfo.environment["OSHI_READER_API_BASE_URL"] ?? ""
+        let trimmedEnvBase = envBase.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedEnvBase.isEmpty {
+            return trimmedEnvBase
+        }
+        return configuredBundleValue(forKey: "OshiReaderAPIBaseURL") ?? fallbackProductionAPIBase
     }
 
     var environmentName: String {

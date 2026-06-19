@@ -2605,6 +2605,23 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(report.results.first?.status, 200)
     }
 
+    func testSendRemoteTestPushDecodesQueuedAcceptance() async throws {
+        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+        let body = Data(#"{"configured":true,"results":[{"token":"abcd1234","environment":"sandbox","status":202,"reason":"queued"}],"pruned_tokens":0,"note":"queued"}"#.utf8)
+        MockURLProtocol.handler = { _ in
+            (body, Self.response(status: 200))
+        }
+
+        let report = try await NetworkManager.shared.sendRemoteTestPush()
+
+        XCTAssertTrue(report.configured)
+        XCTAssertEqual(report.results.first?.status, 202)
+        XCTAssertEqual(report.results.first?.reason, "queued")
+        XCTAssertEqual(report.note, "queued")
+    }
+
     func testSendRemoteTestPushUsesDeviceScopedFallbackWhenEnvironmentChanged() async throws {
         KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
         KeychainHelper.write(

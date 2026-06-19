@@ -508,10 +508,21 @@ struct SettingsView: View {
                 return
             }
             AppLogger.notifications.warning("Remote APNs test failed: \(error.localizedDescription)")
+            if NetworkManager.shared.isLiveBackgroundPushTesting {
+                notificationTestMessage = "live remote error: \(remoteTestDiagnostic(error))"
+                return
+            }
             notificationTestMessage = remoteRegistrationReady
                 ? i18n.t("notifRemoteTestRequestFailed")
                 : i18n.t("notifRemoteTokenMissing")
         }
+    }
+
+    private func remoteTestDiagnostic(_ error: Error) -> String {
+        if case APIClientError.httpStatus(let status) = error {
+            return "HTTP \(status)"
+        }
+        return String(describing: error)
     }
 
     private func retryRemoteTestAfterTokenRefresh() async -> Bool {

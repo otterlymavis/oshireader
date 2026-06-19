@@ -11,6 +11,7 @@ final class OshiReaderUITests: XCTestCase {
         app = XCUIApplication()
         if name.contains("LiveBackgroundPush"), liveUITestsEnabled {
             app.launchArguments = ["--live-background-push-test"]
+            app.launchEnvironment["OSHI_READER_API_BASE_URL"] = "https://oshireader.onrender.com"
         } else {
             app.launchArguments = uiTestingLaunchArguments()
         }
