@@ -66,6 +66,37 @@ class TestAPNSTokenUpsert:
         )
         assert r.status_code == 409
 
+    def test_upsert_allows_secret_rotation_for_same_device_identity(self, client, db_session):
+        token = "b" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json=_registration(token, device_id="device-xyz"),
+        )
+
+        r = client.post(
+            "/api/devices/apns-token",
+            json=_registration(token, device_id="device-xyz", device_secret="new-device-secret-123"),
+        )
+
+        assert r.status_code == 201
+        stored = db_session.get(APNSDeviceToken, token)
+        assert stored.device_id == "device-xyz"
+        assert devices_api._secret_matches(stored.device_secret, "new-device-secret-123")
+
+    def test_upsert_rejects_secret_rotation_for_different_device_identity(self, client):
+        token = "b" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json=_registration(token, device_id="device-xyz"),
+        )
+
+        r = client.post(
+            "/api/devices/apns-token",
+            json=_registration(token, device_id="other-device", device_secret="new-device-secret-123"),
+        )
+
+        assert r.status_code == 409
+
     def test_upsert_requires_device_secret(self, client):
         r = client.post(
             "/api/devices/apns-token",

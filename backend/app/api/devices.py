@@ -89,6 +89,15 @@ def _mark_verified(device: APNSDeviceToken) -> None:
     device.verified_at = datetime.now(timezone.utc)
 
 
+def _is_same_device_identity(stored: APNSDeviceToken, body: APNSDeviceTokenUpsert) -> bool:
+    return bool(
+        stored.device_id
+        and body.device_id
+        and stored.device_id == body.device_id
+        and stored.environment == body.environment
+    )
+
+
 @router.post("/apns-token", response_model=APNSDeviceTokenOut, status_code=201)
 async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)):
     token = _normalize_token(body.token)
@@ -99,7 +108,11 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
     if not stored:
         stored = APNSDeviceToken(token=token, is_verified=False)
         db.add(stored)
-    elif stored.device_secret and not _secret_matches(stored.device_secret, body.device_secret):
+    elif (
+        stored.device_secret
+        and not _secret_matches(stored.device_secret, body.device_secret)
+        and not _is_same_device_identity(stored, body)
+    ):
         raise HTTPException(409, "APNs device token is registered to another device secret")
 
     stored.environment = body.environment
