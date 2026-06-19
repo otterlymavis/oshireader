@@ -2551,6 +2551,12 @@ final class NetworkManagerTests: XCTestCase {
 
     @MainActor
     func testNotificationManagerUploadsRegisteredDeviceToken() async throws {
+        let seededTerm = LocalDB.shared.saveTerm(
+            keyword: "CI APNS Sync \(UUID().uuidString)",
+            collectionMode: .allInfo
+        )
+        defer { LocalDB.shared.deleteTerm(id: seededTerm.id) }
+        let backendTermsData = try JSONEncoder().encode([seededTerm])
         var capturedPaths: [String] = []
         var capturedBody: [String: Any]?
         MockURLProtocol.handler = { req in
@@ -2560,7 +2566,7 @@ final class NetworkManagerTests: XCTestCase {
                 capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
             }
             if path == "/api/watch-terms" {
-                return (Data("[]".utf8), Self.response(status: 200))
+                return (backendTermsData, Self.response(status: 200))
             }
             return (Data(), Self.response(status: 201))
         }
