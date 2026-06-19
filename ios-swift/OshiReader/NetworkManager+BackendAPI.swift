@@ -250,18 +250,26 @@ extension NetworkManager {
         if hasRegisteredAPNSDeviceForCurrentEnvironment,
            let token = registeredAPNSDeviceToken,
            !token.isEmpty {
-            let bodyData = try JSONSerialization.data(withJSONObject: [
+            var body: [String: Any] = [
                 "token": token,
                 "device_secret": apnsDeviceSecret,
-            ])
+            ]
+            if isLiveBackgroundPushTesting {
+                body["delivery_delay_seconds"] = 4
+            }
+            let bodyData = try JSONSerialization.data(withJSONObject: body)
             return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)
         }
         let deviceId = await apnsDeviceId()
-        let bodyData = try JSONSerialization.data(withJSONObject: [
+        var body: [String: Any] = [
             "device_id": deviceId,
             "environment": apnsEnvironment,
             "device_secret": apnsDeviceSecret,
-        ])
+        ]
+        if isLiveBackgroundPushTesting {
+            body["delivery_delay_seconds"] = 4
+        }
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
         return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)
     }
 

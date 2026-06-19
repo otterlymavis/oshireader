@@ -12,6 +12,10 @@ class NetworkManager {
         ProcessInfo.processInfo.arguments.contains("--uitesting")
     }
 
+    var isLiveBackgroundPushTesting: Bool {
+        ProcessInfo.processInfo.arguments.contains("--live-background-push-test")
+    }
+
     var isUnitTesting: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || NSClassFromString("XCTestCase") != nil

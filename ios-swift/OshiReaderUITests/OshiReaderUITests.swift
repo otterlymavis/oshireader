@@ -9,7 +9,9 @@ final class OshiReaderUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        if !name.contains("LiveBackgroundPush") || !liveUITestsEnabled {
+        if name.contains("LiveBackgroundPush"), liveUITestsEnabled {
+            app.launchArguments = ["--live-background-push-test"]
+        } else {
             app.launchArguments = uiTestingLaunchArguments()
         }
         app.launch()

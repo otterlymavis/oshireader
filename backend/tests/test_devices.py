@@ -228,6 +228,38 @@ class TestDeviceScopedTestPush:
         assert r.json() == expected
         mock_send.assert_awaited_once()
 
+    def test_delays_authenticated_test_push_delivery(self, client):
+        token = "f" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "sandbox", "device_secret": "correct-secret-123"},
+        )
+        expected = {"configured": True, "results": [{"token": token[-8:], "status": 200}], "pruned_tokens": 0}
+        with patch("app.api.devices.asyncio.sleep", new=AsyncMock()) as mock_sleep, \
+             patch("app.apns.send_test_push_to_device", new=AsyncMock(return_value=expected)):
+            r = client.post(
+                "/api/devices/apns-test-push",
+                json={
+                    "token": token,
+                    "device_secret": "correct-secret-123",
+                    "delivery_delay_seconds": 4,
+                },
+            )
+
+        assert r.status_code == 200
+        mock_sleep.assert_awaited_once_with(4)
+
+    def test_rejects_excessive_test_push_delay(self, client):
+        r = client.post(
+            "/api/devices/apns-test-push",
+            json={
+                "token": "a" * 64,
+                "device_secret": "secret-secret-secret",
+                "delivery_delay_seconds": 11,
+            },
+        )
+        assert r.status_code == 422
+
     def test_sends_to_latest_registered_token_for_device_id(self, client):
         older_token = "c" * 64
         latest_token = "d" * 64

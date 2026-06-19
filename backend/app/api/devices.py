@@ -139,6 +139,8 @@ async def send_device_test_push(body: APNSDeviceTestPush, db: Session = Depends(
     stored = _find_authenticated_device(body, db, require_verified=False)
 
     from app.apns import send_test_push_to_device
+    if body.delivery_delay_seconds:
+        await asyncio.sleep(body.delivery_delay_seconds)
     report = await send_test_push_to_device(db, stored)
     if any(result.get("status") in {200, 201} for result in report.get("results", [])):
         _mark_verified(stored)

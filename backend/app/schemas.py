@@ -159,6 +159,7 @@ class APNSDeviceTestPush(BaseModel):
     device_id: Optional[str] = None
     environment: Literal["sandbox", "production"] = "sandbox"
     device_secret: str = Field(min_length=16, max_length=200)
+    delivery_delay_seconds: float = Field(default=0, ge=0, le=10)
 
 
 class ClientDiagnosticEvent(BaseModel):

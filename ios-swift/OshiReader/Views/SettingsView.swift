@@ -464,13 +464,15 @@ struct SettingsView: View {
             _ = await notifications.requestAuthorization()
         }
 
-        do {
-            try await notifications.sendTestNotification()
-            notificationTestSucceeded = true
-        } catch {
-            AppLogger.notifications.warning("Local notification test failed: \(error.localizedDescription)")
-            notificationTestMessage = i18n.t("notifLocalTestFailed")
-            return
+        if !NetworkManager.shared.isLiveBackgroundPushTesting {
+            do {
+                try await notifications.sendTestNotification()
+                notificationTestSucceeded = true
+            } catch {
+                AppLogger.notifications.warning("Local notification test failed: \(error.localizedDescription)")
+                notificationTestMessage = i18n.t("notifLocalTestFailed")
+                return
+            }
         }
 
         var remoteRegistrationReady = await notifications.ensureRemoteNotificationsRegisteredIfAllowed(timeout: 4)
