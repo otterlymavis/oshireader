@@ -841,6 +841,7 @@ class LocalDB: ObservableObject {
 
     func getContentCache(id: String) -> String? {
         let name = "cache_\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
+        queue.sync {}
         let result: String? = loadFromFile(name: name, defaultValue: nil)
         return result
     }

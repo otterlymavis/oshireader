@@ -2070,24 +2070,14 @@ final class OshiReaderTests: XCTestCase {
     // MARK: - Content Cache
     func testContentCacheRoundTrip() throws {
         db.saveContentCache(id: "article-123", html: "<h1>Hello</h1>")
-        let expectation = XCTestExpectation(description: "cache write flush")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { expectation.fulfill() }
-        wait(for: [expectation], timeout: 1.0)
         let result = db.getContentCache(id: "article-123")
         XCTAssertEqual(result, "<h1>Hello</h1>")
     }
 
     func testContentCacheRemove() throws {
         db.saveContentCache(id: "to-remove", html: "<p>content</p>")
-        let writeExp = XCTestExpectation(description: "cache write flush")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writeExp.fulfill() }
-        wait(for: [writeExp], timeout: 1.0)
-
+        XCTAssertEqual(db.getContentCache(id: "to-remove"), "<p>content</p>")
         db.removeContentCache(id: "to-remove")
-        let deleteExp = XCTestExpectation(description: "cache delete flush")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { deleteExp.fulfill() }
-        wait(for: [deleteExp], timeout: 1.0)
-
         XCTAssertNil(db.getContentCache(id: "to-remove"))
     }
 
