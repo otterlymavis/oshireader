@@ -184,7 +184,7 @@ schemes:
       targets:
         - OshiReaderTests
         - OshiReaderUITests
-      config: Release
+      config: Debug
     run:
       config: Release
     profile:
