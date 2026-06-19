@@ -19,7 +19,7 @@ from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.ingestion.scheduler import _poll_lock, poll_once, queue_poll, scheduler, start_scheduler
 from app.migrations import apply_startup_migrations
-from app.models import BackendEvent, CollectionMode, Match, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, SourceItem, WatchTerm
 from app.schemas import ClientDiagnosticIn
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
@@ -168,7 +168,6 @@ async def test_push(_: None = Depends(require_admin_auth), db: Session = Depends
 @app.get("/api/admin/stats")
 def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
     from app.apns import apns_configured
-    from app.models import APNSDeviceToken
 
     items_total = db.query(func.count(SourceItem.id)).scalar()
     matches_total = db.query(func.count(Match.id)).scalar()
@@ -177,6 +176,11 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
     device_tokens = db.query(APNSDeviceToken.environment, func.count(APNSDeviceToken.token)).group_by(
         APNSDeviceToken.environment
     ).all()
+    verified_device_tokens = (
+        db.query(APNSDeviceToken.environment, APNSDeviceToken.is_verified, func.count(APNSDeviceToken.token))
+        .group_by(APNSDeviceToken.environment, APNSDeviceToken.is_verified)
+        .all()
+    )
     recent_events = db.query(BackendEvent).order_by(
         BackendEvent.created_at.desc(),
         BackendEvent.id.desc(),
@@ -194,6 +198,19 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             "server_environment": "sandbox" if settings.apns_use_sandbox else "production",
             "backend_public_url": settings.backend_public_url,
             "device_tokens_by_environment": {env: c for env, c in device_tokens},
+            "device_tokens_by_environment_and_verification": {
+                env: {
+                    "verified": sum(
+                        c for row_env, is_verified, c in verified_device_tokens
+                        if row_env == env and is_verified is True
+                    ),
+                    "unverified": sum(
+                        c for row_env, is_verified, c in verified_device_tokens
+                        if row_env == env and is_verified is not True
+                    ),
+                }
+                for env, _ in device_tokens
+            },
         },
         "recent_events": [
             {

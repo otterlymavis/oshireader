@@ -25,7 +25,7 @@ from app.apns import (
     send_test_push,
     send_test_push_to_device,
 )
-from app.models import APNSDeviceToken, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, WatchTerm
 
 
 class TestPayload:
@@ -233,6 +233,41 @@ class TestSendNewMatchNotifications:
             mock_settings.apns_use_sandbox = True
             await send_new_match_notifications(db_session, term, 2)
         mock_send.assert_not_called()
+
+        event = db_session.query(BackendEvent).order_by(BackendEvent.id.desc()).first()
+        assert event.kind == "apns"
+        assert event.status == "skipped"
+        assert event.payload["owner_scoped"] is False
+        assert event.payload["total_devices"] == 0
+        assert event.payload["total_verified_devices"] == 0
+
+    @pytest.mark.asyncio
+    async def test_skip_event_explains_owner_scoped_token_miss(self, db_session):
+        owner_secret = "owner-secret-digest"
+        term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret=owner_secret)
+        owner_device = _device("a" * 64, environment="sandbox")
+        owner_device.device_secret = owner_secret
+        owner_device.is_verified = False
+        other_device = _device("b" * 64, environment="sandbox")
+        other_device.device_secret = "other-secret-digest"
+        db_session.add_all([term, owner_device, other_device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.settings") as mock_settings, \
+             patch("app.apns._send_one", new=AsyncMock()) as mock_send:
+            mock_settings.apns_use_sandbox = True
+            await send_new_match_notifications(db_session, term, 2)
+        mock_send.assert_not_called()
+
+        event = db_session.query(BackendEvent).order_by(BackendEvent.id.desc()).first()
+        assert event.kind == "apns"
+        assert event.status == "skipped"
+        assert event.payload["owner_scoped"] is True
+        assert event.payload["total_devices"] == 2
+        assert event.payload["total_verified_devices"] == 1
+        assert event.payload["owner_devices"] == 1
+        assert event.payload["owner_verified_devices"] == 0
 
     @pytest.mark.asyncio
     async def test_sends_to_matching_environment_device(self, db_session):

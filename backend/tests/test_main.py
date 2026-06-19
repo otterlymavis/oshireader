@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.database import get_db
-from app.models import BackendEvent, Match, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, Match, SourceItem, WatchTerm
 
 
 class TestGetDb:
@@ -121,6 +121,27 @@ class TestAdminStats:
         data = r.json()
         assert data["items_by_platform"]["youtube"] == 2
         assert data["items_by_platform"]["twitter"] == 1
+
+    def test_stats_includes_apns_verification_counts(self, client, db_session):
+        db_session.add_all([
+            APNSDeviceToken(token="a" * 64, environment="sandbox", is_verified=True),
+            APNSDeviceToken(token="b" * 64, environment="sandbox", is_verified=False),
+            APNSDeviceToken(token="c" * 64, environment="production", is_verified=True),
+        ])
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        apns = r.json()["apns"]
+        assert apns["device_tokens_by_environment"] == {
+            "production": 1,
+            "sandbox": 2,
+        }
+        assert apns["device_tokens_by_environment_and_verification"] == {
+            "production": {"verified": 1, "unverified": 0},
+            "sandbox": {"verified": 1, "unverified": 1},
+        }
 
     def test_stats_includes_recent_backend_events(self, client, db_session):
         db_session.add(BackendEvent(

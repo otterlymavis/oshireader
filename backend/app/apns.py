@@ -396,12 +396,37 @@ async def send_new_match_notifications(
         query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
     devices: list[APNSDeviceToken] = query.all()
     if not devices:
+        total_devices = db.query(APNSDeviceToken).count()
+        total_verified_devices = (
+            db.query(APNSDeviceToken)
+            .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+            .count()
+        )
+        owner_devices = None
+        owner_verified_devices = None
+        if term.owner_device_secret:
+            owner_query = db.query(APNSDeviceToken).filter(
+                APNSDeviceToken.device_secret == term.owner_device_secret
+            )
+            owner_devices = owner_query.count()
+            owner_verified_devices = owner_query.filter(
+                APNSDeviceToken.is_verified == True  # noqa: E712
+            ).count()
         record_backend_event(
             db,
             "apns",
             "skipped",
             "No registered APNs device tokens",
-            {"term_id": term.id, "keyword": term.keyword, "new_count": count},
+            {
+                "term_id": term.id,
+                "keyword": term.keyword,
+                "new_count": count,
+                "owner_scoped": bool(term.owner_device_secret),
+                "total_devices": total_devices,
+                "total_verified_devices": total_verified_devices,
+                "owner_devices": owner_devices,
+                "owner_verified_devices": owner_verified_devices,
+            },
         )
         db.commit()
         return True
