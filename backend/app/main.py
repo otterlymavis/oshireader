@@ -2,12 +2,13 @@ import asyncio
 import logging
 import os
 import struct
+import traceback
 import zlib
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import AsyncGenerator
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from sqlalchemy import func
@@ -17,6 +18,7 @@ from app.api import credentials, devices, feed, watch_terms
 from app.auth import require_admin_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
+from app.diagnostics import record_backend_event
 from app.ingestion.scheduler import _poll_lock, poll_once, queue_poll, scheduler, start_scheduler
 from app.migrations import apply_startup_migrations
 from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, SourceItem, WatchTerm
@@ -140,6 +142,25 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
         return {"status": "poll completed"}
     except asyncio.TimeoutError:
         return {"status": "poll timed out (partial progress saved)"}
+    except Exception as exc:
+        trace = traceback.format_exc(limit=8)
+        log.exception("Admin poll failed")
+        db_sess = SessionLocal()
+        try:
+            record_backend_event(
+                db_sess,
+                "poll",
+                "failed",
+                "Scheduled/backend poll failed",
+                {"error": str(exc), "traceback": trace},
+            )
+            db_sess.commit()
+        finally:
+            db_sess.close()
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "poll failed", "error": str(exc), "traceback": trace},
+        )
 
 
 @app.get("/api/admin/test-fetch")
