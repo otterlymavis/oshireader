@@ -247,18 +247,14 @@ final class OshiReaderUITests: XCTestCase {
         guard app.state != .notRunning else {
             throw XCTSkip("OshiReader exited before reporting the APNs registration result")
         }
-        XCTAssertTrue(
-            resultQuery.firstMatch.waitForExistence(timeout: 25),
-            "The app did not report the APNs registration result"
-        )
-        var resultLabels = resultQuery.allElementsBoundByIndex.map(\.label)
+        var resultLabels = waitForRemotePushResult(in: resultQuery, timeout: 25)
+        XCTAssertFalse(resultLabels.isEmpty, "The app did not report the APNs registration result")
         if hasUnregisteredDeviceTokenMessage(resultLabels) {
             testButton.tap()
-            _ = resultQuery.matching(remotePushSuccessPredicate()).firstMatch.waitForExistence(timeout: 25)
+            resultLabels = waitForRemotePushResult(in: resultQuery, timeout: 25)
             guard app.state != .notRunning else {
                 throw XCTSkip("OshiReader exited while waiting for APNs token registration retry")
             }
-            resultLabels = resultQuery.allElementsBoundByIndex.map(\.label)
             if hasUnregisteredDeviceTokenMessage(resultLabels) {
                 throw XCTSkip(
                     "Simulator did not register an APNs device token after retry. Result: \(resultLabels)"
@@ -318,12 +314,31 @@ final class OshiReaderUITests: XCTestCase {
         add(attachment)
     }
 
+    private func waitForRemotePushResult(
+        in resultQuery: XCUIElementQuery,
+        timeout: TimeInterval
+    ) -> [String] {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let labels = resultQuery.allElementsBoundByIndex.map(\.label)
+            if hasRemotePushSuccessMessage(labels) || hasUnregisteredDeviceTokenMessage(labels) {
+                return labels
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return resultQuery.allElementsBoundByIndex.map(\.label)
+    }
+
     private func hasUnregisteredDeviceTokenMessage(_ labels: [String]) -> Bool {
         labels.contains {
             $0.localizedCaseInsensitiveContains("Device token is not registered")
                 || $0.localizedCaseInsensitiveContains("デバイストークンが未登録")
                 || $0.localizedCaseInsensitiveContains("裝置權杖尚未註冊")
                 || $0.localizedCaseInsensitiveContains("设备令牌尚未注册")
+                || $0.localizedCaseInsensitiveContains("No device token found on backend")
+                || $0.localizedCaseInsensitiveContains("バックエンドにデバイストークンがありません")
+                || $0.localizedCaseInsensitiveContains("後端找不到裝置權杖")
+                || $0.localizedCaseInsensitiveContains("后端找不到设备令牌")
         }
     }
 
