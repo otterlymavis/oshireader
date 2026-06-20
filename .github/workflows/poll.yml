@@ -29,7 +29,7 @@ jobs:
             "$BACKEND_URL/api/admin/poll" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --max-time 120)
+            --max-time 260)
           echo "Response status: $STATUS"
           echo "Response body: $(cat "$BODY")"
           CODE=${STATUS%% *}

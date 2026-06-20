@@ -195,6 +195,25 @@ class TestAdminPoll:
         assert r.json() == {"status": "poll completed"}
         mock_poll.assert_awaited_once()
 
+    def test_poll_uses_cloudflare_compatible_completion_budget(self, client):
+        from unittest.mock import AsyncMock
+        mock_lock = MagicMock()
+        mock_lock.locked.return_value = False
+        observed_timeout = None
+
+        async def capture_timeout(awaitable, timeout):
+            nonlocal observed_timeout
+            observed_timeout = timeout
+            await awaitable
+
+        with patch("app.main.poll_once", new=AsyncMock()), \
+             patch("app.main._poll_lock", mock_lock), \
+             patch("app.main.asyncio.wait_for", new=capture_timeout):
+            r = client.post("/api/admin/poll")
+
+        assert r.status_code == 200
+        assert observed_timeout == 210.0
+
     def test_poll_returns_already_running_when_busy(self, client):
         mock_lock = MagicMock()
         mock_lock.locked.return_value = True

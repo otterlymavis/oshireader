@@ -138,7 +138,7 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
     if _poll_lock.locked():
         return {"status": "poll already running"}
     try:
-        await asyncio.wait_for(poll_once(), timeout=80.0)
+        await asyncio.wait_for(poll_once(), timeout=210.0)
         return {"status": "poll completed"}
     except asyncio.TimeoutError:
         return {"status": "poll timed out (partial progress saved)"}
