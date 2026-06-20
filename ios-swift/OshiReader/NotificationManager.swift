@@ -152,14 +152,12 @@ final class NotificationManager: ObservableObject {
     }
 
     func registerForRemoteNotificationsIfAllowed() async {
-        guard NetworkManager.shared.usesBackend else { return }
         await refreshAuthorizationStatus()
         guard canScheduleNotifications else { return }
         registerForRemoteNotificationsForDeviceAuthentication()
     }
 
     func registerForRemoteNotificationsForDeviceAuthentication() {
-        guard NetworkManager.shared.usesBackend else { return }
         // APNs registration does not present the notification permission prompt.
         // Keep a device credential available for watch-term synchronization even
         // when the user has not granted alert presentation permission.
@@ -167,7 +165,6 @@ final class NotificationManager: ObservableObject {
     }
 
     func ensureRemoteNotificationsRegisteredIfAllowed(timeout: TimeInterval = 8) async -> Bool {
-        guard NetworkManager.shared.usesBackend else { return false }
         await refreshAuthorizationStatus()
         guard canScheduleNotifications else { return false }
         if lastRegisteredDeviceToken != nil { return true }

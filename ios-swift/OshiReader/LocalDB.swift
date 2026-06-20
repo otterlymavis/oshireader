@@ -264,8 +264,7 @@ class LocalDB: ObservableObject {
         // Only notify for items that survived the cap — avoids pinging for articles
         // that were immediately evicted as too old.
         let shouldScheduleLocalFallback = BackgroundRefreshPolicy.shouldScheduleLocalFallback(
-            hasRegisteredRemoteDeviceForCurrentEnvironment: NetworkManager.shared.usesBackend &&
-                NetworkManager.shared.hasRegisteredAPNSDeviceForCurrentEnvironment
+            hasRegisteredRemoteDeviceForCurrentEnvironment: NetworkManager.shared.hasRegisteredAPNSDeviceForCurrentEnvironment
         )
         if notifyOnNew, shouldScheduleLocalFallback, !addedItems.isEmpty, !wasFirstLoad {
             let survivedKeys = Set(finalItems.map { itemKey($0) })

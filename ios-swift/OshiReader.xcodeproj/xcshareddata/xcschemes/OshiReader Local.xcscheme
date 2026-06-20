@@ -87,13 +87,6 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
       </CommandLineArguments>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "OSHI_READER_ENVIRONMENT"
-            value = "Local"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Debug"
