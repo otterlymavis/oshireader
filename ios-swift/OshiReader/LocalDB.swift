@@ -26,6 +26,7 @@ class LocalDB: ObservableObject {
     private let maxContentCacheBytes = 1_000_000
     private let maxFeedItems = 600
     private let minFeedItemsPerSubscribedPlatform = 8
+    private let discussionActivityPlatforms: Set<String> = ["5ch", "girlschannel", "togetter"]
 
     // Bump this whenever a migration step is added below.
     private static let currentSchemaVersion = 3
@@ -237,11 +238,7 @@ class LocalDB: ObservableObject {
                     author: item.author ?? existing.author,
                     thumbnail_url: item.thumbnail_url ?? existing.thumbnail_url,
                     media_type: existing.media_type,
-                    published_at: {
-                        let ed = parseISO8601Date(existing.published_at) ?? .distantFuture
-                        let nd = parseISO8601Date(item.published_at) ?? .distantFuture
-                        return ed <= nd ? existing.published_at : item.published_at
-                    }(),
+                    published_at: mergedPublishedAt(existing: existing, incoming: item),
                     watch_term_keyword: existing.watch_term_keyword,
                     fetched_at: item.fetched_at
                 )
@@ -285,6 +282,24 @@ class LocalDB: ObservableObject {
         feedItems = finalItems
         saveToFile(name: "feed_items", value: feedItems)
         return addedCount
+    }
+
+    private func mergedPublishedAt(existing: FeedItem, incoming: FeedItem) -> String {
+        let existingDate = parseISO8601Date(existing.published_at)
+        let incomingDate = parseISO8601Date(incoming.published_at)
+        guard let existingDate, let incomingDate else {
+            return existingDate == nil ? incoming.published_at : existing.published_at
+        }
+
+        // For discussion sources, published_at represents latest thread activity,
+        // so a newer backend value should bump the cached item in the same way the
+        // backend feed does. For ordinary articles/videos, prefer the earlier date:
+        // it is usually a correction from a fetch-time placeholder to the real
+        // publication/broadcast time.
+        if discussionActivityPlatforms.contains(Platform.normalize(incoming.platform)) {
+            return incomingDate >= existingDate ? incoming.published_at : existing.published_at
+        }
+        return existingDate <= incomingDate ? existing.published_at : incoming.published_at
     }
 
     func deleteFeedItem(id: String, watchTermKeyword: String) {

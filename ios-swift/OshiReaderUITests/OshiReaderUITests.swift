@@ -369,6 +369,12 @@ final class OshiReaderUITests: XCTestCase {
                 || $0.localizedCaseInsensitiveContains("バックエンドにデバイストークンがありません")
                 || $0.localizedCaseInsensitiveContains("後端找不到裝置權杖")
                 || $0.localizedCaseInsensitiveContains("后端找不到设备令牌")
+                || $0.localizedCaseInsensitiveContains("沒有裝置權杖")
+                || $0.localizedCaseInsensitiveContains("没有设备令牌")
+                || $0.localizedCaseInsensitiveContains("APNs is not configured")
+                || $0.localizedCaseInsensitiveContains("APNs設定が未完了")
+                || $0.localizedCaseInsensitiveContains("APNs 尚未設定")
+                || $0.localizedCaseInsensitiveContains("APNs 尚未配置")
         }
     }
 

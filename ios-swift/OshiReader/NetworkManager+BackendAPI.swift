@@ -283,7 +283,17 @@ extension NetworkManager {
         request.httpBody = bodyData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await session.data(for: request)
+        do {
+            let (data, response) = try await session.data(for: request)
+            return try handleDeviceScopedResponse(data: data, response: response)
+        } catch let error as URLError where error.code == .networkConnectionLost {
+            AppLogger.network.warning("Connection lost for apns-test-push, retrying request once...")
+            let (data, response) = try await session.data(for: request)
+            return try handleDeviceScopedResponse(data: data, response: response)
+        }
+    }
+
+    private func handleDeviceScopedResponse(data: Data, response: URLResponse) throws -> APNSTestPushReport {
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }

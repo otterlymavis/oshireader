@@ -250,7 +250,7 @@ final class BackgroundRefreshManager {
                 )
             }
 
-            let platformsToFetch = db.subscribedPlatforms
+            let platformsToFetch = NetworkManager.shared.isLiveBackgroundPushTesting ? [] : db.subscribedPlatforms
                 .filter { $0 != "custom" }
                 .sorted { lhs, rhs in
                     let lhsHasItems = latestFetchedAt(in: db.feedItems, platformId: lhs) != nil

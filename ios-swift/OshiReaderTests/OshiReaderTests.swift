@@ -259,6 +259,28 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.feedItems.first?.published_at, older)
     }
 
+    func testMergeUpdatesDiscussionPublishedAtToLatestActivity() throws {
+        let formatter = ISO8601DateFormatter()
+        let older = formatter.string(from: Date(timeIntervalSinceNow: -3600))
+        let newer = formatter.string(from: Date(timeIntervalSinceNow: -60))
+        let base = FeedItem(
+            id: "girlschannel:thread-1", platform: "girlschannel", url: "https://girlschannel.net/topics/1",
+            title: "Aiko thread", content_text: "Aiko", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: older, watch_term_keyword: "Aiko", fetched_at: older
+        )
+        let bumped = FeedItem(
+            id: "girlschannel:thread-1", platform: "girlschannel", url: "https://girlschannel.net/topics/1",
+            title: "Aiko thread", content_text: "Aiko latest reply", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: newer, watch_term_keyword: "Aiko", fetched_at: newer
+        )
+
+        _ = db.mergeItems(newItems: [base])
+        _ = db.mergeItems(newItems: [bumped])
+
+        XCTAssertEqual(db.feedItems.first?.published_at, newer)
+        XCTAssertEqual(db.feedItems.first?.content_text, "Aiko latest reply")
+    }
+
     @MainActor
     func testNotificationManagerSchedulesTestNotificationAfterAuthorization() async throws {
         let center = MockNotificationCenter(status: .notDetermined, grantsAuthorization: true)
@@ -697,9 +719,15 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(actionIDs.contains(NotificationManager.saveResultActionIdentifier))
     }
 
-    func testDebugSchemeUsesLocalBackendConfiguration() throws {
-        XCTAssertEqual(NetworkManager.shared.environmentName, "Local")
-        XCTAssertEqual(NetworkManager.shared.apiBase, "http://127.0.0.1:8000")
+    func testSchemeUsesExpectedBackendConfiguration() throws {
+        switch NetworkManager.shared.environmentName {
+        case "Local":
+            XCTAssertEqual(NetworkManager.shared.apiBase, "http://127.0.0.1:8000")
+        case "Staging", "Production":
+            XCTAssertEqual(NetworkManager.shared.apiBase, "https://oshireader.onrender.com")
+        default:
+            XCTFail("Unexpected backend environment: \(NetworkManager.shared.environmentName)")
+        }
     }
 
     @MainActor
@@ -2336,6 +2364,35 @@ final class NetworkManagerTests: XCTestCase {
         }
     }
 
+    func testFetchWatchTermsRetriesConnectionLostOnce() async throws {
+        var attemptCount = 0
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
+        let data = try JSONEncoder().encode([term])
+        MockURLProtocol.errorHandler = { _ in
+            attemptCount += 1
+            return attemptCount == 1 ? URLError(.networkConnectionLost) : nil
+        }
+        MockURLProtocol.handler = { _ in (data, Self.response(status: 200)) }
+
+        let terms = try await NetworkManager.shared.fetchWatchTerms()
+
+        XCTAssertEqual(attemptCount, 2)
+        XCTAssertEqual(terms.first?.keyword, "Aiko")
+    }
+
+    func testAPIVoidRetriesConnectionLostOnce() async throws {
+        var attemptCount = 0
+        MockURLProtocol.errorHandler = { _ in
+            attemptCount += 1
+            return attemptCount == 1 ? URLError(.networkConnectionLost) : nil
+        }
+        MockURLProtocol.handler = { _ in (Data(), Self.response(status: 204)) }
+
+        try await NetworkManager.shared.deleteWatchTerm(id: "99")
+
+        XCTAssertEqual(attemptCount, 2)
+    }
+
     // createWatchTerm sends POST and decodes the returned term
     func testCreateWatchTermSendsPostAndDecodesTerm() async throws {
         var capturedMethod: String?
@@ -3295,14 +3352,14 @@ final class AdminApiTokenTests: XCTestCase {
 private final class MockURLProtocol: URLProtocol {
     static var handler: ((URLRequest) -> (Data, HTTPURLResponse))?
     // Set this to have the protocol fail with a specific error instead of calling handler.
-    static var errorHandler: ((URLRequest) -> Error)?
+    static var errorHandler: ((URLRequest) -> Error?)?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        if let errHandler = Self.errorHandler {
-            client?.urlProtocol(self, didFailWithError: errHandler(request))
+        if let errHandler = Self.errorHandler, let error = errHandler(request) {
+            client?.urlProtocol(self, didFailWithError: error)
             return
         }
         guard let handler = Self.handler else {

@@ -156,11 +156,21 @@ class NetworkManager {
         }
         if authorized { applyAdminAuthorization(to: &request) }
         if deviceAuthorized { applyDeviceAuthorization(to: &request) }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch let error as URLError where error.code == .networkConnectionLost {
+            AppLogger.network.warning("Connection lost for \(url.path), retrying request once...")
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            return try JSONDecoder().decode(T.self, from: data)
         }
-        return try JSONDecoder().decode(T.self, from: data)
     }
 
     func apiVoid(
@@ -181,9 +191,18 @@ class NetworkManager {
         }
         if authorized { applyAdminAuthorization(to: &request) }
         if deviceAuthorized { applyDeviceAuthorization(to: &request) }
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+        } catch let error as URLError where error.code == .networkConnectionLost {
+            AppLogger.network.warning("Connection lost for \(url.path), retrying request once...")
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
         }
     }
 }
