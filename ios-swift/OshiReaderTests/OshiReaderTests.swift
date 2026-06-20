@@ -723,7 +723,7 @@ final class OshiReaderTests: XCTestCase {
         switch NetworkManager.shared.environmentName {
         case "Local":
             XCTAssertEqual(NetworkManager.shared.apiBase, "http://127.0.0.1:8000")
-        case "Staging", "Production":
+        case "Development", "Staging", "Production":
             XCTAssertEqual(NetworkManager.shared.apiBase, "https://oshireader.onrender.com")
         default:
             XCTFail("Unexpected backend environment: \(NetworkManager.shared.environmentName)")
@@ -2335,6 +2335,40 @@ final class NetworkManagerTests: XCTestCase {
         }
     }
 
+    func testFetchFeedRefreshesRejectedDeviceCredentialAndRetries() async throws {
+        let token = String(repeating: "a", count: 64)
+        KeychainHelper.write(key: "apns_device_token", value: token)
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+
+        var feedRequests = 0
+        var registrationRequests = 0
+        MockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/feed":
+                feedRequests += 1
+                XCTAssertEqual(request.value(forHTTPHeaderField: "X-Device-Token"), token)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "X-Device-Secret"), "device-secret")
+                if feedRequests == 1 {
+                    return (Data(), Self.response(status: 401))
+                }
+                return (Data("[]".utf8), Self.response(status: 200))
+            case "/api/devices/apns-token":
+                registrationRequests += 1
+                return (Data(), Self.response(status: 201))
+            default:
+                XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
+                return (Data(), Self.response(status: 500))
+            }
+        }
+
+        let items = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
+
+        XCTAssertTrue(items.isEmpty)
+        XCTAssertEqual(feedRequests, 2)
+        XCTAssertEqual(registrationRequests, 1)
+    }
+
     // 200 OK with empty array → returns empty, no throw
     func testFetchFeedEmptyArray() async throws {
         MockURLProtocol.handler = { _ in (Data("[]".utf8), Self.response(status: 200)) }
@@ -2895,6 +2929,43 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(capturedTimeout, 12)
         XCTAssertEqual(capturedBody?["token"] as? String, token)
         XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
+    }
+
+    func testTriggerBackgroundPollRefreshesRejectedDeviceCredentialAndRetries() async throws {
+        let token = String(repeating: "a", count: 64)
+        KeychainHelper.write(key: "apns_device_token", value: token)
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+
+        var paths: [String] = []
+        var backgroundRefreshRequests = 0
+        MockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            paths.append(path)
+            if path == "/api/devices/background-refresh" {
+                backgroundRefreshRequests += 1
+                return (
+                    Data(),
+                    Self.response(status: backgroundRefreshRequests == 1 ? 404 : 200)
+                )
+            }
+            if path == "/api/devices/apns-token" {
+                return (Data(), Self.response(status: 201))
+            }
+            XCTFail("Unexpected request path: \(path)")
+            return (Data(), Self.response(status: 500))
+        }
+
+        try await NetworkManager.shared.triggerBackgroundPoll(timeout: 12)
+
+        XCTAssertEqual(
+            paths,
+            [
+                "/api/devices/background-refresh",
+                "/api/devices/apns-token",
+                "/api/devices/background-refresh",
+            ]
+        )
     }
 
     func testTriggerBackgroundPollFallsBackToAdminPollWhenDeviceEndpointFails() async throws {

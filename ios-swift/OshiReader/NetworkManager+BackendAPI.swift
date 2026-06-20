@@ -341,14 +341,17 @@ extension NetworkManager {
 
     private func triggerDeviceBackgroundRefresh(timeout: TimeInterval) async throws {
         let body: [String: String]
+        let storedToken: String?
         if hasRegisteredAPNSDeviceForCurrentEnvironment,
            let token = registeredAPNSDeviceToken,
            !token.isEmpty {
+            storedToken = token
             body = [
                 "token": token,
                 "device_secret": apnsDeviceSecret,
             ]
         } else {
+            storedToken = nil
             let deviceId = await apnsDeviceId()
             body = [
                 "device_id": deviceId,
@@ -357,12 +360,41 @@ extension NetworkManager {
             ]
         }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        try await apiVoid(
-            URL(string: "\(apiBase)/api/devices/background-refresh")!,
-            method: "POST",
-            body: bodyData,
-            timeout: timeout
-        )
+        do {
+            try await sendDeviceBackgroundRefresh(bodyData: bodyData, timeout: timeout)
+        } catch APIClientError.httpStatus(404) {
+            guard let storedToken else { throw APIClientError.httpStatus(404) }
+            AppLogger.network.notice("Background refresh credential rejected; re-registering APNs token and retrying once")
+            try await registerAPNSDeviceToken(storedToken)
+            try await sendDeviceBackgroundRefresh(bodyData: bodyData, timeout: timeout)
+        }
+    }
+
+    private func sendDeviceBackgroundRefresh(bodyData: Data, timeout: TimeInterval) async throws {
+        let url = URL(string: "\(apiBase)/api/devices/background-refresh")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.httpBody = bodyData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            try validateBackgroundRefreshResponse(response)
+        } catch let error as URLError where error.code == .networkConnectionLost {
+            AppLogger.network.warning("Connection lost for background-refresh, retrying request once...")
+            let (_, response) = try await session.data(for: request)
+            try validateBackgroundRefreshResponse(response)
+        }
+    }
+
+    private func validateBackgroundRefreshResponse(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw APIClientError.httpStatus(http.statusCode)
+        }
     }
 
     func sendClientDiagnostic(_ report: ClientDiagnosticReport) async {
