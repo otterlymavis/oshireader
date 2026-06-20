@@ -1,0 +1,12 @@
+name: Scheduled feed poll
+
+on:
+  schedule:
+    # GitHub schedules can be delayed or dropped under Actions load. Run at
+    # off-boundary five-minute slots; backend locking prevents overlapping polls.
+    - cron: '2-59/5 * * * *'
+
+jobs:
+  poll:
+    uses: ./.github/workflows/poll.yml
+    secrets: inherit
