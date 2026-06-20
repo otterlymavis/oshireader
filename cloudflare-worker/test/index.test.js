@@ -31,12 +31,22 @@ test("poll sends the backend bearer token", async (context) => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async (url, options) => {
-    assert.equal(url, "https://backend.example/api/admin/poll");
-    assert.equal(options.method, "POST");
     assert.equal(options.headers.authorization, "Bearer secret");
-    return new Response(JSON.stringify({ status: "poll completed" }), {
-      status: 200,
-    });
+    if (url === "https://backend.example/api/admin/poll") {
+      assert.equal(options.method, "POST");
+      return new Response(JSON.stringify({ status: "poll completed" }), {
+        status: 200,
+      });
+    }
+    assert.equal(url, "https://backend.example/api/admin/stats");
+    return new Response(JSON.stringify({
+      items_total: 10,
+      matches_total: 12,
+      recent_events: [
+        { id: 2, kind: "poll", status: "completed" },
+        { id: 1, kind: "apns", status: "attempted", payload: { delivered_count: 1 } },
+      ],
+    }), { status: 200 });
   };
 
   const result = await triggerBackendPoll({
@@ -46,4 +56,6 @@ test("poll sends the backend bearer token", async (context) => {
 
   assert.equal(result.ok, true);
   assert.equal(result.backend_status, "poll completed");
+  assert.equal(result.diagnostics.latest_poll.id, 2);
+  assert.equal(result.diagnostics.latest_apns.payload.delivered_count, 1);
 });

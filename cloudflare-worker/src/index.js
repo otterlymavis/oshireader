@@ -17,6 +17,28 @@ function requireAdminToken(env) {
   return env.ADMIN_API_TOKEN;
 }
 
+async function fetchBackendDiagnostics(backendURL, adminToken) {
+  const response = await fetch(`${backendURL}/api/admin/stats`, {
+    headers: {
+      authorization: `Bearer ${adminToken}`,
+      "user-agent": "oshireader-cloudflare-poller/1.0",
+    },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Backend diagnostics failed: HTTP ${response.status}`);
+  }
+
+  const stats = await response.json();
+  const recentEvents = stats.recent_events || [];
+  return {
+    items_total: stats.items_total,
+    matches_total: stats.matches_total,
+    latest_poll: recentEvents.find((event) => event.kind === "poll") || null,
+    latest_apns: recentEvents.find((event) => event.kind === "apns") || null,
+  };
+}
+
 export async function triggerBackendPoll(env) {
   const adminToken = requireAdminToken(env);
   const backendURL = (env.BACKEND_URL || "https://oshireader.onrender.com").replace(/\/+$/, "");
@@ -47,10 +69,12 @@ export async function triggerBackendPoll(env) {
     result = { status: responseBody || "poll completed" };
   }
 
+  const diagnostics = await fetchBackendDiagnostics(backendURL, adminToken);
   return {
     ok: true,
     backend_status: result.status,
     duration_ms: durationMs,
+    diagnostics,
   };
 }
 
