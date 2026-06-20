@@ -1,0 +1,44 @@
+name: Backend keep-alive
+
+on:
+  schedule:
+    # Run away from quarter-hour boundaries and before Render's 15-minute idle cutoff.
+    - cron: "3-59/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: backend-keep-alive
+  cancel-in-progress: true
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check backend health
+        env:
+          HEALTH_URL: https://oshireader.onrender.com/api/health
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --fail-with-body --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --max-time 90 \
+            "$HEALTH_URL")
+
+          echo "HTTP status: $STATUS"
+          echo "Response: $(cat "$BODY")"
+
+          python3 - "$BODY" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as response_file:
+              payload = json.load(response_file)
+
+          if payload.get("status") != "ok":
+              raise SystemExit(f"Unexpected health response: {payload}")
+          PY
