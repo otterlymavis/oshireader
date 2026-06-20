@@ -72,6 +72,11 @@ def health() -> dict:
     return payload
 
 
+@app.head("/api/health")
+def health_head() -> Response:
+    return Response(status_code=200)
+
+
 @app.get("/api/notification-preview.png")
 def notification_preview_image() -> Response:
     return Response(

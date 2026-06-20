@@ -24,6 +24,11 @@ class TestHealth:
         assert r.status_code == 200
         assert r.json() == {"status": "ok"}
 
+    def test_health_accepts_head_checks(self, client):
+        r = client.head("/api/health")
+        assert r.status_code == 200
+        assert r.content == b""
+
 
 class TestNotificationPreviewImage:
     def test_returns_cacheable_png(self, client):
