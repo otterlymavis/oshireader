@@ -168,12 +168,16 @@ class TestIngestionNotifications:
         assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
 
     @pytest.mark.asyncio
-    async def test_notification_aggregates_connectors_and_previews_newest_item(
+    async def test_notification_excludes_stale_backlog_and_previews_fresh_item(
         self,
         db_engine,
         db_session,
     ):
-        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
         db_session.add(term)
         db_session.commit()
 
@@ -205,9 +209,65 @@ class TestIngestionNotifications:
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
         assert called_term.keyword == "Aiko"
-        assert called_count == 2
+        assert called_count == 1
         assert preview_item["id"] == "youtube:fresh"
         assert preview_item["title"] == "Aiko fresh"
+
+    @pytest.mark.asyncio
+    async def test_match_older_than_watch_term_is_added_without_notification(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+        term_id = term.id
+
+        historical = _make_item(
+            item_id="historical",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            title="Aiko historical post",
+        )
+        connector = _mock_connector("youtube", [historical])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        db_session.expire_all()
+        match = db_session.query(Match).filter(Match.watch_term_id == term_id).one()
+        assert match.source_item_id == "youtube:historical"
+        mock_notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_estimated_publication_date_is_not_notified(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        estimated = _make_item(
+            item_id="estimated",
+            raw_payload={"date_parsed": False},
+        )
+        connector = _mock_connector("youtube", [estimated])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        assert db_session.query(Match).count() == 1
+        mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_notification_preview_matches_newest_feed_sort_date(
@@ -215,7 +275,11 @@ class TestIngestionNotifications:
         db_engine,
         db_session,
     ):
-        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
         db_session.add(term)
         db_session.commit()
 
@@ -261,7 +325,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_called_once()
         preview_item = mock_notify.call_args.args[3]
-        assert preview_item["id"] == "yahoonews:estimated"
+        assert preview_item["id"] == "youtube:parsed"
 
     @pytest.mark.asyncio
     async def test_notification_preview_uses_stored_feed_item_date_for_existing_source(
@@ -269,7 +333,11 @@ class TestIngestionNotifications:
         db_engine,
         db_session,
     ):
-        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
         old_published_at = datetime.now(timezone.utc) - timedelta(days=365)
         db_session.add_all(
             [
@@ -323,7 +391,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_called_once()
         _, _, called_count, preview_item = mock_notify.call_args.args
-        assert called_count == 2
+        assert called_count == 1
         assert preview_item["id"] == "news:fresher"
 
     @pytest.mark.asyncio
