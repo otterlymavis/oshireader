@@ -80,6 +80,35 @@ class TestListWatchTerms:
         assert resp.status_code == 200
         assert [term["keyword"] for term in resp.json()] == ["Owned"]
 
+    def test_device_headers_take_precedence_over_admin_token(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        db_session.add_all([
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+            WatchTerm(keyword="Owned", owner_device_secret=owner_secret),
+            WatchTerm(keyword="AdminOnly"),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.get(
+                "/api/watch-terms/",
+                headers={
+                    "Authorization": "Bearer admin-secret",
+                    "X-Device-Token": token,
+                    "X-Device-Secret": secret,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert [term["keyword"] for term in resp.json()] == ["Owned"]
+
 
 class TestCreateWatchTerm:
     def test_creates_term_returns_201(self, client):

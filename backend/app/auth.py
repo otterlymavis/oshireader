@@ -71,10 +71,6 @@ def require_admin_or_device_auth(
     if not admin_token:
         return AuthContext(is_admin=True)
 
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme.lower() == "bearer" and secrets.compare_digest(token, admin_token):
-        return AuthContext(is_admin=True)
-
     normalized_token = "".join((device_token or "").strip().lower().split())
     if normalized_token and device_secret:
         stored = db.get(APNSDeviceToken, normalized_token)
@@ -84,6 +80,10 @@ def require_admin_or_device_auth(
                 stored.device_secret, device_secret
             ):
                 return AuthContext(is_admin=False, device=stored)
+
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() == "bearer" and secrets.compare_digest(token, admin_token):
+        return AuthContext(is_admin=True)
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
