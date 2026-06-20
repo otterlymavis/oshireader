@@ -722,19 +722,12 @@ final class OshiReaderTests: XCTestCase {
     func testSchemeUsesExpectedBackendConfiguration() throws {
         switch NetworkManager.shared.environmentName {
         case "Local":
-            XCTAssertFalse(NetworkManager.shared.usesBackend)
+            XCTAssertEqual(NetworkManager.shared.apiBase, "http://127.0.0.1:8000")
         case "Development", "Staging", "Production":
             XCTAssertEqual(NetworkManager.shared.apiBase, "https://oshireader.onrender.com")
         default:
             XCTFail("Unexpected backend environment: \(NetworkManager.shared.environmentName)")
         }
-    }
-
-    func testLocalEnvironmentDisablesBackend() {
-        XCTAssertFalse(NetworkManager.backendEnabled(environmentName: "Local"))
-        XCTAssertFalse(NetworkManager.backendEnabled(environmentName: "local"))
-        XCTAssertTrue(NetworkManager.backendEnabled(environmentName: "Development"))
-        XCTAssertTrue(NetworkManager.backendEnabled(environmentName: "Production"))
     }
 
     @MainActor
@@ -2382,29 +2375,6 @@ final class NetworkManagerTests: XCTestCase {
 
         let items = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
         XCTAssertTrue(items.isEmpty)
-    }
-
-    func testLocalModeSkipsBackendFeedAndPolling() async throws {
-        let previousEnvironment = ProcessInfo.processInfo.environment["OSHI_READER_ENVIRONMENT"]
-        setenv("OSHI_READER_ENVIRONMENT", "Local", 1)
-        defer {
-            if let previousEnvironment {
-                setenv("OSHI_READER_ENVIRONMENT", previousEnvironment, 1)
-            } else {
-                unsetenv("OSHI_READER_ENVIRONMENT")
-            }
-        }
-
-        MockURLProtocol.handler = { request in
-            XCTFail("Local mode made backend request: \(request.url?.absoluteString ?? "nil")")
-            return (Data(), Self.response(status: 500))
-        }
-
-        let feed = try await NetworkManager.shared.fetchFeed()
-        let syncSucceeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [])
-        XCTAssertTrue(feed.isEmpty)
-        XCTAssertTrue(syncSucceeded)
-        try await NetworkManager.shared.triggerBackgroundPoll()
     }
 
     // 204 No Content within accept range → apiVoid succeeds

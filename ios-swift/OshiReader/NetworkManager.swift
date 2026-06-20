@@ -35,20 +35,7 @@ class NetworkManager {
     }
 
     var environmentName: String {
-        let envName = ProcessInfo.processInfo.environment["OSHI_READER_ENVIRONMENT"] ?? ""
-        let trimmedEnvName = envName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedEnvName.isEmpty {
-            return trimmedEnvName
-        }
-        return configuredBundleValue(forKey: "OshiReaderEnvironment") ?? "Production"
-    }
-
-    var usesBackend: Bool {
-        Self.backendEnabled(environmentName: environmentName)
-    }
-
-    static func backendEnabled(environmentName: String) -> Bool {
-        environmentName.caseInsensitiveCompare("Local") != .orderedSame
+        configuredBundleValue(forKey: "OshiReaderEnvironment") ?? "Production"
     }
 
     private func configuredBundleValue(forKey key: String) -> String? {

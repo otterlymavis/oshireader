@@ -14,8 +14,7 @@ extension NetworkManager {
     }
 
     func fetchWatchTerms() async throws -> [WatchTerm] {
-        guard usesBackend else { return [] }
-        return try await apiRequest(
+        try await apiRequest(
             URL(string: "\(apiBase)/api/watch-terms/")!,
             authorized: true,
             deviceAuthorized: true,
@@ -26,7 +25,6 @@ extension NetworkManager {
     // Pushes local watch terms missing from the backend (e.g. after a database reset).
     @discardableResult
     func syncWatchTermsToBackend(localTerms: [WatchTerm]) async -> Bool {
-        guard usesBackend else { return true }
         guard !isUITesting else { return false }
         guard !localTerms.isEmpty else { return true }
         guard let backendTerms = try? await fetchWatchTerms() else { return false }
@@ -70,7 +68,6 @@ extension NetworkManager {
     // Pulls backend watch terms absent locally (e.g. fresh install after another session registered terms).
     @discardableResult
     func syncTermsFromBackend() async -> Bool {
-        guard usesBackend else { return false }
         guard !isUITesting else { return false }
         guard let backendTerms = try? await fetchWatchTerms() else { return false }
         let localByKeyword = await MainActor.run {
@@ -92,7 +89,6 @@ extension NetworkManager {
     }
 
     func createWatchTerm(keyword: String, collectionMode: CollectionMode, notifyOnNew: Bool = true, isActive: Bool = true, aliases: [String] = []) async throws -> WatchTerm {
-        guard usesBackend else { throw URLError(.resourceUnavailable) }
         if isUITesting {
             return WatchTerm(
                 keyword: keyword,
@@ -120,7 +116,6 @@ extension NetworkManager {
     }
 
     func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) async throws -> WatchTerm {
-        guard usesBackend else { throw URLError(.resourceUnavailable) }
         if isUITesting { throw URLError(.cancelled) }
         var body: [String: Any] = [:]
         if let isActive { body["is_active"] = isActive }
@@ -138,7 +133,6 @@ extension NetworkManager {
     }
 
     func deleteWatchTerm(id: String) async throws {
-        guard usesBackend else { return }
         if isUITesting { return }
         try await apiVoid(
             URL(string: "\(apiBase)/api/watch-terms/\(id)")!,
@@ -151,7 +145,6 @@ extension NetworkManager {
     // MARK: - Feed
 
     func fetchFeed(termId: Int? = nil, platform: String? = nil, limit: Int = 50, days: Int = 30, since: String? = nil) async throws -> [FeedItem] {
-        guard usesBackend else { return [] }
         if isUITesting { return [] }
         var components = URLComponents(string: "\(apiBase)/api/feed/")!
         var queryItems: [URLQueryItem] = [URLQueryItem(name: "limit", value: String(limit))]
@@ -219,10 +212,6 @@ extension NetworkManager {
     }
 
     func unregisterAPNSDeviceToken() async throws {
-        guard usesBackend else {
-            clearRegisteredAPNSDeviceToken()
-            return
-        }
         guard let token = registeredAPNSDeviceToken, !token.isEmpty else { return }
         let url = URL(string: "\(apiBase)/api/devices/apns-token/\(token)")!
         var request = URLRequest(url: url)
@@ -241,7 +230,6 @@ extension NetworkManager {
     }
 
     func registerAPNSDeviceToken(_ token: String) async throws {
-        guard usesBackend else { return }
         let deviceId = await apnsDeviceId()
         let body: [String: String] = [
             "token": token,
@@ -256,9 +244,6 @@ extension NetworkManager {
     }
 
     func sendRemoteTestPush() async throws -> APNSTestPushReport {
-        guard usesBackend else {
-            return APNSTestPushReport(configured: false, results: [], note: "local mode", pruned_tokens: 0)
-        }
         if isUITesting {
             return APNSTestPushReport(configured: false, results: [], note: "ui testing", pruned_tokens: 0)
         }
@@ -324,7 +309,6 @@ extension NetworkManager {
     // MARK: - Health & Admin
 
     func checkHealth() async throws -> Bool {
-        guard usesBackend else { return true }
         let url = URL(string: "\(apiBase)/api/health")!
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
@@ -340,13 +324,11 @@ extension NetworkManager {
     }
 
     func triggerPoll(timeout: TimeInterval = 90) async throws {
-        guard usesBackend else { return }
         if isUITesting { return }
         try await apiVoid(URL(string: "\(apiBase)/api/admin/poll")!, method: "POST", authorized: true, timeout: timeout)
     }
 
     func triggerBackgroundPoll(timeout: TimeInterval = 90) async throws {
-        guard usesBackend else { return }
         if isUITesting { return }
         do {
             try await triggerDeviceBackgroundRefresh(timeout: timeout)
@@ -416,7 +398,6 @@ extension NetworkManager {
     }
 
     func sendClientDiagnostic(_ report: ClientDiagnosticReport) async {
-        guard usesBackend else { return }
         guard !isUITesting else { return }
         do {
             let body = try JSONEncoder().encode(report)
