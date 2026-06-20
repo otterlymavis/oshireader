@@ -2,7 +2,9 @@ name: Poll feed
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # every 15 minutes
+    # Avoid crowded quarter-hour boundaries where GitHub may delay or drop
+    # scheduled runs under high Actions load.
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:          # allow manual trigger from GitHub Actions tab
 
 concurrency:
