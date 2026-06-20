@@ -4,7 +4,13 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from app.config import settings
 
 _connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=_connect_args)
+_engine_options = {"connect_args": _connect_args}
+if not settings.database_url.startswith("sqlite"):
+    # Render/Postgres can close idle SSL connections. Check pooled connections
+    # before handing them to a request so scheduled polls reconnect cleanly.
+    _engine_options["pool_pre_ping"] = True
+
+engine = create_engine(settings.database_url, **_engine_options)
 
 if settings.database_url.startswith("sqlite"):
     @event.listens_for(engine, "connect")
