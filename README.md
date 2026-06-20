@@ -161,6 +161,9 @@ npx wrangler deploy
 The deployed Worker's `/health` endpoint is public. Its manual `POST /run`
 endpoint requires the same bearer token as the backend.
 
+Current Worker:
+`https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev`
+
 ### Manual Render Deployments
 A manual Render deployment workflow is available in [.github/workflows/deploy-render.yml](file:///.github/workflows/deploy-render.yml). This triggers the Render deploy hook automatically on workflow dispatch.
 
