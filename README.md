@@ -13,8 +13,8 @@ Below is the high-level architecture showing how the backend ingestion, database
 
 ```mermaid
 graph TD
-    subgraph GitHub Ingestion
-        A["GitHub Actions Ingestion Scheduler"] -- "Triggers Ingestion (POST /api/admin/poll)" --> B["FastAPI Backend Engine"]
+    subgraph Scheduled Ingestion
+        A["Cloudflare Worker Cron"] -- "Triggers Ingestion (POST /api/admin/poll)" --> B["FastAPI Backend Engine"]
     end
 
     subgraph Backend Services [Render Hosting & Ingestion]
@@ -144,7 +144,22 @@ The project uses target schemas to run against different environments:
 ## ⚙️ Ingestion & Deployment Automation
 
 ### Automated Ingestion
-OshiReader runs automated polling via GitHub Actions configured in [.github/workflows/poll.yml](file:///.github/workflows/poll.yml). It triggers a POST request to `/api/admin/poll` every 15 minutes, fetching new matches and notifying devices registered with the backend.
+OshiReader uses a Cloudflare Worker Cron in `cloudflare-worker/` to call
+`POST /api/admin/poll` every 15 minutes. Cloudflare stores `ADMIN_API_TOKEN` as
+an encrypted Worker secret. GitHub's manual poll workflow remains available for
+diagnostics and emergency triggering.
+
+Deploy the Worker after authenticating Wrangler:
+
+```bash
+cd cloudflare-worker
+npx wrangler login
+npx wrangler secret put ADMIN_API_TOKEN
+npx wrangler deploy
+```
+
+The deployed Worker's `/health` endpoint is public. Its manual `POST /run`
+endpoint requires the same bearer token as the backend.
 
 ### Manual Render Deployments
 A manual Render deployment workflow is available in [.github/workflows/deploy-render.yml](file:///.github/workflows/deploy-render.yml). This triggers the Render deploy hook automatically on workflow dispatch.

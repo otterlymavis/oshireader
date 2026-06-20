@@ -32,3 +32,8 @@ mobile/tmp_*.json
 .env
 .claude/
 settings.local.json
+
+# Cloudflare Worker
+cloudflare-worker/node_modules/
+cloudflare-worker/.wrangler/
+cloudflare-worker/.dev.vars

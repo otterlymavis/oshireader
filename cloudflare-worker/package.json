@@ -1,0 +1,13 @@
+{
+  "name": "oshireader-feed-poller",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --test-scheduled"
+  },
+  "devDependencies": {
+    "wrangler": "^4.103.0"
+  }
+}
