@@ -1,158 +1,181 @@
-# OshiReader (Otterpia)
+# 🦦 OshiReader (Otterpia)
 
-OshiReader is a native SwiftUI iOS app backed by a FastAPI ingestion service. It tracks favorite creators, idols, and topics across supported sources, stores matched feed items in the backend, and presents them in the Swift app.
+[![FastAPI Backend](https://img.shields.io/badge/Backend-FastAPI-009688.svg?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![iOS SwiftUI](https://img.shields.io/badge/iOS-17.0%2B-blue.svg?style=flat-square&logo=swift&logoColor=white)](#native-ios-app)
 
-## Project Structure
+OshiReader is a native SwiftUI client application for iOS/iPadOS 17+, paired with a robust FastAPI ingestion backend. Designed for content tracking and idol/creator updates, OshiReader monitors your favorite creators, idols, and topics ("Oshi") across various platforms. It automatically aggregates search results, evaluates relevance, sends rich Apple Push Notifications (APNs), and synchronizes watch terms securely.
 
-```text
-oshireader/
-├── backend/            # FastAPI service and ingestion scheduler
-└── ios-swift/          # Native iOS SwiftUI application
+---
+
+## 📐 System Architecture
+
+Below is the high-level architecture showing how the backend ingestion, database storage, APNs notifications, and the SwiftUI client application interact:
+
+```mermaid
+graph TD
+    subgraph GitHub Ingestion
+        A["GitHub Actions Ingestion Scheduler"] -- "Triggers Ingestion (POST /api/admin/poll)" --> B["FastAPI Backend Engine"]
+    end
+
+    subgraph Backend Services [Render Hosting & Ingestion]
+        B -- "Fetch Matches" --> C["Supported Platforms (Scrapers & APIs)"]
+        B -- "Store Watch Terms & Feed Items" --> D[("SQLite / PostgreSQL DB")]
+        B -- "Check APNs Devices & Matches" --> E["APNs Gateway"]
+    end
+
+    subgraph iOS Client [SwiftUI App]
+        F["iOS App (SwiftUI)"] -- "Fetch Feeds & Sync Terms" --> B
+        E -- "Rich/Silent Notifications" --> F
+        F -- "Background Refresh (REST Client)" --> B
+    end
 ```
 
-## Backend
+---
 
-The backend exposes a REST API for watch terms, feed items, credentials, admin stats, and manual polling. It also runs a scheduled ingestion job.
+## ✨ Features
 
-### Setup
+- **Multi-Source Aggregation**: Fetches and unifies data from a wide variety of Japanese entertainment and media platforms.
+- **Rich & Silent APNs Notifications**: Integrates with Apple Push Notification service to provide instant alerts with rich media previews and background refresh triggers.
+- **Smart Relevance Filters**: Implements primary-text relevance scoring to filter out spam or unrelated articles before they reach the user's feed.
+- **Offline Reading & Caching**: Supports caching of article content and images for access when offline.
+- **Watch Term Synchronization**: Seamlessly syncs watch terms and aliases with a backend server using secure, device-specific credentials (`X-Device-Token` & `X-Device-Secret`).
+- **Development Tooling**: Includes a dedicated "smoke checker" utility command to test connector outputs and verify match relevance rules against live sites.
 
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload
-```
+---
 
-The API runs at `http://127.0.0.1:8000`, with interactive docs at `http://127.0.0.1:8000/docs`.
-The sample `.env` enables unauthenticated admin/write access for private local
-development only. Set `ADMIN_API_TOKEN` and disable
-`ALLOW_UNAUTHENTICATED_ADMIN` before using a shared or deployed backend.
+## 🔌 Supported Sources
 
-### Configuration
+OshiReader utilizes custom scraping and API connectors to aggregate content from the following platforms:
 
-Backend settings are loaded from environment variables or `backend/.env`.
+| Service / Source | Type / Method | Details & Fallback |
+| :--- | :--- | :--- |
+| **YouTube** | Data API / Scraper | Uses YouTube Data API with search scraping fallback |
+| **NicoNico** | Snapshot Search API | Queries NicoNico's snapshot search service |
+| **TVer** | Keyword Search API | Fetches program/episode data via TVer API |
+| **Note** | RSS Feed | Reads public tags and creator feeds |
+| **5channel** | Web Scraper | Scrapes thread indexes for keyword activity |
+| **Girls Channel** | Web Scraper | Scrapes community forum topics |
+| **Togetter** | Web Scraper | Monitors curation pages and compiling logs |
+| **ModelPress** | Search Scraper | Tracks entertainment articles |
+| **Oricon** | RSS & Search | Parses Oricon article feeds and search results |
+| **Yahoo News** | Web Scraper | Uses mirror sites to ensure EEA-safe access |
+| **News/RSS** | RSS Feed | Aggregates curated Japanese entertainment feeds |
+| **Google News Fallbacks** | Search Scraper | Used for *SmartNews, Ameblo, AERA, Hochi, Sponichi, Livedoor, Mantan Web, BARKS, Real Sound, CinemaCafe* |
+| **Twitter (X)** | API v2 / Optional | Integrated when developer keys are configured |
+
+*Watch terms also support aliases. The scheduler searches both the primary keyword and each alias, saving matches against the original watch term.*
+
+---
+
+## 🛠️ Backend Setup & Configuration
+
+The backend is built with **FastAPI** and uses **SQLAlchemy** to interface with SQLite (local development) or PostgreSQL (production deployment).
+
+### Local Quickstart
+
+1. Navigate to the backend directory and set up a virtual environment:
+   ```bash
+   cd backend
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+2. Set up your environment variables:
+   ```bash
+   cp .env.example .env
+   ```
+3. Run the FastAPI development server:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+   The local API is accessible at `http://127.0.0.1:8000`. You can test endpoints via the interactive Swagger docs at `http://127.0.0.1:8000/docs`.
+
+### Environment Variables Reference
+
+Configure these in your backend `.env` file:
 
 | Environment Variable | Default | Description |
-|---|---:|---|
-| `DATABASE_URL` | `sqlite:///./otterpia.db` | SQLAlchemy database URL. Use a PostgreSQL URL for production. |
-| `YOUTUBE_API_KEY` | empty | Optional YouTube Data API key. The connector falls back to scraping when absent. |
-| `POLL_INTERVAL_MINUTES` | `15` | Scheduler interval for automatic ingestion. |
-| `CONNECTOR_FETCH_TIMEOUT_SECONDS` | `25.0` | Per-source fetch timeout. A timed-out connector is skipped for that term so one stalled source cannot hold the poll lock forever. |
-| `ADMIN_API_TOKEN` | empty | Bearer token required for admin, credential, and watch-term write endpoints. Set this before running any shared or deployed backend. |
-| `ALLOW_UNAUTHENTICATED_ADMIN` | `false` | Local-development escape hatch. Set to `true` only for a private local backend when you intentionally want admin/write endpoints open. |
-| `CORS_ALLOW_ORIGINS` | empty | Comma-separated browser origins allowed by CORS. Native iOS calls do not need CORS. |
-| `APNS_TEAM_ID` | empty | Apple Developer Team ID for remote push notifications. |
-| `APNS_KEY_ID` | empty | Apple APNs auth key ID. |
-| `APNS_PRIVATE_KEY` | empty | APNs `.p8` private key text. Use escaped `\n` line breaks if storing in one environment variable. |
-| `APNS_PRIVATE_KEY_PATH` | empty | Alternative path to the APNs `.p8` private key file. |
-| `APNS_TOPIC` | `com.otterpia.oshireader.plus` | APNs topic, usually the iOS bundle identifier. |
-| `APNS_USE_SANDBOX` | `false` | Fallback APNs host when a stored token has no environment. Device registrations include their own environment, so production and sandbox tokens can coexist. |
-| `BACKEND_PUBLIC_URL` | `https://oshireader.onrender.com` | Public backend origin used for compact notification redirect links. |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | `sqlite:///./otterpia.db` | SQLAlchemy connection URL (e.g. `postgresql://...` for production) |
+| `POLL_INTERVAL_MINUTES` | `15` | Default check-in frequency for automated workflows |
+| `CONNECTOR_FETCH_TIMEOUT_SECONDS` | `25.0` | Timeout per connector platform |
+| `ADMIN_API_TOKEN` | *None* | Authentication token for admin/write routes |
+| `ALLOW_UNAUTHENTICATED_ADMIN` | `false` | Enable only in local development to bypass auth check |
+| `CORS_ALLOW_ORIGINS` | *None* | Comma-separated browser origins allowed by CORS (Native iOS calls bypass CORS) |
+| `YOUTUBE_API_KEY` | *None* | Optional API key for YouTube Data API (scrapes as a fallback) |
+| `TWITTER_BEARER_TOKEN` | *None* | Optional Bearer Token for Twitter/X API search |
+| `APNS_TEAM_ID` | *None* | Apple Developer Team ID |
+| `APNS_KEY_ID` | *None* | APNs Key ID (`.p8` private key identifier) |
+| `APNS_PRIVATE_KEY` | *None* | APNs `.p8` raw private key contents |
+| `APNS_PRIVATE_KEY_PATH` | *None* | Alternative path to the APNs `.p8` private key file |
+| `APNS_TOPIC` | `com.otterpia.oshireader.plus` | App Bundle ID for Push Notifications |
+| `APNS_USE_SANDBOX` | `false` | APNs host override when a stored token has no explicit environment |
+| `BACKEND_PUBLIC_URL` | `https://oshireader.onrender.com` | Base public URL of your backend (for notification redirects) |
 
-Admin and credential requests must include:
+---
 
-```text
-Authorization: Bearer <token>
-```
+## 📱 Native iOS App
 
-Watch-term writes also accept the registered app device credentials
-(`X-Device-Token` and `X-Device-Secret`), allowing the iOS app to synchronize
-keywords without exposing the admin token in the app.
+The client app is a native Swift project written in **SwiftUI** (targeting **iOS 17.0+**). It uses `xcodegen` to generate project files dynamically.
 
-## Native iOS App
+### Setup & Installation
 
-The SwiftUI app lives in `ios-swift/` and targets iOS 17+.
+1. Make sure you have Xcode 15+ and `xcodegen` installed (e.g., `brew install xcodegen`).
+2. Navigate to the iOS directory:
+   ```bash
+   cd ios-swift
+   xcodegen generate
+   open OshiReader.xcodeproj
+   ```
+3. Select the target device or simulator and run the application.
 
-### Setup
+### Build Configurations & Schemes
 
-```bash
-cd ios-swift
-xcodegen generate
-open OshiReader.xcodeproj
-```
+The project uses target schemas to run against different environments:
 
-Select a simulator or device in Xcode and run the `OshiReader` scheme.
+| Xcode Scheme | Build Configuration | Target Backend URL |
+| :--- | :--- | :--- |
+| **OshiReader Local** | `Debug` | `http://127.0.0.1:8000` |
+| **OshiReader Staging** | `Staging` | Configured staging URL |
+| **OshiReader Production** | `Release` | `https://oshireader.onrender.com` |
 
-The app is a universal iPhone and iPad build. Use schemes to choose the backend environment:
+---
 
-| Scheme | Configuration | Backend |
-|---|---|---|
-| `OshiReader Local` | `Debug` | `http://127.0.0.1:8000` |
-| `OshiReader Staging` | `Staging` | production URL until a staging backend is deployed |
-| `OshiReader Production` | `Release` | `https://oshireader.onrender.com` |
+## ⚙️ Ingestion & Deployment Automation
 
-UI tests that hit live source endpoints or APNs are skipped by default. Run them
-only when you intentionally want external-network checks:
+### Automated Ingestion
+OshiReader runs automated polling via GitHub Actions configured in [.github/workflows/poll.yml](file:///.github/workflows/poll.yml). It triggers a POST request to `/api/admin/poll` every 15 minutes, fetching new matches and notifying devices registered with the backend.
 
-```bash
-OSHI_READER_RUN_LIVE_UI_TESTS=1 xcodebuild test -project ios-swift/OshiReader.xcodeproj -scheme "OshiReader Local" -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:OshiReaderUITests
-```
+### Manual Render Deployments
+A manual Render deployment workflow is available in [.github/workflows/deploy-render.yml](file:///.github/workflows/deploy-render.yml). This triggers the Render deploy hook automatically on workflow dispatch.
 
-The backend URL is injected through `OshiReaderAPIBaseURL` in `Info.plist`, with values generated from `ios-swift/project.yml`.
+---
 
-Remote push notifications use APNs. The Swift app registers an APNs device token
-at launch and posts that token, APNs environment, device identifier, and
-per-install `device_secret` to `/api/devices/apns-token`; this device credential
-also authenticates watch-term synchronization. Notification permission controls
-whether alert notifications are presented. The backend sends remote
-notifications for new matches only when the watch term has notifications
-enabled.
+## 🧪 Testing & Diagnostics
 
-Background refresh uses two paths:
-
-- Scheduled iOS refresh submits a device-scoped `/api/devices/background-refresh` request authenticated with the registered APNs token or device identifier plus `device_secret`, then fetches feed items after the backend poll has finished.
-- New-match APNs payloads include `content-available: 1`, so iOS can wake the app and fetch the already-created matches without triggering a duplicate backend poll.
-
-### Push Notification Release Checklist
-
-Before shipping a build that relies on background/rich notifications:
-
-1. Set production backend environment variables: `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY` or `APNS_PRIVATE_KEY_PATH`, `APNS_TOPIC=com.otterpia.oshireader.plus`, `APNS_USE_SANDBOX=false`, and `BACKEND_PUBLIC_URL` to the deployed backend origin.
-2. Deploy backend migrations before testing pushes. The APNs device table must include `device_secret`.
-3. Launch the updated iOS app once after deployment so the app re-registers the APNs token with `device_secret` and its APNs environment; then allow notifications before validating visible alerts.
-4. In Settings, send a test notification on a physical device or TestFlight build. The notification should use the rich preview category, and repeated tests should collapse into one diagnostic notification.
-5. Trigger a real poll that creates a new match. Confirm the notification arrives while the app is backgrounded, expands with preview UI, wakes the app to refresh the feed, opens the result on tap, and saves via the notification action.
-6. Check `/api/admin/stats` for APNs configuration and token environment counts when diagnosing delivery issues.
-
-## Supported Backend Sources
-
-The backend scheduler currently registers these connectors:
-
-| Platform | Source |
-|---|---|
-| YouTube | YouTube Data API or search scrape fallback |
-| NicoNico | NicoNico snapshot search API |
-| TVer | TVer keyword search APIs |
-| Note | Public tag RSS feeds |
-| 5channel | Thread index scraping |
-| Girls Channel | Forum topic scraping |
-| Togetter | Curation page scraping |
-| ModelPress | ModelPress article search |
-| Oricon | Oricon article RSS/search |
-| YahooNews | Yahoo News article search through a text mirror for EEA-safe access |
-| News/RSS | Curated Japanese entertainment RSS feeds |
-| SmartNews | Google News site-restricted article search |
-| Ameblo | Google News site-restricted article search |
-| AERA | Google News site-restricted article search |
-| Hochi | Google News site-restricted article search |
-| Sponichi | Google News site-restricted article search |
-| Livedoor | Google News site-restricted article search |
-| Mantan Web | Google News site-restricted article search |
-| BARKS | Direct RSS with Google News fallback |
-| Real Sound | Google News site-restricted article search |
-| CinemaCafe | Google News site-restricted article search |
-| Twitter/X | Optional Twitter API connector when credentials are configured |
-
-Watch terms support aliases. The scheduler searches the primary keyword and each alias while storing matches against the original watch term.
-
-### Source Relevance Smoke Check
-
-When a source appears to return unrelated articles, run the smoke helper against the suspicious platform. It fetches raw connector output, applies the same primary-text relevance rule used by ingestion, and shows which items would be kept or dropped.
-
+### Smoke-Checking Data Sources
+To diagnose connector issues or verify why a particular site is dropping or matching articles, use the local Python smoke tester script:
 ```bash
 python3 backend/scripts/smoke_sources.py --keyword '吉沢亮' --platform livedoor --platform realsound --samples 2
 ```
+This prints matching items along with their match evaluation status (`KEEP`, `DROP` for relevance failures, or `ERROR` for connection issues).
 
-`DROP` rows mean the raw source returned broad results, but ingestion would filter those items before they reach the feed. `ERROR` rows mean the connector itself failed.
+### Running Live Integration Tests
+To test live data endpoints or notification configurations within the iOS application, run:
+```bash
+OSHI_READER_RUN_LIVE_UI_TESTS=1 xcodebuild test \
+  -project ios-swift/OshiReader.xcodeproj \
+  -scheme "OshiReader Local" \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:OshiReaderUITests
+```
+
+### Diagnostics API
+The FastAPI backend serves diagnostics and stats at `/api/admin/stats`. This helps developers verify APNs device registration counts, recent logging events, active watch terms, and token configurations.
+
+---
+
+## 📄 License & Privacy
+
+- **Privacy**: The app stores no personal identifying information. See [PRIVACY.md](file:///PRIVACY.md) for details on device data usage.
+- **Ownership**: Proprietary development for Otterpia.
