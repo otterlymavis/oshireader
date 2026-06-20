@@ -209,6 +209,10 @@ final class BackgroundRefreshManager {
     private func performRefreshFromBackend(triggerPoll: Bool) async -> Bool {
         let db = LocalDB.shared
 
+        if !NetworkManager.shared.usesBackend {
+            return await performLocalRefresh(db: db)
+        }
+
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
         guard !Task.isCancelled else { return false }
         _ = await NetworkManager.shared.syncTermsFromBackend()
@@ -307,6 +311,65 @@ final class BackgroundRefreshManager {
             AppLogger.network.warning("Background refresh failed: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func performLocalRefresh(db: LocalDB) async -> Bool {
+        let activeTerms = db.terms.filter(\.is_active)
+        guard !activeTerms.isEmpty else { return true }
+
+        let hadItemsInitially = !db.feedItems.isEmpty
+        var pendingNotificationItems: [FeedItem] = []
+        var pendingNotificationKeys = Set<String>()
+
+        await withTaskGroup(of: [FeedItem].self) { group in
+            for term in activeTerms {
+                for searchTerm in [term.keyword] + term.aliases {
+                    group.addTask {
+                        await NetworkManager.shared.scrapeLocalFallbacks(
+                            keyword: searchTerm,
+                            tagKeyword: term.keyword
+                        )
+                    }
+                }
+            }
+
+            for await items in group where !items.isEmpty {
+                guard !Task.isCancelled else { break }
+                let existingKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
+                _ = db.mergeItems(newItems: items, notifyOnNew: false)
+                appendNewNotificationItems(
+                    from: items,
+                    existingKeys: existingKeys,
+                    db: db,
+                    into: &pendingNotificationItems,
+                    seenKeys: &pendingNotificationKeys
+                )
+            }
+        }
+
+        guard !Task.isCancelled else { return false }
+
+        let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
+        if !customItems.isEmpty {
+            let existingKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
+            _ = db.mergeItems(newItems: customItems, notifyOnNew: false)
+            appendNewNotificationItems(
+                from: customItems,
+                existingKeys: existingKeys,
+                db: db,
+                into: &pendingNotificationItems,
+                seenKeys: &pendingNotificationKeys
+            )
+        }
+
+        if hadItemsInitially, !pendingNotificationItems.isEmpty {
+            await NotificationManager.shared.notifyForNewItems(
+                pendingNotificationItems,
+                terms: db.terms,
+                includeAttachments: false
+            )
+        }
+        return true
     }
 
     private func appendNewNotificationItems(

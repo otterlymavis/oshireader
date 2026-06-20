@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             application.setMinimumBackgroundFetchInterval(BackgroundRefreshManager.minimumInterval)
             BackgroundRefreshManager.shared.register()
             BackgroundRefreshManager.shared.schedule()
-            if !NetworkManager.shared.isUITesting {
+            if !NetworkManager.shared.isUITesting, NetworkManager.shared.usesBackend {
                 NotificationManager.shared.registerForRemoteNotificationsForDeviceAuthentication()
             }
         }

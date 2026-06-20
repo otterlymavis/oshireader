@@ -476,6 +476,10 @@ struct SettingsView: View {
             do {
                 try await notifications.sendTestNotification()
                 notificationTestSucceeded = true
+                if !NetworkManager.shared.usesBackend {
+                    notificationTestMessage = i18n.t("notifLocalTestSent")
+                    return
+                }
             } catch {
                 AppLogger.notifications.warning("Local notification test failed: \(error.localizedDescription)")
                 notificationTestMessage = i18n.t("notifLocalTestFailed")

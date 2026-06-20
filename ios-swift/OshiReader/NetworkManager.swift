@@ -35,7 +35,20 @@ class NetworkManager {
     }
 
     var environmentName: String {
-        configuredBundleValue(forKey: "OshiReaderEnvironment") ?? "Production"
+        let envName = ProcessInfo.processInfo.environment["OSHI_READER_ENVIRONMENT"] ?? ""
+        let trimmedEnvName = envName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedEnvName.isEmpty {
+            return trimmedEnvName
+        }
+        return configuredBundleValue(forKey: "OshiReaderEnvironment") ?? "Production"
+    }
+
+    var usesBackend: Bool {
+        Self.backendEnabled(environmentName: environmentName)
+    }
+
+    static func backendEnabled(environmentName: String) -> Bool {
+        environmentName.caseInsensitiveCompare("Local") != .orderedSame
     }
 
     private func configuredBundleValue(forKey key: String) -> String? {
@@ -138,6 +151,38 @@ class NetworkManager {
     // Overridable in tests via a URLSession configured with MockURLProtocol.
     var session: URLSession = .shared
 
+    private func dataWithConnectionRetry(for request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: request)
+        } catch let error as URLError where error.code == .networkConnectionLost {
+            AppLogger.network.warning("Connection lost for \(request.url?.path ?? "request"), retrying request once...")
+            return try await session.data(for: request)
+        }
+    }
+
+    private func retryingAfterDeviceCredentialRefresh(
+        _ request: URLRequest,
+        deviceAuthorized: Bool,
+        statusCode: Int
+    ) async -> URLRequest? {
+        guard deviceAuthorized, statusCode == 401 else { return nil }
+        guard hasRegisteredAPNSDeviceForCurrentEnvironment,
+              let token = registeredAPNSDeviceToken,
+              !token.isEmpty
+        else { return nil }
+
+        do {
+            AppLogger.network.notice("Device credential rejected; re-registering APNs token and retrying once")
+            try await registerAPNSDeviceToken(token)
+            var retriedRequest = request
+            applyDeviceAuthorization(to: &retriedRequest)
+            return retriedRequest
+        } catch {
+            AppLogger.network.warning("Device credential recovery failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     func apiRequest<T: Decodable>(
         _ url: URL,
         method: String = "GET",
@@ -157,20 +202,26 @@ class NetworkManager {
         if authorized { applyAdminAuthorization(to: &request) }
         if deviceAuthorized { applyDeviceAuthorization(to: &request) }
 
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
-                throw URLError(.badServerResponse)
-            }
-            return try JSONDecoder().decode(T.self, from: data)
-        } catch let error as URLError where error.code == .networkConnectionLost {
-            AppLogger.network.warning("Connection lost for \(url.path), retrying request once...")
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
-                throw URLError(.badServerResponse)
-            }
-            return try JSONDecoder().decode(T.self, from: data)
+        var (data, response) = try await dataWithConnectionRetry(for: request)
+        guard var http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
         }
+        if !acceptRange.contains(http.statusCode),
+           let retriedRequest = await retryingAfterDeviceCredentialRefresh(
+               request,
+               deviceAuthorized: deviceAuthorized,
+               statusCode: http.statusCode
+           ) {
+            (data, response) = try await dataWithConnectionRetry(for: retriedRequest)
+            guard let retriedHTTP = response as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+            http = retriedHTTP
+        }
+        guard acceptRange.contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     func apiVoid(
@@ -192,17 +243,24 @@ class NetworkManager {
         if authorized { applyAdminAuthorization(to: &request) }
         if deviceAuthorized { applyDeviceAuthorization(to: &request) }
 
-        do {
-            let (_, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
+        var (_, response) = try await dataWithConnectionRetry(for: request)
+        guard var http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        if !acceptRange.contains(http.statusCode),
+           let retriedRequest = await retryingAfterDeviceCredentialRefresh(
+               request,
+               deviceAuthorized: deviceAuthorized,
+               statusCode: http.statusCode
+           ) {
+            (_, response) = try await dataWithConnectionRetry(for: retriedRequest)
+            guard let retriedHTTP = response as? HTTPURLResponse else {
                 throw URLError(.badServerResponse)
             }
-        } catch let error as URLError where error.code == .networkConnectionLost {
-            AppLogger.network.warning("Connection lost for \(url.path), retrying request once...")
-            let (_, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, acceptRange.contains(http.statusCode) else {
-                throw URLError(.badServerResponse)
-            }
+            http = retriedHTTP
+        }
+        guard acceptRange.contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
         }
     }
 }

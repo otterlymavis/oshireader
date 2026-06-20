@@ -509,6 +509,12 @@ class I18nManager: ObservableObject {
             "zh-TW": "本機通知測試失敗，請檢查 iOS 通知設定。",
             "zh-CN": "本地通知测试失败，请检查 iOS 通知设置。"
         ],
+        "notifLocalTestSent": [
+            "en": "Local test notification sent.",
+            "ja": "ローカルテスト通知を送信しました。",
+            "zh-TW": "已傳送本機測試通知。",
+            "zh-CN": "已发送本地测试通知。"
+        ],
         "notifRemoteTestSent": [
             "en": "Remote test push sent.",
             "ja": "リモートテスト通知を送信しました。",

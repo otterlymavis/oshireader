@@ -606,6 +606,22 @@ struct FeedView: View {
     private func quickRefresh() async -> FeedRefreshReport {
         var report = FeedRefreshReport()
 
+        if !NetworkManager.shared.usesBackend {
+            let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
+            if !customItems.isEmpty {
+                let added = db.mergeItems(newItems: customItems)
+                report.record(
+                    strategy: "custom_urls",
+                    status: "items",
+                    itemCount: customItems.count,
+                    addedCount: added
+                )
+            } else if !db.customUrls.isEmpty {
+                report.record(strategy: "custom_urls", status: "empty")
+            }
+            return report
+        }
+
         // 0. Bidirectional term sync
         await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
         guard !Task.isCancelled else { return report }
@@ -723,7 +739,7 @@ struct FeedView: View {
     // If the backend returned nothing, also kick its scheduler for the next pull.
     private func deepFallback(triggerBackendPoll: Bool) async -> FeedRefreshReport {
         var report = FeedRefreshReport()
-        if triggerBackendPoll {
+        if triggerBackendPoll, NetworkManager.shared.usesBackend {
             do {
                 try await NetworkManager.shared.triggerBackgroundPoll(timeout: 45)
                 report.record(strategy: "backend_poll", status: "ok")
