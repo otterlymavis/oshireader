@@ -417,6 +417,10 @@ final class OshiReaderTests: XCTestCase {
 
     func testBackgroundRefreshBudgetLeavesTimeForCompletion() {
         XCTAssertLessThan(BackgroundRefreshPolicy.pollTimeout, BackgroundRefreshPolicy.operationDeadline)
+        XCTAssertGreaterThanOrEqual(
+            BackgroundRefreshPolicy.operationDeadline - BackgroundRefreshPolicy.pollTimeout,
+            15
+        )
         XCTAssertLessThanOrEqual(BackgroundRefreshPolicy.operationDeadline, 25)
     }
 
@@ -2989,6 +2993,22 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(paths, ["/api/devices/background-refresh", "/api/admin/poll"])
         XCTAssertNil(authHeaders.first ?? nil)
         XCTAssertEqual(authHeaders.last ?? nil, "Bearer admin-secret")
+    }
+
+    func testTriggerBackgroundPollDoesNotAttemptAdminFallbackWithoutCredential() async {
+        NetworkManager.shared.setAdminApiToken(nil)
+        var paths: [String] = []
+        MockURLProtocol.handler = { req in
+            paths.append(req.url?.path ?? "")
+            return (Data(), Self.response(status: 500))
+        }
+
+        do {
+            try await NetworkManager.shared.triggerBackgroundPoll(timeout: 8)
+            XCTFail("Expected background refresh failure")
+        } catch {
+            XCTAssertEqual(paths, ["/api/devices/background-refresh"])
+        }
     }
 
     // Japanese text is returned unchanged without a network call.

@@ -385,7 +385,7 @@ async def send_new_match_notifications(
             {"term_id": term.id, "keyword": term.keyword, "new_count": count},
         )
         db.commit()
-        return True
+        return False
 
     # Send to every registered device; _send_one routes each token to the APNs host
     # matching its own environment. Previously this filtered to a single global
@@ -429,7 +429,10 @@ async def send_new_match_notifications(
             },
         )
         db.commit()
-        return True
+        # An owner-scoped device can become verified after registration or a
+        # temporary APNs/configuration failure. Keep its outbox entry so the next
+        # poll can retry instead of permanently discarding the alert.
+        return not bool(term.owner_device_secret and owner_devices)
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
         results = await asyncio.gather(
             *[_send_one(client, device, term, count, preview_item) for device in devices]
@@ -463,7 +466,7 @@ async def send_new_match_notifications(
         },
     )
     db.commit()
-    return delivered_count > 0 or retryable_failures == 0
+    return delivered_count > 0
 
 
 async def send_test_push(db: Session) -> dict:

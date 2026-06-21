@@ -218,8 +218,9 @@ class TestSendNewMatchNotifications:
 
         with patch("app.apns.apns_configured", return_value=False), \
              patch("app.apns._send_one", new=AsyncMock()) as mock_send:
-            await send_new_match_notifications(db_session, term, 5)
+            should_clear = await send_new_match_notifications(db_session, term, 5)
         mock_send.assert_not_called()
+        assert should_clear is False
 
     @pytest.mark.asyncio
     async def test_skips_when_no_devices(self, db_session):
@@ -257,8 +258,9 @@ class TestSendNewMatchNotifications:
              patch("app.apns.settings") as mock_settings, \
              patch("app.apns._send_one", new=AsyncMock()) as mock_send:
             mock_settings.apns_use_sandbox = True
-            await send_new_match_notifications(db_session, term, 2)
+            should_clear = await send_new_match_notifications(db_session, term, 2)
         mock_send.assert_not_called()
+        assert should_clear is False
 
         event = db_session.query(BackendEvent).order_by(BackendEvent.id.desc()).first()
         assert event.kind == "apns"
@@ -321,10 +323,11 @@ class TestSendNewMatchNotifications:
              patch("app.apns.settings") as mock_settings, \
              patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(should_delete_token=True))):
             mock_settings.apns_use_sandbox = True
-            await send_new_match_notifications(db_session, term, 2)
+            should_clear = await send_new_match_notifications(db_session, term, 2)
 
         remaining = db_session.query(APNSDeviceToken).filter_by(token="c" * 64).first()
         assert remaining is None
+        assert should_clear is False
 
     @pytest.mark.asyncio
     async def test_keeps_good_token_device(self, db_session):
