@@ -710,7 +710,7 @@ class LocalDB: ObservableObject {
         let hasScheme = trimmed.range(of: #"^[a-zA-Z][a-zA-Z0-9+\-.]*://"#, options: .regularExpression) != nil
         let normalized = hasScheme ? trimmed : "https://\(trimmed)"
         guard let scheme = URL(string: normalized)?.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
-        let id = "custom:\(normalized.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)?.prefix(60) ?? "")"
+        let id = "custom:\(normalized.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? normalized)"
         if customUrls.contains(where: { $0.id == id }) { return }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let entry = CustomUrl(id: id, url: normalized, title: trimmedTitle.isEmpty ? nil : trimmedTitle, added_at: iso8601.string(from: Date()))

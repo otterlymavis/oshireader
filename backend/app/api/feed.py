@@ -17,6 +17,8 @@ from app.schemas import FeedItemOut, SourceItemOut
 
 router = APIRouter(prefix="/api/feed", tags=["feed"])
 
+_MAX_FEED_SCAN_ROWS = 2000
+
 # These platforms host long-lived threads / community content — skip date filters
 # so they always reach the client (mirrors the iOS app's skipCutoff logic).
 _TIMELESS_PLATFORMS = ("5ch", "girlschannel", "togetter")
@@ -97,7 +99,7 @@ def get_feed(
     relevant_rows = []
     scan_offset = 0
     batch_size = max(200, needed)
-    while len(relevant_rows) < needed:
+    while len(relevant_rows) < needed and scan_offset < _MAX_FEED_SCAN_ROWS:
         batch = q.offset(scan_offset).limit(batch_size).all()
         if not batch:
             break

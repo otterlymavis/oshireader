@@ -399,56 +399,63 @@ async def _poll_once_unlocked() -> None:
                         # can verify the source_item_id reference exists.
                         db.flush()
 
+                        new_matches: list[tuple[Match, SourceItemCreate]] = []
                         for raw in items:
                             if raw.composite_id not in existing_match_ids:
                                 match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
                                 db.add(match)
-                                db.flush()
                                 existing_match_ids.add(raw.composite_id)
                                 new_count += 1
-                                source_item = db.get(SourceItem, raw.composite_id)
-                                if source_item is None:
-                                    raise RuntimeError(
-                                        f"source item disappeared before notification preview: {raw.composite_id}"
-                                    )
-                                if not _is_notification_eligible(
-                                    term=term,
-                                    source_item=source_item,
-                                    observed_at=now,
-                                ):
-                                    continue
-                                notification_count += 1
-                                published_at = source_item.published_at
-                                if published_at.tzinfo is None:
-                                    published_at = published_at.replace(tzinfo=timezone.utc)
-                                published_at_is_estimated = _published_at_is_estimated(source_item, now)
-                                if (
-                                    newest_candidate is None
-                                    or _candidate_is_newer(
-                                        candidate_is_estimated=published_at_is_estimated,
-                                        candidate_published_at=published_at,
-                                        current_is_estimated=newest_candidate[0],
-                                        current_published_at=newest_candidate[1],
-                                    )
-                                ):
-                                    public_base_url = settings.backend_public_url.rstrip("/")
-                                    newest_candidate = (
-                                        published_at_is_estimated,
-                                        published_at,
-                                        {
-                                            "id": source_item.id,
-                                            "match_id": match.id,
-                                            "platform": source_item.platform,
-                                            "url": source_item.url,
-                                            "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
-                                            "title": source_item.title,
-                                            "content_text": source_item.content_text,
-                                            "author": source_item.author,
-                                            "thumbnail_url": source_item.thumbnail_url,
-                                            "media_type": source_item.media_type,
-                                            "published_at": published_at.isoformat(),
-                                        },
-                                    )
+                                new_matches.append((match, raw))
+
+                        # Single flush assigns autoincrement IDs to all new matches at once.
+                        if new_matches:
+                            db.flush()
+
+                        for match, raw in new_matches:
+                            source_item = db.get(SourceItem, raw.composite_id)
+                            if source_item is None:
+                                raise RuntimeError(
+                                    f"source item disappeared before notification preview: {raw.composite_id}"
+                                )
+                            if not _is_notification_eligible(
+                                term=term,
+                                source_item=source_item,
+                                observed_at=now,
+                            ):
+                                continue
+                            notification_count += 1
+                            published_at = source_item.published_at
+                            if published_at.tzinfo is None:
+                                published_at = published_at.replace(tzinfo=timezone.utc)
+                            published_at_is_estimated = _published_at_is_estimated(source_item, now)
+                            if (
+                                newest_candidate is None
+                                or _candidate_is_newer(
+                                    candidate_is_estimated=published_at_is_estimated,
+                                    candidate_published_at=published_at,
+                                    current_is_estimated=newest_candidate[0],
+                                    current_published_at=newest_candidate[1],
+                                )
+                            ):
+                                public_base_url = settings.backend_public_url.rstrip("/")
+                                newest_candidate = (
+                                    published_at_is_estimated,
+                                    published_at,
+                                    {
+                                        "id": source_item.id,
+                                        "match_id": match.id,
+                                        "platform": source_item.platform,
+                                        "url": source_item.url,
+                                        "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
+                                        "title": source_item.title,
+                                        "content_text": source_item.content_text,
+                                        "author": source_item.author,
+                                        "thumbnail_url": source_item.thumbnail_url,
+                                        "media_type": source_item.media_type,
+                                        "published_at": published_at.isoformat(),
+                                    },
+                                )
 
                         _queue_pending_notification(
                             db,

@@ -302,7 +302,7 @@ def _test_payload() -> dict:
         {
             "id": "oshireader:test-preview",
             "platform": "OshiReader",
-            "url": "https://oshireader.onrender.com",
+            "url": settings.backend_public_url.rstrip("/"),
             "title": "通知プレビューのテスト",
             "content_text": "新着結果のタイトル、本文、リンクが通知内に表示されます。",
             "author": "OshiReader",

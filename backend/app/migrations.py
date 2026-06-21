@@ -182,7 +182,7 @@ def apply_startup_migrations(engine: Engine) -> None:
             "language_hint": "VARCHAR",
             "collection_mode": "VARCHAR DEFAULT 'all_info'",
             "is_active": "BOOLEAN DEFAULT TRUE",
-            "notify_on_new": "BOOLEAN DEFAULT FALSE",
+            "notify_on_new": "BOOLEAN DEFAULT TRUE",
             "owner_device_secret": "VARCHAR",
             "created_at": "TIMESTAMP",
         },
