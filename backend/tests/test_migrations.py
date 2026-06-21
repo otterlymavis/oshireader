@@ -131,7 +131,7 @@ class TestApplyStartupMigrations:
         finally:
             db.close()
 
-    def test_orphaned_owner_term_migration_removes_unreachable_terms(self, fresh_engine):
+    def test_startup_preserves_terms_created_before_apns_registration(self, fresh_engine):
         Base.metadata.create_all(bind=fresh_engine)
         Session = sessionmaker(bind=fresh_engine)
         db = Session()
@@ -172,10 +172,9 @@ class TestApplyStartupMigrations:
         db = Session()
         try:
             keywords = {term.keyword for term in db.query(WatchTerm).all()}
-            assert keywords == {"Reachable", "Admin"}
-            assert db.query(Match).count() == 0
-            assert db.query(SourceItem).count() == 0
-            assert db.get(MigrationLog, "purge_orphaned_owner_watch_terms_v1") is not None
+            assert keywords == {"Reachable", "Orphaned", "Admin"}
+            assert db.query(Match).count() == 1
+            assert db.query(SourceItem).count() == 1
         finally:
             db.close()
 

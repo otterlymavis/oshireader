@@ -203,6 +203,7 @@ def apply_startup_migrations(engine: Engine) -> None:
             "device_secret": "VARCHAR",
             "is_verified": "BOOLEAN DEFAULT FALSE",
             "verified_at": "TIMESTAMP",
+            "verification_attempted_at": "TIMESTAMP",
         },
     )
     _add_missing_columns(
@@ -271,12 +272,6 @@ def apply_startup_migrations(engine: Engine) -> None:
         _purge_irrelevant_matches()
         _record_migration(RELEVANCE_SLUG)
 
-    ORPHANED_OWNER_TERMS_SLUG = "purge_orphaned_owner_watch_terms_v1"
-    if not _migration_applied(ORPHANED_OWNER_TERMS_SLUG):
-        _purge_orphaned_owner_watch_terms(engine)
-        _record_migration(ORPHANED_OWNER_TERMS_SLUG)
-
-
 def _purge_irrelevant_matches() -> None:
     db: Session = SessionLocal()
     try:
@@ -289,35 +284,6 @@ def _purge_irrelevant_matches() -> None:
         raise
     finally:
         db.close()
-
-
-def _purge_orphaned_owner_watch_terms(engine: Engine) -> None:
-    """Remove owner-scoped terms that no current APNs device can access.
-
-    These terms are created with a device-secret owner. If that secret no longer
-    belongs to any registered APNs token, the term cannot be listed by the app and
-    cannot receive APNs notifications. Keeping it causes duplicate polling and
-    "No registered APNs device tokens" notification skips.
-    """
-    with engine.begin() as conn:
-        orphaned_term_ids = """
-            SELECT wt.id
-            FROM watch_terms wt
-            WHERE wt.owner_device_secret IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM apns_device_tokens adt
-                  WHERE adt.device_secret = wt.owner_device_secret
-              )
-        """
-        result = conn.execute(text(f"SELECT COUNT(*) FROM ({orphaned_term_ids}) orphaned"))
-        orphaned_count = result.scalar() or 0
-        if orphaned_count == 0:
-            return
-        log.info("Purging %d orphaned owner-scoped watch terms", orphaned_count)
-        conn.execute(text(f"DELETE FROM matches WHERE watch_term_id IN ({orphaned_term_ids})"))
-        conn.execute(text(f"DELETE FROM watch_terms WHERE id IN ({orphaned_term_ids})"))
-        conn.execute(text("DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"))
 
 
 def _purge_girlschannel_googlenews_items(engine: Engine) -> None:

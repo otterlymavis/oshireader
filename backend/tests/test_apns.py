@@ -4,7 +4,7 @@ from __future__ import annotations
 import app.apns as _apns_mod
 import jwt as _jwt_mod
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from unittest.mock import MagicMock
@@ -21,6 +21,7 @@ from app.apns import (
     _private_key,
     _send_one,
     apns_configured,
+    revalidate_unverified_devices,
     send_new_match_notifications,
     send_test_push,
     send_test_push_to_device,
@@ -364,6 +365,40 @@ class TestSendNewMatchNotifications:
 
         mock_send.assert_called_once()
         assert mock_send.call_args.args[1].token == "e" * 64
+
+
+class TestDeviceRevalidation:
+    @pytest.mark.asyncio
+    async def test_revalidates_due_unverified_device(self, db_session):
+        device = _device("1" * 64)
+        device.is_verified = False
+        device.verification_attempted_at = datetime.now(timezone.utc) - timedelta(hours=7)
+        db_session.add(device)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.validate_device_registration", new=AsyncMock(return_value=True)):
+            verified = await revalidate_unverified_devices(db_session)
+
+        db_session.refresh(device)
+        assert verified == 1
+        assert device.is_verified is True
+        assert device.verified_at is not None
+
+    @pytest.mark.asyncio
+    async def test_throttles_recent_failed_verification(self, db_session):
+        device = _device("2" * 64)
+        device.is_verified = False
+        device.verification_attempted_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        db_session.add(device)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.validate_device_registration", new=AsyncMock()) as validate:
+            verified = await revalidate_unverified_devices(db_session)
+
+        assert verified == 0
+        validate.assert_not_awaited()
 
 
 class TestApnsConfigured:

@@ -144,11 +144,15 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
 
     from app.apns import validate_device_registration
 
+    stored.verification_attempted_at = datetime.now(timezone.utc)
     if (
         settings.allow_unauthenticated_admin
         and not settings.admin_api_token
     ) or await validate_device_registration(stored):
         _mark_verified(stored)
+        db.commit()
+        db.refresh(stored)
+    else:
         db.commit()
         db.refresh(stored)
     return stored

@@ -576,10 +576,10 @@ class I18nManager: ObservableObject {
             "zh-CN": "远程推送测试未成功。"
         ],
         "notifNewItemsTitle": [
-            "en": "New items for %@",
-            "ja": "%@ の新着",
-            "zh-TW": "%@ 的新內容",
-            "zh-CN": "%@ 的新内容"
+            "en": "%@",
+            "ja": "%@",
+            "zh-TW": "%@",
+            "zh-CN": "%@"
         ],
         "notifNewItemsBodyOne": [
             "en": "1 new item found.",

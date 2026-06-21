@@ -127,10 +127,12 @@ class NetworkManager {
     }
 
     func applyDeviceAuthorization(to request: inout URLRequest) {
-        guard hasRegisteredAPNSDeviceForCurrentEnvironment else { return }
-        guard let token = registeredAPNSDeviceToken, !token.isEmpty else { return }
-        request.setValue(token, forHTTPHeaderField: "X-Device-Token")
         request.setValue(apnsDeviceSecret, forHTTPHeaderField: "X-Device-Secret")
+        if hasRegisteredAPNSDeviceForCurrentEnvironment,
+           let token = registeredAPNSDeviceToken,
+           !token.isEmpty {
+            request.setValue(token, forHTTPHeaderField: "X-Device-Token")
+        }
     }
 
     // MARK: - Shared Request Helpers

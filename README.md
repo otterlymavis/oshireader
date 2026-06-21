@@ -155,10 +155,14 @@ Deploy the Worker after authenticating Wrangler:
 cd cloudflare-worker
 npx wrangler login
 npx wrangler secret put ADMIN_API_TOKEN
+# Optional: Slack/Discord-compatible webhook for terminal poll failures.
+npx wrangler secret put ALERT_WEBHOOK_URL
 npx wrangler deploy
 ```
 
-The deployed Worker's `/health` endpoint is public. Its manual `POST /run`
+The deployed Worker's `/health` endpoint is public and returns HTTP 503 when no
+successful backend poll has completed within 35 minutes. Point an uptime monitor
+at it to receive an independent stale-poll alert. Its manual `POST /run`
 endpoint requires the same bearer token as the backend.
 
 Current Worker:
