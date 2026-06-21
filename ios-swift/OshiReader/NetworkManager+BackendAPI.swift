@@ -335,6 +335,7 @@ extension NetworkManager {
         } catch {
             guard !Task.isCancelled else { throw error }
             AppLogger.network.warning("Device-scoped background refresh failed: \(error.localizedDescription)")
+            guard adminApiToken != nil else { throw error }
             try await triggerPoll(timeout: timeout)
         }
     }

@@ -400,6 +400,31 @@ class TestDeviceScopedBackgroundRefresh:
         assert r.json() == {"status": "poll completed"}
         mock_poll.assert_awaited_once()
 
+    def test_limits_poll_to_fit_ios_background_budget(self, client):
+        token = "1" * 64
+        captured_timeout = None
+
+        async def capture_wait_for(awaitable, timeout):
+            nonlocal captured_timeout
+            captured_timeout = timeout
+            return await awaitable
+
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        with patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll, \
+             patch("app.api.devices.asyncio.wait_for", side_effect=capture_wait_for):
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        mock_poll.assert_awaited_once()
+        assert captured_timeout == devices_api._BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS
+        assert devices_api._BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS < 8
+
     def test_returns_busy_without_starting_second_poll(self, client):
         token = "c" * 64
         client.post(

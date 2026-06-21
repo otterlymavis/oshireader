@@ -16,7 +16,9 @@ extension BGTaskScheduler: BackgroundTaskSchedulerClient {}
 
 enum BackgroundRefreshPolicy {
     static let operationDeadline: TimeInterval = 25
-    static let pollTimeout: TimeInterval = 12
+    // Leave enough of iOS's short background execution window for syncing and
+    // fetching the feed after the backend has made partial polling progress.
+    static let pollTimeout: TimeInterval = 8
     static let incrementalFetchOverlap: TimeInterval = 15 * 60
 
     static func shouldScheduleLocalFallback(hasRegisteredRemoteDeviceForCurrentEnvironment: Bool) -> Bool {

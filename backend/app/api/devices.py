@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/devices", tags=["devices"])
 
 _BACKGROUND_REFRESH_MIN_INTERVAL = timedelta(seconds=60)
 _BACKGROUND_REFRESH_ATTEMPT_TTL = timedelta(minutes=10)
+_BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS = 6.0
 _background_refresh_attempts: dict[str, datetime] = {}
 
 
@@ -194,7 +195,10 @@ async def request_device_background_refresh(body: APNSDeviceTestPush, db: Sessio
     if _recent_background_refresh_attempt(stored.token, now):
         return {"status": "poll throttled"}
     try:
-        await asyncio.wait_for(ingestion_scheduler.poll_once(), timeout=20.0)
+        await asyncio.wait_for(
+            ingestion_scheduler.poll_once(),
+            timeout=_BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS,
+        )
         return {"status": "poll completed"}
     except asyncio.TimeoutError:
         return {"status": "poll timed out (partial progress saved)"}
