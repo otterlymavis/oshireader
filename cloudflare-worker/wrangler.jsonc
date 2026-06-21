@@ -7,7 +7,10 @@
     "enabled": true
   },
   "vars": {
-    "BACKEND_URL": "https://oshireader.onrender.com"
+    "BACKEND_URL": "https://oshireader.onrender.com",
+    "POLL_RETRIES": "2",
+    "POLL_RETRY_DELAY_MS": "5000",
+    "STALE_AFTER_MINUTES": "35"
   },
   "triggers": {
     "crons": [

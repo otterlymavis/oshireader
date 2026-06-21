@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,6 +32,7 @@ _APNS_PAYLOAD_SOFT_LIMIT_BYTES = 3500
 _APNS_PAYLOAD_HARD_LIMIT_BYTES = 4096
 _APNS_MAX_ATTEMPTS = 3
 _APNS_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+_DEVICE_REVALIDATION_INTERVAL = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -225,6 +227,46 @@ async def validate_device_registration(device: APNSDeviceToken) -> bool:
         reason,
     )
     return False
+
+
+async def revalidate_unverified_devices(db: Session) -> int:
+    """Periodically repair registrations whose initial APNs check was transiently unsuccessful."""
+    if not apns_configured():
+        return 0
+    now = datetime.now(timezone.utc)
+    retry_before = now - _DEVICE_REVALIDATION_INTERVAL
+    devices = (
+        db.query(APNSDeviceToken)
+        .filter(APNSDeviceToken.is_verified == False)  # noqa: E712
+        .filter(
+            (APNSDeviceToken.verification_attempted_at.is_(None))
+            | (APNSDeviceToken.verification_attempted_at <= retry_before)
+        )
+        .all()
+    )
+    if not devices:
+        return 0
+
+    results = await asyncio.gather(
+        *[validate_device_registration(device) for device in devices],
+        return_exceptions=True,
+    )
+    verified = 0
+    for device, result in zip(devices, results):
+        device.verification_attempted_at = now
+        if result is True:
+            device.is_verified = True
+            device.verified_at = now
+            verified += 1
+    record_backend_event(
+        db,
+        "apns_registration",
+        "revalidated",
+        "Retried unverified APNs device registrations",
+        {"attempted": len(devices), "verified": verified},
+    )
+    db.commit()
+    return verified
 
 
 def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> dict:

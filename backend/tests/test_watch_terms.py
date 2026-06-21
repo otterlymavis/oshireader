@@ -253,7 +253,37 @@ class TestCreateWatchTerm:
 
         assert resp.status_code == 201
 
-    def test_unverified_device_is_rejected_when_admin_auth_is_enabled(self, client, db_session):
+    def test_secret_only_device_can_create_when_apns_is_unavailable(self, client):
+        secret = "simulator-device-secret"
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 201
+
+    def test_secret_only_device_only_sees_its_own_terms(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            first = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko"},
+                headers={"X-Device-Secret": "first-device"},
+            )
+            second = client.get(
+                "/api/watch-terms/",
+                headers={"X-Device-Secret": "second-device"},
+            )
+
+        assert first.status_code == 201
+        assert second.status_code == 200
+        assert second.json() == []
+
+    def test_unverified_apns_token_uses_secret_identity(self, client, db_session):
         token = "a" * 64
         secret = "device-secret-value"
         db_session.add(APNSDeviceToken(
@@ -272,17 +302,21 @@ class TestCreateWatchTerm:
                 headers={"X-Device-Token": token, "X-Device-Secret": secret},
             )
 
-        assert resp.status_code == 401
+        assert resp.status_code == 201
+        assert db_session.query(WatchTerm).one().owner_device_secret == hashlib.sha256(
+            secret.encode()
+        ).hexdigest()
 
-    def test_unregistered_device_is_rejected_when_admin_auth_is_enabled(self, client):
-        with patch.object(settings, "admin_api_token", "admin-secret"):
+    def test_unregistered_apns_token_uses_secret_identity(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
             resp = client.post(
                 "/api/watch-terms/",
                 json={"keyword": "Aiko"},
-                headers={"X-Device-Token": "b" * 64, "X-Device-Secret": "wrong-secret"},
+                headers={"X-Device-Token": "b" * 64, "X-Device-Secret": "device-secret"},
             )
 
-        assert resp.status_code == 401
+        assert resp.status_code == 201
 
 
 class TestUpdateWatchTerm:

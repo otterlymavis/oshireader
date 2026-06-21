@@ -17,10 +17,13 @@ from app.models import APNSDeviceToken
 class AuthContext:
     is_admin: bool
     device: APNSDeviceToken | None = None
+    standalone_device_secret: str | None = None
 
     @property
     def device_secret(self) -> str | None:
-        return self.device.device_secret if self.device else None
+        if self.device:
+            return self.device.device_secret
+        return self.standalone_device_secret
 
 
 def _allow_unauthenticated_admin() -> bool:
@@ -80,6 +83,16 @@ def require_admin_or_device_auth(
                 stored.device_secret, device_secret
             ):
                 return AuthContext(is_admin=False, device=stored)
+    if device_secret:
+        # Device identity must not depend on APNs availability. Simulators cannot
+        # receive an APNs token, and APNs verification can fail transiently after
+        # iOS has already handed the app a token. The secret is still a complete,
+        # isolated device identity in either case. Its digest matches the value
+        # stored for APNs devices, so later verification preserves ownership.
+        return AuthContext(
+            is_admin=False,
+            standalone_device_secret=hashlib.sha256(device_secret.encode("utf-8")).hexdigest(),
+        )
 
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() == "bearer" and secrets.compare_digest(token, admin_token):

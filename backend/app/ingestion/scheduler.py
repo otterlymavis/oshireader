@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import text as sa_text
 
-from app.apns import send_new_match_notifications
+from app.apns import revalidate_unverified_devices, send_new_match_notifications
 from app.config import settings
 from app.connectors.base import BaseConnector
 from app.connectors.fivech import FiveChConnector
@@ -288,6 +288,7 @@ async def _flush_pending_notifications(db, exclude_term_ids: set[int] | None = N
 async def _poll_once_unlocked() -> None:
     db = SessionLocal()
     try:
+        await revalidate_unverified_devices(db)
         connectors = _build_connectors(db)
         terms = db.query(WatchTerm).filter(WatchTerm.is_active == True).all()  # noqa: E712
         processed_term_ids = {term.id for term in terms}

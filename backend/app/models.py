@@ -65,6 +65,7 @@ class APNSDeviceToken(Base):
     device_secret = Column(String, index=True)
     is_verified = Column(Boolean, nullable=False, default=False)
     verified_at = Column(DateTime)
+    verification_attempted_at = Column(DateTime)
     last_seen_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 

@@ -26,6 +26,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         BackgroundRefreshManager.shared.schedule()
     }
 
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        guard !NetworkManager.shared.isUnitTesting,
+              !NetworkManager.shared.isUITesting else { return }
+        // APNs tokens and server-side verification can change independently of an
+        // app update. Re-register on each foreground activation so a transient
+        // registration failure cannot strand background sync indefinitely.
+        NotificationManager.shared.registerForRemoteNotificationsForDeviceAuthentication()
+        BackgroundRefreshManager.shared.schedule()
+    }
+
     func application(
         _ application: UIApplication,
         performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void

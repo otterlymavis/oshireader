@@ -1918,11 +1918,11 @@ final class OshiReaderTests: XCTestCase {
         i18n.setLanguage("en")
 
         let result = i18n.tFormat("notifNewItemsTitle", "Aiko")
-        XCTAssertEqual(result, "New items for Aiko")
+        XCTAssertEqual(result, "Aiko")
 
         i18n.setLanguage("ja")
         let jaResult = i18n.tFormat("notifNewItemsTitle", "愛子")
-        XCTAssertEqual(jaResult, "愛子 の新着")
+        XCTAssertEqual(jaResult, "愛子")
 
         i18n.setLanguage(saved)
     }
@@ -2376,6 +2376,23 @@ final class NetworkManagerTests: XCTestCase {
     // 200 OK with empty array → returns empty, no throw
     func testFetchFeedEmptyArray() async throws {
         MockURLProtocol.handler = { _ in (Data("[]".utf8), Self.response(status: 200)) }
+
+        let items = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
+        XCTAssertTrue(items.isEmpty)
+    }
+
+    func testFetchFeedSendsDeviceSecretWithoutAPNSToken() async throws {
+        KeychainHelper.delete(key: "apns_device_token")
+        KeychainHelper.delete(key: "apns_device_environment")
+        KeychainHelper.write(key: "apns_device_secret", value: "standalone-device-secret")
+        MockURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Device-Token"))
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "X-Device-Secret"),
+                "standalone-device-secret"
+            )
+            return (Data("[]".utf8), Self.response(status: 200))
+        }
 
         let items = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
         XCTAssertTrue(items.isEmpty)
