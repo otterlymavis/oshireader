@@ -21,11 +21,12 @@ from app.ingestion.scheduler import (
     _fetch_one,
     _prune_irrelevant_matches,
     _prune_old_items,
+    _poll_term_window,
     _search_terms_for,
 )
 from app.connectors.youtube import YouTubeConnector
 from app.connectors.twitter import TwitterConnector
-from app.models import CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
+from app.models import BackendEvent, CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
 
 
 @pytest.fixture()
@@ -361,6 +362,59 @@ class TestConnectorBatches:
             batches = _connector_batches(connectors)
 
         assert [len(batch) for batch in batches] == [1, 1, 1]
+
+
+class TestPollTermWindow:
+    def _terms(self, db, count: int) -> list[WatchTerm]:
+        terms = [WatchTerm(keyword=f"term-{index}", aliases=[]) for index in range(count)]
+        db.add_all(terms)
+        db.commit()
+        return db.query(WatchTerm).order_by(WatchTerm.id).all()
+
+    def test_limits_terms_per_run(self, db):
+        terms = self._terms(db, 8)
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.poll_terms_per_run = 5
+            selected, offset, next_offset = _poll_term_window(db, terms)
+
+        assert [term.keyword for term in selected] == [f"term-{index}" for index in range(5)]
+        assert offset == 0
+        assert next_offset == 5
+
+    def test_rotates_from_previous_successful_poll(self, db):
+        terms = self._terms(db, 8)
+        db.add(BackendEvent(
+            kind="poll",
+            status="completed",
+            payload={"next_term_offset": 5},
+        ))
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.poll_terms_per_run = 5
+            selected, offset, next_offset = _poll_term_window(db, terms)
+
+        assert [term.keyword for term in selected] == [
+            "term-5",
+            "term-6",
+            "term-7",
+            "term-0",
+            "term-1",
+        ]
+        assert offset == 5
+        assert next_offset == 2
+
+    def test_zero_limit_processes_all_terms(self, db):
+        terms = self._terms(db, 3)
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.poll_terms_per_run = 0
+            selected, offset, next_offset = _poll_term_window(db, terms)
+
+        assert selected == terms
+        assert offset == 0
+        assert next_offset == 0
 
 
 class TestPruneIrrelevantMatches:

@@ -37,6 +37,7 @@ from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
 from app.diagnostics import prune_backend_events, record_backend_event
 from app.models import (
+    BackendEvent,
     CollectionMode,
     Match,
     PendingNotification,
@@ -185,6 +186,33 @@ def _connector_batches(connectors: list[BaseConnector]) -> list[list[BaseConnect
     ]
 
 
+def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int, int]:
+    total = len(terms)
+    limit = settings.poll_terms_per_run
+    if total == 0 or limit <= 0 or limit >= total:
+        return terms, 0, 0
+
+    latest = (
+        db.query(BackendEvent)
+        .filter(
+            BackendEvent.kind == "poll",
+            BackendEvent.status.in_(["completed", "completed_with_errors"]),
+        )
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
+    try:
+        offset = int((latest.payload or {}).get("next_term_offset", 0)) if latest else 0
+    except (TypeError, ValueError):
+        offset = 0
+    offset %= total
+    next_offset = (offset + limit) % total
+
+    if offset + limit <= total:
+        return terms[offset:offset + limit], offset, next_offset
+    return terms[offset:] + terms[:next_offset], offset, next_offset
+
+
 def _published_at_is_estimated(raw, observed_at: datetime) -> bool:
     marker = (raw.raw_payload or {}).get("date_parsed")
     if marker is not None:
@@ -314,7 +342,13 @@ async def _poll_once_unlocked() -> None:
     try:
         await revalidate_unverified_devices(db)
         connectors = _build_connectors(db)
-        terms = db.query(WatchTerm).filter(WatchTerm.is_active == True).all()  # noqa: E712
+        all_terms = (
+            db.query(WatchTerm)
+            .filter(WatchTerm.is_active == True)  # noqa: E712
+            .order_by(WatchTerm.id)
+            .all()
+        )
+        terms, term_offset, next_term_offset = _poll_term_window(db, all_terms)
         processed_term_ids = {term.id for term in terms}
         total_new = 0
         failed_connectors = 0
@@ -323,7 +357,13 @@ async def _poll_once_unlocked() -> None:
             "poll",
             "started",
             "Scheduled/backend poll started",
-            {"terms": len(terms), "connectors": len(connectors)},
+            {
+                "terms": len(terms),
+                "total_terms": len(all_terms),
+                "connectors": len(connectors),
+                "term_offset": term_offset,
+                "next_term_offset": next_term_offset,
+            },
         )
 
         for term in terms:
@@ -540,7 +580,15 @@ async def _poll_once_unlocked() -> None:
             "poll",
             "completed" if failed_connectors == 0 else "completed_with_errors",
             "Scheduled/backend poll completed",
-            {"terms": len(terms), "connectors": len(connectors), "new_matches": total_new, "failed_connectors": failed_connectors},
+            {
+                "terms": len(terms),
+                "total_terms": len(all_terms),
+                "connectors": len(connectors),
+                "new_matches": total_new,
+                "failed_connectors": failed_connectors,
+                "term_offset": term_offset,
+                "next_term_offset": next_term_offset,
+            },
         )
         prune_backend_events(db)
         for term in terms:
