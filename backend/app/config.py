@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./otterpia.db"
     poll_interval_minutes: int = 15
     connector_fetch_timeout_seconds: float = 25.0
-    connector_concurrency: int = 4
-    poll_terms_per_run: int = 5
+    connector_concurrency: int = 2
+    poll_terms_per_run: int = 2
     admin_api_token: str = ""
     allow_unauthenticated_admin: bool = False
     cors_allow_origins: str = ""
