@@ -380,7 +380,7 @@ final class OshiReaderUITests: XCTestCase {
 
     private func hasRemotePushSuccessMessage(_ labels: [String]) -> Bool {
         labels.contains {
-            $0.localizedCaseInsensitiveContains("Remote test notification sent")
+            $0.localizedCaseInsensitiveContains("Remote test push sent")
                 || $0.localizedCaseInsensitiveContains("リモートテスト通知を送信しました")
                 || $0.localizedCaseInsensitiveContains("遠端測試通知已傳送")
                 || $0.localizedCaseInsensitiveContains("已傳送遠端測試推播")
@@ -392,7 +392,7 @@ final class OshiReaderUITests: XCTestCase {
     private func remotePushSuccessPredicate() -> NSPredicate {
         NSPredicate(
             format: "label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
-            "Remote test notification sent",
+            "Remote test push sent",
             "リモートテスト通知を送信しました",
             "遠端測試通知已傳送",
             "已傳送遠端測試推播",
