@@ -12,6 +12,8 @@ services:
         sync: false
       - key: POLL_INTERVAL_MINUTES
         value: "15"
+      - key: CONNECTOR_CONCURRENCY
+        value: "4"
       - key: BACKEND_PUBLIC_URL
         value: https://oshireader.onrender.com
       - key: YOUTUBE_API_KEY

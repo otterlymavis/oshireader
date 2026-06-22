@@ -87,7 +87,7 @@ def _build_connectors(db) -> list[BaseConnector]:
         cred = db.get(PlatformCredential, "youtube")
         if cred:
             youtube_key = cred.api_key or ""
-    
+
     # Always register YouTubeConnector so it can fetch using scrape fallback if no key is set
     connectors.append(YouTubeConnector(api_key=youtube_key))
 
@@ -110,11 +110,26 @@ async def poll_once() -> None:
         await _poll_once_unlocked()
 
 
+def _observe_poll_task_result(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        log.info("Background poll task was cancelled")
+    except Exception:
+        log.exception("Background poll task failed")
+
+
+def create_poll_task() -> asyncio.Task:
+    task = asyncio.create_task(poll_once())
+    task.add_done_callback(_observe_poll_task_result)
+    return task
+
+
 def queue_poll() -> bool:
     global _queued_task
     if _poll_lock.locked() or (_queued_task and not _queued_task.done()):
         return False
-    _queued_task = asyncio.create_task(poll_once())
+    _queued_task = create_poll_task()
     return True
 
 
@@ -159,6 +174,15 @@ async def _fetch_one(connector: BaseConnector, search_term: str, mode: Collectio
             len(items),
         )
     return filtered
+
+
+def _connector_batches(connectors: list[BaseConnector]) -> list[list[BaseConnector]]:
+    """Split connector work so one poll cannot retain every response in memory at once."""
+    batch_size = max(1, settings.connector_concurrency)
+    return [
+        connectors[index:index + batch_size]
+        for index in range(0, len(connectors), batch_size)
+    ]
 
 
 def _published_at_is_estimated(raw, observed_at: datetime) -> bool:
@@ -304,189 +328,199 @@ async def _poll_once_unlocked() -> None:
 
         for term in terms:
             for search_term in _search_terms_for(term):
-                # Fetch all connectors in parallel — pure I/O, no DB contention.
-                all_results = await asyncio.gather(
-                    *[_fetch_one(c, search_term, CollectionMode(term.collection_mode or "all_info")) for c in connectors]
-                )
-                for connector, items in zip(connectors, all_results):
-                    if not items:
-                        continue
-                    try:
-                        new_count = 0
-                        notification_count = 0
-                        newest_candidate: tuple[bool, datetime, dict] | None = None
-                        ids = [raw.composite_id for raw in items]
-                        now = datetime.now(timezone.utc)
-
-                        # Fetch existing ids AND their stored published_at so we can
-                        # fix bad dates (fetch-time placeholders) when the connector
-                        # now returns a real publication date.
-                        existing_items: dict[str, datetime] = {
-                            r[0]: r[1]
-                            for r in db.query(SourceItem.id, SourceItem.published_at)
-                            .filter(SourceItem.id.in_(ids))
-                            .all()
-                        }
-                        existing_source_ids = set(existing_items.keys())
-                        existing_match_ids = {
-                            r[0]
-                            for r in db.query(Match.source_item_id)
-                            .filter(
-                                Match.watch_term_id == term.id,
-                                Match.source_item_id.in_(ids),
+                # Keep I/O parallel without retaining every connector's response,
+                # parser tree, and result list until the slowest request finishes.
+                # Small batches materially reduce peak RSS on memory-limited hosts.
+                for connector_batch in _connector_batches(connectors):
+                    batch_results = await asyncio.gather(
+                        *[
+                            _fetch_one(
+                                connector,
+                                search_term,
+                                CollectionMode(term.collection_mode or "all_info"),
                             )
-                            .all()
-                        }
+                            for connector in connector_batch
+                        ]
+                    )
+                    for connector, items in zip(connector_batch, batch_results):
+                        if not items:
+                            continue
+                        try:
+                            new_count = 0
+                            notification_count = 0
+                            newest_candidate: tuple[bool, datetime, dict] | None = None
+                            ids = [raw.composite_id for raw in items]
+                            now = datetime.now(timezone.utc)
 
-                        for raw in items:
-                            published_at = raw.published_at
-                            if published_at.tzinfo is None:
-                                published_at = published_at.replace(tzinfo=timezone.utc)
-                            if raw.composite_id not in existing_source_ids:
-                                db.add(
-                                    SourceItem(
-                                        id=raw.composite_id,
-                                        platform=raw.platform,
-                                        item_id=raw.item_id,
-                                        url=raw.url,
-                                        published_at=published_at,
-                                        media_type=raw.media_type,
-                                        author=raw.author,
-                                        title=raw.title,
-                                        content_text=raw.content_text,
-                                        thumbnail_url=raw.thumbnail_url,
-                                        raw_payload=raw.raw_payload,
-                                    )
+                            # Fetch existing ids AND their stored published_at so we can
+                            # fix bad dates (fetch-time placeholders) when the connector
+                            # now returns a real publication date.
+                            existing_items: dict[str, datetime] = {
+                                r[0]: r[1]
+                                for r in db.query(SourceItem.id, SourceItem.published_at)
+                                .filter(SourceItem.id.in_(ids))
+                                .all()
+                            }
+                            existing_source_ids = set(existing_items.keys())
+                            existing_match_ids = {
+                                r[0]
+                                for r in db.query(Match.source_item_id)
+                                .filter(
+                                    Match.watch_term_id == term.id,
+                                    Match.source_item_id.in_(ids),
                                 )
-                                existing_source_ids.add(raw.composite_id)
-                                existing_items[raw.composite_id] = published_at
-                            else:
-                                # Update published_at when the connector returns a better date.
-                                # Discussion platforms: always update toward newer dates so
-                                # threads with recent replies sort above stale ones.
-                                # Other platforms: only heal when dates differ significantly
-                                # (avoids spurious updates from fetch-time placeholders).
-                                stored = existing_items.get(raw.composite_id)
-                                if stored is not None:
-                                    stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
-                                    if raw.platform in _DISCUSSION_PLATFORMS:
-                                        # Only heal toward a newer date when the connector
-                                        # actually parsed a real timestamp. A fetch-time
-                                        # placeholder (date_parsed=False) is always ~now and
-                                        # would otherwise re-pin the thread to the top every poll.
-                                        date_parsed = (raw.raw_payload or {}).get("date_parsed", True)
-                                        should_update = date_parsed and published_at > stored_aware
-                                    else:
-                                        new_age = (now - published_at).total_seconds()
-                                        diff = abs((published_at - stored_aware).total_seconds())
-                                        should_update = new_age > 300 and diff > 300
-                                    if should_update:
-                                        db.query(SourceItem).filter(
-                                            SourceItem.id == raw.composite_id
-                                        ).update(
-                                            {"published_at": published_at},
-                                            synchronize_session=False,
+                                .all()
+                            }
+
+                            for raw in items:
+                                published_at = raw.published_at
+                                if published_at.tzinfo is None:
+                                    published_at = published_at.replace(tzinfo=timezone.utc)
+                                if raw.composite_id not in existing_source_ids:
+                                    db.add(
+                                        SourceItem(
+                                            id=raw.composite_id,
+                                            platform=raw.platform,
+                                            item_id=raw.item_id,
+                                            url=raw.url,
+                                            published_at=published_at,
+                                            media_type=raw.media_type,
+                                            author=raw.author,
+                                            title=raw.title,
+                                            content_text=raw.content_text,
+                                            thumbnail_url=raw.thumbnail_url,
+                                            raw_payload=raw.raw_payload,
                                         )
-                                        existing_items[raw.composite_id] = published_at
-                                        log.info(
-                                            "healed published_at for %s: %s → %s",
-                                            raw.composite_id,
-                                            stored_aware.isoformat(),
-                                            published_at.isoformat(),
-                                        )
+                                    )
+                                    existing_source_ids.add(raw.composite_id)
+                                    existing_items[raw.composite_id] = published_at
+                                else:
+                                    # Update published_at when the connector returns a better date.
+                                    # Discussion platforms: always update toward newer dates so
+                                    # threads with recent replies sort above stale ones.
+                                    # Other platforms: only heal when dates differ significantly
+                                    # (avoids spurious updates from fetch-time placeholders).
+                                    stored = existing_items.get(raw.composite_id)
+                                    if stored is not None:
+                                        stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
+                                        if raw.platform in _DISCUSSION_PLATFORMS:
+                                            # Only heal toward a newer date when the connector
+                                            # actually parsed a real timestamp. A fetch-time
+                                            # placeholder (date_parsed=False) is always ~now and
+                                            # would otherwise re-pin the thread to the top every poll.
+                                            date_parsed = (raw.raw_payload or {}).get("date_parsed", True)
+                                            should_update = date_parsed and published_at > stored_aware
+                                        else:
+                                            new_age = (now - published_at).total_seconds()
+                                            diff = abs((published_at - stored_aware).total_seconds())
+                                            should_update = new_age > 300 and diff > 300
+                                        if should_update:
+                                            db.query(SourceItem).filter(
+                                                SourceItem.id == raw.composite_id
+                                            ).update(
+                                                {"published_at": published_at},
+                                                synchronize_session=False,
+                                            )
+                                            existing_items[raw.composite_id] = published_at
+                                            log.info(
+                                                "healed published_at for %s: %s → %s",
+                                                raw.composite_id,
+                                                stored_aware.isoformat(),
+                                                published_at.isoformat(),
+                                            )
 
-                        # Flush source_items before inserting matches so that
-                        # SQLite's FOREIGN KEY enforcement (PRAGMA foreign_keys=ON)
-                        # can verify the source_item_id reference exists.
-                        db.flush()
-
-                        new_matches: list[tuple[Match, SourceItemCreate]] = []
-                        for raw in items:
-                            if raw.composite_id not in existing_match_ids:
-                                match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
-                                db.add(match)
-                                existing_match_ids.add(raw.composite_id)
-                                new_count += 1
-                                new_matches.append((match, raw))
-
-                        # Single flush assigns autoincrement IDs to all new matches at once.
-                        if new_matches:
+                            # Flush source_items before inserting matches so that
+                            # SQLite's FOREIGN KEY enforcement (PRAGMA foreign_keys=ON)
+                            # can verify the source_item_id reference exists.
                             db.flush()
 
-                        for match, raw in new_matches:
-                            source_item = db.get(SourceItem, raw.composite_id)
-                            if source_item is None:
-                                raise RuntimeError(
-                                    f"source item disappeared before notification preview: {raw.composite_id}"
-                                )
-                            if not _is_notification_eligible(
-                                term=term,
-                                source_item=source_item,
-                                observed_at=now,
-                            ):
-                                continue
-                            notification_count += 1
-                            published_at = source_item.published_at
-                            if published_at.tzinfo is None:
-                                published_at = published_at.replace(tzinfo=timezone.utc)
-                            published_at_is_estimated = _published_at_is_estimated(source_item, now)
-                            if (
-                                newest_candidate is None
-                                or _candidate_is_newer(
-                                    candidate_is_estimated=published_at_is_estimated,
-                                    candidate_published_at=published_at,
-                                    current_is_estimated=newest_candidate[0],
-                                    current_published_at=newest_candidate[1],
-                                )
-                            ):
-                                public_base_url = settings.backend_public_url.rstrip("/")
-                                newest_candidate = (
-                                    published_at_is_estimated,
-                                    published_at,
-                                    {
-                                        "id": source_item.id,
-                                        "match_id": match.id,
-                                        "platform": source_item.platform,
-                                        "url": source_item.url,
-                                        "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
-                                        "title": source_item.title,
-                                        "content_text": source_item.content_text,
-                                        "author": source_item.author,
-                                        "thumbnail_url": source_item.thumbnail_url,
-                                        "media_type": source_item.media_type,
-                                        "published_at": published_at.isoformat(),
-                                    },
-                                )
+                            new_matches: list[tuple[Match, SourceItemCreate]] = []
+                            for raw in items:
+                                if raw.composite_id not in existing_match_ids:
+                                    match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
+                                    db.add(match)
+                                    existing_match_ids.add(raw.composite_id)
+                                    new_count += 1
+                                    new_matches.append((match, raw))
 
-                        _queue_pending_notification(
-                            db,
-                            term,
-                            notification_count,
-                            newest_candidate,
-                        )
-                        db.flush()
-                        db.commit()
-                        if new_count:
-                            total_new += new_count
-                        log.info(
-                            "term=%r search=%r connector=%s fetched=%d new=%d",
-                            term.keyword,
-                            search_term,
-                            connector.PLATFORM,
-                            len(items),
-                            new_count,
-                        )
-                    except Exception as exc:
-                        failed_connectors += 1
-                        log.warning(
-                            "poll failed term=%r search=%r connector=%s: %s",
-                            term.keyword,
-                            search_term,
-                            connector.PLATFORM,
-                            exc,
-                            exc_info=True,
-                        )
-                        db.rollback()
+                            # Single flush assigns autoincrement IDs to all new matches at once.
+                            if new_matches:
+                                db.flush()
+
+                            for match, raw in new_matches:
+                                source_item = db.get(SourceItem, raw.composite_id)
+                                if source_item is None:
+                                    raise RuntimeError(
+                                        f"source item disappeared before notification preview: {raw.composite_id}"
+                                    )
+                                if not _is_notification_eligible(
+                                    term=term,
+                                    source_item=source_item,
+                                    observed_at=now,
+                                ):
+                                    continue
+                                notification_count += 1
+                                published_at = source_item.published_at
+                                if published_at.tzinfo is None:
+                                    published_at = published_at.replace(tzinfo=timezone.utc)
+                                published_at_is_estimated = _published_at_is_estimated(source_item, now)
+                                if (
+                                    newest_candidate is None
+                                    or _candidate_is_newer(
+                                        candidate_is_estimated=published_at_is_estimated,
+                                        candidate_published_at=published_at,
+                                        current_is_estimated=newest_candidate[0],
+                                        current_published_at=newest_candidate[1],
+                                    )
+                                ):
+                                    public_base_url = settings.backend_public_url.rstrip("/")
+                                    newest_candidate = (
+                                        published_at_is_estimated,
+                                        published_at,
+                                        {
+                                            "id": source_item.id,
+                                            "match_id": match.id,
+                                            "platform": source_item.platform,
+                                            "url": source_item.url,
+                                            "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
+                                            "title": source_item.title,
+                                            "content_text": source_item.content_text,
+                                            "author": source_item.author,
+                                            "thumbnail_url": source_item.thumbnail_url,
+                                            "media_type": source_item.media_type,
+                                            "published_at": published_at.isoformat(),
+                                        },
+                                    )
+
+                            _queue_pending_notification(
+                                db,
+                                term,
+                                notification_count,
+                                newest_candidate,
+                            )
+                            db.flush()
+                            db.commit()
+                            if new_count:
+                                total_new += new_count
+                            log.info(
+                                "term=%r search=%r connector=%s fetched=%d new=%d",
+                                term.keyword,
+                                search_term,
+                                connector.PLATFORM,
+                                len(items),
+                                new_count,
+                            )
+                        except Exception as exc:
+                            failed_connectors += 1
+                            log.warning(
+                                "poll failed term=%r search=%r connector=%s: %s",
+                                term.keyword,
+                                search_term,
+                                connector.PLATFORM,
+                                exc,
+                                exc_info=True,
+                            )
+                            db.rollback()
 
             # Deliver once after every connector and alias has contributed to the
             # database-backed outbox. If the poll is canceled or APNs raises, the

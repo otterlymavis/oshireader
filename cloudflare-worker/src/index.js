@@ -34,14 +34,14 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
 
   const stats = await response.json();
   const recentEvents = stats.recent_events || [];
-  const successfulPoll = recentEvents.find(
+  const successfulPoll = stats.latest_successful_poll || recentEvents.find(
     (event) => event.kind === "poll" &&
       (event.status === "completed" || event.status === "completed_with_errors"),
   ) || null;
   return {
     items_total: stats.items_total,
     matches_total: stats.matches_total,
-    latest_poll: recentEvents.find((event) => event.kind === "poll") || null,
+    latest_poll: stats.latest_poll || recentEvents.find((event) => event.kind === "poll") || null,
     latest_successful_poll: successfulPoll,
     latest_apns: recentEvents.find((event) => event.kind === "apns") || null,
   };
@@ -49,9 +49,35 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
 
 function pollHealth(diagnostics, staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES) {
   const event = diagnostics.latest_successful_poll;
+  const latestPoll = diagnostics.latest_poll;
+  const latestPollStartedAt = latestPoll?.created_at ? Date.parse(latestPoll.created_at) : Number.NaN;
+  const latestPollAgeMinutes = Number.isFinite(latestPollStartedAt)
+    ? (Date.now() - latestPollStartedAt) / 60_000
+    : Number.NaN;
+  const latestPollIsActive = latestPoll &&
+    ["started", "running_past_request_timeout"].includes(latestPoll.status);
   const completedAt = event?.created_at ? Date.parse(event.created_at) : Number.NaN;
   if (!Number.isFinite(completedAt)) {
+    if (latestPollIsActive && latestPollAgeMinutes <= staleAfterMinutes) {
+      return {
+        healthy: true,
+        in_progress: true,
+        age_minutes: Math.max(0, Math.floor(latestPollAgeMinutes)),
+      };
+    }
     return { healthy: false, reason: "No successful backend poll recorded" };
+  }
+  if (
+    latestPollIsActive &&
+    Number.isFinite(latestPollStartedAt) &&
+    latestPollStartedAt > completedAt &&
+    latestPollAgeMinutes <= staleAfterMinutes
+  ) {
+    return {
+      healthy: true,
+      in_progress: true,
+      age_minutes: Math.max(0, Math.floor(latestPollAgeMinutes)),
+    };
   }
   const ageMinutes = (Date.now() - completedAt) / 60_000;
   if (ageMinutes > staleAfterMinutes) {

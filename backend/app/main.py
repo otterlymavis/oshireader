@@ -19,7 +19,15 @@ from app.auth import require_admin_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.diagnostics import record_backend_event
-from app.ingestion.scheduler import _poll_lock, poll_once, queue_poll, scheduler, start_scheduler
+from app.ingestion.scheduler import (
+    _connector_batches,
+    _poll_lock,
+    create_poll_task,
+    poll_once,
+    queue_poll,
+    scheduler,
+    start_scheduler,
+)
 from app.migrations import apply_startup_migrations
 from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, SourceItem, WatchTerm
 from app.schemas import ClientDiagnosticIn
@@ -27,6 +35,33 @@ from app.schemas import ClientDiagnosticIn
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
 log = logging.getLogger(__name__)
+_ADMIN_POLL_TIMEOUT_SECONDS = 210.0
+
+
+def _backend_event_payload(event: BackendEvent) -> dict:
+    return {
+        "id": event.id,
+        "kind": event.kind,
+        "status": event.status,
+        "message": event.message,
+        "payload": event.payload or {},
+        "created_at": event.created_at,
+    }
+
+
+def _record_poll_request_timeout(timeout_seconds: float) -> None:
+    db_sess = SessionLocal()
+    try:
+        record_backend_event(
+            db_sess,
+            "poll",
+            "running_past_request_timeout",
+            "Scheduled/backend poll exceeded the request budget",
+            {"timeout_seconds": timeout_seconds},
+        )
+        db_sess.commit()
+    finally:
+        db_sess.close()
 
 
 @asynccontextmanager
@@ -142,11 +177,16 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
     # so even if we hit the timeout, completed connectors are already persisted.
     if _poll_lock.locked():
         return {"status": "poll already running"}
+    poll_task = create_poll_task()
     try:
-        await asyncio.wait_for(poll_once(), timeout=210.0)
+        await asyncio.wait_for(
+            asyncio.shield(poll_task),
+            timeout=_ADMIN_POLL_TIMEOUT_SECONDS,
+        )
         return {"status": "poll completed"}
     except asyncio.TimeoutError:
-        return {"status": "poll timed out (partial progress saved)"}
+        _record_poll_request_timeout(_ADMIN_POLL_TIMEOUT_SECONDS)
+        return {"status": "poll still running (request timed out)"}
     except Exception as exc:
         trace = traceback.format_exc(limit=8)
         log.exception("Admin poll failed")
@@ -177,10 +217,16 @@ async def test_fetch(
     db_sess = SessionLocal()
     try:
         connectors = _build_connectors(db_sess)
-        results = await asyncio.gather(
-            *[_fetch_one(c, keyword, CollectionMode.ALL_INFO) for c in connectors]
-        )
-        return {c.PLATFORM: len(r) for c, r in zip(connectors, results)}
+        counts: dict[str, int] = {}
+        for connector_batch in _connector_batches(connectors):
+            results = await asyncio.gather(
+                *[_fetch_one(c, keyword, CollectionMode.ALL_INFO) for c in connector_batch]
+            )
+            counts.update({
+                connector.PLATFORM: len(result)
+                for connector, result in zip(connector_batch, results)
+            })
+        return counts
     finally:
         db_sess.close()
 
@@ -211,6 +257,21 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         BackendEvent.created_at.desc(),
         BackendEvent.id.desc(),
     ).limit(20).all()
+    latest_poll = (
+        db.query(BackendEvent)
+        .filter(BackendEvent.kind == "poll")
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
+    latest_successful_poll = (
+        db.query(BackendEvent)
+        .filter(
+            BackendEvent.kind == "poll",
+            BackendEvent.status.in_(["completed", "completed_with_errors"]),
+        )
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
 
     def notification_device_counts(term: WatchTerm) -> dict:
         query = db.query(APNSDeviceToken)
@@ -257,15 +318,13 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
                 for env, _ in device_tokens
             },
         },
+        "latest_poll": _backend_event_payload(latest_poll) if latest_poll else None,
+        "latest_successful_poll": (
+            _backend_event_payload(latest_successful_poll)
+            if latest_successful_poll else None
+        ),
         "recent_events": [
-            {
-                "id": event.id,
-                "kind": event.kind,
-                "status": event.status,
-                "message": event.message,
-                "payload": event.payload or {},
-                "created_at": event.created_at,
-            }
+            _backend_event_payload(event)
             for event in recent_events
         ],
     }

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -390,7 +392,13 @@ class TestDeviceScopedBackgroundRefresh:
             "/api/devices/apns-token",
             json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
         )
-        with patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll:
+        async def noop_poll():
+            return None
+
+        with patch(
+            "app.ingestion.scheduler.create_poll_task",
+            side_effect=lambda: asyncio.create_task(noop_poll()),
+        ) as mock_create_poll_task:
             r = client.post(
                 "/api/devices/background-refresh",
                 json={"token": token, "device_secret": "correct-secret-123"},
@@ -398,7 +406,7 @@ class TestDeviceScopedBackgroundRefresh:
 
         assert r.status_code == 200
         assert r.json() == {"status": "poll completed"}
-        mock_poll.assert_awaited_once()
+        mock_create_poll_task.assert_called_once()
 
     def test_limits_poll_to_fit_ios_background_budget(self, client):
         token = "1" * 64
@@ -413,7 +421,13 @@ class TestDeviceScopedBackgroundRefresh:
             "/api/devices/apns-token",
             json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
         )
-        with patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll, \
+        async def noop_poll():
+            return None
+
+        with patch(
+            "app.ingestion.scheduler.create_poll_task",
+            side_effect=lambda: asyncio.create_task(noop_poll()),
+        ) as mock_create_poll_task, \
              patch("app.api.devices.asyncio.wait_for", side_effect=capture_wait_for):
             r = client.post(
                 "/api/devices/background-refresh",
@@ -421,7 +435,7 @@ class TestDeviceScopedBackgroundRefresh:
             )
 
         assert r.status_code == 200
-        mock_poll.assert_awaited_once()
+        mock_create_poll_task.assert_called_once()
         assert captured_timeout == devices_api._BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS
         assert devices_api._BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS < 8
 
@@ -437,7 +451,7 @@ class TestDeviceScopedBackgroundRefresh:
                 return True
 
         with patch("app.ingestion.scheduler._poll_lock", BusyLock()), \
-             patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll:
+             patch("app.ingestion.scheduler.create_poll_task") as mock_create_poll_task:
             r = client.post(
                 "/api/devices/background-refresh",
                 json={"token": token, "device_secret": "correct-secret-123"},
@@ -445,7 +459,7 @@ class TestDeviceScopedBackgroundRefresh:
 
         assert r.status_code == 200
         assert r.json() == {"status": "poll already running"}
-        mock_poll.assert_not_awaited()
+        mock_create_poll_task.assert_not_called()
 
     def test_throttles_repeated_refresh_for_same_device(self, client):
         token = "f" * 64
@@ -453,7 +467,13 @@ class TestDeviceScopedBackgroundRefresh:
             "/api/devices/apns-token",
             json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
         )
-        with patch("app.ingestion.scheduler.poll_once", new=AsyncMock()) as mock_poll:
+        async def noop_poll():
+            return None
+
+        with patch(
+            "app.ingestion.scheduler.create_poll_task",
+            side_effect=lambda: asyncio.create_task(noop_poll()),
+        ) as mock_create_poll_task:
             first = client.post(
                 "/api/devices/background-refresh",
                 json={"token": token, "device_secret": "correct-secret-123"},
@@ -467,7 +487,7 @@ class TestDeviceScopedBackgroundRefresh:
         assert first.json() == {"status": "poll completed"}
         assert second.status_code == 200
         assert second.json() == {"status": "poll throttled"}
-        mock_poll.assert_awaited_once()
+        mock_create_poll_task.assert_called_once()
 
     def test_refresh_throttle_prunes_stale_attempts(self):
         now = datetime.now(timezone.utc)

@@ -691,7 +691,7 @@ class TestSendTestPush:
         payload = client.post.call_args.kwargs["json"]
         assert payload["aps"]["category"] == "OSHI_RESULT_PREVIEW"
         assert payload["aps"]["target-content-id"] == "oshireader:test-preview"
-        assert payload["item_url"] == "https://oshireader.onrender.com"
+        assert payload["item_url"] == "https://backend.example.com"
         headers = client.post.call_args.kwargs["headers"]
         assert headers["apns-collapse-id"].startswith("oshireader-test-")
         assert len(headers["apns-collapse-id"]) == len("oshireader-test-") + 12

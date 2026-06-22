@@ -45,6 +45,80 @@ test("health reports stale polling as degraded", async (context) => {
   assert.equal((await response.json()).status, "degraded");
 });
 
+test("health uses dedicated latest successful poll outside recent events", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const now = new Date().toISOString();
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    latest_successful_poll: {
+      id: 99,
+      kind: "poll",
+      status: "completed",
+      created_at: now,
+    },
+    recent_events: [
+      { id: 101, kind: "apns", status: "attempted" },
+      { id: 100, kind: "apns", status: "skipped" },
+    ],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).diagnostics.latest_successful_poll.id, 99);
+});
+
+test("health treats a fresh started poll as in progress", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    latest_poll: {
+      id: 3,
+      kind: "poll",
+      status: "started",
+      created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    },
+    latest_successful_poll: null,
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.healthy, true);
+  assert.equal(body.in_progress, true);
+});
+
+test("health treats a fresh request-timeout marker as in progress", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    latest_poll: {
+      id: 4,
+      kind: "poll",
+      status: "running_past_request_timeout",
+      created_at: new Date(Date.now() - 2 * 60_000).toISOString(),
+    },
+    latest_successful_poll: null,
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).in_progress, true);
+});
+
 test("manual run rejects callers without the token", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/run", { method: "POST" }),
