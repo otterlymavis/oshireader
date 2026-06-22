@@ -41,9 +41,60 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
   return {
     items_total: stats.items_total,
     matches_total: stats.matches_total,
+    apns: stats.apns || null,
+    watch_terms: stats.watch_terms || [],
     latest_poll: stats.latest_poll || recentEvents.find((event) => event.kind === "poll") || null,
     latest_successful_poll: successfulPoll,
     latest_apns: recentEvents.find((event) => event.kind === "apns") || null,
+  };
+}
+
+function notificationHealth(diagnostics) {
+  const watchTerms = diagnostics.watch_terms || [];
+  const notifyTerms = watchTerms.filter((term) => term.is_active && term.notify_on_new);
+  const atRiskTerms = notifyTerms.filter((term) => (term.notification_verified_devices || 0) <= 0);
+  const apns = diagnostics.apns || {};
+  const envCounts = apns.device_tokens_by_environment_and_verification || {};
+  const verifiedDevices = Object.values(envCounts).reduce(
+    (total, entry) => total + (entry?.verified || 0),
+    0,
+  );
+
+  if (!notifyTerms.length) {
+    return { healthy: true, reason: "No active notification terms" };
+  }
+  if (!apns.configured) {
+    return {
+      healthy: false,
+      reason: "Backend APNs is not configured",
+      active_notify_terms: notifyTerms.length,
+      at_risk_terms: notifyTerms.length,
+    };
+  }
+  if (verifiedDevices <= 0) {
+    return {
+      healthy: false,
+      reason: "No verified APNs devices are registered",
+      active_notify_terms: notifyTerms.length,
+      at_risk_terms: notifyTerms.length,
+      verified_devices: 0,
+    };
+  }
+  if (atRiskTerms.length) {
+    return {
+      healthy: false,
+      reason: "Some active notification terms have no verified device",
+      active_notify_terms: notifyTerms.length,
+      at_risk_terms: atRiskTerms.length,
+      at_risk_keywords: atRiskTerms.slice(0, 5).map((term) => term.keyword),
+      verified_devices: verifiedDevices,
+    };
+  }
+  return {
+    healthy: true,
+    active_notify_terms: notifyTerms.length,
+    at_risk_terms: 0,
+    verified_devices: verifiedDevices,
   };
 }
 
@@ -119,6 +170,17 @@ function watchdogSummary(reason, diagnostics = {}) {
   ].join("\n");
 }
 
+function notificationWatchdogSummary(health, diagnostics = {}) {
+  const latestApns = diagnostics.latest_apns;
+  return [
+    `OshiReader notification watchdog degraded: ${health.reason || "unknown"}`,
+    `active_notify_terms=${health.active_notify_terms ?? "n/a"} at_risk_terms=${health.at_risk_terms ?? "n/a"}`,
+    `at_risk_keywords=${(health.at_risk_keywords || []).join(", ") || "n/a"}`,
+    `verified_devices=${health.verified_devices ?? "n/a"}`,
+    `latest_apns=${latestApns?.status || "none"} at ${latestApns?.created_at || "n/a"}`,
+  ].join("\n");
+}
+
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export async function triggerBackendPoll(env) {
@@ -178,10 +240,17 @@ export default {
             result.diagnostics,
             Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
           );
+          const notifications = notificationHealth(result.diagnostics);
           if (!health.healthy) {
             await notifyWatchdog(
               env,
               watchdogSummary(health.reason || "unknown", result.diagnostics),
+            );
+          }
+          if (!notifications.healthy) {
+            await notifyWatchdog(
+              env,
+              notificationWatchdogSummary(notifications, result.diagnostics),
             );
           }
         },
@@ -205,9 +274,17 @@ export default {
           diagnostics,
           Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
         );
+        const notifications = notificationHealth(diagnostics);
+        const healthy = health.healthy && notifications.healthy;
         return json(
-          { status: health.healthy ? "ok" : "degraded", scheduler: "cloudflare-cron", ...health, diagnostics },
-          health.healthy ? 200 : 503,
+          {
+            status: healthy ? "ok" : "degraded",
+            scheduler: "cloudflare-cron",
+            ...health,
+            notifications,
+            diagnostics,
+          },
+          healthy ? 200 : 503,
         );
       } catch (error) {
         await notifyWatchdog(env, error);
