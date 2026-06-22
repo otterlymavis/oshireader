@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -185,23 +186,57 @@ class TestAdminStats:
         assert event["status"] == "attempted"
         assert event["payload"] == {"new_count": 2, "device_count": 1}
 
+    def test_stats_includes_latest_poll_events_outside_recent_window(self, client, db_session):
+        completed = BackendEvent(
+            kind="poll",
+            status="completed",
+            message="Scheduled/backend poll completed",
+            payload={"new_matches": 1},
+        )
+        db_session.add(completed)
+        db_session.flush()
+        for index in range(25):
+            db_session.add(BackendEvent(
+                kind="apns",
+                status="attempted",
+                message="APNs notification attempted",
+                payload={"index": index},
+            ))
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["latest_successful_poll"]["id"] == completed.id
+        assert all(event["kind"] == "apns" for event in data["recent_events"])
+
 
 class TestAdminPoll:
     def test_poll_runs_synchronously_and_reports_completed(self, client):
         # The endpoint awaits the poll (so Render keeps the instance alive for the
         # whole run) rather than firing it as a background task.
-        from unittest.mock import AsyncMock
         mock_lock = MagicMock()
         mock_lock.locked.return_value = False
-        with patch("app.main.poll_once", new=AsyncMock()) as mock_poll, \
+        async def noop_poll():
+            return None
+
+        created_task = None
+
+        def create_task():
+            nonlocal created_task
+            created_task = asyncio.create_task(noop_poll())
+            return created_task
+
+        with patch("app.main.create_poll_task", side_effect=create_task) as mock_create_poll_task, \
              patch("app.main._poll_lock", mock_lock):
             r = client.post("/api/admin/poll")
         assert r.status_code == 200
         assert r.json() == {"status": "poll completed"}
-        mock_poll.assert_awaited_once()
+        mock_create_poll_task.assert_called_once()
+        assert created_task is not None and created_task.done()
 
     def test_poll_uses_cloudflare_compatible_completion_budget(self, client):
-        from unittest.mock import AsyncMock
         mock_lock = MagicMock()
         mock_lock.locked.return_value = False
         observed_timeout = None
@@ -211,13 +246,43 @@ class TestAdminPoll:
             observed_timeout = timeout
             await awaitable
 
-        with patch("app.main.poll_once", new=AsyncMock()), \
+        async def noop_poll():
+            return None
+
+        with patch("app.main.create_poll_task", side_effect=lambda: asyncio.create_task(noop_poll())), \
              patch("app.main._poll_lock", mock_lock), \
              patch("app.main.asyncio.wait_for", new=capture_timeout):
             r = client.post("/api/admin/poll")
 
         assert r.status_code == 200
         assert observed_timeout == 210.0
+
+    def test_poll_timeout_does_not_cancel_underlying_task(self, client):
+        mock_lock = MagicMock()
+        mock_lock.locked.return_value = False
+
+        async def noop_poll():
+            return None
+
+        async def timeout_without_canceling(_awaitable, timeout):
+            raise asyncio.TimeoutError
+
+        created_tasks = []
+
+        def create_task():
+            task = asyncio.create_task(noop_poll())
+            created_tasks.append(task)
+            return task
+
+        with patch("app.main.create_poll_task", side_effect=create_task), \
+             patch("app.main._poll_lock", mock_lock), \
+             patch("app.main.asyncio.wait_for", new=timeout_without_canceling):
+            r = client.post("/api/admin/poll")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll still running (request timed out)"}
+        assert created_tasks
+        assert not created_tasks[0].cancelled()
 
     def test_poll_returns_already_running_when_busy(self, client):
         mock_lock = MagicMock()

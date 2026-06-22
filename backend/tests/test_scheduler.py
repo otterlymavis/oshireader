@@ -17,6 +17,7 @@ from unittest.mock import patch
 from app.connectors import news_sites
 from app.ingestion.scheduler import (
     _build_connectors,
+    _connector_batches,
     _fetch_one,
     _prune_irrelevant_matches,
     _prune_old_items,
@@ -339,6 +340,27 @@ class TestFetchOne:
         connector = self._connector(return_value=[])
         await _fetch_one(connector, "Test", CollectionMode.MEDIA_ONLY)
         connector.fetch.assert_awaited_once_with("Test", CollectionMode.MEDIA_ONLY)
+
+
+class TestConnectorBatches:
+    def test_limits_peak_connector_concurrency(self):
+        connectors = [MagicMock() for _ in range(10)]
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.connector_concurrency = 4
+            batches = _connector_batches(connectors)
+
+        assert [len(batch) for batch in batches] == [4, 4, 2]
+        assert [connector for batch in batches for connector in batch] == connectors
+
+    def test_never_uses_zero_sized_batches(self):
+        connectors = [MagicMock() for _ in range(3)]
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.connector_concurrency = 0
+            batches = _connector_batches(connectors)
+
+        assert [len(batch) for batch in batches] == [1, 1, 1]
 
 
 class TestPruneIrrelevantMatches:

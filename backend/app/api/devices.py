@@ -198,14 +198,15 @@ async def request_device_background_refresh(body: APNSDeviceTestPush, db: Sessio
     now = datetime.now(timezone.utc)
     if _recent_background_refresh_attempt(stored.token, now):
         return {"status": "poll throttled"}
+    poll_task = ingestion_scheduler.create_poll_task()
     try:
         await asyncio.wait_for(
-            ingestion_scheduler.poll_once(),
+            asyncio.shield(poll_task),
             timeout=_BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS,
         )
         return {"status": "poll completed"}
     except asyncio.TimeoutError:
-        return {"status": "poll timed out (partial progress saved)"}
+        return {"status": "poll still running (request timed out)"}
 
 
 @router.delete("/apns-token/{token}", status_code=204)
