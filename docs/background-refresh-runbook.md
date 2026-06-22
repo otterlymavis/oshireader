@@ -18,6 +18,7 @@ Healthy output must include:
 
 - `status: "ok"`
 - `healthy: true`
+- `notifications.healthy: true`
 - a recent `diagnostics.latest_successful_poll`
 
 The backend commit currently served by Render:
@@ -28,15 +29,27 @@ curl -fsS https://oshireader.onrender.com/api/health
 
 ## Failure Pattern
 
-The common failure is repeated `poll started` events with no newer `poll completed`
-event. This usually means the Render process restarted or ran out of budget before
-the full connector/term workload finished.
+The common polling failure is repeated `poll started` events with no newer
+`poll completed` event. This usually means the Render process restarted or ran
+out of budget before the full connector/term workload finished.
 
 Look for:
 
 - `latest_poll.status == "started"`
 - `latest_successful_poll.created_at` older than 45 minutes
 - repeated `latest_poll.id` changes without a matching completed event
+
+The common notification failure is healthy polling with
+`notifications.healthy: false`. This usually means APNs is not configured, there
+are no verified APNs devices, or at least one active notification term has no
+verified device attached.
+
+Look for:
+
+- `notifications.reason`
+- `notifications.at_risk_keywords`
+- `diagnostics.latest_apns`
+- `diagnostics.apns.device_tokens_by_environment_and_verification`
 
 ## Safe Production Knobs
 
@@ -57,13 +70,15 @@ the worker health endpoint is degraded or if the latest successful poll is older
 than 45 minutes.
 
 The Cloudflare Worker also sends `ALERT_WEBHOOK_URL` a compact watchdog summary
-when a scheduled poll finishes with degraded poll health.
+when a scheduled poll finishes with degraded poll or notification health.
 
 ## Recovery Steps
 
 1. Check worker health and backend health.
 2. If worker health is degraded, inspect `latest_poll`, `latest_successful_poll`,
-   and `latest_apns`.
+   `latest_apns`, and `notifications`.
 3. If polls are starting but not completing, reduce workload knobs in `render.yaml`.
-4. Trigger `gh workflow run deploy-render.yml --ref master`.
-5. Keep polling worker health until a fresh `latest_successful_poll` appears.
+4. If `notifications` is degraded, open the app on the affected device and use
+   Settings notification repair/test to re-register APNs, then check health again.
+5. Trigger `gh workflow run deploy-render.yml --ref master` for backend config changes.
+6. Keep polling worker health until a fresh `latest_successful_poll` appears.

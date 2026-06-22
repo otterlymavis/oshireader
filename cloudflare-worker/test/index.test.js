@@ -119,6 +119,46 @@ test("health treats a fresh request-timeout marker as in progress", async (conte
   assert.equal((await response.json()).in_progress, true);
 });
 
+test("health reports active notification terms without devices as degraded", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    apns: {
+      configured: true,
+      device_tokens_by_environment_and_verification: {
+        production: { verified: 1, unverified: 0 },
+      },
+    },
+    watch_terms: [
+      {
+        keyword: "Aiko",
+        is_active: true,
+        notify_on_new: true,
+        notification_verified_devices: 0,
+      },
+    ],
+    latest_successful_poll: {
+      id: 1,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date().toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.status, "degraded");
+  assert.equal(body.notifications.healthy, false);
+  assert.equal(body.notifications.at_risk_terms, 1);
+  assert.deepEqual(body.notifications.at_risk_keywords, ["Aiko"]);
+});
+
 test("manual run rejects callers without the token", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/run", { method: "POST" }),
@@ -226,4 +266,61 @@ test("scheduled poll notifies watchdog when diagnostics are degraded", async (co
   await Promise.all(pending);
 
   assert.equal(webhookPayloads.length, 1);
+});
+
+test("scheduled poll notifies watchdog when notifications are not deliverable", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const webhookPayloads = [];
+  globalThis.fetch = async (url, options) => {
+    if (url.endsWith("/api/admin/poll")) {
+      return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
+    }
+    if (url.endsWith("/api/admin/stats")) {
+      return new Response(JSON.stringify({
+        apns: {
+          configured: true,
+          device_tokens_by_environment_and_verification: {
+            production: { verified: 1, unverified: 0 },
+          },
+        },
+        watch_terms: [
+          {
+            keyword: "Aiko",
+            is_active: true,
+            notify_on_new: true,
+            notification_verified_devices: 0,
+          },
+        ],
+        latest_successful_poll: {
+          id: 1,
+          kind: "poll",
+          status: "completed",
+          created_at: new Date().toISOString(),
+        },
+        recent_events: [],
+      }), { status: 200 });
+    }
+    if (url === "https://hooks.example/watchdog") {
+      const payload = await options.json?.() || JSON.parse(options.body);
+      webhookPayloads.push(payload.text);
+      return new Response("ok", { status: 200 });
+    }
+    throw new Error(`unexpected url ${url}`);
+  };
+  const pending = [];
+  await worker.scheduled(null, {
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+    ALERT_WEBHOOK_URL: "https://hooks.example/watchdog",
+  }, {
+    waitUntil(promise) {
+      pending.push(promise);
+    },
+  });
+  await Promise.all(pending);
+
+  assert.equal(webhookPayloads.length, 1);
+  assert.match(webhookPayloads[0], /notification watchdog degraded/);
+  assert.match(webhookPayloads[0], /Aiko/);
 });
