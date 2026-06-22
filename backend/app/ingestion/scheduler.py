@@ -37,6 +37,7 @@ from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
 from app.diagnostics import prune_backend_events, record_backend_event
 from app.models import (
+    APNSDeviceToken,
     BackendEvent,
     CollectionMode,
     Match,
@@ -213,6 +214,49 @@ def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int,
     return terms[offset:] + terms[:next_offset], offset, next_offset
 
 
+def _disable_orphaned_notification_terms(db) -> int:
+    grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=grace_minutes)
+    terms = (
+        db.query(WatchTerm)
+        .filter(WatchTerm.is_active == True)  # noqa: E712
+        .filter(WatchTerm.notify_on_new == True)  # noqa: E712
+        .filter(WatchTerm.owner_device_secret.isnot(None))
+        .filter(WatchTerm.created_at <= cutoff)
+        .all()
+    )
+    disabled = 0
+    disabled_keywords: list[str] = []
+    for term in terms:
+        has_device = (
+            db.query(APNSDeviceToken.token)
+            .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+            .first()
+            is not None
+        )
+        if has_device:
+            continue
+        term.notify_on_new = False
+        disabled += 1
+        if len(disabled_keywords) < 10:
+            disabled_keywords.append(term.keyword)
+
+    if disabled:
+        record_backend_event(
+            db,
+            "notification_maintenance",
+            "disabled_orphaned_terms",
+            "Disabled push alerts for owner-scoped terms with no APNs device",
+            {
+                "disabled_count": disabled,
+                "grace_minutes": grace_minutes,
+                "keywords": disabled_keywords,
+            },
+        )
+        db.commit()
+    return disabled
+
+
 def _published_at_is_estimated(raw, observed_at: datetime) -> bool:
     marker = (raw.raw_payload or {}).get("date_parsed")
     if marker is not None:
@@ -341,6 +385,7 @@ async def _poll_once_unlocked() -> None:
     db = SessionLocal()
     try:
         await revalidate_unverified_devices(db)
+        _disable_orphaned_notification_terms(db)
         connectors = _build_connectors(db)
         all_terms = (
             db.query(WatchTerm)

@@ -58,6 +58,7 @@ These are intentionally conservative for the current Render instance:
 - `POLL_TERMS_PER_RUN=1`
 - `CONNECTOR_CONCURRENCY=1`
 - `CONNECTOR_FETCH_TIMEOUT_SECONDS=8`
+- `ORPHANED_NOTIFICATION_GRACE_MINUTES=60`
 
 Increase them only after the service has stayed healthy for a few days, and change
 one knob at a time. If polling starts to miss completion markers again, roll the
@@ -80,5 +81,8 @@ when a scheduled poll finishes with degraded poll or notification health.
 3. If polls are starting but not completing, reduce workload knobs in `render.yaml`.
 4. If `notifications` is degraded, open the app on the affected device and use
    Settings notification repair/test to re-register APNs, then check health again.
+   The backend automatically disables push alerts for owner-scoped terms older
+   than `ORPHANED_NOTIFICATION_GRACE_MINUTES` when their APNs device no longer
+   exists, while preserving the feed term itself.
 5. Trigger `gh workflow run deploy-render.yml --ref master` for backend config changes.
 6. Keep polling worker health until a fresh `latest_successful_poll` appears.

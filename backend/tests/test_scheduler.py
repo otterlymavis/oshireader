@@ -18,6 +18,7 @@ from app.connectors import news_sites
 from app.ingestion.scheduler import (
     _build_connectors,
     _connector_batches,
+    _disable_orphaned_notification_terms,
     _fetch_one,
     _prune_irrelevant_matches,
     _prune_old_items,
@@ -26,7 +27,7 @@ from app.ingestion.scheduler import (
 )
 from app.connectors.youtube import YouTubeConnector
 from app.connectors.twitter import TwitterConnector
-from app.models import BackendEvent, CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
 
 
 @pytest.fixture()
@@ -415,6 +416,73 @@ class TestPollTermWindow:
         assert selected == terms
         assert offset == 0
         assert next_offset == 0
+
+
+class TestDisableOrphanedNotificationTerms:
+    def test_disables_stale_owner_scoped_terms_without_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="missing-secret",
+            created_at=old,
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            disabled = _disable_orphaned_notification_terms(db)
+
+        db.refresh(term)
+        assert disabled == 1
+        assert term.notify_on_new is False
+
+    def test_keeps_recent_owner_scoped_terms_during_grace_period(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="missing-secret",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            disabled = _disable_orphaned_notification_terms(db)
+
+        db.refresh(term)
+        assert disabled == 0
+        assert term.notify_on_new is True
+
+    def test_keeps_terms_with_registered_owner_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        db.add(APNSDeviceToken(
+            token="a" * 64,
+            environment="production",
+            device_secret="owner-secret",
+            is_verified=True,
+        ))
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="owner-secret",
+            created_at=old,
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            disabled = _disable_orphaned_notification_terms(db)
+
+        db.refresh(term)
+        assert disabled == 0
+        assert term.notify_on_new is True
 
 
 class TestPruneIrrelevantMatches:
