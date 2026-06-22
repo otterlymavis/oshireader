@@ -6,9 +6,9 @@ class Settings(BaseSettings):
     twitter_bearer_token: str = ""
     database_url: str = "sqlite:///./otterpia.db"
     poll_interval_minutes: int = 15
-    connector_fetch_timeout_seconds: float = 25.0
-    connector_concurrency: int = 2
-    poll_terms_per_run: int = 2
+    connector_fetch_timeout_seconds: float = 8.0
+    connector_concurrency: int = 1
+    poll_terms_per_run: int = 1
     admin_api_token: str = ""
     allow_unauthenticated_admin: bool = False
     cors_allow_origins: str = ""
