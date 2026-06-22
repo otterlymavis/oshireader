@@ -185,3 +185,45 @@ test("poll retries a transient backend failure", async (context) => {
 
   assert.equal(pollAttempts, 2);
 });
+
+test("scheduled poll notifies watchdog when diagnostics are degraded", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const webhookPayloads = [];
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/api/admin/poll")) {
+      return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
+    }
+    if (url.endsWith("/api/admin/stats")) {
+      return new Response(JSON.stringify({
+        items_total: 10,
+        matches_total: 12,
+        latest_successful_poll: {
+          id: 1,
+          kind: "poll",
+          status: "completed",
+          created_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+        },
+        recent_events: [],
+      }), { status: 200 });
+    }
+    if (url === "https://hooks.example/watchdog") {
+      webhookPayloads.push(true);
+      return new Response("ok", { status: 200 });
+    }
+    throw new Error(`unexpected url ${url}`);
+  };
+  const pending = [];
+  await worker.scheduled(null, {
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+    ALERT_WEBHOOK_URL: "https://hooks.example/watchdog",
+  }, {
+    waitUntil(promise) {
+      pending.push(promise);
+    },
+  });
+  await Promise.all(pending);
+
+  assert.equal(webhookPayloads.length, 1);
+});

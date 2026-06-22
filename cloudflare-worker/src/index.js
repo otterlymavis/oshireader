@@ -91,7 +91,9 @@ function pollHealth(diagnostics, staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES
 
 async function notifyWatchdog(env, error) {
   if (!env.ALERT_WEBHOOK_URL) return;
-  const message = `OshiReader automation failure: ${String(error)}`;
+  const message = typeof error === "string"
+    ? error
+    : `OshiReader automation failure: ${String(error)}`;
   try {
     await fetch(env.ALERT_WEBHOOK_URL, {
       method: "POST",
@@ -102,6 +104,19 @@ async function notifyWatchdog(env, error) {
   } catch (webhookError) {
     console.error("Watchdog alert delivery failed", webhookError);
   }
+}
+
+function watchdogSummary(reason, diagnostics = {}) {
+  const latestPoll = diagnostics.latest_poll;
+  const latestSuccessfulPoll = diagnostics.latest_successful_poll;
+  const latestApns = diagnostics.latest_apns;
+  return [
+    `OshiReader poll watchdog degraded: ${reason}`,
+    `latest_poll=${latestPoll?.status || "none"} at ${latestPoll?.created_at || "n/a"}`,
+    `latest_successful_poll=${latestSuccessfulPoll?.status || "none"} at ${latestSuccessfulPoll?.created_at || "n/a"}`,
+    `latest_apns=${latestApns?.status || "none"} at ${latestApns?.created_at || "n/a"}`,
+    `items_total=${diagnostics.items_total ?? "n/a"} matches_total=${diagnostics.matches_total ?? "n/a"}`,
+  ].join("\n");
 }
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -157,7 +172,19 @@ export default {
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(
       triggerBackendPoll(env).then(
-        (result) => console.log("Scheduled feed poll completed", result),
+        async (result) => {
+          console.log("Scheduled feed poll completed", result);
+          const health = pollHealth(
+            result.diagnostics,
+            Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
+          );
+          if (!health.healthy) {
+            await notifyWatchdog(
+              env,
+              watchdogSummary(health.reason || "unknown", result.diagnostics),
+            );
+          }
+        },
         (error) => {
           console.error("Scheduled feed poll failed", error);
           return notifyWatchdog(env, error).then(() => {
