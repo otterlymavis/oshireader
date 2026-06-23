@@ -18,6 +18,7 @@ from app.connectors import news_sites
 from app.ingestion.scheduler import (
     _build_connectors,
     _connector_batches,
+    _deactivate_orphaned_duplicate_terms,
     _disable_orphaned_notification_terms,
     _fetch_one,
     _prune_irrelevant_matches,
@@ -483,6 +484,108 @@ class TestDisableOrphanedNotificationTerms:
         db.refresh(term)
         assert disabled == 0
         assert term.notify_on_new is True
+
+
+class TestDeactivateOrphanedDuplicateTerms:
+    def test_deactivates_stale_duplicate_without_device_when_replacement_can_notify(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        stale = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        replacement = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="current-secret",
+            created_at=old,
+        )
+        db.add_all([
+            stale,
+            replacement,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                device_secret="current-secret",
+                is_verified=True,
+            ),
+        ])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            deactivated = _deactivate_orphaned_duplicate_terms(db)
+
+        db.refresh(stale)
+        db.refresh(replacement)
+        assert deactivated == 1
+        assert stale.is_active is False
+        assert replacement.is_active is True
+
+    def test_keeps_unique_non_notifying_term_without_replacement(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            deactivated = _deactivate_orphaned_duplicate_terms(db)
+
+        db.refresh(term)
+        assert deactivated == 0
+        assert term.is_active is True
+
+    def test_keeps_duplicate_when_owner_still_has_a_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        replacement = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="current-secret",
+            created_at=old,
+        )
+        db.add_all([
+            term,
+            replacement,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                device_secret="old-secret",
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token="b" * 64,
+                environment="production",
+                device_secret="current-secret",
+                is_verified=True,
+            ),
+        ])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            deactivated = _deactivate_orphaned_duplicate_terms(db)
+
+        db.refresh(term)
+        assert deactivated == 0
+        assert term.is_active is True
 
 
 class TestPruneIrrelevantMatches:

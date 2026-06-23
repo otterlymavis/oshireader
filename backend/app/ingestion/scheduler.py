@@ -257,6 +257,68 @@ def _disable_orphaned_notification_terms(db) -> int:
     return disabled
 
 
+def _term_has_verified_device(db, term: WatchTerm) -> bool:
+    query = db.query(APNSDeviceToken.token).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+    if term.owner_device_secret:
+        query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+    return query.first() is not None
+
+
+def _deactivate_orphaned_duplicate_terms(db) -> int:
+    grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=grace_minutes)
+    candidates = (
+        db.query(WatchTerm)
+        .filter(WatchTerm.is_active == True)  # noqa: E712
+        .filter(WatchTerm.notify_on_new == False)  # noqa: E712
+        .filter(WatchTerm.owner_device_secret.isnot(None))
+        .filter(WatchTerm.created_at <= cutoff)
+        .all()
+    )
+    deactivated = 0
+    deactivated_keywords: list[str] = []
+    for term in candidates:
+        has_any_owner_device = (
+            db.query(APNSDeviceToken.token)
+            .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+            .first()
+            is not None
+        )
+        if has_any_owner_device:
+            continue
+
+        replacements = (
+            db.query(WatchTerm)
+            .filter(WatchTerm.id != term.id)
+            .filter(WatchTerm.keyword == term.keyword)
+            .filter(WatchTerm.is_active == True)  # noqa: E712
+            .filter(WatchTerm.notify_on_new == True)  # noqa: E712
+            .all()
+        )
+        if not any(_term_has_verified_device(db, replacement) for replacement in replacements):
+            continue
+
+        term.is_active = False
+        deactivated += 1
+        if len(deactivated_keywords) < 10:
+            deactivated_keywords.append(term.keyword)
+
+    if deactivated:
+        record_backend_event(
+            db,
+            "notification_maintenance",
+            "deactivated_orphaned_duplicates",
+            "Deactivated stale duplicate owner-scoped terms with no APNs device",
+            {
+                "deactivated_count": deactivated,
+                "grace_minutes": grace_minutes,
+                "keywords": deactivated_keywords,
+            },
+        )
+        db.commit()
+    return deactivated
+
+
 def _published_at_is_estimated(raw, observed_at: datetime) -> bool:
     marker = (raw.raw_payload or {}).get("date_parsed")
     if marker is not None:
@@ -386,6 +448,7 @@ async def _poll_once_unlocked() -> None:
     try:
         await revalidate_unverified_devices(db)
         _disable_orphaned_notification_terms(db)
+        _deactivate_orphaned_duplicate_terms(db)
         connectors = _build_connectors(db)
         all_terms = (
             db.query(WatchTerm)
