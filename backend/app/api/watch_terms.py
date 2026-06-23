@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth import AuthContext, require_admin_or_device_auth
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll
-from app.models import WatchTerm
+from app.models import APNSDeviceToken, WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
 router = APIRouter(prefix="/api/watch-terms", tags=["watch-terms"])
@@ -29,6 +29,43 @@ def _term_with_keyword_exists(
     if exclude_id is not None:
         query = query.filter(WatchTerm.id != exclude_id)
     return db.query(query.exists()).scalar()
+
+
+def _owner_has_any_device(db: Session, owner_device_secret: str | None) -> bool:
+    if owner_device_secret is None:
+        return False
+    return (
+        db.query(APNSDeviceToken.token)
+        .filter(APNSDeviceToken.device_secret == owner_device_secret)
+        .first()
+        is not None
+    )
+
+
+def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> WatchTerm | None:
+    if incoming.owner_device_secret is None:
+        return None
+    candidates = (
+        db.query(WatchTerm)
+        .filter(
+            WatchTerm.keyword == incoming.keyword,
+            WatchTerm.owner_device_secret.isnot(None),
+            WatchTerm.owner_device_secret != incoming.owner_device_secret,
+            WatchTerm.is_active == True,  # noqa: E712
+        )
+        .order_by(WatchTerm.created_at.desc(), WatchTerm.id.desc())
+        .all()
+    )
+    for candidate in candidates:
+        if _owner_has_any_device(db, candidate.owner_device_secret):
+            continue
+        candidate.owner_device_secret = incoming.owner_device_secret
+        candidate.collection_mode = incoming.collection_mode
+        candidate.is_active = incoming.is_active
+        candidate.notify_on_new = incoming.notify_on_new
+        candidate.aliases = incoming.aliases
+        return candidate
+    return None
 
 
 @router.get("/", response_model=list[WatchTermOut])
@@ -57,6 +94,16 @@ async def create_term(
         owner_device_secret=term.owner_device_secret,
     ):
         raise HTTPException(409, "A watch term with this keyword already exists")
+    adopted = None if auth.is_admin else _adopt_orphaned_same_keyword_term(db, term)
+    if adopted is not None:
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "A watch term with this keyword already exists")
+        db.refresh(adopted)
+        queue_poll()
+        return adopted
     db.add(term)
     try:
         db.commit()

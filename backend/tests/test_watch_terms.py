@@ -206,6 +206,97 @@ class TestCreateWatchTerm:
         assert second.status_code == 201
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
 
+    def test_registered_device_adopts_orphaned_same_keyword_without_device(self, client, db_session):
+        token = "a" * 64
+        secret = "current-device-secret"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        stale_owner_secret = hashlib.sha256("stale-device-secret".encode()).hexdigest()
+        stale = WatchTerm(
+            keyword="Aiko",
+            collection_mode="media_only",
+            notify_on_new=False,
+            is_active=True,
+            aliases=["old"],
+            owner_device_secret=stale_owner_secret,
+        )
+        db_session.add_all([
+            stale,
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.post(
+                "/api/watch-terms/",
+                json={
+                    "keyword": "Aiko",
+                    "collection_mode": "all_info",
+                    "notify_on_new": True,
+                    "aliases": ["new"],
+                },
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["id"] == stale.id
+        db_session.refresh(stale)
+        assert stale.owner_device_secret == owner_secret
+        assert stale.collection_mode == "all_info"
+        assert stale.notify_on_new is True
+        assert stale.aliases == ["new"]
+        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
+        mock_poll.assert_called_once()
+
+    def test_registered_device_does_not_adopt_same_keyword_with_existing_owner_device(self, client, db_session):
+        current_token = "a" * 64
+        old_token = "b" * 64
+        current_secret = "current-device-secret"
+        old_secret = "old-device-secret"
+        current_owner_secret = hashlib.sha256(current_secret.encode()).hexdigest()
+        old_owner_secret = hashlib.sha256(old_secret.encode()).hexdigest()
+        stale = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret=old_owner_secret,
+        )
+        db_session.add_all([
+            stale,
+            APNSDeviceToken(
+                token=current_token,
+                environment="sandbox",
+                device_secret=current_owner_secret,
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token=old_token,
+                environment="sandbox",
+                device_secret=old_owner_secret,
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+                headers={"X-Device-Token": current_token, "X-Device-Secret": current_secret},
+            )
+
+        assert resp.status_code == 201
+        db_session.refresh(stale)
+        assert stale.owner_device_secret == old_owner_secret
+        assert stale.notify_on_new is False
+        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
+
     def test_registered_device_duplicate_keyword_for_same_owner_returns_409(self, client, db_session):
         token = "a" * 64
         secret = "device-secret-value"

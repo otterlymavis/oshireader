@@ -333,6 +333,7 @@ final class OshiReaderTests: XCTestCase {
             ),
             true
         )
+        XCTAssertTrue(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localDisabled))
     }
 
     @MainActor

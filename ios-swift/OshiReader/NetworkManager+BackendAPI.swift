@@ -9,6 +9,10 @@ extension NetworkManager {
         localTerm.notify_on_new && !serverTerm.notify_on_new ? true : nil
     }
 
+    static func automaticSyncNotifyOnNewCreate(localTerm: WatchTerm) -> Bool {
+        true
+    }
+
     private func firstTermByKeyword(_ terms: [WatchTerm]) -> [String: WatchTerm] {
         var result: [String: WatchTerm] = [:]
         for term in terms where result[term.keyword] == nil {
@@ -61,7 +65,7 @@ extension NetworkManager {
             } else if let serverTerm = try? await createWatchTerm(
                 keyword: term.keyword,
                 collectionMode: term.collection_mode,
-                notifyOnNew: term.notify_on_new,
+                notifyOnNew: Self.automaticSyncNotifyOnNewCreate(localTerm: term),
                 isActive: term.is_active,
                 aliases: term.aliases
             ) {
