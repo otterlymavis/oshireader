@@ -20,6 +20,7 @@ enum BackgroundRefreshPolicy {
     // fetching the feed after the backend has made partial polling progress.
     static let pollTimeout: TimeInterval = 8
     static let incrementalFetchOverlap: TimeInterval = 15 * 60
+    static let foregroundRefreshStaleAfter: TimeInterval = 5 * 60
 
     static func shouldScheduleLocalFallback(hasRegisteredRemoteDeviceForCurrentEnvironment: Bool) -> Bool {
         !hasRegisteredRemoteDeviceForCurrentEnvironment
@@ -88,6 +89,18 @@ enum BackgroundRefreshPolicy {
         if item.id.contains(":gnews:") { return false }
         if item.id.hasPrefix("news:nhk:") { return false }
         return true
+    }
+
+    static func shouldRefreshOnForeground(
+        items: [FeedItem],
+        now: Date = Date()
+    ) -> Bool {
+        guard !items.isEmpty else { return true }
+        let latestFetchedAt = items
+            .compactMap { parseISO8601Date($0.fetched_at) }
+            .max()
+        guard let latestFetchedAt else { return true }
+        return now.timeIntervalSince(latestFetchedAt) >= foregroundRefreshStaleAfter
     }
 }
 

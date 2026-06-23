@@ -314,6 +314,27 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertNil(NetworkManager.normalizedAPNSEnvironment(nil))
     }
 
+    func testAutomaticTermSyncDoesNotDisableServerNotificationsFromStaleLocalState() throws {
+        let serverEnabled = WatchTerm(keyword: "Aiko", notify_on_new: true)
+        let serverDisabled = WatchTerm(keyword: "Aiko", notify_on_new: false)
+        let localEnabled = WatchTerm(keyword: "Aiko", notify_on_new: true)
+        let localDisabled = WatchTerm(keyword: "Aiko", notify_on_new: false)
+
+        XCTAssertNil(
+            NetworkManager.automaticSyncNotifyOnNewUpdate(
+                localTerm: localDisabled,
+                serverTerm: serverEnabled
+            )
+        )
+        XCTAssertEqual(
+            NetworkManager.automaticSyncNotifyOnNewUpdate(
+                localTerm: localEnabled,
+                serverTerm: serverDisabled
+            ),
+            true
+        )
+    }
+
     @MainActor
     func testNotificationManagerUsesPersistedRegisteredToken() async throws {
         let manager = NotificationManager(
@@ -422,6 +443,33 @@ final class OshiReaderTests: XCTestCase {
             15
         )
         XCTAssertLessThanOrEqual(BackgroundRefreshPolicy.operationDeadline, 25)
+    }
+
+    func testForegroundRefreshPolicyRefreshesEmptyOrStaleCache() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recent = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:26:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:26:00Z"
+        )
+        let stale = FeedItem(
+            id: "youtube:stale", platform: "youtube", url: "https://example.com/stale",
+            title: "Stale", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:20:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:20:00Z"
+        )
+        let invalid = FeedItem(
+            id: "youtube:invalid", platform: "youtube", url: "https://example.com/invalid",
+            title: "Invalid", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "not-a-date",
+            watch_term_keyword: "Aiko", fetched_at: "not-a-date"
+        )
+
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [], now: now))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [recent], now: now))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [invalid], now: now))
     }
 
     func testBackgroundRefreshNotificationItemsAreNewSurvivingAndDeduplicated() {

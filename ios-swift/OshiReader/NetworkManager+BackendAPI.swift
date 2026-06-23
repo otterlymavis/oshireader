@@ -5,6 +5,10 @@ extension NetworkManager {
 
     // MARK: - Watch Terms
 
+    static func automaticSyncNotifyOnNewUpdate(localTerm: WatchTerm, serverTerm: WatchTerm) -> Bool? {
+        localTerm.notify_on_new && !serverTerm.notify_on_new ? true : nil
+    }
+
     private func firstTermByKeyword(_ terms: [WatchTerm]) -> [String: WatchTerm] {
         var result: [String: WatchTerm] = [:]
         for term in terms where result[term.keyword] == nil {
@@ -33,16 +37,20 @@ extension NetworkManager {
         let backendByKeyword = firstTermByKeyword(backendTerms)
         for term in localTerms {
             if let serverTerm = backendByKeyword[term.keyword] {
+                let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
+                    localTerm: term,
+                    serverTerm: serverTerm
+                )
                 let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
                     serverTerm.is_active != term.is_active ||
-                    serverTerm.notify_on_new != term.notify_on_new ||
+                    notifyOnNewUpdate != nil ||
                     serverTerm.aliases != term.aliases
                 if needsUpdate,
                    let updatedTerm = try? await updateWatchTerm(
                     id: serverTerm.id,
                     isActive: term.is_active,
                     collectionMode: term.collection_mode,
-                    notifyOnNew: term.notify_on_new,
+                    notifyOnNew: notifyOnNewUpdate,
                     aliases: term.aliases
                    ) {
                     await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm) }

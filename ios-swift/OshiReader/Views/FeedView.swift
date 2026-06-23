@@ -523,9 +523,10 @@ struct FeedView: View {
                 await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
                 // Pull backend terms that aren't local yet (fresh install / multi-device)
                 let pulledNew = await NetworkManager.shared.syncTermsFromBackend()
-                // Refresh feed when: no cached items and we have terms (either pre-existing
-                // or just pulled from the backend)
-                if db.feedItems.isEmpty, (!db.terms.isEmpty || pulledNew) {
+                let hasTerms = !db.terms.isEmpty || pulledNew
+                let needsForegroundRefresh = db.feedItems.isEmpty ||
+                    BackgroundRefreshPolicy.shouldRefreshOnForeground(items: db.feedItems)
+                if hasTerms, needsForegroundRefresh {
                     await refreshFeed()
                 }
             }
