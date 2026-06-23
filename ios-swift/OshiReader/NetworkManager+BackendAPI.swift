@@ -10,7 +10,7 @@ extension NetworkManager {
     }
 
     static func automaticSyncNotifyOnNewCreate(localTerm: WatchTerm) -> Bool {
-        true
+        localTerm.notify_on_new
     }
 
     private func firstTermByKeyword(_ terms: [WatchTerm]) -> [String: WatchTerm] {

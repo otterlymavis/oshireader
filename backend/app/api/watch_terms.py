@@ -31,12 +31,15 @@ def _term_with_keyword_exists(
     return db.query(query.exists()).scalar()
 
 
-def _owner_has_any_device(db: Session, owner_device_secret: str | None) -> bool:
+def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> bool:
     if owner_device_secret is None:
         return False
     return (
         db.query(APNSDeviceToken.token)
-        .filter(APNSDeviceToken.device_secret == owner_device_secret)
+        .filter(
+            APNSDeviceToken.device_secret == owner_device_secret,
+            APNSDeviceToken.is_verified == True,  # noqa: E712
+        )
         .first()
         is not None
     )
@@ -57,7 +60,7 @@ def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> Watch
         .all()
     )
     for candidate in candidates:
-        if _owner_has_any_device(db, candidate.owner_device_secret):
+        if _owner_has_verified_device(db, candidate.owner_device_secret):
             continue
         candidate.owner_device_secret = incoming.owner_device_secret
         candidate.collection_mode = incoming.collection_mode

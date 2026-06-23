@@ -253,6 +253,55 @@ class TestCreateWatchTerm:
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
         mock_poll.assert_called_once()
 
+    def test_registered_device_adopts_same_keyword_when_old_owner_has_only_unverified_device(
+        self,
+        client,
+        db_session,
+    ):
+        token = "a" * 64
+        stale_token = "b" * 64
+        secret = "current-device-secret"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        stale_owner_secret = hashlib.sha256("stale-device-secret".encode()).hexdigest()
+        stale = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret=stale_owner_secret,
+        )
+        db_session.add_all([
+            stale,
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token=stale_token,
+                environment="sandbox",
+                device_secret=stale_owner_secret,
+                is_verified=False,
+            ),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["id"] == stale.id
+        db_session.refresh(stale)
+        assert stale.owner_device_secret == owner_secret
+        assert stale.notify_on_new is True
+        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
+        mock_poll.assert_called_once()
+
     def test_registered_device_does_not_adopt_same_keyword_with_existing_owner_device(self, client, db_session):
         current_token = "a" * 64
         old_token = "b" * 64

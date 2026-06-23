@@ -314,7 +314,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertNil(NetworkManager.normalizedAPNSEnvironment(nil))
     }
 
-    func testAutomaticTermSyncDoesNotDisableServerNotificationsFromStaleLocalState() throws {
+    func testAutomaticTermSyncPreservesNotificationOwnership() throws {
         let serverEnabled = WatchTerm(keyword: "Aiko", notify_on_new: true)
         let serverDisabled = WatchTerm(keyword: "Aiko", notify_on_new: false)
         let localEnabled = WatchTerm(keyword: "Aiko", notify_on_new: true)
@@ -333,7 +333,8 @@ final class OshiReaderTests: XCTestCase {
             ),
             true
         )
-        XCTAssertTrue(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localDisabled))
+        XCTAssertTrue(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localEnabled))
+        XCTAssertFalse(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localDisabled))
     }
 
     @MainActor
