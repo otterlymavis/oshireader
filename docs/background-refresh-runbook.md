@@ -94,6 +94,11 @@ The GitHub Actions workflow `Poller monitor` runs every 15 minutes and fails if
 the worker health endpoint is degraded, if the latest successful poll is older
 than 45 minutes, or if authenticated backend notification health is degraded.
 
+Set the GitHub Actions secret `ALERT_WEBHOOK_URL` to a Slack/Discord-compatible
+incoming webhook to receive failure alerts from `Poll feed`, `Poller monitor`,
+and `Notification canary`. The workflows still fail normally when this secret is
+not configured; the alert step is skipped.
+
 The Cloudflare Worker also sends `ALERT_WEBHOOK_URL` a compact watchdog summary
 when a scheduled poll finishes with degraded poll or notification health.
 

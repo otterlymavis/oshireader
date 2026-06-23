@@ -18,6 +18,8 @@ jobs:
       WORKER_HEALTH_URL: https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
       BACKEND_STATS_URL: https://oshireader.onrender.com/api/admin/stats
       ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+      ALERT_CONTEXT: poller-monitor
     steps:
       - name: Check required secret
         run: |
@@ -129,4 +131,46 @@ jobs:
               failures.append(f"pending notifications remain: {pending_notifications}")
           if failures:
               raise SystemExit("; ".join(failures))
+          PY
+
+      - name: Send failure alert
+        if: failure()
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "No ALERT_WEBHOOK_URL configured; skipping failure alert"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          payload = {
+              "status": "failure",
+              "context": os.environ.get("ALERT_CONTEXT"),
+              "workflow": os.environ.get("GITHUB_WORKFLOW"),
+              "job": os.environ.get("GITHUB_JOB"),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "repository": os.environ.get("GITHUB_REPOSITORY"),
+              "ref": os.environ.get("GITHUB_REF_NAME"),
+              "sha": os.environ.get("GITHUB_SHA"),
+              "url": (
+                  f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}"
+                  f"/actions/runs/{os.environ.get('GITHUB_RUN_ID')}"
+              ),
+          }
+          data = json.dumps(payload).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["ALERT_WEBHOOK_URL"],
+              data=data,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=15) as response:
+                  print(f"Alert webhook status: {response.status}")
+          except Exception as exc:
+              print(f"Alert webhook failed: {exc}")
           PY
