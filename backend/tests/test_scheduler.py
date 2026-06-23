@@ -19,6 +19,7 @@ from app.ingestion.scheduler import (
     _build_connectors,
     _connector_batches,
     _deactivate_orphaned_duplicate_terms,
+    _deactivate_orphaned_silent_terms,
     _disable_orphaned_notification_terms,
     _fetch_one,
     _prune_irrelevant_matches,
@@ -582,6 +583,81 @@ class TestDeactivateOrphanedDuplicateTerms:
         with patch("app.ingestion.scheduler.settings") as mock_settings:
             mock_settings.orphaned_notification_grace_minutes = 60
             deactivated = _deactivate_orphaned_duplicate_terms(db)
+
+        db.refresh(term)
+        assert deactivated == 0
+        assert term.is_active is True
+
+
+class TestDeactivateOrphanedSilentTerms:
+    def test_deactivates_stale_silent_owner_scoped_term_without_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            deactivated = _deactivate_orphaned_silent_terms(db)
+
+        db.refresh(term)
+        assert deactivated == 1
+        assert term.is_active is False
+        event = db.query(BackendEvent).filter_by(
+            kind="notification_maintenance",
+            status="deactivated_orphaned_silent_terms",
+        ).one()
+        assert event.payload["deactivated_count"] == 1
+        assert event.payload["keywords"] == ["Aiko"]
+
+    def test_keeps_recent_silent_owner_scoped_term_during_grace_period(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            deactivated = _deactivate_orphaned_silent_terms(db)
+
+        db.refresh(term)
+        assert deactivated == 0
+        assert term.is_active is True
+
+    def test_keeps_silent_term_when_owner_still_has_a_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        db.add_all([
+            term,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                device_secret="old-secret",
+                is_verified=True,
+            ),
+        ])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            deactivated = _deactivate_orphaned_silent_terms(db)
 
         db.refresh(term)
         assert deactivated == 0

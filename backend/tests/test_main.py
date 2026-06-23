@@ -81,6 +81,14 @@ class TestAdminStats:
         assert data["watch_terms"] == []
         assert data["items_by_platform"] == {}
         assert data["apns"]["backend_public_url"]
+        assert data["notification_health"] == {
+            "healthy": True,
+            "active_notify_terms": 0,
+            "active_silent_orphan_terms": 0,
+            "active_notify_terms_without_verified_devices": 0,
+            "active_silent_orphan_term_ids": [],
+            "active_notify_term_ids_without_verified_devices": [],
+        }
         assert data["latest_relevant_apns"] is None
         assert data["recent_events"] == []
 
@@ -169,6 +177,47 @@ class TestAdminStats:
         assert terms["Global"]["owner_scoped"] is False
         assert terms["Global"]["notification_devices"] == 3
         assert terms["Global"]["notification_verified_devices"] == 2
+
+    def test_stats_flags_notification_health_risks(self, client, db_session):
+        db_session.add_all([
+            WatchTerm(
+                keyword="Silent",
+                is_active=True,
+                notify_on_new=False,
+                owner_device_secret="silent-orphan",
+            ),
+            WatchTerm(
+                keyword="Notify",
+                is_active=True,
+                notify_on_new=True,
+                owner_device_secret="notify-without-device",
+            ),
+            WatchTerm(
+                keyword="Safe",
+                is_active=True,
+                notify_on_new=True,
+                owner_device_secret="safe-owner",
+            ),
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                device_secret="safe-owner",
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        terms = {term["keyword"]: term for term in r.json()["watch_terms"]}
+        health = r.json()["notification_health"]
+        assert health["healthy"] is False
+        assert health["active_notify_terms"] == 2
+        assert health["active_silent_orphan_terms"] == 1
+        assert health["active_notify_terms_without_verified_devices"] == 1
+        assert health["active_silent_orphan_term_ids"] == [terms["Silent"]["id"]]
+        assert health["active_notify_term_ids_without_verified_devices"] == [terms["Notify"]["id"]]
 
     def test_stats_includes_recent_backend_events(self, client, db_session):
         db_session.add(BackendEvent(

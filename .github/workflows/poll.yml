@@ -68,6 +68,7 @@ jobs:
               "device_tokens_by_environment_and_verification": apns.get(
                   "device_tokens_by_environment_and_verification", {}
               ),
+              "notification_health": data.get("notification_health", {}),
               "watch_terms": data.get("watch_terms", []),
               "recent_events": data.get("recent_events", [])[:10],
           }

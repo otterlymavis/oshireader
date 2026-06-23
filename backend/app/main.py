@@ -339,19 +339,46 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             "notification_verified_devices": verified,
         }
 
+    watch_term_rows: list[dict] = []
+    active_silent_orphans: list[dict] = []
+    active_notify_without_verified_devices: list[dict] = []
+    active_notify_terms = 0
+    for term in terms:
+        device_counts = notification_device_counts(term)
+        row = {
+            "id": term.id,
+            "keyword": term.keyword,
+            "is_active": term.is_active,
+            "notify_on_new": term.notify_on_new,
+            **device_counts,
+        }
+        watch_term_rows.append(row)
+        if not term.is_active:
+            continue
+        if term.notify_on_new:
+            active_notify_terms += 1
+            if device_counts["notification_verified_devices"] == 0:
+                active_notify_without_verified_devices.append(row)
+        elif (
+            term.owner_device_secret
+            and device_counts["notification_devices"] == 0
+        ):
+            active_silent_orphans.append(row)
+
     return {
         "items_total": items_total,
         "matches_total": matches_total,
-        "watch_terms": [
-            {
-                "id": t.id,
-                "keyword": t.keyword,
-                "is_active": t.is_active,
-                "notify_on_new": t.notify_on_new,
-                **notification_device_counts(t),
-            }
-            for t in terms
-        ],
+        "watch_terms": watch_term_rows,
+        "notification_health": {
+            "healthy": not active_silent_orphans and not active_notify_without_verified_devices,
+            "active_notify_terms": active_notify_terms,
+            "active_silent_orphan_terms": len(active_silent_orphans),
+            "active_notify_terms_without_verified_devices": len(active_notify_without_verified_devices),
+            "active_silent_orphan_term_ids": [term["id"] for term in active_silent_orphans[:20]],
+            "active_notify_term_ids_without_verified_devices": [
+                term["id"] for term in active_notify_without_verified_devices[:20]
+            ],
+        },
         "items_by_platform": {p: c for p, c in by_platform},
         "apns": {
             "configured": apns_configured(),
