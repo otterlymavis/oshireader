@@ -1,0 +1,70 @@
+name: Notification canary
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: notification-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BACKEND_CANARY_URL: https://oshireader.onrender.com/api/admin/notification-canary
+      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+    steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$ADMIN_API_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Send synthetic notification canary
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --max-time 60 \
+            -X POST \
+            "$BACKEND_CANARY_URL" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN")
+
+          echo "HTTP status: $STATUS"
+          cat "$BODY"
+          echo
+
+          python3 - "$STATUS" "$BODY" <<'PY'
+          import json
+          import sys
+
+          status = sys.argv[1]
+          with open(sys.argv[2], encoding="utf-8") as response_file:
+              payload = json.load(response_file)
+
+          apns_event = payload.get("apns_event") or {}
+          apns_payload = apns_event.get("payload") or {}
+          summary = {
+              "term_id": payload.get("term_id"),
+              "keyword": payload.get("keyword"),
+              "delivered": payload.get("delivered"),
+              "apns_event": apns_event,
+          }
+          print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+
+          failures = []
+          if status != "200":
+              failures.append(f"canary endpoint returned HTTP {status}")
+          if payload.get("delivered") is not True:
+              failures.append(f"canary did not deliver: {payload}")
+          if apns_payload.get("delivered_count", 0) < 1:
+              failures.append(f"APNs event did not record a delivery: {apns_event}")
+          if failures:
+              raise SystemExit("; ".join(failures))
+          PY

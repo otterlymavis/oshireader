@@ -441,6 +441,83 @@ class TestAdminPoll:
         assert r.json() == {"status": "poll already running"}
 
 
+class TestAdminNotificationCanary:
+    def test_canary_sends_synthetic_new_match_notification(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        db_session.add_all([
+            term,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=AsyncMock(return_value=True)) as mock_send:
+            r = client.post("/api/admin/notification-canary")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["term_id"] == term.id
+        assert body["keyword"] == "Aiko"
+        assert body["delivered"] is True
+        assert body["apns_event"] is None
+        mock_send.assert_awaited_once()
+        _, sent_term, count, preview = mock_send.await_args.args
+        assert sent_term.id == term.id
+        assert count == 1
+        assert preview["title"] == "OshiReader notification canary"
+
+        event = db_session.query(BackendEvent).filter_by(
+            kind="notification_canary",
+            status="passed",
+        ).one()
+        assert event.payload["term_id"] == term.id
+        assert event.payload["delivered"] is True
+
+    def test_canary_requires_active_notification_term_with_verified_device(self, client, db_session):
+        db_session.add(WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True))
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=AsyncMock()) as mock_send:
+            r = client.post("/api/admin/notification-canary")
+
+        assert r.status_code == 503
+        mock_send.assert_not_awaited()
+        event = db_session.query(BackendEvent).filter_by(
+            kind="notification_canary",
+            status="failed",
+        ).one()
+        assert event.message == "No active notification term has a verified APNs device"
+
+    def test_canary_fails_when_delivery_fails(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        db_session.add_all([
+            term,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=AsyncMock(return_value=False)):
+            r = client.post("/api/admin/notification-canary")
+
+        assert r.status_code == 503
+        event = db_session.query(BackendEvent).filter_by(
+            kind="notification_canary",
+            status="failed",
+        ).one()
+        assert event.payload["term_id"] == term.id
+        assert event.payload["delivered"] is False
+
+
 class TestAdminAuth:
     def test_stats_requires_auth_when_token_set(self, client):
         with patch("app.auth.settings") as mock_settings:

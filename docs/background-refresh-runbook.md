@@ -42,6 +42,16 @@ Healthy notification output must include:
 - `notification_health.active_notify_terms_without_verified_devices: 0`
 - `pending_notifications: []`
 
+Manual end-to-end APNs canary:
+
+```sh
+gh workflow run notification-canary.yml --ref master
+```
+
+This intentionally sends one visible synthetic "OshiReader notification canary"
+push through the same new-match APNs path used for feed notifications. Use it
+when you need proof that the backend can still produce and deliver a real push.
+
 ## Failure Pattern
 
 The common polling failure is repeated `poll started` events with no newer
@@ -87,6 +97,11 @@ than 45 minutes, or if authenticated backend notification health is degraded.
 The Cloudflare Worker also sends `ALERT_WEBHOOK_URL` a compact watchdog summary
 when a scheduled poll finishes with degraded poll or notification health.
 
+The GitHub Actions workflow `Notification canary` is manual-only to avoid noisy
+scheduled test pushes. It fails if the backend cannot choose an active
+notification term, if APNs delivery fails, or if the APNs event does not record
+at least one delivery.
+
 ## Recovery Steps
 
 1. Check worker health and backend health.
@@ -99,5 +114,8 @@ when a scheduled poll finishes with degraded poll or notification health.
    non-notifying owner-scoped terms older than
    `ORPHANED_NOTIFICATION_GRACE_MINUTES` when their APNs device no longer
    exists, so those terms cannot silently collect matches without push delivery.
-5. Trigger `gh workflow run deploy-render.yml --ref master` for backend config changes.
-6. Keep polling worker health until a fresh `latest_successful_poll` appears.
+5. If health looks clean but notifications are still suspect, run
+   `gh workflow run notification-canary.yml --ref master` and inspect the APNs
+   canary event.
+6. Trigger `gh workflow run deploy-render.yml --ref master` for backend config changes.
+7. Keep polling worker health until a fresh `latest_successful_poll` appears.

@@ -7,6 +7,7 @@ import struct
 import traceback
 import zlib
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import AsyncGenerator
 
@@ -87,6 +88,40 @@ def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
         if term_id is None or term_id in active_term_ids:
             return event
     return None
+
+
+def _term_verified_device_count(db: Session, term: WatchTerm) -> int:
+    query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+    if term.owner_device_secret:
+        query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+    return query.count()
+
+
+def _notification_canary_preview() -> dict:
+    now = datetime.now(timezone.utc)
+    backend_url = settings.backend_public_url.rstrip("/")
+    return {
+        "id": f"oshireader:canary:{int(now.timestamp())}",
+        "platform": "OshiReader",
+        "url": backend_url,
+        "title": "OshiReader notification canary",
+        "content_text": "Synthetic new-feed notification canary.",
+        "author": "OshiReader",
+        "thumbnail_url": f"{backend_url}/api/notification-preview.png",
+        "media_type": "article",
+        "published_at": now.isoformat(),
+    }
+
+
+def _notification_canary_term(db: Session) -> WatchTerm | None:
+    candidates = (
+        db.query(WatchTerm)
+        .filter(WatchTerm.is_active == True)  # noqa: E712
+        .filter(WatchTerm.notify_on_new == True)  # noqa: E712
+        .order_by(WatchTerm.owner_device_secret.isnot(None), WatchTerm.id)
+        .all()
+    )
+    return next((term for term in candidates if _term_verified_device_count(db, term) > 0), None)
 
 
 def _record_poll_request_timeout(timeout_seconds: float) -> None:
@@ -275,6 +310,54 @@ async def test_fetch(
 async def test_push(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
     from app.apns import send_test_push
     return await send_test_push(db)
+
+
+@app.post("/api/admin/notification-canary")
+async def notification_canary(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
+    from app.apns import apns_configured, send_new_match_notifications
+
+    if not apns_configured():
+        record_backend_event(
+            db,
+            "notification_canary",
+            "failed",
+            "APNs is not configured",
+            {},
+        )
+        db.commit()
+        raise HTTPException(503, "APNs is not configured")
+
+    term = _notification_canary_term(db)
+    if term is None:
+        record_backend_event(
+            db,
+            "notification_canary",
+            "failed",
+            "No active notification term has a verified APNs device",
+            {},
+        )
+        db.commit()
+        raise HTTPException(503, "No active notification term has a verified APNs device")
+
+    delivered = await send_new_match_notifications(db, term, 1, _notification_canary_preview())
+    apns_event = _latest_relevant_apns_event(db)
+    payload = {
+        "term_id": term.id,
+        "keyword": term.keyword,
+        "delivered": delivered,
+        "apns_event": _backend_event_payload(apns_event) if apns_event else None,
+    }
+    record_backend_event(
+        db,
+        "notification_canary",
+        "passed" if delivered else "failed",
+        "Synthetic notification canary completed",
+        payload,
+    )
+    db.commit()
+    if not delivered:
+        raise HTTPException(503, payload)
+    return payload
 
 
 @app.get("/api/admin/stats")
