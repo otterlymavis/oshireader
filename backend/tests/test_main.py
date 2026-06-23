@@ -454,8 +454,26 @@ class TestAdminNotificationCanary:
         ])
         db_session.commit()
 
+        async def fake_send(db, sent_term, count, _preview):
+            db.add(BackendEvent(
+                kind="apns",
+                status="attempted",
+                message="APNs notification attempted",
+                payload={
+                    "term_id": sent_term.id,
+                    "keyword": sent_term.keyword,
+                    "new_count": count,
+                    "device_count": 1,
+                    "delivered_count": 1,
+                    "retryable_failures": 0,
+                    "pruned_tokens": 0,
+                },
+            ))
+            db.commit()
+            return True
+
         with patch("app.apns.apns_configured", return_value=True), \
-             patch("app.apns.send_new_match_notifications", new=AsyncMock(return_value=True)) as mock_send:
+             patch("app.apns.send_new_match_notifications", new=AsyncMock(side_effect=fake_send)) as mock_send:
             r = client.post("/api/admin/notification-canary")
 
         assert r.status_code == 200
@@ -463,7 +481,9 @@ class TestAdminNotificationCanary:
         assert body["term_id"] == term.id
         assert body["keyword"] == "Aiko"
         assert body["delivered"] is True
-        assert body["apns_event"] is None
+        assert body["apns_event"]["kind"] == "apns"
+        assert body["apns_event"]["payload"]["delivered_count"] == 1
+        assert isinstance(body["apns_event"]["created_at"], str)
         mock_send.assert_awaited_once()
         _, sent_term, count, preview = mock_send.await_args.args
         assert sent_term.id == term.id
@@ -476,6 +496,7 @@ class TestAdminNotificationCanary:
         ).one()
         assert event.payload["term_id"] == term.id
         assert event.payload["delivered"] is True
+        assert isinstance(event.payload["apns_event"]["created_at"], str)
 
     def test_canary_requires_active_notification_term_with_verified_device(self, client, db_session):
         db_session.add(WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True))

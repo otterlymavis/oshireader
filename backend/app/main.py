@@ -52,6 +52,14 @@ def _backend_event_payload(event: BackendEvent) -> dict:
     }
 
 
+def _jsonable_backend_event_payload(event: BackendEvent) -> dict:
+    payload = _backend_event_payload(event)
+    created_at = payload.get("created_at")
+    if hasattr(created_at, "isoformat"):
+        payload["created_at"] = created_at.isoformat()
+    return payload
+
+
 def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
     """Return the newest APNs event that still describes an active notification path."""
     events = (
@@ -345,7 +353,7 @@ async def notification_canary(_: None = Depends(require_admin_auth), db: Session
         "term_id": term.id,
         "keyword": term.keyword,
         "delivered": delivered,
-        "apns_event": _backend_event_payload(apns_event) if apns_event else None,
+        "apns_event": _jsonable_backend_event_payload(apns_event) if apns_event else None,
     }
     record_backend_event(
         db,
