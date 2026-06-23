@@ -235,7 +235,7 @@ def _notification_preview_png() -> bytes:
 
 
 @app.post("/api/client-diagnostics")
-def client_diagnostics(report: ClientDiagnosticIn) -> dict:
+def client_diagnostics(report: ClientDiagnosticIn, db: Session = Depends(get_db)) -> dict:
     failed_events = [event for event in report.events if event.status not in {"ok", "items"}]
     log.warning(
         "client diagnostic reason=%s env=%s terms=%d cached=%d platforms=%s failed_events=%d events=%s",
@@ -247,6 +247,24 @@ def client_diagnostics(report: ClientDiagnosticIn) -> dict:
         len(failed_events),
         [event.model_dump() for event in report.events],
     )
+    record_backend_event(
+        db,
+        "client_diagnostic",
+        "reported",
+        "Client diagnostic reported",
+        {
+            "reason": report.reason,
+            "environment": report.environment,
+            "api_base": report.api_base,
+            "app_version": report.app_version,
+            "build": report.build,
+            "active_terms_count": report.active_terms_count,
+            "subscribed_platforms": report.subscribed_platforms,
+            "cached_feed_count": report.cached_feed_count,
+            "events": [event.model_dump() for event in report.events],
+        },
+    )
+    db.commit()
     return {"status": "received"}
 
 

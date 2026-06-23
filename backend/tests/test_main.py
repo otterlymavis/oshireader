@@ -43,7 +43,7 @@ class TestNotificationPreviewImage:
 
 
 class TestClientDiagnostics:
-    def test_client_diagnostics_accepts_refresh_report(self, client, caplog):
+    def test_client_diagnostics_accepts_refresh_report(self, client, db_session, caplog):
         payload = {
             "reason": "feed_refresh_no_results_after_fallbacks",
             "environment": "Debug",
@@ -69,6 +69,11 @@ class TestClientDiagnostics:
         assert r.status_code == 200
         assert r.json() == {"status": "received"}
         assert "client diagnostic reason=feed_refresh_no_results_after_fallbacks" in caplog.text
+        event = db_session.query(BackendEvent).filter_by(kind="client_diagnostic").one()
+        assert event.status == "reported"
+        assert event.payload["reason"] == "feed_refresh_no_results_after_fallbacks"
+        assert event.payload["environment"] == "Debug"
+        assert event.payload["events"][0]["strategy"] == "backend_feed_days_90"
 
 
 class TestAdminStats:

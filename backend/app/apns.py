@@ -5,7 +5,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -41,6 +41,7 @@ class APNSSendResult:
     delivered: bool = False
     should_delete_token: bool = False
     retryable_failure: bool = False
+    notification_id: str | None = field(default=None, compare=False)
 
 
 def _private_key() -> str:
@@ -159,6 +160,10 @@ def _shrink_payload(payload: dict) -> dict:
 
 def _payload_exceeds_apns_limit(payload: dict) -> bool:
     return _payload_size(payload) > _APNS_PAYLOAD_HARD_LIMIT_BYTES
+
+
+def _diagnostics_url() -> str:
+    return f"{settings.backend_public_url.rstrip('/')}/api/client-diagnostics"
 
 
 async def _post_with_retry(
@@ -371,6 +376,11 @@ async def _send_one(
         "apns-collapse-id": _collapse_id(term),
     }
     payload = _payload(term, count, preview_item)
+    notification_id = uuid.uuid4().hex
+    payload["notification_id"] = notification_id
+    payload["apns_token_suffix"] = device.token[-8:]
+    payload["diagnostics_url"] = _diagnostics_url()
+    payload = _shrink_payload(payload)
     if _payload_exceeds_apns_limit(payload):
         log.warning(
             "APNs payload too large; skipping send token=%s term=%s bytes=%d",
@@ -378,16 +388,16 @@ async def _send_one(
             term.id,
             _payload_size(payload),
         )
-        return APNSSendResult()
+        return APNSSendResult(notification_id=notification_id)
 
     try:
         resp = await _post_with_retry(client, url, payload, headers)
     except Exception as exc:
         log.warning("APNs send failed token=%s: %s", device.token[-8:], exc)
-        return APNSSendResult(retryable_failure=True)
+        return APNSSendResult(retryable_failure=True, notification_id=notification_id)
 
     if resp.status_code in {200, 201}:
-        return APNSSendResult(delivered=True)
+        return APNSSendResult(delivered=True, notification_id=notification_id)
 
     reason = None
     try:
@@ -397,7 +407,11 @@ async def _send_one(
     log.warning("APNs rejected token=%s status=%d reason=%s", device.token[-8:], resp.status_code, reason)
     should_delete = reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"} or resp.status_code == 410
     retryable = resp.status_code in _APNS_TRANSIENT_STATUS_CODES
-    return APNSSendResult(should_delete_token=should_delete, retryable_failure=retryable)
+    return APNSSendResult(
+        should_delete_token=should_delete,
+        retryable_failure=retryable,
+        notification_id=notification_id,
+    )
 
 
 async def send_new_match_notifications(
@@ -495,13 +509,16 @@ async def send_new_match_notifications(
             db.delete(device)
             pruned_tokens += 1
         if len(device_results) < _APNS_EVENT_DEVICE_RESULT_LIMIT:
-            device_results.append({
+            device_result = {
                 "token": device.token[-8:],
                 "environment": device.environment,
                 "delivered": result.delivered,
                 "retryable_failure": result.retryable_failure,
                 "pruned": result.should_delete_token,
-            })
+            }
+            if result.notification_id:
+                device_result["notification_id"] = result.notification_id
+            device_results.append(device_result)
     record_backend_event(
         db,
         "apns",

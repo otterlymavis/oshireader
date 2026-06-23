@@ -376,9 +376,9 @@ class TestSendNewMatchNotifications:
         db_session.commit()
 
         results = [
-            APNSSendResult(delivered=True),
-            APNSSendResult(retryable_failure=True),
-            APNSSendResult(should_delete_token=True),
+            APNSSendResult(delivered=True, notification_id="n1"),
+            APNSSendResult(retryable_failure=True, notification_id="n2"),
+            APNSSendResult(should_delete_token=True, notification_id="n3"),
         ]
         with patch("app.apns.apns_configured", return_value=True), \
              patch("app.apns._send_one", new=AsyncMock(side_effect=results)):
@@ -396,6 +396,7 @@ class TestSendNewMatchNotifications:
             {
                 "token": "11111111",
                 "environment": "production",
+                "notification_id": "n1",
                 "delivered": True,
                 "retryable_failure": False,
                 "pruned": False,
@@ -403,6 +404,7 @@ class TestSendNewMatchNotifications:
             {
                 "token": "22222222",
                 "environment": "sandbox",
+                "notification_id": "n2",
                 "delivered": False,
                 "retryable_failure": True,
                 "pruned": False,
@@ -410,6 +412,7 @@ class TestSendNewMatchNotifications:
             {
                 "token": "33333333",
                 "environment": "sandbox",
+                "notification_id": "n3",
                 "delivered": False,
                 "retryable_failure": False,
                 "pruned": True,
@@ -627,6 +630,28 @@ class TestSendOne:
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
         assert result == APNSSendResult(delivered=True)
+
+    @pytest.mark.asyncio
+    async def test_send_one_includes_receipt_diagnostics_metadata(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(200, {}))
+        notification_id = "abc123notification"
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.uuid.uuid4") as mock_uuid, \
+             patch("app.apns.settings") as s:
+            mock_uuid.return_value.hex = notification_id
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            s.backend_public_url = "https://backend.example.com"
+            result = await _send_one(client, device, term, 1)
+
+        assert result == APNSSendResult(delivered=True)
+        assert result.notification_id == notification_id
+        payload = client.post.call_args.kwargs["json"]
+        assert payload["notification_id"] == notification_id
+        assert payload["apns_token_suffix"] == "aaaaaaaa"
+        assert payload["diagnostics_url"] == "https://backend.example.com/api/client-diagnostics"
+        assert _payload_size(payload) <= 3500
 
     @pytest.mark.asyncio
     async def test_skips_send_when_preview_payload_exceeds_apns_limit(self):

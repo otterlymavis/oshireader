@@ -1,3 +1,4 @@
+import Foundation
 import UserNotifications
 
 final class NotificationService: UNNotificationServiceExtension {
@@ -19,6 +20,7 @@ final class NotificationService: UNNotificationServiceExtension {
         // Hide source/author labels while preserving the title, message preview,
         // link metadata, and any downloadable thumbnail attachment.
         content.subtitle = ""
+        sendReceiptDiagnostic(userInfo: content.userInfo)
 
         guard let url = thumbnailURL(from: content.userInfo) else {
             finish(with: content)
@@ -85,6 +87,92 @@ final class NotificationService: UNNotificationServiceExtension {
 
     private func isSupported(_ url: URL) -> Bool {
         ["http", "https"].contains(url.scheme?.lowercased())
+    }
+
+    private func sendReceiptDiagnostic(userInfo: [AnyHashable: Any]) {
+        guard let url = diagnosticsURL(from: userInfo) else { return }
+
+        let detail = diagnosticDetail(userInfo: userInfo)
+        let event: [String: Any] = [
+            "strategy": "notification_service_extension",
+            "status": "received",
+            "item_count": intValue(userInfo["new_count"]),
+            "added_count": 0,
+            "detail": detail,
+        ]
+        let payload: [String: Any] = [
+            "reason": "remote_notification_received",
+            "environment": "NotificationService",
+            "api_base": apiBase(from: url),
+            "app_version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+            "active_terms_count": 0,
+            "subscribed_platforms": [],
+            "cached_feed_count": 0,
+            "events": [event],
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let body = try? JSONSerialization.data(withJSONObject: payload)
+        else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 4
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        URLSession.shared.dataTask(with: request).resume()
+    }
+
+    private func diagnosticsURL(from userInfo: [AnyHashable: Any]) -> URL? {
+        if let value = userInfo["diagnostics_url"] as? String,
+           let url = URL(string: value),
+           isSupported(url) {
+            return url
+        }
+        if let thumbnail = thumbnailURL(from: userInfo),
+           let host = thumbnail.host,
+           let scheme = thumbnail.scheme,
+           isSupported(thumbnail) {
+            var components = URLComponents()
+            components.scheme = scheme
+            components.host = host
+            components.port = thumbnail.port
+            components.path = "/api/client-diagnostics"
+            return components.url
+        }
+        return nil
+    }
+
+    private func apiBase(from url: URL) -> String {
+        var components = URLComponents()
+        components.scheme = url.scheme
+        components.host = url.host
+        components.port = url.port
+        return components.url?.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
+    }
+
+    private func diagnosticDetail(userInfo: [AnyHashable: Any]) -> String {
+        let keys = [
+            "notification_id",
+            "apns_token_suffix",
+            "watch_term_id",
+            "watch_term_keyword",
+            "new_count",
+            "item_id",
+            "match_id",
+        ]
+        let parts = keys.compactMap { key -> String? in
+            guard let value = userInfo[key] else { return nil }
+            return "\(key)=\(value)"
+        }
+        return String(parts.joined(separator: " ").prefix(500))
+    }
+
+    private func intValue(_ value: Any?) -> Int {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? String, let parsed = Int(value) { return parsed }
+        return 0
     }
 
     private func fileSize(at url: URL) -> Int64 {
