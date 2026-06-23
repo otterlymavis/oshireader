@@ -38,7 +38,7 @@ jobs:
             exit 1
           fi
 
-      - name: Print backend notification diagnostics
+      - name: Validate backend notification diagnostics
         if: always()
         run: |
           BODY=$(mktemp)
@@ -59,6 +59,8 @@ jobs:
               data = json.load(fh)
 
           apns = data.get("apns", {})
+          notification_health = data.get("notification_health") or {}
+          pending_notifications = data.get("pending_notifications") or []
           summary = {
               "items_total": data.get("items_total"),
               "matches_total": data.get("matches_total"),
@@ -68,9 +70,19 @@ jobs:
               "device_tokens_by_environment_and_verification": apns.get(
                   "device_tokens_by_environment_and_verification", {}
               ),
-              "notification_health": data.get("notification_health", {}),
+              "notification_health": notification_health,
+              "pending_notifications": pending_notifications,
               "watch_terms": data.get("watch_terms", []),
               "recent_events": data.get("recent_events", [])[:10],
           }
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+          failures = []
+          if apns.get("configured") is not True:
+              failures.append("APNs is not configured")
+          if notification_health.get("healthy") is not True:
+              failures.append(f"notification_health is degraded: {notification_health}")
+          if pending_notifications:
+              failures.append(f"pending notifications remain after poll: {pending_notifications}")
+          if failures:
+              raise SystemExit("; ".join(failures))
           PY
