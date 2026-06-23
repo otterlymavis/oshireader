@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -91,6 +91,7 @@ class TestAdminStats:
             "active_notify_terms": 0,
             "active_silent_orphan_terms": 0,
             "active_notify_terms_without_verified_devices": 0,
+            "orphaned_notification_grace_minutes": 60,
             "active_silent_orphan_term_ids": [],
             "active_notify_term_ids_without_verified_devices": [],
         }
@@ -184,18 +185,21 @@ class TestAdminStats:
         assert terms["Global"]["notification_verified_devices"] == 2
 
     def test_stats_flags_notification_health_risks(self, client, db_session):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
         db_session.add_all([
             WatchTerm(
                 keyword="Silent",
                 is_active=True,
                 notify_on_new=False,
                 owner_device_secret="silent-orphan",
+                created_at=old,
             ),
             WatchTerm(
                 keyword="Notify",
                 is_active=True,
                 notify_on_new=True,
                 owner_device_secret="notify-without-device",
+                created_at=old,
             ),
             WatchTerm(
                 keyword="Safe",
@@ -221,8 +225,39 @@ class TestAdminStats:
         assert health["active_notify_terms"] == 2
         assert health["active_silent_orphan_terms"] == 1
         assert health["active_notify_terms_without_verified_devices"] == 1
+        assert health["orphaned_notification_grace_minutes"] == 60
         assert health["active_silent_orphan_term_ids"] == [terms["Silent"]["id"]]
         assert health["active_notify_term_ids_without_verified_devices"] == [terms["Notify"]["id"]]
+
+    def test_stats_keeps_recent_owner_scoped_terms_in_grace_period(self, client, db_session):
+        db_session.add_all([
+            WatchTerm(
+                keyword="Recent silent",
+                is_active=True,
+                notify_on_new=False,
+                owner_device_secret="recent-silent-orphan",
+                created_at=datetime.now(timezone.utc),
+            ),
+            WatchTerm(
+                keyword="Recent notify",
+                is_active=True,
+                notify_on_new=True,
+                owner_device_secret="recent-notify-orphan",
+                created_at=datetime.now(timezone.utc),
+            ),
+        ])
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        health = r.json()["notification_health"]
+        assert health["healthy"] is True
+        assert health["active_notify_terms"] == 1
+        assert health["active_silent_orphan_terms"] == 0
+        assert health["active_notify_terms_without_verified_devices"] == 0
+        assert health["active_silent_orphan_term_ids"] == []
+        assert health["active_notify_term_ids_without_verified_devices"] == []
 
     def test_stats_includes_recent_backend_events(self, client, db_session):
         db_session.add(BackendEvent(

@@ -7,7 +7,7 @@ import struct
 import traceback
 import zlib
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import AsyncGenerator
 
@@ -452,6 +452,19 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
     active_silent_orphans: list[dict] = []
     active_notify_without_verified_devices: list[dict] = []
     active_notify_terms = 0
+    orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
+    orphaned_cutoff = datetime.now(timezone.utc) - timedelta(minutes=orphaned_grace_minutes)
+
+    def is_past_owner_grace(term: WatchTerm) -> bool:
+        if not term.owner_device_secret:
+            return True
+        if not term.created_at:
+            return True
+        created_at = term.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return created_at <= orphaned_cutoff
+
     for term in terms:
         device_counts = notification_device_counts(term)
         row = {
@@ -466,11 +479,15 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             continue
         if term.notify_on_new:
             active_notify_terms += 1
-            if device_counts["notification_verified_devices"] == 0:
+            if (
+                device_counts["notification_verified_devices"] == 0
+                and is_past_owner_grace(term)
+            ):
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
             and device_counts["notification_devices"] == 0
+            and is_past_owner_grace(term)
         ):
             active_silent_orphans.append(row)
 
@@ -483,6 +500,7 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             "active_notify_terms": active_notify_terms,
             "active_silent_orphan_terms": len(active_silent_orphans),
             "active_notify_terms_without_verified_devices": len(active_notify_without_verified_devices),
+            "orphaned_notification_grace_minutes": orphaned_grace_minutes,
             "active_silent_orphan_term_ids": [term["id"] for term in active_silent_orphans[:20]],
             "active_notify_term_ids_without_verified_devices": [
                 term["id"] for term in active_notify_without_verified_devices[:20]
