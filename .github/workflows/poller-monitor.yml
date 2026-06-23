@@ -16,7 +16,16 @@ jobs:
     timeout-minutes: 5
     env:
       WORKER_HEALTH_URL: https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
+      BACKEND_STATS_URL: https://oshireader.onrender.com/api/admin/stats
+      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
     steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$ADMIN_API_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
       - name: Check poller health
         run: |
           BODY=$(mktemp)
@@ -69,4 +78,55 @@ jobs:
               "items_total": diagnostics.get("items_total"),
               "matches_total": diagnostics.get("matches_total"),
           }, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Check backend notification health
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --max-time 30 \
+            "$BACKEND_STATS_URL" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN")
+
+          echo "HTTP status: $STATUS"
+
+          python3 - "$STATUS" "$BODY" <<'PY'
+          import json
+          import sys
+
+          status = sys.argv[1]
+          with open(sys.argv[2], encoding="utf-8") as response_file:
+              payload = json.load(response_file)
+
+          apns = payload.get("apns") or {}
+          notification_health = payload.get("notification_health") or {}
+          pending_notifications = payload.get("pending_notifications") or []
+          summary = {
+              "apns_configured": apns.get("configured"),
+              "apns_server_environment": apns.get("server_environment"),
+              "device_tokens_by_environment_and_verification": apns.get(
+                  "device_tokens_by_environment_and_verification", {}
+              ),
+              "notification_health": notification_health,
+              "pending_notifications": pending_notifications,
+              "latest_relevant_apns": payload.get("latest_relevant_apns"),
+          }
+          print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+
+          failures = []
+          if status != "200":
+              failures.append(f"stats endpoint returned HTTP {status}")
+          if apns.get("configured") is not True:
+              failures.append("APNs is not configured")
+          if notification_health.get("healthy") is not True:
+              failures.append(f"notification health is degraded: {notification_health}")
+          if pending_notifications:
+              failures.append(f"pending notifications remain: {pending_notifications}")
+          if failures:
+              raise SystemExit("; ".join(failures))
           PY

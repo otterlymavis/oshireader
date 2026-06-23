@@ -27,6 +27,21 @@ The backend commit currently served by Render:
 curl -fsS https://oshireader.onrender.com/api/health
 ```
 
+Authenticated backend notification health is exposed through:
+
+```sh
+curl -fsS https://oshireader.onrender.com/api/admin/stats \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
+```
+
+Healthy notification output must include:
+
+- `apns.configured: true`
+- `notification_health.healthy: true`
+- `notification_health.active_silent_orphan_terms: 0`
+- `notification_health.active_notify_terms_without_verified_devices: 0`
+- `pending_notifications: []`
+
 ## Failure Pattern
 
 The common polling failure is repeated `poll started` events with no newer
@@ -39,17 +54,16 @@ Look for:
 - `latest_successful_poll.created_at` older than 45 minutes
 - repeated `latest_poll.id` changes without a matching completed event
 
-The common notification failure is healthy polling with
-`notifications.healthy: false`. This usually means APNs is not configured, there
-are no verified APNs devices, or at least one active notification term has no
-verified device attached.
+The common notification failure is healthy polling with degraded notification
+health. This usually means APNs is not configured, pending notifications are
+stuck, or at least one active notification term has no verified device attached.
 
 Look for:
 
-- `notifications.reason`
-- `notifications.at_risk_keywords`
-- `diagnostics.latest_apns`
-- `diagnostics.apns.device_tokens_by_environment_and_verification`
+- `notification_health`
+- `pending_notifications`
+- `latest_relevant_apns`
+- `apns.device_tokens_by_environment_and_verification`
 
 ## Safe Production Knobs
 
@@ -67,8 +81,8 @@ knob back before debugging connectors.
 ## Alerting
 
 The GitHub Actions workflow `Poller monitor` runs every 15 minutes and fails if
-the worker health endpoint is degraded or if the latest successful poll is older
-than 45 minutes.
+the worker health endpoint is degraded, if the latest successful poll is older
+than 45 minutes, or if authenticated backend notification health is degraded.
 
 The Cloudflare Worker also sends `ALERT_WEBHOOK_URL` a compact watchdog summary
 when a scheduled poll finishes with degraded poll or notification health.
@@ -79,10 +93,11 @@ when a scheduled poll finishes with degraded poll or notification health.
 2. If worker health is degraded, inspect `latest_poll`, `latest_successful_poll`,
    `latest_apns`, and `notifications`.
 3. If polls are starting but not completing, reduce workload knobs in `render.yaml`.
-4. If `notifications` is degraded, open the app on the affected device and use
-   Settings notification repair/test to re-register APNs, then check health again.
-   The backend automatically disables push alerts for owner-scoped terms older
-   than `ORPHANED_NOTIFICATION_GRACE_MINUTES` when their APNs device no longer
-   exists, while preserving the feed term itself.
+4. If `notification_health` is degraded, inspect the listed term ids and use
+   Settings notification repair/test on the affected device to re-register APNs,
+   then check health again. The backend automatically deactivates stale
+   non-notifying owner-scoped terms older than
+   `ORPHANED_NOTIFICATION_GRACE_MINUTES` when their APNs device no longer
+   exists, so those terms cannot silently collect matches without push delivery.
 5. Trigger `gh workflow run deploy-render.yml --ref master` for backend config changes.
 6. Keep polling worker health until a fresh `latest_successful_poll` appears.
