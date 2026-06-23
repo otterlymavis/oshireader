@@ -45,7 +45,8 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
     watch_terms: stats.watch_terms || [],
     latest_poll: stats.latest_poll || recentEvents.find((event) => event.kind === "poll") || null,
     latest_successful_poll: successfulPoll,
-    latest_apns: recentEvents.find((event) => event.kind === "apns") || null,
+    latest_apns: stats.latest_apns || recentEvents.find((event) => event.kind === "apns") || null,
+    pending_notifications: stats.pending_notifications || [],
   };
 }
 
@@ -166,6 +167,7 @@ function watchdogSummary(reason, diagnostics = {}) {
     `latest_poll=${latestPoll?.status || "none"} at ${latestPoll?.created_at || "n/a"}`,
     `latest_successful_poll=${latestSuccessfulPoll?.status || "none"} at ${latestSuccessfulPoll?.created_at || "n/a"}`,
     `latest_apns=${latestApns?.status || "none"} at ${latestApns?.created_at || "n/a"}`,
+    `pending_notifications=${(diagnostics.pending_notifications || []).length}`,
     `items_total=${diagnostics.items_total ?? "n/a"} matches_total=${diagnostics.matches_total ?? "n/a"}`,
   ].join("\n");
 }
@@ -178,6 +180,7 @@ function notificationWatchdogSummary(health, diagnostics = {}) {
     `at_risk_keywords=${(health.at_risk_keywords || []).join(", ") || "n/a"}`,
     `verified_devices=${health.verified_devices ?? "n/a"}`,
     `latest_apns=${latestApns?.status || "none"} at ${latestApns?.created_at || "n/a"}`,
+    `pending_notifications=${(diagnostics.pending_notifications || []).length}`,
   ].join("\n");
 }
 

@@ -29,7 +29,7 @@ from app.ingestion.scheduler import (
     start_scheduler,
 )
 from app.migrations import apply_startup_migrations
-from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PendingNotification, SourceItem, WatchTerm
 from app.schemas import ClientDiagnosticIn
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
@@ -272,6 +272,19 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
         .first()
     )
+    latest_apns = (
+        db.query(BackendEvent)
+        .filter(BackendEvent.kind == "apns")
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
+    pending_notifications = (
+        db.query(PendingNotification, WatchTerm)
+        .join(WatchTerm, PendingNotification.watch_term_id == WatchTerm.id)
+        .order_by(PendingNotification.updated_at.desc())
+        .limit(20)
+        .all()
+    )
 
     def notification_device_counts(term: WatchTerm) -> dict:
         query = db.query(APNSDeviceToken)
@@ -323,6 +336,18 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             _backend_event_payload(latest_successful_poll)
             if latest_successful_poll else None
         ),
+        "latest_apns": _backend_event_payload(latest_apns) if latest_apns else None,
+        "pending_notifications": [
+            {
+                "watch_term_id": pending.watch_term_id,
+                "keyword": term.keyword,
+                "new_count": pending.new_count,
+                "updated_at": pending.updated_at,
+                "notify_on_new": term.notify_on_new,
+                "owner_scoped": bool(term.owner_device_secret),
+            }
+            for pending, term in pending_notifications
+        ],
         "recent_events": [
             _backend_event_payload(event)
             for event in recent_events

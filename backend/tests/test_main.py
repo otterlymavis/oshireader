@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.database import get_db
-from app.models import APNSDeviceToken, BackendEvent, Match, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, Match, PendingNotification, SourceItem, WatchTerm
 
 
 class TestGetDb:
@@ -210,6 +210,52 @@ class TestAdminStats:
         data = r.json()
         assert data["latest_successful_poll"]["id"] == completed.id
         assert all(event["kind"] == "apns" for event in data["recent_events"])
+
+    def test_stats_includes_latest_apns_outside_recent_window(self, client, db_session):
+        apns = BackendEvent(
+            kind="apns",
+            status="attempted",
+            message="APNs notification attempted",
+            payload={"delivered_count": 1},
+        )
+        db_session.add(apns)
+        db_session.flush()
+        for index in range(25):
+            db_session.add(BackendEvent(
+                kind="poll",
+                status="completed",
+                message="Scheduled/backend poll completed",
+                payload={"index": index},
+            ))
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["latest_apns"]["id"] == apns.id
+        assert data["latest_apns"]["payload"] == {"delivered_count": 1}
+        assert all(event["kind"] == "poll" for event in data["recent_events"])
+
+    def test_stats_includes_pending_notifications(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret="owner-secret")
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(PendingNotification(watch_term_id=term.id, new_count=3))
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        pending = r.json()["pending_notifications"]
+        assert pending == [{
+            "watch_term_id": term.id,
+            "keyword": "Aiko",
+            "new_count": 3,
+            "updated_at": pending[0]["updated_at"],
+            "notify_on_new": True,
+            "owner_scoped": True,
+        }]
 
 
 class TestAdminPoll:
