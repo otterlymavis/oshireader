@@ -65,8 +65,22 @@ jobs:
               failures.append(f"canary endpoint returned HTTP {status}")
           if payload.get("delivered") is not True:
               failures.append(f"canary did not deliver: {payload}")
-          if apns_payload.get("delivered_count", 0) < 1:
+          device_count = apns_payload.get("device_count", 0)
+          delivered_count = apns_payload.get("delivered_count", 0)
+          retryable_failures = apns_payload.get("retryable_failures", 0)
+          pruned_tokens = apns_payload.get("pruned_tokens", 0)
+          if device_count < 1:
+              failures.append(f"APNs event did not target any devices: {apns_event}")
+          if delivered_count < 1:
               failures.append(f"APNs event did not record a delivery: {apns_event}")
+          if delivered_count != device_count:
+              failures.append(
+                  f"APNs delivery was incomplete: delivered={delivered_count} device_count={device_count}"
+              )
+          if retryable_failures:
+              failures.append(f"APNs had retryable failures: {retryable_failures}")
+          if pruned_tokens:
+              failures.append(f"APNs pruned invalid tokens: {pruned_tokens}")
           if failures:
               raise SystemExit("; ".join(failures))
           PY

@@ -104,8 +104,10 @@ when a scheduled poll finishes with degraded poll or notification health.
 
 The GitHub Actions workflow `Notification canary` is manual-only to avoid noisy
 scheduled test pushes. It fails if the backend cannot choose an active
-notification term, if APNs delivery fails, or if the APNs event does not record
-at least one delivery.
+notification term, if APNs delivery fails for any registered device, if APNs
+reports retryable failures, or if APNs prunes invalid tokens. Inspect the
+canary event's redacted `device_results` rows to confirm the affected token
+suffix and environment.
 
 ## Recovery Steps
 
