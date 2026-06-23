@@ -32,6 +32,7 @@ _APNS_PAYLOAD_SOFT_LIMIT_BYTES = 3500
 _APNS_PAYLOAD_HARD_LIMIT_BYTES = 4096
 _APNS_MAX_ATTEMPTS = 3
 _APNS_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+_APNS_EVENT_DEVICE_RESULT_LIMIT = 25
 _DEVICE_REVALIDATION_INTERVAL = timedelta(hours=6)
 
 
@@ -482,6 +483,7 @@ async def send_new_match_notifications(
     pruned_tokens = 0
     delivered_count = 0
     retryable_failures = 0
+    device_results = []
     for device, result in zip(devices, results):
         if isinstance(result, bool):
             result = APNSSendResult(should_delete_token=result)
@@ -492,6 +494,14 @@ async def send_new_match_notifications(
         if result.should_delete_token:
             db.delete(device)
             pruned_tokens += 1
+        if len(device_results) < _APNS_EVENT_DEVICE_RESULT_LIMIT:
+            device_results.append({
+                "token": device.token[-8:],
+                "environment": device.environment,
+                "delivered": result.delivered,
+                "retryable_failure": result.retryable_failure,
+                "pruned": result.should_delete_token,
+            })
     record_backend_event(
         db,
         "apns",
@@ -505,6 +515,8 @@ async def send_new_match_notifications(
             "delivered_count": delivered_count,
             "retryable_failures": retryable_failures,
             "pruned_tokens": pruned_tokens,
+            "device_results": device_results,
+            "device_results_truncated": max(0, len(devices) - len(device_results)),
         },
     )
     db.commit()

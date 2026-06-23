@@ -366,6 +366,76 @@ class TestSendNewMatchNotifications:
         mock_send.assert_called_once()
         assert mock_send.call_args.args[1].token == "e" * 64
 
+    @pytest.mark.asyncio
+    async def test_records_redacted_device_results_in_apns_event(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        delivered_device = _device("1" * 64, environment="production")
+        retry_device = _device("2" * 64, environment="sandbox")
+        pruned_device = _device("3" * 64, environment="sandbox")
+        db_session.add_all([term, delivered_device, retry_device, pruned_device])
+        db_session.commit()
+
+        results = [
+            APNSSendResult(delivered=True),
+            APNSSendResult(retryable_failure=True),
+            APNSSendResult(should_delete_token=True),
+        ]
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock(side_effect=results)):
+            delivered = await send_new_match_notifications(db_session, term, 1)
+
+        assert delivered is True
+        event = db_session.query(BackendEvent).filter_by(kind="apns").one()
+        payload = event.payload
+        assert payload["device_count"] == 3
+        assert payload["delivered_count"] == 1
+        assert payload["retryable_failures"] == 1
+        assert payload["pruned_tokens"] == 1
+        assert payload["device_results_truncated"] == 0
+        assert payload["device_results"] == [
+            {
+                "token": "11111111",
+                "environment": "production",
+                "delivered": True,
+                "retryable_failure": False,
+                "pruned": False,
+            },
+            {
+                "token": "22222222",
+                "environment": "sandbox",
+                "delivered": False,
+                "retryable_failure": True,
+                "pruned": False,
+            },
+            {
+                "token": "33333333",
+                "environment": "sandbox",
+                "delivered": False,
+                "retryable_failure": False,
+                "pruned": True,
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_limits_device_results_in_apns_event(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        devices = [_device(f"{index:064x}", environment="production") for index in range(30)]
+        db_session.add(term)
+        db_session.add_all(devices)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))):
+            await send_new_match_notifications(db_session, term, 1)
+
+        event = db_session.query(BackendEvent).filter_by(kind="apns").one()
+        payload = event.payload
+        assert payload["device_count"] == 30
+        assert payload["delivered_count"] == 30
+        assert len(payload["device_results"]) == 25
+        assert payload["device_results_truncated"] == 5
+        assert all(len(result["token"]) == 8 for result in payload["device_results"])
+
 
 class TestDeviceRevalidation:
     @pytest.mark.asyncio
