@@ -46,6 +46,7 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
     latest_poll: stats.latest_poll || recentEvents.find((event) => event.kind === "poll") || null,
     latest_successful_poll: successfulPoll,
     latest_apns: stats.latest_apns || recentEvents.find((event) => event.kind === "apns") || null,
+    latest_relevant_apns: stats.latest_relevant_apns || null,
     pending_notifications: stats.pending_notifications || [],
   };
 }
@@ -161,7 +162,7 @@ async function notifyWatchdog(env, error) {
 function watchdogSummary(reason, diagnostics = {}) {
   const latestPoll = diagnostics.latest_poll;
   const latestSuccessfulPoll = diagnostics.latest_successful_poll;
-  const latestApns = diagnostics.latest_apns;
+  const latestApns = diagnostics.latest_relevant_apns || diagnostics.latest_apns;
   return [
     `OshiReader poll watchdog degraded: ${reason}`,
     `latest_poll=${latestPoll?.status || "none"} at ${latestPoll?.created_at || "n/a"}`,
@@ -173,7 +174,7 @@ function watchdogSummary(reason, diagnostics = {}) {
 }
 
 function notificationWatchdogSummary(health, diagnostics = {}) {
-  const latestApns = diagnostics.latest_apns;
+  const latestApns = diagnostics.latest_relevant_apns || diagnostics.latest_apns;
   return [
     `OshiReader notification watchdog degraded: ${health.reason || "unknown"}`,
     `active_notify_terms=${health.active_notify_terms ?? "n/a"} at_risk_terms=${health.at_risk_terms ?? "n/a"}`,

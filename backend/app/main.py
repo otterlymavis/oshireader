@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -47,6 +49,44 @@ def _backend_event_payload(event: BackendEvent) -> dict:
         "payload": event.payload or {},
         "created_at": event.created_at,
     }
+
+
+def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
+    """Return the newest APNs event that still describes an active notification path."""
+    events = (
+        db.query(BackendEvent)
+        .filter(BackendEvent.kind == "apns")
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .limit(50)
+        .all()
+    )
+    if not events:
+        return None
+
+    term_ids = {
+        event.payload.get("term_id")
+        for event in events
+        if isinstance(event.payload, dict) and event.payload.get("term_id") is not None
+    }
+    active_term_ids = set()
+    if term_ids:
+        active_term_ids = {
+            term_id
+            for (term_id,) in (
+                db.query(WatchTerm.id)
+                .filter(
+                    WatchTerm.id.in_(term_ids),
+                    WatchTerm.is_active == True,  # noqa: E712
+                )
+                .all()
+            )
+        }
+
+    for event in events:
+        term_id = event.payload.get("term_id") if isinstance(event.payload, dict) else None
+        if term_id is None or term_id in active_term_ids:
+            return event
+    return None
 
 
 def _record_poll_request_timeout(timeout_seconds: float) -> None:
@@ -278,6 +318,7 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
         .first()
     )
+    latest_relevant_apns = _latest_relevant_apns_event(db)
     pending_notifications = (
         db.query(PendingNotification, WatchTerm)
         .join(WatchTerm, PendingNotification.watch_term_id == WatchTerm.id)
@@ -337,6 +378,10 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             if latest_successful_poll else None
         ),
         "latest_apns": _backend_event_payload(latest_apns) if latest_apns else None,
+        "latest_relevant_apns": (
+            _backend_event_payload(latest_relevant_apns)
+            if latest_relevant_apns else None
+        ),
         "pending_notifications": [
             {
                 "watch_term_id": pending.watch_term_id,

@@ -71,6 +71,46 @@ test("health uses dedicated latest successful poll outside recent events", async
   assert.equal((await response.json()).diagnostics.latest_successful_poll.id, 99);
 });
 
+test("health exposes latest relevant APNs separately from stale history", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const now = new Date().toISOString();
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    latest_successful_poll: {
+      id: 99,
+      kind: "poll",
+      status: "completed",
+      created_at: now,
+    },
+    latest_apns: {
+      id: 7,
+      kind: "apns",
+      status: "skipped",
+      message: "Watch term notifications are disabled",
+      payload: { term_id: 16 },
+      created_at: now,
+    },
+    latest_relevant_apns: {
+      id: 6,
+      kind: "apns",
+      status: "attempted",
+      payload: { delivered_count: 1 },
+      created_at: now,
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.diagnostics.latest_apns.id, 7);
+  assert.equal(body.diagnostics.latest_relevant_apns.id, 6);
+});
+
 test("health treats a fresh started poll as in progress", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
@@ -185,6 +225,12 @@ test("poll sends the backend bearer token", async (context) => {
     return new Response(JSON.stringify({
       items_total: 10,
       matches_total: 12,
+      latest_relevant_apns: {
+        id: 3,
+        kind: "apns",
+        status: "attempted",
+        payload: { delivered_count: 1 },
+      },
       recent_events: [
         { id: 2, kind: "poll", status: "completed" },
         { id: 1, kind: "apns", status: "attempted", payload: { delivered_count: 1 } },
@@ -201,6 +247,7 @@ test("poll sends the backend bearer token", async (context) => {
   assert.equal(result.backend_status, "poll completed");
   assert.equal(result.diagnostics.latest_poll.id, 2);
   assert.equal(result.diagnostics.latest_apns.payload.delivered_count, 1);
+  assert.equal(result.diagnostics.latest_relevant_apns.id, 3);
 });
 
 test("poll retries a transient backend failure", async (context) => {

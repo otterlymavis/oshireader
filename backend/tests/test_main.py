@@ -81,6 +81,7 @@ class TestAdminStats:
         assert data["watch_terms"] == []
         assert data["items_by_platform"] == {}
         assert data["apns"]["backend_public_url"]
+        assert data["latest_relevant_apns"] is None
         assert data["recent_events"] == []
 
     def test_stats_counts_reflect_db_content(self, client, db_session):
@@ -234,8 +235,60 @@ class TestAdminStats:
         assert r.status_code == 200
         data = r.json()
         assert data["latest_apns"]["id"] == apns.id
+        assert data["latest_relevant_apns"]["id"] == apns.id
         assert data["latest_apns"]["payload"] == {"delivered_count": 1}
         assert all(event["kind"] == "poll" for event in data["recent_events"])
+
+    def test_stats_ignores_latest_apns_for_inactive_term_when_relevance_checked(self, client, db_session):
+        active = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        inactive = WatchTerm(keyword="Aiko", is_active=False, notify_on_new=False)
+        db_session.add_all([active, inactive])
+        db_session.flush()
+        relevant = BackendEvent(
+            kind="apns",
+            status="attempted",
+            message="APNs notification attempted",
+            payload={"term_id": active.id, "delivered_count": 1},
+        )
+        stale = BackendEvent(
+            kind="apns",
+            status="skipped",
+            message="Watch term notifications are disabled",
+            payload={"term_id": inactive.id, "new_count": 1},
+        )
+        db_session.add_all([relevant, stale])
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["latest_apns"]["id"] == stale.id
+        assert data["latest_relevant_apns"]["id"] == relevant.id
+        assert data["latest_relevant_apns"]["payload"] == {
+            "term_id": active.id,
+            "delivered_count": 1,
+        }
+
+    def test_stats_returns_no_relevant_apns_when_only_inactive_term_events_exist(self, client, db_session):
+        inactive = WatchTerm(keyword="Aiko", is_active=False, notify_on_new=False)
+        db_session.add(inactive)
+        db_session.flush()
+        stale = BackendEvent(
+            kind="apns",
+            status="skipped",
+            message="Watch term notifications are disabled",
+            payload={"term_id": inactive.id, "new_count": 1},
+        )
+        db_session.add(stale)
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["latest_apns"]["id"] == stale.id
+        assert data["latest_relevant_apns"] is None
 
     def test_stats_includes_pending_notifications(self, client, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret="owner-secret")
