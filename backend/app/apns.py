@@ -341,10 +341,10 @@ def _collapse_id(term: WatchTerm) -> str:
 
 
 def _device_identity_key(device: APNSDeviceToken) -> tuple[str, str, str]:
-    if device.device_secret:
-        return (device.environment or "", "secret", device.device_secret)
     if device.device_id:
         return (device.environment or "", "device_id", device.device_id)
+    if device.device_secret:
+        return (device.environment or "", "secret", device.device_secret)
     return (device.environment or "", "token", device.token)
 
 
