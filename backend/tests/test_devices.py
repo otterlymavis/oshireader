@@ -99,6 +99,34 @@ class TestAPNSTokenUpsert:
 
         assert r.status_code == 409
 
+    def test_upsert_retires_older_token_for_same_device_identity(self, client, db_session):
+        older_token = "b" * 64
+        newer_token = "c" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json=_registration(older_token, "production", device_id="device-xyz"),
+        )
+
+        r = client.post(
+            "/api/devices/apns-token",
+            json=_registration(newer_token, "production", device_id="device-xyz"),
+        )
+
+        assert r.status_code == 201
+        assert db_session.get(APNSDeviceToken, older_token) is None
+        assert db_session.get(APNSDeviceToken, newer_token) is not None
+
+    def test_upsert_keeps_token_only_registrations_without_device_id(self, client, db_session):
+        older_token = "b" * 64
+        newer_token = "c" * 64
+        client.post("/api/devices/apns-token", json=_registration(older_token, "production"))
+
+        r = client.post("/api/devices/apns-token", json=_registration(newer_token, "production"))
+
+        assert r.status_code == 201
+        assert db_session.get(APNSDeviceToken, older_token) is not None
+        assert db_session.get(APNSDeviceToken, newer_token) is not None
+
     def test_upsert_requires_device_secret(self, client):
         r = client.post(
             "/api/devices/apns-token",

@@ -118,6 +118,29 @@ def _is_same_device_identity(stored: APNSDeviceToken, body: APNSDeviceTokenUpser
     )
 
 
+def _retire_superseded_device_tokens(
+    db: Session,
+    stored: APNSDeviceToken,
+) -> int:
+    """Remove older APNs tokens that represent the same physical app install."""
+    if not stored.device_id:
+        return 0
+    retired = 0
+    candidates = (
+        db.query(APNSDeviceToken)
+        .filter(
+            APNSDeviceToken.environment == stored.environment,
+            APNSDeviceToken.token != stored.token,
+            APNSDeviceToken.device_id == stored.device_id,
+        )
+        .all()
+    )
+    for candidate in candidates:
+        db.delete(candidate)
+        retired += 1
+    return retired
+
+
 @router.post("/apns-token", response_model=APNSDeviceTokenOut, status_code=201)
 async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)):
     token = _normalize_token(body.token)
@@ -139,6 +162,7 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
     stored.device_id = body.device_id
     stored.device_secret = _secret_digest(body.device_secret)
     stored.last_seen_at = datetime.now(timezone.utc)
+    _retire_superseded_device_tokens(db, stored)
     db.commit()
     db.refresh(stored)
 
