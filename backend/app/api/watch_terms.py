@@ -45,6 +45,11 @@ def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> 
     )
 
 
+def _require_verified_notification_device(db: Session, term: WatchTerm) -> None:
+    if term.notify_on_new and term.owner_device_secret and not _owner_has_verified_device(db, term.owner_device_secret):
+        raise HTTPException(409, "Notification-enabled watch terms require a verified APNs device")
+
+
 def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> WatchTerm | None:
     if incoming.owner_device_secret is None:
         return None
@@ -91,6 +96,7 @@ async def create_term(
     term = WatchTerm(**body.model_dump())
     if not auth.is_admin:
         term.owner_device_secret = auth.device_secret
+        _require_verified_notification_device(db, term)
     if _term_with_keyword_exists(
         db,
         keyword=term.keyword,
@@ -138,6 +144,8 @@ async def update_term(
         raise HTTPException(409, "A watch term with this keyword already exists")
     for k, v in updates.items():
         setattr(term, k, v)
+    if not auth.is_admin:
+        _require_verified_notification_device(db, term)
     try:
         db.commit()
     except IntegrityError:

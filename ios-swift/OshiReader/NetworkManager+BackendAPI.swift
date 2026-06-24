@@ -110,6 +110,9 @@ extension NetworkManager {
                 aliases: aliases
             )
         }
+        if notifyOnNew {
+            _ = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed()
+        }
         var body: [String: Any] = [
             "keyword": keyword,
             "collection_mode": collectionMode.rawValue,
@@ -129,6 +132,9 @@ extension NetworkManager {
 
     func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) async throws -> WatchTerm {
         if isUITesting { throw URLError(.cancelled) }
+        if notifyOnNew == true {
+            _ = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed()
+        }
         var body: [String: Any] = [:]
         if let isActive { body["is_active"] = isActive }
         if let collectionMode { body["collection_mode"] = collectionMode.rawValue }

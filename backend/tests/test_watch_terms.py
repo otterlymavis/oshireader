@@ -302,6 +302,57 @@ class TestCreateWatchTerm:
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
         mock_poll.assert_called_once()
 
+    def test_device_create_notify_term_requires_verified_device(self, client, db_session):
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+                headers={"X-Device-Secret": "unverified-device-secret"},
+            )
+
+        assert resp.status_code == 409
+        assert "verified APNs device" in resp.json()["detail"]
+        assert db_session.query(WatchTerm).count() == 0
+        mock_poll.assert_not_called()
+
+    def test_device_can_create_muted_term_without_verified_device(self, client, db_session):
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": False},
+                headers={"X-Device-Secret": "unverified-device-secret"},
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["notify_on_new"] is False
+        assert db_session.query(WatchTerm).count() == 1
+        mock_poll.assert_called_once()
+
+    def test_device_update_notify_term_requires_verified_device(self, client, db_session):
+        owner_secret = hashlib.sha256("unverified-device-secret".encode()).hexdigest()
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            owner_device_secret=owner_secret,
+        )
+        db_session.add(term)
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"notify_on_new": True},
+                headers={"X-Device-Secret": "unverified-device-secret"},
+            )
+
+        assert resp.status_code == 409
+        db_session.refresh(term)
+        assert term.notify_on_new is False
+        mock_poll.assert_not_called()
+
     def test_registered_device_does_not_adopt_same_keyword_with_existing_owner_device(self, client, db_session):
         current_token = "a" * 64
         old_token = "b" * 64
@@ -400,18 +451,19 @@ class TestCreateWatchTerm:
              patch("app.api.watch_terms.queue_poll"):
             resp = client.post(
                 "/api/watch-terms/",
-                json={"keyword": "Aiko"},
+                json={"keyword": "Aiko", "notify_on_new": False},
                 headers={"X-Device-Secret": secret},
             )
 
         assert resp.status_code == 201
+        assert resp.json()["notify_on_new"] is False
 
     def test_secret_only_device_only_sees_its_own_terms(self, client):
         with patch.object(settings, "admin_api_token", "admin-secret"), \
              patch("app.api.watch_terms.queue_poll"):
             first = client.post(
                 "/api/watch-terms/",
-                json={"keyword": "Aiko"},
+                json={"keyword": "Aiko", "notify_on_new": False},
                 headers={"X-Device-Secret": "first-device"},
             )
             second = client.get(
@@ -438,7 +490,7 @@ class TestCreateWatchTerm:
              patch("app.api.watch_terms.queue_poll"):
             resp = client.post(
                 "/api/watch-terms/",
-                json={"keyword": "Aiko"},
+                json={"keyword": "Aiko", "notify_on_new": False},
                 headers={"X-Device-Token": token, "X-Device-Secret": secret},
             )
 
@@ -452,7 +504,7 @@ class TestCreateWatchTerm:
              patch("app.api.watch_terms.queue_poll"):
             resp = client.post(
                 "/api/watch-terms/",
-                json={"keyword": "Aiko"},
+                json={"keyword": "Aiko", "notify_on_new": False},
                 headers={"X-Device-Token": "b" * 64, "X-Device-Secret": "device-secret"},
             )
 
