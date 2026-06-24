@@ -340,6 +340,33 @@ def _collapse_id(term: WatchTerm) -> str:
     return f"oshireader-{term.id}"[:64]
 
 
+def _device_identity_key(device: APNSDeviceToken) -> tuple[str, str, str]:
+    if device.device_secret:
+        return (device.environment or "", "secret", device.device_secret)
+    if device.device_id:
+        return (device.environment or "", "device_id", device.device_id)
+    return (device.environment or "", "token", device.token)
+
+
+def _device_recency(device: APNSDeviceToken) -> float:
+    candidate = device.last_seen_at or device.verified_at
+    if candidate is None:
+        return 0
+    if candidate.tzinfo is None:
+        candidate = candidate.replace(tzinfo=timezone.utc)
+    return candidate.timestamp()
+
+
+def _dedupe_devices(devices: list[APNSDeviceToken]) -> list[APNSDeviceToken]:
+    newest_by_identity: dict[tuple[str, str, str], APNSDeviceToken] = {}
+    for device in devices:
+        key = _device_identity_key(device)
+        existing = newest_by_identity.get(key)
+        if existing is None or _device_recency(device) >= _device_recency(existing):
+            newest_by_identity[key] = device
+    return list(newest_by_identity.values())
+
+
 def _test_payload() -> dict:
     term = WatchTerm(keyword="OshiReader")
     term.id = 0
@@ -451,7 +478,8 @@ async def send_new_match_notifications(
     query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
     if term.owner_device_secret:
         query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
-    devices: list[APNSDeviceToken] = query.all()
+    candidate_devices: list[APNSDeviceToken] = query.all()
+    devices = _dedupe_devices(candidate_devices)
     if not devices:
         total_devices = db.query(APNSDeviceToken).count()
         total_verified_devices = (
@@ -529,6 +557,7 @@ async def send_new_match_notifications(
             "keyword": term.keyword,
             "new_count": count,
             "device_count": len(devices),
+            "candidate_device_count": len(candidate_devices),
             "delivered_count": delivered_count,
             "retryable_failures": retryable_failures,
             "pruned_tokens": pruned_tokens,
@@ -546,11 +575,12 @@ async def send_test_push(db: Session) -> dict:
     waiting for a new feed item."""
     if not apns_configured():
         return {"configured": False, "results": []}
-    devices: list[APNSDeviceToken] = (
+    candidate_devices: list[APNSDeviceToken] = (
         db.query(APNSDeviceToken)
         .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
         .all()
     )
+    devices = _dedupe_devices(candidate_devices)
     if not devices:
         return {"configured": True, "results": [], "note": "no device tokens registered"}
 
@@ -593,7 +623,12 @@ async def send_test_push(db: Session) -> dict:
         for device in dead:
             db.delete(device)
         db.commit()
-    return {"configured": True, "results": results, "pruned_tokens": len(dead)}
+    return {
+        "configured": True,
+        "results": results,
+        "pruned_tokens": len(dead),
+        "candidate_device_count": len(candidate_devices),
+    }
 
 
 async def send_test_push_to_device(db: Session, device: APNSDeviceToken) -> dict:

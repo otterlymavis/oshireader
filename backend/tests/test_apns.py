@@ -309,6 +309,30 @@ class TestSendNewMatchNotifications:
         mock_send.assert_called_once()
         assert mock_send.call_args.args[1].token == "b" * 64
 
+    @pytest.mark.asyncio
+    async def test_sends_only_latest_token_per_device_identity(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        older = _device("1" * 64, environment="production")
+        older.device_secret = "same-device"
+        older.last_seen_at = datetime.now(timezone.utc) - timedelta(days=1)
+        newer = _device("2" * 64, environment="production")
+        newer.device_secret = "same-device"
+        newer.last_seen_at = datetime.now(timezone.utc)
+        other = _device("3" * 64, environment="production")
+        other.device_secret = "other-device"
+        db_session.add_all([term, older, newer, other])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))) as mock_send:
+            await send_new_match_notifications(db_session, term, 1)
+
+        sent_tokens = [call.args[1].token for call in mock_send.call_args_list]
+        assert sent_tokens == ["2" * 64, "3" * 64]
+        event = db_session.query(BackendEvent).filter_by(kind="apns").one()
+        assert event.payload["candidate_device_count"] == 3
+        assert event.payload["device_count"] == 2
+
     def test_host_routes_by_token_environment(self):
         assert _host("production") == "https://api.push.apple.com"
         assert _host("sandbox") == "https://api.sandbox.push.apple.com"
