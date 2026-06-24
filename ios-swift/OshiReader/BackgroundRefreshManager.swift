@@ -119,7 +119,24 @@ enum BackgroundRefreshLiveTestProbe {
 
     static func recordCompleted(success: Bool) {
         guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        if !success,
+           let existing = UserDefaults.standard.string(forKey: resultKey),
+           existing.hasPrefix("completed:failure:") {
+            return
+        }
         UserDefaults.standard.set(success ? "completed:success" : "completed:failure", forKey: resultKey)
+    }
+
+    static func recordCompleted(success: Bool, detail: String) {
+        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        guard !success else {
+            recordCompleted(success: true)
+            return
+        }
+        let safeDetail = detail
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: "\n", with: " ")
+        UserDefaults.standard.set("completed:failure:\(safeDetail)", forKey: resultKey)
     }
 }
 
@@ -194,6 +211,7 @@ final class BackgroundRefreshManager {
     func refreshFromBackend(triggerPoll: Bool = true) async -> Bool {
         guard !isRefreshing else {
             AppLogger.network.notice("Background refresh skipped because another refresh is running")
+            BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "busy")
             return false
         }
         AppLogger.network.notice("Background refresh started")
@@ -209,9 +227,14 @@ final class BackgroundRefreshManager {
                 await self.performRefreshFromBackend(triggerPoll: triggerPoll)
             }
             group.addTask {
-                try? await Task.sleep(
-                    nanoseconds: UInt64(BackgroundRefreshPolicy.operationDeadline * 1_000_000_000)
-                )
+                do {
+                    try await Task.sleep(
+                        nanoseconds: UInt64(BackgroundRefreshPolicy.operationDeadline * 1_000_000_000)
+                    )
+                } catch {
+                    return false
+                }
+                BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "deadline")
                 return false
             }
 
@@ -224,21 +247,30 @@ final class BackgroundRefreshManager {
     private func performRefreshFromBackend(triggerPoll: Bool) async -> Bool {
         let db = LocalDB.shared
 
-        await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
-        guard !Task.isCancelled else { return false }
-        _ = await NetworkManager.shared.syncTermsFromBackend()
-        guard !Task.isCancelled else { return false }
-
-        guard !db.terms.filter(\.is_active).isEmpty else { return true }
-
         if triggerPoll {
+            await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+            guard !Task.isCancelled else {
+                BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "cancelled_after_push_sync")
+                return false
+            }
+            _ = await NetworkManager.shared.syncTermsFromBackend()
+            guard !Task.isCancelled else {
+                BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "cancelled_after_pull_sync")
+                return false
+            }
+
+            guard !db.terms.filter(\.is_active).isEmpty else { return true }
+
             do {
                 try await NetworkManager.shared.triggerBackgroundPoll(timeout: BackgroundRefreshPolicy.pollTimeout)
             } catch {
                 AppLogger.network.warning("Background poll trigger failed: \(error.localizedDescription)")
             }
         }
-        guard !Task.isCancelled else { return false }
+        guard !Task.isCancelled else {
+            BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "cancelled_after_poll")
+            return false
+        }
 
         let latestSince = latestFetchedAt(in: db.feedItems)
         let hadItemsInitially = !db.feedItems.isEmpty
@@ -252,7 +284,10 @@ final class BackgroundRefreshManager {
             } else {
                 items = try await NetworkManager.shared.fetchFeed(limit: 120, days: 90)
             }
-            guard !Task.isCancelled else { return false }
+            guard !Task.isCancelled else {
+                BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "cancelled_after_feed")
+                return false
+            }
             if !items.isEmpty {
                 let existingKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
                 _ = db.mergeItems(newItems: items, notifyOnNew: false)
@@ -320,7 +355,51 @@ final class BackgroundRefreshManager {
             return true
         } catch {
             AppLogger.network.warning("Background refresh failed: \(error.localizedDescription)")
+            let detail = Self.refreshErrorKind(error)
+            BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: detail)
+            await sendLiveTestFailureDiagnostic(
+                reason: "background_refresh_failed",
+                detail: "\(detail): \(error.localizedDescription)",
+                db: db
+            )
             return false
+        }
+    }
+
+    private func sendLiveTestFailureDiagnostic(reason: String, detail: String, db: LocalDB) async {
+        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        let info = Bundle.main.infoDictionary
+        let diagnostic = ClientDiagnosticReport(
+            reason: reason,
+            environment: NetworkManager.shared.environmentName,
+            api_base: NetworkManager.shared.apiBase,
+            app_version: info?["CFBundleShortVersionString"] as? String,
+            build: info?["CFBundleVersion"] as? String,
+            active_terms_count: db.terms.filter(\.is_active).count,
+            subscribed_platforms: db.subscribedPlatforms,
+            cached_feed_count: db.feedItems.count,
+            events: [
+                ClientDiagnosticEvent(
+                    strategy: "background_refresh",
+                    status: "failed",
+                    item_count: 0,
+                    added_count: 0,
+                    detail: detail
+                )
+            ]
+        )
+        await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+    }
+
+    private static func refreshErrorKind(_ error: Error) -> String {
+        if error is DecodingError { return "decode" }
+        guard let e = error as? URLError else { return "unknown" }
+        switch e.code {
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed: return "offline"
+        case .timedOut: return "timeout"
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed: return "unreachable"
+        case .badServerResponse: return "server_error"
+        default: return "url_\(e.code.rawValue)"
         }
     }
 

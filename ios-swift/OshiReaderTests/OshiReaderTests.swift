@@ -557,6 +557,43 @@ final class OshiReaderTests: XCTestCase {
         manager.selectedItem = nil
     }
 
+    @MainActor
+    func testNotificationNavigationMergesRemotePreviewPayloadIntoFeed() throws {
+        let manager = NotificationNavigationManager.shared
+        let itemID = "youtube:\(UUID().uuidString)"
+        let keyword = "Merge Test \(UUID().uuidString)"
+
+        let userInfo: [AnyHashable: Any] = [
+            "watch_term_keyword": keyword,
+            "new_count": 1,
+            "thumbnail_url": "https://img.example.com/merged.jpg",
+            "preview_item": [
+                "id": itemID,
+                "platform": "youtube",
+                "url": "https://youtube.com/watch?v=merged",
+                "title": "Merged notification title",
+                "content_text": "Merged notification description",
+                "author": "Aiko Channel",
+                "media_type": "video",
+                "published_at": "2026-06-20T12:00:00Z",
+            ],
+        ]
+
+        XCTAssertTrue(manager.mergeNotificationItem(userInfo: userInfo))
+        let merged = LocalDB.shared.feedItems.first {
+            $0.id == itemID && $0.watch_term_keyword == keyword
+        }
+        XCTAssertEqual(merged?.url, "https://youtube.com/watch?v=merged")
+        XCTAssertEqual(merged?.title, "Merged notification title")
+        XCTAssertEqual(merged?.content_text, "Merged notification description")
+        XCTAssertEqual(merged?.author, "Aiko Channel")
+        XCTAssertEqual(merged?.thumbnail_url, "https://img.example.com/merged.jpg")
+        XCTAssertEqual(merged?.media_type, "video")
+        XCTAssertEqual(merged?.published_at, "2026-06-20T12:00:00Z")
+
+        LocalDB.shared.deleteFeedItem(id: itemID, watchTermKeyword: keyword)
+    }
+
     func testNotificationNavigationPrefersPushOverStaleCachedItem() throws {
         let cached = FeedItem(
             id: "youtube:shared",

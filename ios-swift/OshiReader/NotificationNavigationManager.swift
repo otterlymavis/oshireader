@@ -29,6 +29,21 @@ final class NotificationNavigationManager: ObservableObject {
     }
 
     @discardableResult
+    func mergeNotificationItem(userInfo: [AnyHashable: Any]) -> Bool {
+        guard let payload = notificationPayload(from: userInfo) else { return false }
+        let notificationItem = Self.preferredNotificationItem(
+            payload.item,
+            cachedItems: LocalDB.shared.feedItems,
+            hasPlatform: payload.hasPlatform,
+            hasMediaType: payload.hasMediaType,
+            hasPublishedAt: payload.hasPublishedAt,
+            hasWatchTermKeyword: payload.hasWatchTermKeyword
+        )
+        _ = LocalDB.shared.mergeItems(newItems: [notificationItem], notifyOnNew: false)
+        return true
+    }
+
+    @discardableResult
     func saveNotificationItem(userInfo: [AnyHashable: Any]) -> Bool {
         guard let payload = notificationPayload(from: userInfo) else { return false }
         let notificationItem = Self.preferredNotificationItem(
