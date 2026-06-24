@@ -56,7 +56,7 @@ _queued_task: asyncio.Task | None = None
 # Platforms where published_at should reflect "last reply/activity" rather than original
 # post date. We update published_at whenever we see a more recent date from the connector.
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "togetter"})
-_NOTIFICATION_FRESHNESS_WINDOW = timedelta(hours=24)
+_NOTIFICATION_FRESHNESS_WINDOW = timedelta(hours=2)
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 
 

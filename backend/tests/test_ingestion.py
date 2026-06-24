@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.orm import sessionmaker
 
 from app.connectors.base import SourceItemCreate
+from app.config import settings
 import asyncio
 
 from app.ingestion.scheduler import _poll_lock, _poll_once_unlocked, poll_once, _prune_old_items
@@ -39,7 +40,8 @@ async def _run_poll(db_engine, connectors):
     TestSession = sessionmaker(bind=db_engine)
     with patch("app.ingestion.scheduler._build_connectors", return_value=connectors), \
          patch("app.ingestion.scheduler.SessionLocal", TestSession), \
-         patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()):
+         patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()), \
+         patch.object(settings, "poll_terms_per_run", 0):
         await _poll_once_unlocked()
 
 
@@ -244,6 +246,40 @@ class TestIngestionNotifications:
         mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_twelve_hour_old_discovery_is_added_without_notification(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(days=3),
+        )
+        db_session.add(term)
+        db_session.commit()
+        term_id = term.id
+
+        stale_discovery = _make_item(
+            item_id="twelve-hours-old",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=12),
+            title="Aiko stale discovery",
+        )
+        connector = _mock_connector("youtube", [stale_discovery])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        db_session.expire_all()
+        match = db_session.query(Match).filter(Match.watch_term_id == term_id).one()
+        assert match.source_item_id == "youtube:twelve-hours-old"
+        mock_notify.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_estimated_publication_date_is_not_notified(
         self,
         db_engine,
@@ -283,7 +319,7 @@ class TestIngestionNotifications:
         db_session.add(term)
         db_session.commit()
 
-        reliable = datetime.now(timezone.utc) - timedelta(hours=2)
+        reliable = datetime.now(timezone.utc) - timedelta(minutes=30)
         parsed_connector = _mock_connector(
             "youtube",
             [
@@ -367,7 +403,7 @@ class TestIngestionNotifications:
         fresher_feed_item = _make_item(
             platform="news",
             item_id="fresher",
-            published_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=30),
             title="Aiko fresher in feed",
             raw_payload={"date_parsed": True},
         )
@@ -429,6 +465,10 @@ class TestIngestionNotifications:
         ), patch(
             "app.ingestion.scheduler.send_new_match_notifications",
             new=mock_notify,
+        ), patch.object(
+            settings,
+            "poll_terms_per_run",
+            0,
         ):
             await _poll_once_unlocked()
             await _poll_once_unlocked()
