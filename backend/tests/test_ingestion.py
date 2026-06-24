@@ -170,6 +170,50 @@ class TestIngestionNotifications:
         assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
 
     @pytest.mark.asyncio
+    async def test_same_keyword_owner_duplicate_notified_from_global_poll_slot(
+        self,
+        db_engine,
+        db_session,
+    ):
+        global_term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        owner_term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            owner_device_secret="owner-secret",
+        )
+        db_session.add_all([global_term, owner_term])
+        db_session.commit()
+        global_term_id = global_term.id
+        owner_term_id = owner_term.id
+
+        connector = _mock_connector("youtube", [_make_item(item_id="shared-fresh")])
+        notified_term_ids: list[int] = []
+
+        async def fake_notify(_db, notified_term, _count, _preview_item):
+            notified_term_ids.append(notified_term.id)
+            return True
+
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=fake_notify), \
+             patch.object(settings, "poll_terms_per_run", 1):
+            await _poll_once_unlocked()
+
+        assert notified_term_ids == [global_term_id, owner_term_id]
+
+        db_session.expire_all()
+        owner_match = (
+            db_session.query(Match)
+            .filter(
+                Match.watch_term_id == owner_term_id,
+                Match.source_item_id == "youtube:shared-fresh",
+            )
+            .first()
+        )
+        assert owner_match is not None
+
+    @pytest.mark.asyncio
     async def test_notification_excludes_stale_backlog_and_previews_fresh_item(
         self,
         db_engine,

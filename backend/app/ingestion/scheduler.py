@@ -443,6 +443,111 @@ def _queue_pending_notification(
         pending.preview_is_estimated = candidate_is_estimated
 
 
+def _duplicate_notification_terms(db, term: WatchTerm) -> list[WatchTerm]:
+    return (
+        db.query(WatchTerm)
+        .filter(WatchTerm.id != term.id)
+        .filter(WatchTerm.keyword == term.keyword)
+        .filter(WatchTerm.is_active == True)  # noqa: E712
+        .filter(WatchTerm.notify_on_new == True)  # noqa: E712
+        .order_by(WatchTerm.id)
+        .all()
+    )
+
+
+def _preview_for_match(match: Match, source_item: SourceItem) -> dict:
+    public_base_url = settings.backend_public_url.rstrip("/")
+    return {
+        "id": source_item.id,
+        "match_id": match.id,
+        "platform": source_item.platform,
+        "url": source_item.url,
+        "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
+        "title": source_item.title,
+        "content_text": source_item.content_text,
+        "author": source_item.author,
+        "thumbnail_url": source_item.thumbnail_url,
+        "media_type": source_item.media_type,
+        "published_at": source_item.published_at.isoformat(),
+    }
+
+
+def _queue_duplicate_term_notifications(
+    db,
+    term: WatchTerm,
+    raw_items: list[SourceItemCreate],
+    observed_at: datetime,
+) -> None:
+    duplicate_terms = _duplicate_notification_terms(db, term)
+    if not duplicate_terms or not raw_items:
+        return
+
+    source_item_ids = list(dict.fromkeys(raw.composite_id for raw in raw_items))
+
+    for duplicate_term in duplicate_terms:
+        existing_match_ids = {
+            r[0]
+            for r in db.query(Match.source_item_id)
+            .filter(
+                Match.watch_term_id == duplicate_term.id,
+                Match.source_item_id.in_(source_item_ids),
+            )
+            .all()
+        }
+
+        new_matches: list[tuple[Match, SourceItem]] = []
+        for source_item_id in source_item_ids:
+            if source_item_id in existing_match_ids:
+                continue
+            source_item = db.get(SourceItem, source_item_id)
+            if source_item is None:
+                continue
+            match = Match(watch_term_id=duplicate_term.id, source_item_id=source_item_id)
+            db.add(match)
+            existing_match_ids.add(source_item_id)
+            new_matches.append((match, source_item))
+
+        if not new_matches:
+            continue
+
+        db.flush()
+        notification_count = 0
+        newest_candidate: tuple[bool, datetime, dict] | None = None
+        for match, source_item in new_matches:
+            if not _is_notification_eligible(
+                term=duplicate_term,
+                source_item=source_item,
+                observed_at=observed_at,
+            ):
+                continue
+            notification_count += 1
+            published_at = source_item.published_at
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            published_at_is_estimated = _published_at_is_estimated(source_item, observed_at)
+            if (
+                newest_candidate is None
+                or _candidate_is_newer(
+                    candidate_is_estimated=published_at_is_estimated,
+                    candidate_published_at=published_at,
+                    current_is_estimated=newest_candidate[0],
+                    current_published_at=newest_candidate[1],
+                )
+            ):
+                newest_candidate = (
+                    published_at_is_estimated,
+                    published_at,
+                    _preview_for_match(match, source_item),
+                )
+
+        _queue_pending_notification(
+            db,
+            duplicate_term,
+            notification_count,
+            newest_candidate,
+        )
+
+
 async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
     pending = db.get(PendingNotification, term.id)
     if pending is None:
@@ -666,23 +771,10 @@ async def _poll_once_unlocked() -> None:
                                         current_published_at=newest_candidate[1],
                                     )
                                 ):
-                                    public_base_url = settings.backend_public_url.rstrip("/")
                                     newest_candidate = (
                                         published_at_is_estimated,
                                         published_at,
-                                        {
-                                            "id": source_item.id,
-                                            "match_id": match.id,
-                                            "platform": source_item.platform,
-                                            "url": source_item.url,
-                                            "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
-                                            "title": source_item.title,
-                                            "content_text": source_item.content_text,
-                                            "author": source_item.author,
-                                            "thumbnail_url": source_item.thumbnail_url,
-                                            "media_type": source_item.media_type,
-                                            "published_at": published_at.isoformat(),
-                                        },
+                                        _preview_for_match(match, source_item),
                                     )
 
                             _queue_pending_notification(
@@ -691,6 +783,7 @@ async def _poll_once_unlocked() -> None:
                                 notification_count,
                                 newest_candidate,
                             )
+                            _queue_duplicate_term_notifications(db, term, items, now)
                             db.flush()
                             db.commit()
                             if new_count:
