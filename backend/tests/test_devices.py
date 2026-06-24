@@ -577,7 +577,10 @@ class TestPruneSupersededAPNSTokens:
         db_session.add_all([older, newer, WatchTerm(keyword="Owned", owner_device_secret="owner-secret")])
         db_session.commit()
 
-        r = client.post("/api/devices/apns-tokens/prune-superseded?dry_run=true&keep_per_environment=1")
+        r = client.post(
+            "/api/devices/apns-tokens/prune-superseded"
+            "?dry_run=true&keep_per_environment=1&preserve_owner_scoped=false"
+        )
 
         assert r.status_code == 200
         data = r.json()
@@ -591,6 +594,31 @@ class TestPruneSupersededAPNSTokens:
         assert data["removed"][0]["device_id"] == "vice-old"
         assert db_session.get(APNSDeviceToken, "1" * 64) is not None
         assert db_session.get(APNSDeviceToken, "2" * 64) is not None
+
+    def test_dry_run_preserves_owner_scoped_tokens_by_default(self, client, db_session):
+        older = APNSDeviceToken(
+            token="1" * 64,
+            environment="production",
+            device_secret="owner-secret",
+            is_verified=True,
+            last_seen_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        newer = APNSDeviceToken(
+            token="2" * 64,
+            environment="production",
+            is_verified=True,
+            last_seen_at=datetime.now(timezone.utc),
+        )
+        db_session.add_all([older, newer, WatchTerm(keyword="Owned", owner_device_secret="owner-secret")])
+        db_session.commit()
+
+        r = client.post("/api/devices/apns-tokens/prune-superseded?dry_run=true&keep_per_environment=1")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["preserve_owner_scoped"] is True
+        assert data["kept_count"] == 2
+        assert data["removed_count"] == 0
 
     def test_execute_removes_older_verified_tokens_per_environment(self, client, db_session):
         production_old = APNSDeviceToken(

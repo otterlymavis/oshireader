@@ -15,6 +15,14 @@ on:
         description: "Newest verified tokens to keep per APNs environment"
         required: true
         default: "1"
+      preserve_owner_scoped:
+        description: "Keep tokens that back owner-scoped watch terms"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 jobs:
   prune:
@@ -25,6 +33,7 @@ jobs:
       BACKEND_URL: https://oshireader.onrender.com
       DRY_RUN: ${{ inputs.dry_run }}
       KEEP_PER_ENVIRONMENT: ${{ inputs.keep_per_environment }}
+      PRESERVE_OWNER_SCOPED: ${{ inputs.preserve_owner_scoped }}
     steps:
       - name: Check required secret
         run: |
@@ -44,7 +53,7 @@ jobs:
             --retry-delay 10 \
             --max-time 30 \
             -X POST \
-            "$BACKEND_URL/api/devices/apns-tokens/prune-superseded?dry_run=$DRY_RUN&keep_per_environment=$KEEP_PER_ENVIRONMENT" \
+            "$BACKEND_URL/api/devices/apns-tokens/prune-superseded?dry_run=$DRY_RUN&keep_per_environment=$KEEP_PER_ENVIRONMENT&preserve_owner_scoped=$PRESERVE_OWNER_SCOPED" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN")
 
           echo "HTTP status: $STATUS"

@@ -277,6 +277,7 @@ def list_apns_tokens(_: None = Depends(require_admin_auth), db: Session = Depend
 def prune_superseded_apns_tokens(
     dry_run: bool = Query(True),
     keep_per_environment: int = Query(1, ge=1, le=20),
+    preserve_owner_scoped: bool = Query(True),
     _: None = Depends(require_admin_auth),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -300,28 +301,36 @@ def prune_superseded_apns_tokens(
 
     kept: list[APNSDeviceToken] = []
     removed: list[APNSDeviceToken] = []
-    for environment_devices in devices_by_environment.values():
-        ordered = sorted(
-            environment_devices,
-            key=lambda device: (_device_recency(device), device.token),
-            reverse=True,
-        )
-        kept.extend(ordered[:keep_per_environment])
-        removed.extend(ordered[keep_per_environment:])
-
-    if not dry_run:
-        for device in removed:
-            db.delete(device)
-        db.commit()
 
     def owner_count(device: APNSDeviceToken) -> int:
         if not device.device_secret:
             return 0
         return owner_term_counts_by_secret.get(device.device_secret, 0)
 
+    for environment_devices in devices_by_environment.values():
+        ordered = sorted(
+            environment_devices,
+            key=lambda device: (_device_recency(device), device.token),
+            reverse=True,
+        )
+        keep_tokens = {device.token for device in ordered[:keep_per_environment]}
+        if preserve_owner_scoped:
+            keep_tokens.update(device.token for device in ordered if owner_count(device) > 0)
+        for device in ordered:
+            if device.token in keep_tokens:
+                kept.append(device)
+            else:
+                removed.append(device)
+
+    if not dry_run:
+        for device in removed:
+            db.delete(device)
+        db.commit()
+
     return {
         "dry_run": dry_run,
         "keep_per_environment": keep_per_environment,
+        "preserve_owner_scoped": preserve_owner_scoped,
         "candidate_count": len(devices),
         "kept_count": len(kept),
         "removed_count": len(removed),
