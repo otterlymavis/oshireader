@@ -520,6 +520,7 @@ class TestAdminNotificationCanary:
         body = r.json()
         assert body["term_id"] == term.id
         assert body["keyword"] == "Aiko"
+        assert body["owner_scoped"] is False
         assert body["delivered"] is True
         assert body["apns_event"]["kind"] == "apns"
         assert body["apns_event"]["payload"]["delivered_count"] == 1

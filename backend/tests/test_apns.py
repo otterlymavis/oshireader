@@ -421,9 +421,11 @@ class TestSendNewMatchNotifications:
         owned_term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret=owner_secret)
         owner_device = _device("e" * 64, environment="production")
         owner_device.device_secret = owner_secret
+        owner_sandbox_device = _device("d" * 64, environment="sandbox")
+        owner_sandbox_device.device_secret = owner_secret
         broadcast_device = _device("f" * 64, environment="production")
         broadcast_device.device_secret = "broadcast-secret"
-        db_session.add_all([global_term, owned_term, owner_device, broadcast_device])
+        db_session.add_all([global_term, owned_term, owner_device, owner_sandbox_device, broadcast_device])
         db_session.commit()
 
         with patch("app.apns.apns_configured", return_value=True), \
@@ -435,7 +437,7 @@ class TestSendNewMatchNotifications:
         event = db_session.query(BackendEvent).filter_by(kind="apns").one()
         assert event.payload["candidate_device_count"] == 1
         assert event.payload["device_count"] == 1
-        assert event.payload["excluded_owner_duplicate_devices"] == 1
+        assert event.payload["excluded_owner_duplicate_devices"] == 2
 
     @pytest.mark.asyncio
     async def test_global_term_does_not_skip_silent_owned_duplicate_term(self, db_session):

@@ -491,9 +491,13 @@ async def send_new_match_notifications(
     # (TestFlight) tokens — and vice versa.
     query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
     excluded_owner_duplicate_secrets = _owner_scoped_duplicate_secrets(db, term)
+    excluded_owner_duplicate_devices = 0
     if term.owner_device_secret:
         query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
     elif excluded_owner_duplicate_secrets:
+        excluded_owner_duplicate_devices = query.filter(
+            APNSDeviceToken.device_secret.in_(excluded_owner_duplicate_secrets)
+        ).count()
         query = query.filter(~APNSDeviceToken.device_secret.in_(excluded_owner_duplicate_secrets))
     candidate_devices: list[APNSDeviceToken] = query.all()
     devices = _dedupe_devices(candidate_devices)
@@ -578,7 +582,7 @@ async def send_new_match_notifications(
             "delivered_count": delivered_count,
             "retryable_failures": retryable_failures,
             "pruned_tokens": pruned_tokens,
-            "excluded_owner_duplicate_devices": len(excluded_owner_duplicate_secrets),
+            "excluded_owner_duplicate_devices": excluded_owner_duplicate_devices,
             "device_results": device_results,
             "device_results_truncated": max(0, len(devices) - len(device_results)),
         },

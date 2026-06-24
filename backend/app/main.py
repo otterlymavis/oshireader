@@ -370,6 +370,7 @@ async def notification_canary(_: None = Depends(require_admin_auth), db: Session
     payload = {
         "term_id": term.id,
         "keyword": term.keyword,
+        "owner_scoped": bool(term.owner_device_secret),
         "delivered": delivered,
         "apns_event": _jsonable_backend_event_payload(apns_event) if apns_event else None,
     }
