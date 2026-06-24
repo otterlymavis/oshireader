@@ -121,15 +121,18 @@ def _notification_canary_preview() -> dict:
     }
 
 
-def _notification_canary_term(db: Session) -> WatchTerm | None:
-    candidates = (
+def _notification_canary_terms(db: Session, *, all_terms: bool = False) -> list[WatchTerm]:
+    candidates: list[WatchTerm] = (
         db.query(WatchTerm)
         .filter(WatchTerm.is_active == True)  # noqa: E712
         .filter(WatchTerm.notify_on_new == True)  # noqa: E712
         .order_by(WatchTerm.owner_device_secret.isnot(None), WatchTerm.id)
         .all()
     )
-    return next((term for term in candidates if _term_verified_device_count(db, term) > 0), None)
+    terms = [term for term in candidates if _term_verified_device_count(db, term) > 0]
+    if all_terms:
+        return terms
+    return terms[:1]
 
 
 def _record_poll_request_timeout(timeout_seconds: float) -> None:
@@ -339,7 +342,11 @@ async def test_push(_: None = Depends(require_admin_auth), db: Session = Depends
 
 
 @app.post("/api/admin/notification-canary")
-async def notification_canary(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
+async def notification_canary(
+    all_terms: bool = Query(False),
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
     from app.apns import apns_configured, send_new_match_notifications
 
     if not apns_configured():
@@ -353,8 +360,8 @@ async def notification_canary(_: None = Depends(require_admin_auth), db: Session
         db.commit()
         raise HTTPException(503, "APNs is not configured")
 
-    term = _notification_canary_term(db)
-    if term is None:
+    terms = _notification_canary_terms(db, all_terms=all_terms)
+    if not terms:
         record_backend_event(
             db,
             "notification_canary",
@@ -365,24 +372,36 @@ async def notification_canary(_: None = Depends(require_admin_auth), db: Session
         db.commit()
         raise HTTPException(503, "No active notification term has a verified APNs device")
 
-    delivered = await send_new_match_notifications(db, term, 1, _notification_canary_preview())
-    apns_event = _latest_relevant_apns_event(db)
+    term_results = []
+    all_delivered = True
+    for term in terms:
+        delivered = await send_new_match_notifications(db, term, 1, _notification_canary_preview())
+        apns_event = _latest_relevant_apns_event(db)
+        all_delivered = all_delivered and delivered
+        term_results.append({
+            "term_id": term.id,
+            "keyword": term.keyword,
+            "owner_scoped": bool(term.owner_device_secret),
+            "delivered": delivered,
+            "apns_event": _jsonable_backend_event_payload(apns_event) if apns_event else None,
+        })
+
+    first_result = term_results[0]
     payload = {
-        "term_id": term.id,
-        "keyword": term.keyword,
-        "owner_scoped": bool(term.owner_device_secret),
-        "delivered": delivered,
-        "apns_event": _jsonable_backend_event_payload(apns_event) if apns_event else None,
+        **first_result,
+        "all_terms": all_terms,
+        "delivered": all_delivered,
+        "terms": term_results,
     }
     record_backend_event(
         db,
         "notification_canary",
-        "passed" if delivered else "failed",
+        "passed" if all_delivered else "failed",
         "Synthetic notification canary completed",
         payload,
     )
     db.commit()
-    if not delivered:
+    if not all_delivered:
         raise HTTPException(503, payload)
     return payload
 
