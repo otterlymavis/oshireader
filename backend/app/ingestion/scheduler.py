@@ -58,6 +58,7 @@ _queued_task: asyncio.Task | None = None
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "togetter"})
 _NOTIFICATION_FRESHNESS_WINDOW = timedelta(hours=2)
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
+_ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
 
 
 def _build_connectors(db) -> list[BaseConnector]:
@@ -375,18 +376,24 @@ def _is_notification_eligible(
     term: WatchTerm,
     source_item: SourceItem,
     observed_at: datetime,
+    term_had_existing_matches: bool = True,
 ) -> bool:
     """Keep historical matches in the feed without notifying as if they were new."""
+    term_created_at = term.created_at or observed_at
+    if term_created_at.tzinfo is None:
+        term_created_at = term_created_at.replace(tzinfo=timezone.utc)
+
     if _published_at_is_estimated(source_item, observed_at):
-        return False
+        # Some sources only expose discovery time. Suppress those during the
+        # first/backfill pass, then allow future discoveries to behave like
+        # Twitter-style new-post alerts for established follows.
+        return term_had_existing_matches or (
+            observed_at - term_created_at >= _ESTIMATED_DATE_NOTIFICATION_WARMUP
+        )
 
     published_at = source_item.published_at
     if published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=timezone.utc)
-
-    term_created_at = term.created_at or observed_at
-    if term_created_at.tzinfo is None:
-        term_created_at = term_created_at.replace(tzinfo=timezone.utc)
 
     cutoff = max(
         observed_at - _NOTIFICATION_FRESHNESS_WINDOW,
@@ -406,11 +413,11 @@ def _candidate_is_newer(
         return True
     if current_published_at.tzinfo is None:
         current_published_at = current_published_at.replace(tzinfo=timezone.utc)
+    if current_is_estimated != candidate_is_estimated:
+        return current_is_estimated and not candidate_is_estimated
     if candidate_published_at != current_published_at:
         return candidate_published_at > current_published_at
-    # Match the feed's date ordering first. For an exact tie, prefer the item
-    # backed by a parsed source date over a fetch-time estimate.
-    return current_is_estimated and not candidate_is_estimated
+    return False
 
 
 def _queue_pending_notification(
@@ -494,6 +501,12 @@ def _queue_duplicate_term_notifications(
             )
             .all()
         }
+        term_had_existing_matches = (
+            db.query(Match.id)
+            .filter(Match.watch_term_id == duplicate_term.id)
+            .first()
+            is not None
+        )
 
         new_matches: list[tuple[Match, SourceItem]] = []
         for source_item_id in source_item_ids:
@@ -518,6 +531,7 @@ def _queue_duplicate_term_notifications(
                 term=duplicate_term,
                 source_item=source_item,
                 observed_at=observed_at,
+                term_had_existing_matches=term_had_existing_matches,
             ):
                 continue
             notification_count += 1
@@ -669,6 +683,12 @@ async def _poll_once_unlocked() -> None:
                                 )
                                 .all()
                             }
+                            term_had_existing_matches = (
+                                db.query(Match.id)
+                                .filter(Match.watch_term_id == term.id)
+                                .first()
+                                is not None
+                            )
 
                             for raw in items:
                                 published_at = raw.published_at
@@ -755,6 +775,7 @@ async def _poll_once_unlocked() -> None:
                                     term=term,
                                     source_item=source_item,
                                     observed_at=now,
+                                    term_had_existing_matches=term_had_existing_matches,
                                 ):
                                     continue
                                 notification_count += 1
