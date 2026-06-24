@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from app.api import devices as devices_api
-from app.models import APNSDeviceToken
+from app.models import APNSDeviceToken, WatchTerm
 
 _DEVICE_SECRET = "device-secret-123"
 
@@ -555,3 +555,80 @@ class TestListAPNSTokens:
         tokens = [d["token"] for d in r.json()]
         # token2 was upserted last, so it should appear first
         assert tokens.index(token2) < tokens.index(token1)
+
+
+class TestPruneSupersededAPNSTokens:
+    def test_dry_run_reports_without_deleting(self, client, db_session):
+        older = APNSDeviceToken(
+            token="1" * 64,
+            environment="production",
+            device_id="device-old",
+            device_secret="owner-secret",
+            is_verified=True,
+            last_seen_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        newer = APNSDeviceToken(
+            token="2" * 64,
+            environment="production",
+            device_id="device-new",
+            is_verified=True,
+            last_seen_at=datetime.now(timezone.utc),
+        )
+        db_session.add_all([older, newer, WatchTerm(keyword="Owned", owner_device_secret="owner-secret")])
+        db_session.commit()
+
+        r = client.post("/api/devices/apns-tokens/prune-superseded?dry_run=true&keep_per_environment=1")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["dry_run"] is True
+        assert data["candidate_count"] == 2
+        assert data["kept_count"] == 1
+        assert data["removed_count"] == 1
+        assert data["kept"][0]["token"] == "22222222"
+        assert data["removed"][0]["token"] == "11111111"
+        assert data["removed"][0]["owner_term_count"] == 1
+        assert data["removed"][0]["device_id"] == "vice-old"
+        assert db_session.get(APNSDeviceToken, "1" * 64) is not None
+        assert db_session.get(APNSDeviceToken, "2" * 64) is not None
+
+    def test_execute_removes_older_verified_tokens_per_environment(self, client, db_session):
+        production_old = APNSDeviceToken(
+            token="1" * 64,
+            environment="production",
+            is_verified=True,
+            last_seen_at=datetime.now(timezone.utc) - timedelta(days=2),
+        )
+        production_new = APNSDeviceToken(
+            token="2" * 64,
+            environment="production",
+            is_verified=True,
+            last_seen_at=datetime.now(timezone.utc),
+        )
+        sandbox = APNSDeviceToken(
+            token="3" * 64,
+            environment="sandbox",
+            is_verified=True,
+            last_seen_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        unverified = APNSDeviceToken(
+            token="4" * 64,
+            environment="production",
+            is_verified=False,
+            last_seen_at=datetime.now(timezone.utc) - timedelta(days=3),
+        )
+        db_session.add_all([production_old, production_new, sandbox, unverified])
+        db_session.commit()
+
+        r = client.post("/api/devices/apns-tokens/prune-superseded?dry_run=false&keep_per_environment=1")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["dry_run"] is False
+        assert data["candidate_count"] == 3
+        assert data["kept_count"] == 2
+        assert data["removed_count"] == 1
+        assert db_session.get(APNSDeviceToken, "1" * 64) is None
+        assert db_session.get(APNSDeviceToken, "2" * 64) is not None
+        assert db_session.get(APNSDeviceToken, "3" * 64) is not None
+        assert db_session.get(APNSDeviceToken, "4" * 64) is not None

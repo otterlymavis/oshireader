@@ -3,15 +3,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth import require_admin_auth
 from app.config import settings
 from app.database import SessionLocal, get_db
-from app.models import APNSDeviceToken
+from app.models import APNSDeviceToken, WatchTerm
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
@@ -141,6 +142,27 @@ def _retire_superseded_device_tokens(
     return retired
 
 
+def _device_recency(device: APNSDeviceToken) -> float:
+    candidate = device.last_seen_at or device.verified_at
+    if candidate is None:
+        return 0
+    if candidate.tzinfo is None:
+        candidate = candidate.replace(tzinfo=timezone.utc)
+    return candidate.timestamp()
+
+
+def _redacted_device_row(device: APNSDeviceToken, owner_term_count: int) -> dict:
+    return {
+        "token": device.token[-8:],
+        "environment": device.environment,
+        "device_id_present": bool(device.device_id),
+        "device_id": device.device_id[-8:] if device.device_id else None,
+        "owner_term_count": owner_term_count,
+        "verified_at": device.verified_at,
+        "last_seen_at": device.last_seen_at,
+    }
+
+
 @router.post("/apns-token", response_model=APNSDeviceTokenOut, status_code=201)
 async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(get_db)):
     token = _normalize_token(body.token)
@@ -249,3 +271,60 @@ def delete_apns_token(
 @router.get("/apns-tokens", response_model=list[APNSDeviceTokenOut])
 def list_apns_tokens(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)):
     return db.query(APNSDeviceToken).order_by(APNSDeviceToken.last_seen_at.desc()).all()
+
+
+@router.post("/apns-tokens/prune-superseded")
+def prune_superseded_apns_tokens(
+    dry_run: bool = Query(True),
+    keep_per_environment: int = Query(1, ge=1, le=20),
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    owner_term_rows = (
+        db.query(WatchTerm.owner_device_secret, WatchTerm.id)
+        .filter(WatchTerm.owner_device_secret.isnot(None))
+        .all()
+    )
+    owner_term_counts_by_secret: dict[str, int] = defaultdict(int)
+    for device_secret, _term_id in owner_term_rows:
+        owner_term_counts_by_secret[device_secret] += 1
+
+    devices = (
+        db.query(APNSDeviceToken)
+        .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+        .all()
+    )
+    devices_by_environment: dict[str, list[APNSDeviceToken]] = defaultdict(list)
+    for device in devices:
+        devices_by_environment[device.environment or "unknown"].append(device)
+
+    kept: list[APNSDeviceToken] = []
+    removed: list[APNSDeviceToken] = []
+    for environment_devices in devices_by_environment.values():
+        ordered = sorted(
+            environment_devices,
+            key=lambda device: (_device_recency(device), device.token),
+            reverse=True,
+        )
+        kept.extend(ordered[:keep_per_environment])
+        removed.extend(ordered[keep_per_environment:])
+
+    if not dry_run:
+        for device in removed:
+            db.delete(device)
+        db.commit()
+
+    def owner_count(device: APNSDeviceToken) -> int:
+        if not device.device_secret:
+            return 0
+        return owner_term_counts_by_secret.get(device.device_secret, 0)
+
+    return {
+        "dry_run": dry_run,
+        "keep_per_environment": keep_per_environment,
+        "candidate_count": len(devices),
+        "kept_count": len(kept),
+        "removed_count": len(removed),
+        "kept": [_redacted_device_row(device, owner_count(device)) for device in kept],
+        "removed": [_redacted_device_row(device, owner_count(device)) for device in removed],
+    }
