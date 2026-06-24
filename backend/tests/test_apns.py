@@ -415,6 +415,46 @@ class TestSendNewMatchNotifications:
         assert mock_send.call_args.args[1].token == "e" * 64
 
     @pytest.mark.asyncio
+    async def test_global_term_skips_devices_with_owned_duplicate_term(self, db_session):
+        owner_secret = "owner-secret-digest"
+        global_term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        owned_term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret=owner_secret)
+        owner_device = _device("e" * 64, environment="production")
+        owner_device.device_secret = owner_secret
+        broadcast_device = _device("f" * 64, environment="production")
+        broadcast_device.device_secret = "broadcast-secret"
+        db_session.add_all([global_term, owned_term, owner_device, broadcast_device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))) as mock_send:
+            await send_new_match_notifications(db_session, global_term, 1)
+
+        mock_send.assert_awaited_once()
+        assert mock_send.await_args.args[1].token == "f" * 64
+        event = db_session.query(BackendEvent).filter_by(kind="apns").one()
+        assert event.payload["candidate_device_count"] == 1
+        assert event.payload["device_count"] == 1
+        assert event.payload["excluded_owner_duplicate_devices"] == 1
+
+    @pytest.mark.asyncio
+    async def test_global_term_does_not_skip_silent_owned_duplicate_term(self, db_session):
+        owner_secret = "owner-secret-digest"
+        global_term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        owned_term = WatchTerm(keyword="Aiko", notify_on_new=False, owner_device_secret=owner_secret)
+        owner_device = _device("e" * 64, environment="production")
+        owner_device.device_secret = owner_secret
+        db_session.add_all([global_term, owned_term, owner_device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))) as mock_send:
+            await send_new_match_notifications(db_session, global_term, 1)
+
+        mock_send.assert_awaited_once()
+        assert mock_send.await_args.args[1].token == "e" * 64
+
+    @pytest.mark.asyncio
     async def test_records_redacted_device_results_in_apns_event(self, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=True)
         delivered_device = _device("1" * 64, environment="production")

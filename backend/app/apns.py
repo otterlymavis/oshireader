@@ -367,6 +367,20 @@ def _dedupe_devices(devices: list[APNSDeviceToken]) -> list[APNSDeviceToken]:
     return list(newest_by_identity.values())
 
 
+def _owner_scoped_duplicate_secrets(db: Session, term: WatchTerm) -> set[str]:
+    if term.owner_device_secret:
+        return set()
+    rows = (
+        db.query(WatchTerm.owner_device_secret)
+        .filter(WatchTerm.keyword == term.keyword)
+        .filter(WatchTerm.is_active == True)  # noqa: E712
+        .filter(WatchTerm.notify_on_new == True)  # noqa: E712
+        .filter(WatchTerm.owner_device_secret.isnot(None))
+        .all()
+    )
+    return {secret for (secret,) in rows if secret}
+
+
 def _test_payload() -> dict:
     term = WatchTerm(keyword="OshiReader")
     term.id = 0
@@ -476,8 +490,11 @@ async def send_new_match_notifications(
     # environment, so a server set to "sandbox" never delivered to production
     # (TestFlight) tokens — and vice versa.
     query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+    excluded_owner_duplicate_secrets = _owner_scoped_duplicate_secrets(db, term)
     if term.owner_device_secret:
         query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+    elif excluded_owner_duplicate_secrets:
+        query = query.filter(~APNSDeviceToken.device_secret.in_(excluded_owner_duplicate_secrets))
     candidate_devices: list[APNSDeviceToken] = query.all()
     devices = _dedupe_devices(candidate_devices)
     if not devices:
@@ -561,6 +578,7 @@ async def send_new_match_notifications(
             "delivered_count": delivered_count,
             "retryable_failures": retryable_failures,
             "pruned_tokens": pruned_tokens,
+            "excluded_owner_duplicate_devices": len(excluded_owner_duplicate_secrets),
             "device_results": device_results,
             "device_results_truncated": max(0, len(devices) - len(device_results)),
         },
