@@ -42,6 +42,7 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
     items_total: stats.items_total,
     matches_total: stats.matches_total,
     apns: stats.apns || null,
+    notification_health: stats.notification_health || null,
     watch_terms: stats.watch_terms || [],
     latest_poll: stats.latest_poll || recentEvents.find((event) => event.kind === "poll") || null,
     latest_successful_poll: successfulPoll,
@@ -52,6 +53,28 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
 }
 
 function notificationHealth(diagnostics) {
+  const backendHealth = diagnostics.notification_health;
+  if (backendHealth && typeof backendHealth.healthy === "boolean") {
+    const activeNotifyTerms = backendHealth.active_notify_terms ?? 0;
+    const atRiskTerms = backendHealth.active_notify_terms_without_verified_devices ?? 0;
+    if (backendHealth.healthy) {
+      return {
+        healthy: true,
+        active_notify_terms: activeNotifyTerms,
+        at_risk_terms: atRiskTerms,
+        active_silent_orphan_terms: backendHealth.active_silent_orphan_terms ?? 0,
+      };
+    }
+    return {
+      healthy: false,
+      reason: "Backend notification health is degraded",
+      active_notify_terms: activeNotifyTerms,
+      at_risk_terms: atRiskTerms,
+      active_silent_orphan_terms: backendHealth.active_silent_orphan_terms ?? 0,
+      at_risk_term_ids: backendHealth.active_notify_term_ids_without_verified_devices || [],
+    };
+  }
+
   const watchTerms = diagnostics.watch_terms || [];
   const notifyTerms = watchTerms.filter((term) => term.is_active && term.notify_on_new);
   const atRiskTerms = notifyTerms.filter((term) => (term.notification_verified_devices || 0) <= 0);

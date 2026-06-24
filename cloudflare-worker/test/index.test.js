@@ -199,6 +199,54 @@ test("health reports active notification terms without devices as degraded", asy
   assert.deepEqual(body.notifications.at_risk_keywords, ["Aiko"]);
 });
 
+test("health trusts backend notification grace period", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    apns: {
+      configured: true,
+      device_tokens_by_environment_and_verification: {
+        production: { verified: 1, unverified: 0 },
+      },
+    },
+    notification_health: {
+      healthy: true,
+      active_notify_terms: 2,
+      active_silent_orphan_terms: 0,
+      active_notify_terms_without_verified_devices: 0,
+      orphaned_notification_grace_minutes: 60,
+      active_silent_orphan_term_ids: [],
+      active_notify_term_ids_without_verified_devices: [],
+    },
+    watch_terms: [
+      {
+        keyword: "Aiko",
+        is_active: true,
+        notify_on_new: true,
+        notification_verified_devices: 0,
+      },
+    ],
+    latest_successful_poll: {
+      id: 1,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date().toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status, "ok");
+  assert.equal(body.notifications.healthy, true);
+  assert.equal(body.notifications.active_notify_terms, 2);
+});
+
 test("manual run rejects callers without the token", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/run", { method: "POST" }),
