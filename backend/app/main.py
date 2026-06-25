@@ -34,6 +34,7 @@ from app.connectors.base import (
 from app.ingestion.scheduler import (
     _connector_batches,
     _poll_lock,
+    connector_fetch_timeout_seconds,
     create_poll_task,
     poll_once,
     queue_poll,
@@ -364,17 +365,18 @@ async def test_fetch(
                 )
             else:
                 async def _fetch_with_timeout(connector):
+                    effective_timeout = max(timeout_seconds, connector_fetch_timeout_seconds(connector))
                     try:
                         items = await asyncio.wait_for(
                             connector.fetch(keyword, CollectionMode.ALL_INFO),
-                            timeout=timeout_seconds,
+                            timeout=effective_timeout,
                         )
                     except Exception as exc:
                         log.warning(
                             "admin test-fetch error connector=%s term=%r timeout=%ss: %s",
                             connector.PLATFORM,
                             keyword,
-                            timeout_seconds,
+                            effective_timeout,
                             exc,
                         )
                         return []

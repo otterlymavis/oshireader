@@ -59,6 +59,7 @@ _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "toget
 _NOTIFICATION_FRESHNESS_WINDOW = timedelta(hours=2)
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
+_FIVECH_FETCH_TIMEOUT_SECONDS = 15.0
 
 
 def _build_connectors(db) -> list[BaseConnector]:
@@ -150,17 +151,18 @@ def _search_terms_for(term: WatchTerm) -> list[str]:
 
 async def _fetch_one(connector: BaseConnector, search_term: str, mode: CollectionMode) -> list:
     """Run a single connector fetch; return [] on any error."""
+    timeout_seconds = connector_fetch_timeout_seconds(connector)
     try:
         items = await asyncio.wait_for(
             connector.fetch(search_term, mode),
-            timeout=settings.connector_fetch_timeout_seconds,
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
         log.warning(
             "fetch timeout connector=%s term=%r timeout=%ss",
             connector.PLATFORM,
             search_term,
-            settings.connector_fetch_timeout_seconds,
+            timeout_seconds,
         )
         return []
     except Exception as exc:
@@ -177,6 +179,13 @@ async def _fetch_one(connector: BaseConnector, search_term: str, mode: Collectio
             len(items),
         )
     return filtered
+
+
+def connector_fetch_timeout_seconds(connector: BaseConnector) -> float:
+    timeout = settings.connector_fetch_timeout_seconds
+    if connector.PLATFORM == "5ch":
+        return max(timeout, _FIVECH_FETCH_TIMEOUT_SECONDS)
+    return timeout
 
 
 def _connector_batches(connectors: list[BaseConnector]) -> list[list[BaseConnector]]:
