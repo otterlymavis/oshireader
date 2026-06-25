@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, quote_plus, urljoin
 
 import feedparser
 import httpx
@@ -144,7 +144,10 @@ class _GNewsSiteConnector(BaseConnector):
             )
         if items:
             return items
-        return await self._fetch_gnews_jina(keyword, url, history_years)
+        items = await self._fetch_gnews_jina(keyword, url, history_years)
+        if items:
+            return items
+        return await self._fetch_bing_news(keyword, history_years)
 
     async def _fetch_gnews_jina(
         self,
@@ -184,6 +187,56 @@ class _GNewsSiteConnector(BaseConnector):
                         "keyword": keyword,
                         "history_years": history_years,
                         "source": "google_news_jina",
+                    },
+                )
+            )
+        return items
+
+    async def _fetch_bing_news(
+        self,
+        keyword: str,
+        history_years: int | None,
+    ) -> list[SourceItemCreate]:
+        query = f"{keyword} site:{self.SITE}"
+        url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt=ja-JP"
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    log.warning("%s Bing News fallback returned %d", self.PLATFORM, resp.status_code)
+                    return []
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+        except Exception as exc:
+            log.warning("%s Bing News fallback error: %s", self.PLATFORM, exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            item_id = entry.get("id") or link
+            if self.TITLE_SUFFIX_RE:
+                title = self.TITLE_SUFFIX_RE.sub("", title).strip()
+            if not link or not title or item_id in seen:
+                continue
+            if not title_contains_keyword(keyword, title):
+                continue
+            seen.add(item_id)
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=item_id,
+                    url=link,
+                    published_at=parse_feed_date(entry),
+                    media_type="article",
+                    title=title,
+                    content_text=entry.get("summary") or None,
+                    raw_payload={
+                        "site": self.SITE,
+                        "keyword": keyword,
+                        "history_years": history_years,
+                        "source": "bing_news",
                     },
                 )
             )

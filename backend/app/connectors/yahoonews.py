@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import feedparser
 import httpx
@@ -148,7 +148,10 @@ class YahooNewsConnector(BaseConnector):
             )
         if items:
             return items
-        return await self._fetch_gnews_jina(keyword, url)
+        items = await self._fetch_gnews_jina(keyword, url)
+        if items:
+            return items
+        return await self._fetch_bing_news(keyword)
 
     async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
@@ -177,6 +180,44 @@ class YahooNewsConnector(BaseConnector):
                     title=title,
                     content_text=None,
                     raw_payload={"keyword": keyword, "source": "google_news_jina"},
+                )
+            )
+        return items
+
+    async def _fetch_bing_news(self, keyword: str) -> list[SourceItemCreate]:
+        query = f"{keyword} site:news.yahoo.co.jp"
+        url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt=ja-JP"
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    return []
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+        except Exception as exc:
+            log.warning("YahooNews Bing News fallback error: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            item_id = entry.get("id") or link
+            if not link or not title or item_id in seen:
+                continue
+            if not title_contains_keyword(keyword, title):
+                continue
+            seen.add(item_id)
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=item_id,
+                    url=link,
+                    published_at=parse_feed_date(entry),
+                    media_type="article",
+                    title=title,
+                    content_text=entry.get("summary") or None,
+                    raw_payload={"keyword": keyword, "source": "bing_news"},
                 )
             )
         return items

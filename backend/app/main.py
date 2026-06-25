@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import AsyncGenerator, Optional
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -416,6 +416,7 @@ async def source_probe(
     encoded = quote(query)
     url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
     proxy_url = "https://r.jina.ai/http://" + url.replace("https://", "")
+    bing_url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt=ja-JP"
 
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
         direct_status = None
@@ -454,6 +455,24 @@ async def source_probe(
         except Exception as exc:
             jina_error = f"{type(exc).__name__}: {exc}"
 
+        bing_status = None
+        bing_len = 0
+        bing_entries = 0
+        bing_matches = 0
+        bing_error = None
+        try:
+            bing_resp = await client.get(bing_url)
+            bing_status = bing_resp.status_code
+            bing_len = len(bing_resp.content)
+            bing_feed = await asyncio.to_thread(feedparser.parse, bing_resp.content)
+            bing_entries = len(bing_feed.entries)
+            bing_matches = sum(
+                1 for entry in bing_feed.entries
+                if title_contains_keyword(keyword, entry.get("title") or "")
+            )
+        except Exception as exc:
+            bing_error = f"{type(exc).__name__}: {exc}"
+
     return {
         "platform": platform,
         "keyword": keyword,
@@ -471,6 +490,13 @@ async def source_probe(
             "entries": jina_entries,
             "keyword_title_matches": jina_matches,
             "error": jina_error,
+        },
+        "bing": {
+            "status": bing_status,
+            "bytes": bing_len,
+            "entries": bing_entries,
+            "keyword_title_matches": bing_matches,
+            "error": bing_error,
         },
     }
 

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import feedparser
 import httpx
@@ -120,7 +120,10 @@ class RSSConnector(BaseConnector):
             ))
         if items:
             return items
-        return await self._fetch_google_news_history_jina(keyword, url)
+        items = await self._fetch_google_news_history_jina(keyword, url)
+        if items:
+            return items
+        return await self._fetch_bing_news(keyword)
 
     async def _fetch_google_news_history_jina(
         self,
@@ -152,5 +155,39 @@ class RSSConnector(BaseConnector):
                 content_text=None,
                 author="Google News",
                 raw_payload={"source": "google_news_jina", "keyword": keyword},
+            ))
+        return items
+
+    async def _fetch_bing_news(self, keyword: str) -> list[SourceItemCreate]:
+        url = f"https://www.bing.com/news/search?q={quote_plus(keyword)}&format=rss&mkt=ja-JP"
+        try:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    return []
+            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+        except Exception as exc:
+            log.warning("Bing News fallback failed: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            item_id = entry.get("id") or link
+            if not link or not title_contains_keyword(keyword, title) or item_id in seen:
+                continue
+            seen.add(item_id)
+            items.append(SourceItemCreate(
+                platform=self.PLATFORM,
+                item_id=item_id,
+                url=link,
+                published_at=parse_feed_date(entry),
+                media_type="article",
+                title=title,
+                content_text=entry.get("summary") or None,
+                author="Bing News",
+                raw_payload={"source": "bing_news", "keyword": keyword},
             ))
         return items
