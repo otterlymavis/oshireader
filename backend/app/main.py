@@ -9,7 +9,7 @@ import zlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -316,20 +316,41 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
 async def test_fetch(
     _: None = Depends(require_admin_auth),
     keyword: str = Query("吉沢亮"),
+    platform: Optional[str] = Query(None),
+    samples: int = Query(0, ge=0, le=10),
 ) -> dict:
     from app.ingestion.scheduler import _build_connectors, _fetch_one
     db_sess = SessionLocal()
     try:
         connectors = _build_connectors(db_sess)
+        if platform:
+            requested = platform.casefold()
+            connectors = [c for c in connectors if c.PLATFORM.casefold() == requested]
         counts: dict[str, int] = {}
+        details: dict[str, dict] = {}
         for connector_batch in _connector_batches(connectors):
             results = await asyncio.gather(
                 *[_fetch_one(c, keyword, CollectionMode.ALL_INFO) for c in connector_batch]
             )
-            counts.update({
-                connector.PLATFORM: len(result)
-                for connector, result in zip(connector_batch, results)
-            })
+            for connector, result in zip(connector_batch, results):
+                counts[connector.PLATFORM] = len(result)
+                if samples:
+                    details[connector.PLATFORM] = {
+                        "count": len(result),
+                        "items": [
+                            {
+                                "item_id": item.item_id,
+                                "url": item.url,
+                                "title": item.title,
+                                "media_type": item.media_type,
+                                "published_at": item.published_at.isoformat(),
+                                "raw_payload": item.raw_payload,
+                            }
+                            for item in result[:samples]
+                        ],
+                    }
+        if samples:
+            return details
         return counts
     finally:
         db_sess.close()

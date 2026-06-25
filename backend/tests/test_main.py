@@ -765,3 +765,59 @@ class TestAdminTestFetch:
 
         assert r.status_code == 200
         assert r.json() == {"youtube": 1}
+
+    def test_test_fetch_can_filter_one_platform(self, client):
+        youtube = MagicMock()
+        youtube.PLATFORM = "youtube"
+        tver = MagicMock()
+        tver.PLATFORM = "tver"
+
+        async def _fake_fetch(connector, *_args):
+            return [object()] if connector.PLATFORM == "tver" else []
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[youtube, tver]), \
+             patch("app.ingestion.scheduler._fetch_one", new=AsyncMock(side_effect=_fake_fetch)):
+            r = client.get("/api/admin/test-fetch", params={"platform": "tver"})
+
+        assert r.status_code == 200
+        assert r.json() == {"tver": 1}
+
+    def test_test_fetch_can_return_dated_samples(self, client):
+        from app.connectors.base import SourceItemCreate
+
+        published = datetime(2026, 6, 17, tzinfo=timezone.utc)
+        mock_item = SourceItemCreate(
+            platform="tver",
+            item_id="ep1",
+            url="https://tver.jp/episodes/ep1",
+            published_at=published,
+            media_type="video",
+            title="Aiko episode",
+            raw_payload={"date_source": "episode_detail"},
+        )
+        mock_connector = MagicMock()
+        mock_connector.PLATFORM = "tver"
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]), \
+             patch("app.ingestion.scheduler._fetch_one", new=AsyncMock(return_value=[mock_item])):
+            r = client.get(
+                "/api/admin/test-fetch",
+                params={"keyword": "Aiko", "platform": "tver", "samples": 1},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "tver": {
+                "count": 1,
+                "items": [
+                    {
+                        "item_id": "ep1",
+                        "url": "https://tver.jp/episodes/ep1",
+                        "title": "Aiko episode",
+                        "media_type": "video",
+                        "published_at": "2026-06-17T00:00:00+00:00",
+                        "raw_payload": {"date_source": "episode_detail"},
+                    }
+                ],
+            }
+        }
