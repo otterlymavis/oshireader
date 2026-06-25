@@ -24,6 +24,63 @@ test("health endpoint does not require the admin token", async () => {
   assert.equal(body.healthy, true);
 });
 
+test("rss proxy requires the admin token", async () => {
+  const response = await worker.fetch(
+    new Request("https://worker.example/rss-proxy?target=google&query=Aiko"),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 401);
+});
+
+test("rss proxy fetches only supported search targets", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  globalThis.fetch = async (url) => {
+    upstreamURL = String(url);
+    return new Response("<rss><channel /></rss>", { status: 200 });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/rss-proxy?target=google&query=Aiko%20site%3Aexample.com", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "application/xml; charset=utf-8");
+  assert.match(upstreamURL, /^https:\/\/news\.google\.com\/rss\/search\?/);
+  assert.match(upstreamURL, /Aiko%20site%3Aexample\.com/);
+});
+
+test("rss proxy normalizes bearer token formatting", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response("<rss><channel /></rss>", { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/rss-proxy?target=google&query=Aiko", {
+      headers: { authorization: " Bearer secret " },
+    }),
+    { ADMIN_API_TOKEN: " Bearer secret " },
+  );
+
+  assert.equal(response.status, 200);
+});
+
+test("rss proxy rejects unsupported targets", async () => {
+  const response = await worker.fetch(
+    new Request("https://worker.example/rss-proxy?target=other&query=Aiko", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 400);
+});
+
 test("health reports stale polling as degraded", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });

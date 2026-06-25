@@ -25,7 +25,12 @@ from app.auth import require_admin_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.diagnostics import record_backend_event
-from app.connectors.base import GOOGLE_NEWS_HEADERS, parse_google_news_markdown, title_contains_keyword
+from app.connectors.base import (
+    GOOGLE_NEWS_HEADERS,
+    fetch_search_rss_via_proxy,
+    parse_google_news_markdown,
+    title_contains_keyword,
+)
 from app.ingestion.scheduler import (
     _connector_batches,
     _poll_lock,
@@ -473,6 +478,30 @@ async def source_probe(
         except Exception as exc:
             bing_error = f"{type(exc).__name__}: {exc}"
 
+        async def probe_worker_proxy(target: str) -> dict:
+            result = {
+                "bytes": 0,
+                "entries": 0,
+                "keyword_title_matches": 0,
+                "error": None,
+            }
+            try:
+                proxy_content = await fetch_search_rss_via_proxy(query, target=target)
+                if proxy_content:
+                    result["bytes"] = len(proxy_content)
+                    proxy_feed = await asyncio.to_thread(feedparser.parse, proxy_content)
+                    result["entries"] = len(proxy_feed.entries)
+                    result["keyword_title_matches"] = sum(
+                        1 for entry in proxy_feed.entries
+                        if title_contains_keyword(keyword, entry.get("title") or "")
+                    )
+            except Exception as exc:
+                result["error"] = f"{type(exc).__name__}: {exc}"
+            return result
+
+        worker_google = await probe_worker_proxy("google")
+        worker_bing = await probe_worker_proxy("bing")
+
     return {
         "platform": platform,
         "keyword": keyword,
@@ -498,6 +527,8 @@ async def source_probe(
             "keyword_title_matches": bing_matches,
             "error": bing_error,
         },
+        "worker_proxy": worker_google,
+        "worker_proxy_bing": worker_bing,
     }
 
 

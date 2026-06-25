@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import re
 from typing import Optional
+from urllib.parse import urlencode
 import unicodedata
 
 import feedparser
+import httpx
 
+from app.config import settings
 from app.models import CollectionMode
 
 GOOGLE_NEWS_HEADERS = {
@@ -61,6 +64,22 @@ def parse_google_news_markdown(text: str) -> list[dict]:
             "published_at": published,
         })
     return items
+
+
+async def fetch_search_rss_via_proxy(query: str, target: str = "google") -> bytes | None:
+    proxy_url = settings.source_rss_proxy_url.strip()
+    token = settings.admin_api_token.strip()
+    if not proxy_url or not token:
+        return None
+    url = f"{proxy_url}?{urlencode({'target': target, 'query': query})}"
+    try:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+            if not response.is_success:
+                return None
+            return response.content
+    except Exception:
+        return None
 
 
 def contains_keyword(keyword: str, *values: object) -> bool:

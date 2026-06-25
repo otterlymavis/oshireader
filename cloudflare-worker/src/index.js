@@ -2,6 +2,7 @@ const POLL_TIMEOUT_MS = 4 * 60 * 1000;
 const DEFAULT_POLL_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
 const DEFAULT_STALE_AFTER_MINUTES = 35;
+const RSS_PROXY_TIMEOUT_MS = 20_000;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -18,6 +19,68 @@ function requireAdminToken(env) {
     throw new Error("Missing Worker secret: ADMIN_API_TOKEN");
   }
   return env.ADMIN_API_TOKEN;
+}
+
+function unauthorized() {
+  return json({ detail: "Unauthorized" }, 401);
+}
+
+function rssResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "application/xml; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function requireBearer(request, env) {
+  const expected = normalizeBearerToken(requireAdminToken(env));
+  const actual = normalizeBearerToken(request.headers.get("authorization") || "");
+  return actual !== "" && actual === expected;
+}
+
+function normalizeBearerToken(value) {
+  const raw = String(value || "").trim();
+  if (raw.toLowerCase().startsWith("bearer ")) {
+    return raw.slice(7).trim();
+  }
+  return raw;
+}
+
+async function proxySearchRss(request, env) {
+  if (!requireBearer(request, env)) return unauthorized();
+
+  const url = new URL(request.url);
+  const target = url.searchParams.get("target") || "google";
+  const query = (url.searchParams.get("query") || "").trim();
+  if (!query || query.length > 200) {
+    return json({ detail: "Invalid query" }, 400);
+  }
+
+  let upstream;
+  if (target === "google") {
+    upstream = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP%3Aja`;
+  } else if (target === "bing") {
+    upstream = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=rss&mkt=ja-JP`;
+  } else {
+    return json({ detail: "Unsupported target" }, 400);
+  }
+
+  const response = await fetch(upstream, {
+    headers: {
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      "accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
+      "accept-language": "ja,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(RSS_PROXY_TIMEOUT_MS),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    return json({ detail: `Upstream ${target} failed`, status: response.status, bytes: body.length }, 502);
+  }
+  return rssResponse(body);
 }
 
 async function fetchBackendDiagnostics(backendURL, adminToken) {
@@ -319,11 +382,17 @@ export default {
       }
     }
 
-    if (request.method === "POST" && url.pathname === "/run") {
-      const expected = `Bearer ${requireAdminToken(env)}`;
-      if (request.headers.get("authorization") !== expected) {
-        return json({ detail: "Unauthorized" }, 401);
+    if (request.method === "GET" && url.pathname === "/rss-proxy") {
+      try {
+        return await proxySearchRss(request, env);
+      } catch (error) {
+        console.error("RSS proxy failed", error);
+        return json({ detail: String(error) }, 502);
       }
+    }
+
+    if (request.method === "POST" && url.pathname === "/run") {
+      if (!requireBearer(request, env)) return unauthorized();
       try {
         return json(await triggerBackendPoll(env));
       } catch (error) {

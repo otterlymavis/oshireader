@@ -16,6 +16,7 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    fetch_search_rss_via_proxy,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -320,7 +321,10 @@ class FiveChConnector(BaseConnector):
 
         if items:
             return items
-        return await self._fetch_gnews_jina(keyword, url)
+        items = await self._fetch_gnews_jina(keyword, url)
+        if items:
+            return items
+        return await self._fetch_gnews_proxy(keyword)
 
     async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
@@ -353,3 +357,38 @@ class FiveChConnector(BaseConnector):
                 )
             )
         return items
+
+    async def _fetch_gnews_proxy(self, keyword: str) -> list[SourceItemCreate]:
+        query = f"{keyword} site:5ch.net OR site:2ch.sc"
+        for target, source in (("google", "google_news_proxy"), ("bing", "bing_news_proxy")):
+            content = await fetch_search_rss_via_proxy(query, target=target)
+            if not content:
+                continue
+            feed = await asyncio.to_thread(feedparser.parse, content)
+            items: list[SourceItemCreate] = []
+            seen: set[str] = set()
+            for entry in feed.entries[:25]:
+                link = entry.get("link", "")
+                item_id = entry.get("id") or link
+                title = (entry.get("title") or "").strip()
+                if not link or not title or item_id in seen:
+                    continue
+                if not title_contains_keyword(keyword, title):
+                    continue
+                seen.add(item_id)
+                items.append(
+                    SourceItemCreate(
+                        platform=self.PLATFORM,
+                        item_id=item_id,
+                        url=link,
+                        published_at=parse_feed_date(entry),
+                        media_type="text",
+                        title=title,
+                        content_text=entry.get("summary") or None,
+                        thumbnail_url=None,
+                        raw_payload={"source": source, "keyword": keyword},
+                    )
+                )
+            if items:
+                return items
+        return []

@@ -10,6 +10,7 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    fetch_search_rss_via_proxy,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -123,6 +124,9 @@ class RSSConnector(BaseConnector):
         items = await self._fetch_google_news_history_jina(keyword, url)
         if items:
             return items
+        items = await self._fetch_google_news_history_proxy(keyword)
+        if items:
+            return items
         return await self._fetch_bing_news(keyword)
 
     async def _fetch_google_news_history_jina(
@@ -158,14 +162,46 @@ class RSSConnector(BaseConnector):
             ))
         return items
 
+    async def _fetch_google_news_history_proxy(self, keyword: str) -> list[SourceItemCreate]:
+        content = await fetch_search_rss_via_proxy(f"{keyword} when:10y", target="google")
+        if not content:
+            return []
+        feed = await asyncio.to_thread(feedparser.parse, content)
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            item_id = entry.get("id") or link
+            if not link or not title_contains_keyword(keyword, title) or item_id in seen:
+                continue
+            seen.add(item_id)
+            items.append(SourceItemCreate(
+                platform=self.PLATFORM,
+                item_id=item_id,
+                url=link,
+                published_at=parse_feed_date(entry),
+                media_type="article",
+                title=title,
+                content_text=entry.get("summary") or None,
+                author="Google News",
+                raw_payload={"source": "google_news_proxy", "keyword": keyword},
+            ))
+        return items
+
     async def _fetch_bing_news(self, keyword: str) -> list[SourceItemCreate]:
         url = f"https://www.bing.com/news/search?q={quote_plus(keyword)}&format=rss&mkt=ja-JP"
+        source = "bing_news_proxy"
+        content = await fetch_search_rss_via_proxy(keyword, target="bing")
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    return []
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+            if not content:
+                source = "bing_news"
+                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+                    resp = await client.get(url)
+                    if not resp.is_success:
+                        return []
+                content = resp.content
+            feed = await asyncio.to_thread(feedparser.parse, content)
         except Exception as exc:
             log.warning("Bing News fallback failed: %s", exc)
             return []
@@ -188,6 +224,6 @@ class RSSConnector(BaseConnector):
                 title=title,
                 content_text=entry.get("summary") or None,
                 author="Bing News",
-                raw_payload={"source": "bing_news", "keyword": keyword},
+                raw_payload={"source": source, "keyword": keyword},
             ))
         return items

@@ -21,6 +21,7 @@ from app.connectors.base import (
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     contains_keyword,
+    fetch_search_rss_via_proxy,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -147,6 +148,9 @@ class _GNewsSiteConnector(BaseConnector):
         items = await self._fetch_gnews_jina(keyword, url, history_years)
         if items:
             return items
+        items = await self._fetch_proxy_google_news(keyword, history_years)
+        if items:
+            return items
         return await self._fetch_bing_news(keyword, history_years)
 
     async def _fetch_gnews_jina(
@@ -192,6 +196,49 @@ class _GNewsSiteConnector(BaseConnector):
             )
         return items
 
+    async def _fetch_proxy_google_news(
+        self,
+        keyword: str,
+        history_years: int | None,
+    ) -> list[SourceItemCreate]:
+        history = f" when:{history_years}y" if history_years else ""
+        query = f"{keyword} site:{self.SITE}{history}"
+        content = await fetch_search_rss_via_proxy(query, target="google")
+        if not content:
+            return []
+        feed = await asyncio.to_thread(feedparser.parse, content)
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            item_id = entry.get("id") or link
+            if self.TITLE_SUFFIX_RE:
+                title = self.TITLE_SUFFIX_RE.sub("", title).strip()
+            if not link or not title or item_id in seen:
+                continue
+            if not title_contains_keyword(keyword, title):
+                continue
+            seen.add(item_id)
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=item_id,
+                    url=link,
+                    published_at=parse_feed_date(entry),
+                    media_type="article",
+                    title=title,
+                    content_text=entry.get("summary") or None,
+                    raw_payload={
+                        "site": self.SITE,
+                        "keyword": keyword,
+                        "history_years": history_years,
+                        "source": "google_news_proxy",
+                    },
+                )
+            )
+        return items
+
     async def _fetch_bing_news(
         self,
         keyword: str,
@@ -199,13 +246,18 @@ class _GNewsSiteConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         query = f"{keyword} site:{self.SITE}"
         url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt=ja-JP"
+        source = "bing_news_proxy"
+        content = await fetch_search_rss_via_proxy(query, target="bing")
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("%s Bing News fallback returned %d", self.PLATFORM, resp.status_code)
-                    return []
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+            if not content:
+                source = "bing_news"
+                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+                    resp = await client.get(url)
+                    if not resp.is_success:
+                        log.warning("%s Bing News fallback returned %d", self.PLATFORM, resp.status_code)
+                        return []
+                content = resp.content
+            feed = await asyncio.to_thread(feedparser.parse, content)
         except Exception as exc:
             log.warning("%s Bing News fallback error: %s", self.PLATFORM, exc)
             return []
@@ -236,7 +288,7 @@ class _GNewsSiteConnector(BaseConnector):
                         "site": self.SITE,
                         "keyword": keyword,
                         "history_years": history_years,
-                        "source": "bing_news",
+                        "source": source,
                     },
                 )
             )
