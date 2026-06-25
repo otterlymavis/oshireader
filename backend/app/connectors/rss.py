@@ -8,6 +8,7 @@ import httpx
 from app.connectors.base import (
     BaseConnector,
     CollectionMode,
+    GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     parse_feed_date,
     parse_google_news_markdown,
@@ -88,7 +89,7 @@ class RSSConnector(BaseConnector):
         encoded = quote(f"{keyword} when:10y")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=_HEADERS) as client:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
                     return []
@@ -128,7 +129,7 @@ class RSSConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=_HEADERS) as client:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     return []

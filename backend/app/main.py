@@ -25,7 +25,7 @@ from app.auth import require_admin_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.diagnostics import record_backend_event
-from app.connectors.base import parse_google_news_markdown, title_contains_keyword
+from app.connectors.base import GOOGLE_NEWS_HEADERS, parse_google_news_markdown, title_contains_keyword
 from app.ingestion.scheduler import (
     _connector_batches,
     _poll_lock,
@@ -417,7 +417,7 @@ async def source_probe(
     url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
     proxy_url = "https://r.jina.ai/http://" + url.replace("https://", "")
 
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
         direct_status = None
         direct_len = 0
         direct_entries = 0

@@ -14,6 +14,7 @@ import httpx
 from app.connectors.base import (
     BaseConnector,
     CollectionMode,
+    GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     parse_feed_date,
     parse_google_news_markdown,
@@ -277,7 +278,7 @@ class FiveChConnector(BaseConnector):
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
 
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
                     log.warning("5ch via Google News returned status %d", resp.status_code)
@@ -324,7 +325,7 @@ class FiveChConnector(BaseConnector):
     async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("5ch Google News Jina fallback returned status %d", resp.status_code)

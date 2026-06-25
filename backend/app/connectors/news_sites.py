@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from app.connectors.base import (
     BaseConnector,
     CollectionMode,
+    GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     contains_keyword,
     parse_feed_date,
@@ -97,7 +98,7 @@ class _GNewsSiteConnector(BaseConnector):
         encoded = quote(f"{keyword} site:{self.SITE}{history}")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
                     log.warning("%s Google News returned %d", self.PLATFORM, resp.status_code)
@@ -153,7 +154,7 @@ class _GNewsSiteConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)
