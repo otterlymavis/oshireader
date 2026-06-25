@@ -196,6 +196,10 @@ class TestParseTverDate:
         result = _parse_tver_date({})
         assert result is None
 
+    def test_view_status_start_at_used_when_present(self):
+        result = _parse_tver_date({"viewStatus": {"startAt": 1773907200, "endAt": 1782831599}})
+        assert result == datetime.fromtimestamp(1773907200, tz=timezone.utc)
+
     def test_result_is_utc_aware(self):
         result = _parse_tver_date({"publishedAt": 1700000000})
         assert result is not None
@@ -1004,6 +1008,43 @@ class TestTogetterFetch:
         assert result[0].thumbnail_url == "https://i.togetter.com/t.jpg"
 
     @pytest.mark.asyncio
+    async def test_merges_newest_title_and_tag_search_results(self):
+        direct_html = """
+        <html><body><ul>
+          <li>
+            <h3>吉沢亮 古いまとめ</h3>
+            <a href="https://togetter.com/li/100">吉沢亮 old</a>
+            <time datetime="2026-05-05T23:57:13+09:00">old</time>
+          </li>
+        </ul></body></html>
+        """
+        tag_html = """
+        <html><body><ul>
+          <li>
+            <h3>吉沢亮 新しいタグまとめ</h3>
+            <a href="https://togetter.com/li/200">吉沢亮 new</a>
+            <time datetime="2026-05-29T07:56:04+09:00">new</time>
+          </li>
+        </ul></body></html>
+        """
+        calls = []
+
+        async def _side(_url, params=None, **_kw):
+            calls.append(params)
+            resp = MagicMock(is_success=True, status_code=200)
+            resp.text = tag_html if params and str(params.get("q", "")).startswith("tag:") else direct_html
+            return resp
+
+        with patch("app.connectors.togetter.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
+            result = await TogetterConnector().fetch("吉沢亮", "all_info")
+
+        assert len(result) == 2
+        assert result[0].item_id == "200"
+        assert result[0].published_at.isoformat() == "2026-05-29T07:56:04+09:00"
+        assert result[0].raw_payload["source"] == "tag_search"
+        assert any(call.get("sort") == "created_at" for call in calls)
+
+    @pytest.mark.asyncio
     async def test_returns_empty_on_http_error(self):
         with patch("app.connectors.togetter.httpx.AsyncClient",
                    _http_mock(status_code=503, is_success=False)):
@@ -1082,6 +1123,7 @@ class TestTogetterFetch:
             result = await TogetterConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
         assert result[0].item_id == "22222"
+        assert result[0].raw_payload["date_parsed"] is False
 
     @pytest.mark.asyncio
     async def test_filters_items_without_keyword(self):
@@ -1883,6 +1925,47 @@ class TestTVERFetch:
         assert result[0].url == "https://tver.jp/episodes/ep001"
         assert result[0].author == "NHK"
         assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_missing_search_date_uses_episode_detail_view_start(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="epdetail", title="Aiko Detail", published_at_unix=None)
+        sr = _tver_search_resp(episodes=[ep])
+        detail = MagicMock(is_success=True, status_code=200)
+        detail.json.return_value = {"viewStatus": {"startAt": 1773907200, "endAt": 1782831599}}
+        client_mock = AsyncMock()
+        client_mock.post = AsyncMock(return_value=tr)
+        client_mock.get = AsyncMock(side_effect=[sr, detail])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.connectors.tver.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+
+        assert len(result) == 1
+        assert result[0].published_at == datetime.fromtimestamp(1773907200, tz=timezone.utc)
+        assert result[0].raw_payload["date_source"] == "episode_detail"
+
+    @pytest.mark.asyncio
+    async def test_missing_all_dates_skips_episode(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="epnodate", title="Aiko No Date", published_at_unix=None)
+        sr = _tver_search_resp(episodes=[ep])
+        detail = MagicMock(is_success=True, status_code=200)
+        detail.json.return_value = {}
+        client_mock = AsyncMock()
+        client_mock.post = AsyncMock(return_value=tr)
+        client_mock.get = AsyncMock(side_effect=[sr, detail])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.connectors.tver.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TVERConnector, "_fetch_indexed_history", new=AsyncMock(return_value=[])):
+            result = await TVERConnector().fetch("Aiko", "all_info")
+
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_success_series_and_episode_structure(self):

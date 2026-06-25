@@ -27,21 +27,49 @@ class TogetterConnector(BaseConnector):
         if mode == CollectionMode.MEDIA_ONLY:
             return []
 
-        params = {"q": keyword}
         try:
             async with httpx.AsyncClient(timeout=15.0, headers=HEADERS, follow_redirects=True) as client:
-                resp = await client.get(self._SEARCH, params=params)
-                if not resp.is_success:
-                    log.warning("Togetter search returned %d", resp.status_code)
-                    return []
+                pages = await asyncio.gather(
+                    self._fetch_search_page(
+                        client,
+                        {"q": keyword, "t": "q", "sort": "created_at"},
+                        keyword,
+                        "direct_search",
+                    ),
+                    self._fetch_search_page(
+                        client,
+                        {"q": f"tag:{keyword}", "sort": "created_at"},
+                        keyword,
+                        "tag_search",
+                    ),
+                )
         except Exception as exc:
             log.warning("Togetter fetch error: %s", exc)
             return []
 
-        page = scrapling_page(resp.text, self._SEARCH)
-        items: list[SourceItemCreate] = []
+        items = self._merge_items([item for page_items in pages for item in page_items])
+        if items:
+            return items[:25]
+        return await self._fetch_indexed_history(keyword)
 
+    async def _fetch_search_page(
+        self,
+        client: httpx.AsyncClient,
+        params: dict[str, str],
+        keyword: str,
+        source: str,
+    ) -> list[SourceItemCreate]:
+        resp = await client.get(self._SEARCH, params=params)
+        if not resp.is_success:
+            log.warning("Togetter search returned %d", resp.status_code)
+            return []
+        return self._parse_html(resp.text, keyword, source)
+
+    def _parse_html(self, html: str, keyword: str, source: str) -> list[SourceItemCreate]:
+        page = scrapling_page(html, self._SEARCH)
+        items: list[SourceItemCreate] = []
         seen_ids: set[str] = set()
+        tag_context = source == "tag_search" and f"tag:{keyword}" in html
         for a in page.css("a[href^='https://togetter.com/li/']"):
             if len(items) >= 25:
                 break
@@ -65,11 +93,14 @@ class TogetterConnector(BaseConnector):
                 title = text_of(a)
             if not title:
                 continue
-            if not contains_keyword(keyword, title, text_of(container) if container else None):
+            matched_visible_text = contains_keyword(keyword, title, text_of(container) if container else None)
+            if not matched_visible_text and not tag_context:
                 continue
+            if not matched_visible_text:
+                title = f"{keyword}: {title}"
 
             thumb = None
-            published = datetime.now(timezone.utc)
+            published: datetime | None = None
 
             if container:
                 img = first(container.css("img[src]"))
@@ -87,6 +118,10 @@ class TogetterConnector(BaseConnector):
                     except (ValueError, AttributeError):
                         pass
 
+            date_parsed = published is not None
+            if not published:
+                published = datetime.now(timezone.utc)
+
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
@@ -96,15 +131,28 @@ class TogetterConnector(BaseConnector):
                     media_type="article",
                     title=title,
                     thumbnail_url=thumb,
-                    content_text=None,
+                    content_text=f"Togetter tag: {keyword}" if source == "tag_search" else None,
                     author=None,
-                    raw_payload={"keyword": keyword},
+                    raw_payload={"keyword": keyword, "source": source, "date_parsed": date_parsed},
                 )
             )
 
-        if items:
-            return items
-        return await self._fetch_indexed_history(keyword)
+        return items
+
+    def _merge_items(self, candidates: list[SourceItemCreate]) -> list[SourceItemCreate]:
+        by_id: dict[str, SourceItemCreate] = {}
+        for item in candidates:
+            existing = by_id.get(item.item_id)
+            if existing is None or item.published_at > existing.published_at:
+                by_id[item.item_id] = item
+        return sorted(
+            by_id.values(),
+            key=lambda item: (
+                bool((item.raw_payload or {}).get("date_parsed", True)),
+                item.published_at,
+            ),
+            reverse=True,
+        )
 
     async def _fetch_indexed_history(self, keyword: str) -> list[SourceItemCreate]:
         encoded = quote(f"{keyword} site:togetter.com when:10y")

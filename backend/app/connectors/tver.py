@@ -20,20 +20,33 @@ _MONTH_DAY_RE = re.compile(r'(\d+)月(\d+)日')
 _TIME_RE = re.compile(r'(\d+):(\d+)')
 
 
+def _parse_timestamp_value(val: object) -> Optional[datetime]:
+    if isinstance(val, (int, float)) and val > 0:
+        try:
+            return datetime.fromtimestamp(val, tz=timezone.utc)
+        except (OSError, OverflowError):
+            return None
+    if isinstance(val, str) and val:
+        try:
+            parsed = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
 def _parse_tver_date(content: dict) -> Optional[datetime]:
     # Unix timestamps (seconds) — most reliable
-    for key in ("publishedAt", "publish_start", "deliveryStartAt", "broadcastDate", "airDate"):
-        val = content.get(key)
-        if isinstance(val, (int, float)) and val > 0:
-            try:
-                return datetime.fromtimestamp(val, tz=timezone.utc)
-            except (OSError, OverflowError):
-                pass
-        if isinstance(val, str) and val:
-            try:
-                return datetime.fromisoformat(val.replace("Z", "+00:00"))
-            except ValueError:
-                pass
+    for key in ("publishedAt", "publish_start", "deliveryStartAt", "broadcastDate", "airDate", "startAt"):
+        parsed_value = _parse_timestamp_value(content.get(key))
+        if parsed_value:
+            return parsed_value
+
+    view_status = content.get("viewStatus")
+    if isinstance(view_status, dict):
+        parsed_value = _parse_timestamp_value(view_status.get("startAt"))
+        if parsed_value:
+            return parsed_value
 
     # Parse broadcastDateLabel: "6月5日(金)放送分", "5月29日(金) 18:29", "2021年放送"
     label = content.get("broadcastDateLabel") or ""
@@ -184,8 +197,17 @@ class TVERConnector(BaseConnector):
                     if not contains_keyword(keyword, title, description, author, content.get("seriesTitle")):
                         continue
 
-                    # Try API timestamp fields before falling back to now()
-                    published_at = _parse_tver_date(content) or datetime.now(timezone.utc)
+                    published_at = _parse_tver_date(content)
+                    date_source = "search"
+                    if not published_at:
+                        published_at = await self._fetch_episode_detail_date(client, str(ep_id))
+                        date_source = "episode_detail"
+                    if not published_at:
+                        log.debug("Skipping TVer item without trustworthy date: %s", ep_id)
+                        continue
+
+                    raw_payload = dict(ep)
+                    raw_payload["date_source"] = date_source
 
                     items.append(
                         SourceItemCreate(
@@ -198,15 +220,31 @@ class TVERConnector(BaseConnector):
                             thumbnail_url=thumb,
                             author=author,
                             content_text=description,
-                            raw_payload=ep,
+                            raw_payload=raw_payload,
                         )
                     )
                 except Exception as exc:
                     log.warning("Error parsing TVer episode item: %s", exc)
                     
             if items:
+                items.sort(key=lambda item: item.published_at, reverse=True)
                 return items
             return await self._fetch_indexed_history(keyword)
+
+    async def _fetch_episode_detail_date(
+        self,
+        client: httpx.AsyncClient,
+        episode_id: str,
+    ) -> Optional[datetime]:
+        try:
+            resp = await client.get(f"https://statics.tver.jp/content/episode/{episode_id}.json")
+            if not resp.is_success:
+                return None
+            data = resp.json()
+        except Exception as exc:
+            log.debug("TVer episode detail date fetch failed for %s: %s", episode_id, exc)
+            return None
+        return _parse_tver_date(data)
 
     async def _fetch_indexed_history(self, keyword: str) -> list[SourceItemCreate]:
         encoded = quote(f"{keyword} site:tver.jp when:10y")
