@@ -35,6 +35,8 @@ _DAT_DATE_RE = re.compile(
     r"\([^)]+\)\s+"
     r"(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})"
 )
+_DIRECT_REQUEST_CONCURRENCY = 4
+_DIRECT_DAT_LIMIT = 50
 
 # 5ch itself is often Cloudflare-blocked for server-side fetches.  2ch.sc mirrors
 # the same board/thread formats and exposes subject.txt/dat files directly.
@@ -81,6 +83,16 @@ class _ThreadHit:
     thread_id: str
     title: str
     posts: int
+
+
+async def _gather_limited(coros):
+    semaphore = asyncio.Semaphore(_DIRECT_REQUEST_CONCURRENCY)
+
+    async def run(coro):
+        async with semaphore:
+            return await coro
+
+    return await asyncio.gather(*(run(coro) for coro in coros), return_exceptions=True)
 
 
 def _decode_shift_jis(content: bytes) -> str:
@@ -167,10 +179,9 @@ class FiveChConnector(BaseConnector):
         return await self._fetch_gnews(keyword)
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:
-        async with httpx.AsyncClient(timeout=15.0, headers=HEADERS, follow_redirects=True) as client:
-            subject_results = await asyncio.gather(
-                *[self._fetch_subject(client, board_url, keyword) for board_url in _DIRECT_BOARD_URLS],
-                return_exceptions=True,
+        async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
+            subject_results = await _gather_limited(
+                [self._fetch_subject(client, board_url, keyword) for board_url in _DIRECT_BOARD_URLS]
             )
 
             hits: list[_ThreadHit] = []
@@ -189,9 +200,8 @@ class FiveChConnector(BaseConnector):
             if not hits:
                 return []
 
-            dated = await asyncio.gather(
-                *[self._build_direct_item(client, hit, keyword) for hit in hits[:75]],
-                return_exceptions=True,
+            dated = await _gather_limited(
+                [self._build_direct_item(client, hit, keyword) for hit in hits[:_DIRECT_DAT_LIMIT]]
             )
 
         items: list[SourceItemCreate] = [
