@@ -81,6 +81,49 @@ test("rss proxy rejects unsupported targets", async () => {
   assert.equal(response.status, 400);
 });
 
+test("5ch proxy fetches only whitelisted board resources", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  globalThis.fetch = async (url) => {
+    upstreamURL = String(url);
+    return new Response("123.dat<>Aiko thread (4)\n", { status: 200 });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Ftoro.2ch.sc%2Fnogizaka%2F", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "123.dat<>Aiko thread (4)\n");
+  assert.equal(upstreamURL, "http://toro.2ch.sc/nogizaka/subject.txt");
+});
+
+test("5ch proxy rejects non-whitelisted boards", async () => {
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fexample.com%2Fnews%2F", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 400);
+});
+
+test("5ch proxy validates dat thread ids", async () => {
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=dat&board_url=http%3A%2F%2Ftoro.2ch.sc%2Fnogizaka%2F&thread_id=../../secret", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 400);
+});
+
 test("health reports stale polling as degraded", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });

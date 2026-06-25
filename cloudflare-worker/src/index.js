@@ -3,6 +3,40 @@ const DEFAULT_POLL_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
 const DEFAULT_STALE_AFTER_MINUTES = 35;
 const RSS_PROXY_TIMEOUT_MS = 20_000;
+const FIVECH_PROXY_TIMEOUT_MS = 20_000;
+const FIVECH_ALLOWED_BOARDS = new Set([
+  "sweet.2ch.sc/headline",
+  "ai.2ch.sc/newsalpha",
+  "hayabusa3.2ch.sc/mnewsalpha",
+  "ai.2ch.sc/newsplus",
+  "hayabusa3.2ch.sc/mnewsplus",
+  "nozomi.2ch.sc/snsplus",
+  "hayabusa3.2ch.sc/news",
+  "ikura.2ch.sc/musicnews",
+  "anago.2ch.sc/geino",
+  "awabi.2ch.sc/drama",
+  "anago.2ch.sc/tvsaloon",
+  "toro.2ch.sc/tv",
+  "awabi.2ch.sc/tvd",
+  "anago.2ch.sc/am",
+  "nozomi.2ch.sc/idol",
+  "awabi.2ch.sc/akb",
+  "toro.2ch.sc/nogizaka",
+  "tarte.2ch.sc/keyakizaka46",
+  "awabi.2ch.sc/uraidol",
+  "anago.2ch.sc/indieidol",
+  "anago.2ch.sc/netidol",
+  "tarte.2ch.sc/akbsaloon",
+  "tarte.2ch.sc/idolplus",
+  "tarte.2ch.sc/world48",
+  "awabi.2ch.sc/musicj",
+  "awabi.2ch.sc/musicjm",
+  "awabi.2ch.sc/musicjf",
+  "toro.2ch.sc/musicjg",
+  "awabi.2ch.sc/music",
+  "anago.2ch.sc/streaming",
+  "anago.2ch.sc/sns",
+]);
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,6 +64,16 @@ function rssResponse(body, status = 200) {
     status,
     headers: {
       "content-type": "application/xml; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function textResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/plain; charset=shift_jis",
       "cache-control": "no-store",
     },
   });
@@ -81,6 +125,57 @@ async function proxySearchRss(request, env) {
     return json({ detail: `Upstream ${target} failed`, status: response.status, bytes: body.length }, 502);
   }
   return rssResponse(body);
+}
+
+function normalizeFiveChBoard(boardURL) {
+  let parsed;
+  try {
+    parsed = new URL(boardURL);
+  } catch {
+    return null;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return null;
+  const boardKey = `${parsed.hostname}${parsed.pathname}`.replace(/\/+$/, "");
+  if (!FIVECH_ALLOWED_BOARDS.has(boardKey)) return null;
+  return `${parsed.protocol}//${boardKey}/`;
+}
+
+async function proxyFiveCh(request, env) {
+  if (!requireBearer(request, env)) return unauthorized();
+
+  const url = new URL(request.url);
+  const board = normalizeFiveChBoard(url.searchParams.get("board_url") || "");
+  const resource = url.searchParams.get("resource") || "subject";
+  if (!board) {
+    return json({ detail: "Unsupported board" }, 400);
+  }
+
+  let upstream;
+  if (resource === "subject") {
+    upstream = `${board}subject.txt`;
+  } else if (resource === "dat") {
+    const threadID = url.searchParams.get("thread_id") || "";
+    if (!/^\d{9,12}$/.test(threadID)) {
+      return json({ detail: "Invalid thread_id" }, 400);
+    }
+    upstream = `${board}dat/${threadID}.dat`;
+  } else {
+    return json({ detail: "Unsupported resource" }, 400);
+  }
+
+  const response = await fetch(upstream, {
+    headers: {
+      "user-agent": "Monazilla/1.00 OshiReader/1.0",
+      "accept": "text/plain,text/html;q=0.8,*/*;q=0.5",
+      "accept-language": "ja,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(FIVECH_PROXY_TIMEOUT_MS),
+  });
+  const body = await response.arrayBuffer();
+  if (!response.ok) {
+    return json({ detail: "Upstream 5ch mirror failed", status: response.status, bytes: body.byteLength }, 502);
+  }
+  return textResponse(body);
 }
 
 async function fetchBackendDiagnostics(backendURL, adminToken) {
@@ -387,6 +482,15 @@ export default {
         return await proxySearchRss(request, env);
       } catch (error) {
         console.error("RSS proxy failed", error);
+        return json({ detail: String(error) }, 502);
+      }
+    }
+
+    if (request.method === "GET" && url.pathname === "/fivech-proxy") {
+      try {
+        return await proxyFiveCh(request, env);
+      } catch (error) {
+        console.error("5ch proxy failed", error);
         return json({ detail: String(error) }, 502);
       }
     }

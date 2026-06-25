@@ -6,7 +6,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import feedparser
 import httpx
@@ -21,6 +21,7 @@ from app.connectors.base import (
     parse_google_news_markdown,
     title_contains_keyword,
 )
+from app.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -221,13 +222,12 @@ class FiveChConnector(BaseConnector):
     ) -> list[_ThreadHit]:
         try:
             resp = await client.get(board_url.rstrip("/") + "/subject.txt")
-            if not resp.is_success:
-                log.debug("5ch subject returned status %d for %s", resp.status_code, board_url)
-                return []
-            return _parse_subject(_decode_shift_jis(resp.content), board_url, keyword)
+            if resp.is_success:
+                return _parse_subject(_decode_shift_jis(resp.content), board_url, keyword)
+            log.debug("5ch subject returned status %d for %s", resp.status_code, board_url)
         except Exception as exc:
             log.debug("5ch subject fetch error for %s: %s", board_url, exc)
-            return []
+        return await self._fetch_subject_via_proxy(board_url, keyword)
 
     async def _build_direct_item(
         self,
@@ -267,11 +267,46 @@ class FiveChConnector(BaseConnector):
     ) -> datetime | None:
         try:
             resp = await client.get(f"{hit.board_url}dat/{hit.thread_id}.dat")
-            if not resp.is_success:
-                return None
-            return _parse_dat_latest_post_at(_decode_shift_jis(resp.content))
+            if resp.is_success:
+                return _parse_dat_latest_post_at(_decode_shift_jis(resp.content))
         except Exception as exc:
             log.debug("5ch dat fetch error for %s/%s: %s", hit.board_key, hit.thread_id, exc)
+        return await self._fetch_latest_post_at_via_proxy(hit)
+
+    async def _fetch_subject_via_proxy(self, board_url: str, keyword: str) -> list[_ThreadHit]:
+        content = await self._fetch_proxy_resource(board_url, "subject")
+        if not content:
+            return []
+        return _parse_subject(_decode_shift_jis(content), board_url, keyword)
+
+    async def _fetch_latest_post_at_via_proxy(self, hit: _ThreadHit) -> datetime | None:
+        content = await self._fetch_proxy_resource(hit.board_url, "dat", hit.thread_id)
+        if not content:
+            return None
+        return _parse_dat_latest_post_at(_decode_shift_jis(content))
+
+    async def _fetch_proxy_resource(
+        self,
+        board_url: str,
+        resource: str,
+        thread_id: str | None = None,
+    ) -> bytes | None:
+        proxy_url = settings.source_5ch_proxy_url.strip()
+        token = settings.admin_api_token.strip()
+        if not proxy_url or not token:
+            return None
+        params = {"board_url": board_url, "resource": resource}
+        if thread_id:
+            params["thread_id"] = thread_id
+        url = f"{proxy_url}?{urlencode(params)}"
+        try:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                if not response.is_success:
+                    return None
+                return response.content
+        except Exception as exc:
+            log.debug("5ch proxy fetch error for %s %s: %s", board_url, resource, exc)
             return None
 
     async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:

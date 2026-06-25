@@ -487,6 +487,37 @@ class TestFiveChFetch:
         assert result[0].raw_payload["date_parsed"] is False
 
     @pytest.mark.asyncio
+    async def test_direct_scan_uses_worker_proxy_when_subject_and_dat_are_blocked(self):
+        from urllib.parse import parse_qs, urlparse
+
+        subject = "1778433981.dat<>【元乃木坂46】Aiko proxy thread (64)\n"
+        dat = "君の名は<><>2026/06/25(木) 11:26:55.28 ID:last<> latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text.startswith("https://worker.example/fivech-proxy"):
+                query = parse_qs(urlparse(url_text).query)
+                board_url = query.get("board_url", [""])[0]
+                resource = query.get("resource", [""])[0]
+                if board_url.endswith("/nogizaka/") and resource == "subject":
+                    return MagicMock(is_success=True, status_code=200, content=subject.encode("shift_jis"))
+                if board_url.endswith("/nogizaka/") and resource == "dat":
+                    return MagicMock(is_success=True, status_code=200, content=dat.encode("shift_jis"))
+                return MagicMock(is_success=True, status_code=200, content=b"")
+            return MagicMock(is_success=False, status_code=403, content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.settings.admin_api_token", "secret"), \
+             patch("app.connectors.fivech.settings.source_5ch_proxy_url", "https://worker.example/fivech-proxy"), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+
+        parse.assert_not_called()
+        assert len(result) == 1
+        assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
+        assert result[0].raw_payload["date_parsed"] is True
+
+    @pytest.mark.asyncio
     async def test_filters_keyword_found_only_in_google_news_summary(self):
         entry = _rss_entry(
             link="https://5ch.net/test/read.cgi/news/1",

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     apns_use_sandbox: bool = False  # set APNS_USE_SANDBOX=true only for Debug-config builds; TestFlight/App Store builds use the production APNs host
     backend_public_url: str = "https://oshireader.onrender.com"
     source_rss_proxy_url: str = "https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/rss-proxy"
+    source_5ch_proxy_url: str = "https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/fivech-proxy"
 
     model_config = {"env_file": ".env"}
 
