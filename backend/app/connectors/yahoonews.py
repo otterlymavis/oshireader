@@ -16,6 +16,7 @@ from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
     parse_feed_date,
+    parse_google_news_markdown,
     title_contains_keyword,
 )
 
@@ -142,6 +143,39 @@ class YahooNewsConnector(BaseConnector):
                     title=title,
                     content_text=summary,
                     raw_payload={"keyword": keyword, "source": "google_news"},
+                )
+            )
+        if items:
+            return items
+        return await self._fetch_gnews_jina(keyword, url)
+
+    async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
+        proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.get(proxy_url)
+                if not resp.is_success:
+                    log.warning("YahooNews Google News Jina fallback returned status %d", resp.status_code)
+                    return []
+        except Exception as exc:
+            log.warning("YahooNews Google News Jina fallback error: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        for entry in parse_google_news_markdown(resp.text)[:25]:
+            title = entry["title"]
+            if not title_contains_keyword(keyword, title):
+                continue
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=entry["url"],
+                    url=entry["url"],
+                    published_at=entry["published_at"],
+                    media_type="article",
+                    title=title,
+                    content_text=None,
+                    raw_payload={"keyword": keyword, "source": "google_news_jina"},
                 )
             )
         return items

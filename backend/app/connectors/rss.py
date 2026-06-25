@@ -10,6 +10,7 @@ from app.connectors.base import (
     CollectionMode,
     SourceItemCreate,
     parse_feed_date,
+    parse_google_news_markdown,
     title_contains_keyword,
 )
 
@@ -115,5 +116,40 @@ class RSSConnector(BaseConnector):
                 content_text=entry.get("summary") or None,
                 author="Google News",
                 raw_payload={"source": "google_news_history", "keyword": keyword},
+            ))
+        if items:
+            return items
+        return await self._fetch_google_news_history_jina(keyword, url)
+
+    async def _fetch_google_news_history_jina(
+        self,
+        keyword: str,
+        google_news_url: str,
+    ) -> list[SourceItemCreate]:
+        proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=_HEADERS) as client:
+                resp = await client.get(proxy_url)
+                if not resp.is_success:
+                    return []
+        except Exception as exc:
+            log.warning("Google News Jina history fallback failed: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        for entry in parse_google_news_markdown(resp.text)[:25]:
+            title = entry["title"]
+            if not title_contains_keyword(keyword, title):
+                continue
+            items.append(SourceItemCreate(
+                platform=self.PLATFORM,
+                item_id=entry["url"],
+                url=entry["url"],
+                published_at=entry["published_at"],
+                media_type="article",
+                title=title,
+                content_text=None,
+                author="Google News",
+                raw_payload={"source": "google_news_jina", "keyword": keyword},
             ))
         return items

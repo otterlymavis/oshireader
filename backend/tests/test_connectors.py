@@ -9,7 +9,13 @@ import httpx as _httpx_mod
 import json as _json_mod
 import pytest
 
-from app.connectors.base import SourceItemCreate, contains_keyword, parse_feed_date, title_contains_keyword
+from app.connectors.base import (
+    SourceItemCreate,
+    contains_keyword,
+    parse_feed_date,
+    parse_google_news_markdown,
+    title_contains_keyword,
+)
 from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
@@ -98,6 +104,20 @@ class TestParseFeedDate:
         entry = _entry(published_parsed=(2024, 1, 1, 0, 0, 0, 0, 1, 0))
         result = parse_feed_date(entry)
         assert result.tzinfo == timezone.utc
+
+    def test_parses_google_news_jina_markdown(self):
+        text = """### [Aiko fresh article - Example](https://news.google.com/rss/articles/abc123)
+
+[Aiko fresh article](https://news.google.com/rss/articles/abc123)
+
+Wed, 24 Jun 2026 02:07:03 GMT
+"""
+        result = parse_google_news_markdown(text)
+        assert result == [{
+            "title": "Aiko fresh article - Example",
+            "url": "https://news.google.com/rss/articles/abc123",
+            "published_at": datetime(2026, 6, 24, 2, 7, 3, tzinfo=timezone.utc),
+        }]
 
 
 class TestSourceItemCreateCompositeId:

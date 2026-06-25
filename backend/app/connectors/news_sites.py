@@ -21,6 +21,7 @@ from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
     parse_feed_date,
+    parse_google_news_markdown,
     title_contains_keyword,
 )
 
@@ -137,6 +138,51 @@ class _GNewsSiteConnector(BaseConnector):
                         "site": self.SITE,
                         "keyword": keyword,
                         "history_years": history_years,
+                    },
+                )
+            )
+        if items:
+            return items
+        return await self._fetch_gnews_jina(keyword, url, history_years)
+
+    async def _fetch_gnews_jina(
+        self,
+        keyword: str,
+        google_news_url: str,
+        history_years: int | None,
+    ) -> list[SourceItemCreate]:
+        proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.get(proxy_url)
+                if not resp.is_success:
+                    log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)
+                    return []
+        except Exception as exc:
+            log.warning("%s Google News Jina fallback error: %s", self.PLATFORM, exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        for entry in parse_google_news_markdown(resp.text)[:25]:
+            title = entry["title"]
+            if self.TITLE_SUFFIX_RE:
+                title = self.TITLE_SUFFIX_RE.sub("", title).strip()
+            if not title or not title_contains_keyword(keyword, title):
+                continue
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=entry["url"],
+                    url=entry["url"],
+                    published_at=entry["published_at"],
+                    media_type="article",
+                    title=title,
+                    content_text=None,
+                    raw_payload={
+                        "site": self.SITE,
+                        "keyword": keyword,
+                        "history_years": history_years,
+                        "source": "google_news_jina",
                     },
                 )
             )

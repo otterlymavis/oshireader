@@ -3,12 +3,20 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import re
 from typing import Optional
 import unicodedata
 
 import feedparser
 
 from app.models import CollectionMode
+
+_GNEWS_MD_ITEM_RE = re.compile(
+    r"^### \[(?P<title>.+?)\]\((?P<url>https://news\.google\.com/rss/articles/[^)]+)\)"
+    r".*?\n\n(?P<date>[A-Z][a-z]{2}, \d{1,2} [A-Z][a-z]{2} \d{4} [0-9:]{8} GMT)",
+    re.M | re.S,
+)
 
 
 def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
@@ -21,6 +29,29 @@ def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
             except Exception:
                 pass
     return datetime.now(timezone.utc)
+
+
+def parse_google_news_markdown(text: str) -> list[dict]:
+    """Parse r.jina.ai's markdown view of a Google News RSS result page."""
+    if not isinstance(text, str):
+        return []
+    items: list[dict] = []
+    seen: set[str] = set()
+    for match in _GNEWS_MD_ITEM_RE.finditer(text):
+        url = match.group("url")
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            published = parsedate_to_datetime(match.group("date")).astimezone(timezone.utc)
+        except (TypeError, ValueError, IndexError, AttributeError):
+            published = datetime.now(timezone.utc)
+        items.append({
+            "title": match.group("title").strip(),
+            "url": url,
+            "published_at": published,
+        })
+    return items
 
 
 def contains_keyword(keyword: str, *values: object) -> bool:
