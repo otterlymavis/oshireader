@@ -137,6 +137,10 @@ def _has_subject_rows(text: str) -> bool:
     return any(_SUBJECT_LINE_RE.match(line.strip()) for line in text.splitlines())
 
 
+def _fivech_proxy_configured() -> bool:
+    return bool(settings.source_5ch_proxy_url.strip() and settings.admin_api_token.strip())
+
+
 def _thread_url(hit: _ThreadHit) -> str:
     return f"http://{hit.host}/test/read.cgi/{hit.board_key}/{hit.thread_id}/"
 
@@ -224,6 +228,13 @@ class FiveChConnector(BaseConnector):
         board_url: str,
         keyword: str,
     ) -> list[_ThreadHit]:
+        if _fivech_proxy_configured():
+            content = await self._fetch_proxy_resource(board_url, "subject")
+            if content:
+                text = _decode_shift_jis(content)
+                hits = _parse_subject(text, board_url, keyword)
+                if hits or _has_subject_rows(text):
+                    return hits
         try:
             resp = await client.get(board_url.rstrip("/") + "/subject.txt")
             if resp.is_success:
@@ -273,6 +284,10 @@ class FiveChConnector(BaseConnector):
         client: httpx.AsyncClient,
         hit: _ThreadHit,
     ) -> datetime | None:
+        if _fivech_proxy_configured():
+            published_at = await self._fetch_latest_post_at_via_proxy(hit)
+            if published_at is not None:
+                return published_at
         try:
             resp = await client.get(f"{hit.board_url}dat/{hit.thread_id}.dat")
             if resp.is_success:
