@@ -821,3 +821,43 @@ class TestAdminTestFetch:
                 ],
             }
         }
+
+    def test_test_fetch_custom_timeout_fetches_and_filters_samples(self, client):
+        from app.connectors.base import SourceItemCreate
+
+        matching = SourceItemCreate(
+            platform="news",
+            item_id="n1",
+            url="https://example.com/n1",
+            published_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+            media_type="article",
+            title="Aiko fresh article",
+        )
+        unrelated = SourceItemCreate(
+            platform="news",
+            item_id="n2",
+            url="https://example.com/n2",
+            published_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+            media_type="article",
+            title="unrelated article",
+        )
+        mock_connector = MagicMock()
+        mock_connector.PLATFORM = "news"
+        mock_connector.fetch = AsyncMock(return_value=[matching, unrelated])
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]), \
+             patch("app.ingestion.scheduler._fetch_one", new=AsyncMock()) as default_fetch:
+            r = client.get(
+                "/api/admin/test-fetch",
+                params={
+                    "keyword": "Aiko",
+                    "platform": "news",
+                    "samples": 1,
+                    "timeout_seconds": 30,
+                },
+            )
+
+        assert r.status_code == 200
+        default_fetch.assert_not_awaited()
+        assert r.json()["news"]["count"] == 1
+        assert r.json()["news"]["items"][0]["item_id"] == "n1"

@@ -318,8 +318,10 @@ async def test_fetch(
     keyword: str = Query("吉沢亮"),
     platform: Optional[str] = Query(None),
     samples: int = Query(0, ge=0, le=10),
+    timeout_seconds: Optional[float] = Query(None, ge=1, le=60),
 ) -> dict:
     from app.ingestion.scheduler import _build_connectors, _fetch_one
+    from app.relevance import primary_text_matches
     db_sess = SessionLocal()
     try:
         connectors = _build_connectors(db_sess)
@@ -329,9 +331,31 @@ async def test_fetch(
         counts: dict[str, int] = {}
         details: dict[str, dict] = {}
         for connector_batch in _connector_batches(connectors):
-            results = await asyncio.gather(
-                *[_fetch_one(c, keyword, CollectionMode.ALL_INFO) for c in connector_batch]
-            )
+            if timeout_seconds is None:
+                results = await asyncio.gather(
+                    *[_fetch_one(c, keyword, CollectionMode.ALL_INFO) for c in connector_batch]
+                )
+            else:
+                async def _fetch_with_timeout(connector):
+                    try:
+                        items = await asyncio.wait_for(
+                            connector.fetch(keyword, CollectionMode.ALL_INFO),
+                            timeout=timeout_seconds,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "admin test-fetch error connector=%s term=%r timeout=%ss: %s",
+                            connector.PLATFORM,
+                            keyword,
+                            timeout_seconds,
+                            exc,
+                        )
+                        return []
+                    return [item for item in items if primary_text_matches(keyword, item)]
+
+                results = await asyncio.gather(
+                    *[_fetch_with_timeout(c) for c in connector_batch]
+                )
             for connector, result in zip(connector_batch, results):
                 counts[connector.PLATFORM] = len(result)
                 if samples:
