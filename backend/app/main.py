@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import feedparser
+import httpx
 import logging
 import os
 import struct
@@ -10,6 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import AsyncGenerator, Optional
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +25,7 @@ from app.auth import require_admin_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.diagnostics import record_backend_event
+from app.connectors.base import parse_google_news_markdown, title_contains_keyword
 from app.ingestion.scheduler import (
     _connector_batches,
     _poll_lock,
@@ -39,6 +43,24 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(messa
 
 log = logging.getLogger(__name__)
 _ADMIN_POLL_TIMEOUT_SECONDS = 210.0
+
+_GNEWS_PROBE_QUERIES = {
+    "news": "{keyword} when:10y",
+    "aera": "{keyword} site:dot.asahi.com",
+    "barks": "{keyword} site:barks.jp",
+    "cinemacafe": "{keyword} site:cinemacafe.net",
+    "5ch": "{keyword} site:5ch.net OR site:2ch.sc",
+    "hochi": "{keyword} site:hochi.news",
+    "livedoor": "{keyword} site:news.livedoor.com",
+    "mantanweb": "{keyword} site:mantan-web.jp",
+    "mdpr": "{keyword} site:mdpr.jp",
+    "niconico": "{keyword} site:nicovideo.jp",
+    "oricon": "{keyword} site:oricon.co.jp",
+    "smartnews": "{keyword} site:smartnews.com",
+    "sponichi": "{keyword} site:sponichi.co.jp",
+    "twitter": "{keyword} site:x.com OR site:twitter.com",
+    "yahoonews": "{keyword} site:news.yahoo.co.jp",
+}
 
 
 def _backend_event_payload(event: BackendEvent) -> dict:
@@ -378,6 +400,79 @@ async def test_fetch(
         return counts
     finally:
         db_sess.close()
+
+
+@app.get("/api/admin/source-probe")
+async def source_probe(
+    _: None = Depends(require_admin_auth),
+    platform: str = Query(...),
+    keyword: str = Query("吉沢亮"),
+) -> dict:
+    template = _GNEWS_PROBE_QUERIES.get(platform.casefold())
+    if not template:
+        raise HTTPException(status_code=404, detail="Unsupported source probe platform")
+
+    query = template.format(keyword=keyword)
+    encoded = quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+    proxy_url = "https://r.jina.ai/http://" + url.replace("https://", "")
+
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        direct_status = None
+        direct_len = 0
+        direct_entries = 0
+        direct_matches = 0
+        direct_error = None
+        try:
+            direct_resp = await client.get(url)
+            direct_status = direct_resp.status_code
+            direct_len = len(direct_resp.content)
+            direct_feed = await asyncio.to_thread(feedparser.parse, direct_resp.content)
+            direct_entries = len(direct_feed.entries)
+            direct_matches = sum(
+                1 for entry in direct_feed.entries
+                if title_contains_keyword(keyword, entry.get("title") or "")
+            )
+        except Exception as exc:
+            direct_error = f"{type(exc).__name__}: {exc}"
+
+        jina_status = None
+        jina_len = 0
+        jina_entries = 0
+        jina_matches = 0
+        jina_error = None
+        try:
+            jina_resp = await client.get(proxy_url)
+            jina_status = jina_resp.status_code
+            jina_len = len(jina_resp.text)
+            jina_items = parse_google_news_markdown(jina_resp.text)
+            jina_entries = len(jina_items)
+            jina_matches = sum(
+                1 for item in jina_items
+                if title_contains_keyword(keyword, item.get("title") or "")
+            )
+        except Exception as exc:
+            jina_error = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "platform": platform,
+        "keyword": keyword,
+        "query": query,
+        "direct": {
+            "status": direct_status,
+            "bytes": direct_len,
+            "entries": direct_entries,
+            "keyword_title_matches": direct_matches,
+            "error": direct_error,
+        },
+        "jina": {
+            "status": jina_status,
+            "bytes": jina_len,
+            "entries": jina_entries,
+            "keyword_title_matches": jina_matches,
+            "error": jina_error,
+        },
+    }
 
 
 @app.post("/api/admin/test-push")

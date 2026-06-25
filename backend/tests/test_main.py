@@ -861,3 +861,43 @@ class TestAdminTestFetch:
         default_fetch.assert_not_awaited()
         assert r.json()["news"]["count"] == 1
         assert r.json()["news"]["items"][0]["item_id"] == "n1"
+
+
+class TestAdminSourceProbe:
+    def test_source_probe_rejects_unsupported_platform(self, client):
+        r = client.get("/api/admin/source-probe", params={"platform": "unknown"})
+        assert r.status_code == 404
+
+    def test_source_probe_returns_direct_and_jina_counts(self, client):
+        direct_resp = MagicMock()
+        direct_resp.status_code = 200
+        direct_resp.content = b"<rss />"
+        jina_resp = MagicMock()
+        jina_resp.status_code = 200
+        jina_resp.text = """### [Aiko fresh article](https://news.google.com/rss/articles/abc123)
+
+[Aiko fresh article](https://news.google.com/rss/articles/abc123)
+
+Wed, 24 Jun 2026 02:07:03 GMT
+"""
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=[direct_resp, jina_resp])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        fake_feed = MagicMock()
+        fake_feed.entries = [{"title": "Aiko direct article"}]
+
+        with patch("app.main.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.main.feedparser.parse", return_value=fake_feed):
+            r = client.get(
+                "/api/admin/source-probe",
+                params={"platform": "news", "keyword": "Aiko"},
+            )
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["direct"]["entries"] == 1
+        assert data["direct"]["keyword_title_matches"] == 1
+        assert data["jina"]["entries"] == 1
+        assert data["jina"]["keyword_title_matches"] == 1
