@@ -39,36 +39,36 @@ _DAT_DATE_RE = re.compile(
     r"\([^)]+\)\s+"
     r"(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})"
 )
-_DIRECT_REQUEST_CONCURRENCY = 4
-_DIRECT_DAT_LIMIT = 50
+_DIRECT_REQUEST_CONCURRENCY = 12
+_DIRECT_DAT_LIMIT = 25
 
 # 5ch itself is often Cloudflare-blocked for server-side fetches.  2ch.sc mirrors
 # the same board/thread formats and exposes subject.txt/dat files directly.
 _DIRECT_BOARD_URLS: tuple[str, ...] = (
+    "http://toro.2ch.sc/nogizaka/",
+    "http://tarte.2ch.sc/keyakizaka46/",
+    "http://awabi.2ch.sc/akb/",
+    "http://tarte.2ch.sc/akbsaloon/",
+    "http://tarte.2ch.sc/world48/",
+    "http://nozomi.2ch.sc/idol/",
+    "http://awabi.2ch.sc/uraidol/",
+    "http://anago.2ch.sc/indieidol/",
+    "http://anago.2ch.sc/netidol/",
+    "http://tarte.2ch.sc/idolplus/",
+    "http://anago.2ch.sc/geino/",
+    "http://hayabusa3.2ch.sc/mnewsalpha/",
+    "http://hayabusa3.2ch.sc/mnewsplus/",
     "http://sweet.2ch.sc/headline/",
     "http://ai.2ch.sc/newsalpha/",
-    "http://hayabusa3.2ch.sc/mnewsalpha/",
     "http://ai.2ch.sc/newsplus/",
-    "http://hayabusa3.2ch.sc/mnewsplus/",
     "http://nozomi.2ch.sc/snsplus/",
     "http://hayabusa3.2ch.sc/news/",
     "http://ikura.2ch.sc/musicnews/",
-    "http://anago.2ch.sc/geino/",
     "http://awabi.2ch.sc/drama/",
     "http://anago.2ch.sc/tvsaloon/",
     "http://toro.2ch.sc/tv/",
     "http://awabi.2ch.sc/tvd/",
     "http://anago.2ch.sc/am/",
-    "http://nozomi.2ch.sc/idol/",
-    "http://awabi.2ch.sc/akb/",
-    "http://toro.2ch.sc/nogizaka/",
-    "http://tarte.2ch.sc/keyakizaka46/",
-    "http://awabi.2ch.sc/uraidol/",
-    "http://anago.2ch.sc/indieidol/",
-    "http://anago.2ch.sc/netidol/",
-    "http://tarte.2ch.sc/akbsaloon/",
-    "http://tarte.2ch.sc/idolplus/",
-    "http://tarte.2ch.sc/world48/",
     "http://awabi.2ch.sc/musicj/",
     "http://awabi.2ch.sc/musicjm/",
     "http://awabi.2ch.sc/musicjf/",
@@ -192,22 +192,26 @@ class FiveChConnector(BaseConnector):
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:
         async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
-            subject_results = await _gather_limited(
-                [self._fetch_subject(client, board_url, keyword) for board_url in _DIRECT_BOARD_URLS]
-            )
-
             hits: list[_ThreadHit] = []
             seen: set[tuple[str, str, str]] = set()
-            for result in subject_results:
-                if isinstance(result, Exception):
-                    log.debug("5ch subject scan failed: %s", result)
-                    continue
-                for hit in result:
-                    key = (hit.host, hit.board_key, hit.thread_id)
-                    if key in seen:
+            for start in range(0, len(_DIRECT_BOARD_URLS), _DIRECT_REQUEST_CONCURRENCY):
+                board_batch = _DIRECT_BOARD_URLS[start:start + _DIRECT_REQUEST_CONCURRENCY]
+                subject_results = await _gather_limited(
+                    [self._fetch_subject(client, board_url, keyword) for board_url in board_batch]
+                )
+
+                for result in subject_results:
+                    if isinstance(result, Exception):
+                        log.debug("5ch subject scan failed: %s", result)
                         continue
-                    seen.add(key)
-                    hits.append(hit)
+                    for hit in result:
+                        key = (hit.host, hit.board_key, hit.thread_id)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        hits.append(hit)
+                if len(hits) >= _DIRECT_DAT_LIMIT:
+                    break
 
             if not hits:
                 return []
