@@ -98,20 +98,20 @@ class _GNewsSiteConnector(BaseConnector):
         history = f" when:{history_years}y" if history_years else ""
         encoded = quote(f"{keyword} site:{self.SITE}{history}")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+        feed = None
         try:
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
                     log.warning("%s Google News returned %d", self.PLATFORM, resp.status_code)
-                    return []
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+                else:
+                    feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
             log.warning("%s Google News error: %s", self.PLATFORM, exc)
-            return []
 
         items: list[SourceItemCreate] = []
         seen: set[str] = set()
-        for entry in feed.entries[:25]:
+        for entry in (feed.entries if feed else [])[:25]:
             link = entry.get("link", "")
             if not link:
                 continue

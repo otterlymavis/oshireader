@@ -108,20 +108,20 @@ class YahooNewsConnector(BaseConnector):
         """Fallback: Google News RSS filtered to news.yahoo.co.jp."""
         encoded = quote(f"{keyword} site:news.yahoo.co.jp")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+        feed = None
         try:
             async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
                     log.warning("YahooNews Google News fallback returned status %d", resp.status_code)
-                    return []
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+                else:
+                    feed = await asyncio.to_thread(feedparser.parse, resp.content)
         except Exception as exc:
             log.warning("YahooNews Google News fallback error: %s", exc)
-            return []
 
         items: list[SourceItemCreate] = []
         seen: set[str] = set()
-        for entry in feed.entries[:25]:
+        for entry in (feed.entries if feed else [])[:25]:
             link = entry.get("link", "")
             if not link:
                 continue
