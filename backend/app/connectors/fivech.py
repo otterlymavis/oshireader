@@ -133,6 +133,10 @@ def _parse_subject(text: str, board_url: str, keyword: str) -> list[_ThreadHit]:
     return hits
 
 
+def _has_subject_rows(text: str) -> bool:
+    return any(_SUBJECT_LINE_RE.match(line.strip()) for line in text.splitlines())
+
+
 def _thread_url(hit: _ThreadHit) -> str:
     return f"http://{hit.host}/test/read.cgi/{hit.board_key}/{hit.thread_id}/"
 
@@ -223,7 +227,11 @@ class FiveChConnector(BaseConnector):
         try:
             resp = await client.get(board_url.rstrip("/") + "/subject.txt")
             if resp.is_success:
-                return _parse_subject(_decode_shift_jis(resp.content), board_url, keyword)
+                text = _decode_shift_jis(resp.content)
+                hits = _parse_subject(text, board_url, keyword)
+                if hits or _has_subject_rows(text):
+                    return hits
+                log.debug("5ch subject response had no parseable rows for %s", board_url)
             log.debug("5ch subject returned status %d for %s", resp.status_code, board_url)
         except Exception as exc:
             log.debug("5ch subject fetch error for %s: %s", board_url, exc)
@@ -268,7 +276,9 @@ class FiveChConnector(BaseConnector):
         try:
             resp = await client.get(f"{hit.board_url}dat/{hit.thread_id}.dat")
             if resp.is_success:
-                return _parse_dat_latest_post_at(_decode_shift_jis(resp.content))
+                published_at = _parse_dat_latest_post_at(_decode_shift_jis(resp.content))
+                if published_at is not None:
+                    return published_at
         except Exception as exc:
             log.debug("5ch dat fetch error for %s/%s: %s", hit.board_key, hit.thread_id, exc)
         return await self._fetch_latest_post_at_via_proxy(hit)

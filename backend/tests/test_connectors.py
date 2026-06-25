@@ -487,7 +487,7 @@ class TestFiveChFetch:
         assert result[0].raw_payload["date_parsed"] is False
 
     @pytest.mark.asyncio
-    async def test_direct_scan_uses_worker_proxy_when_subject_and_dat_are_blocked(self):
+    async def test_direct_scan_uses_worker_proxy_when_subject_and_dat_are_unparseable(self):
         from urllib.parse import parse_qs, urlparse
 
         subject = "1778433981.dat<>【元乃木坂46】Aiko proxy thread (64)\n"
@@ -504,7 +504,7 @@ class TestFiveChFetch:
                 if board_url.endswith("/nogizaka/") and resource == "dat":
                     return MagicMock(is_success=True, status_code=200, content=dat.encode("shift_jis"))
                 return MagicMock(is_success=True, status_code=200, content=b"")
-            return MagicMock(is_success=False, status_code=403, content=b"")
+            return MagicMock(is_success=True, status_code=200, content=b"Blocked: Only HTTPS requests are allowed")
 
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.fivech.settings.admin_api_token", "secret"), \
