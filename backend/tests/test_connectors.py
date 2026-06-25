@@ -411,6 +411,58 @@ class TestTwitterConnectorNoToken:
 
 class TestFiveChFetch:
     @pytest.mark.asyncio
+    async def test_direct_scan_returns_thread_with_latest_post_date(self):
+        subject = "1778433981.dat<>【元乃木坂４６】相楽伊織応援スレ★16【いおり】 (64)\n"
+        dat = (
+            "君の名は<><>2026/06/24(水) 20:18:37.20 ID:first<> first <>title\n"
+            "君の名は<><>2026/06/25(木) 11:26:55.28 ID:last<> latest <>\n"
+        )
+
+        async def _side(url, **_kw):
+            resp = MagicMock(is_success=True, status_code=200)
+            if str(url).endswith("/nogizaka/subject.txt"):
+                resp.content = subject.encode("shift_jis")
+            elif str(url).endswith("/nogizaka/dat/1778433981.dat"):
+                resp.content = dat.encode("shift_jis")
+            else:
+                resp.content = b""
+            return resp
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("乃木坂46", "all_info")
+
+        parse.assert_not_called()
+        assert len(result) == 1
+        assert result[0].platform == "5ch"
+        assert result[0].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1778433981"
+        assert result[0].url == "http://toro.2ch.sc/test/read.cgi/nogizaka/1778433981/"
+        assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
+        assert result[0].raw_payload["source"] == "2ch.sc_subject"
+        assert result[0].raw_payload["date_parsed"] is True
+
+    @pytest.mark.asyncio
+    async def test_direct_scan_falls_back_to_thread_id_date_when_dat_missing(self):
+        subject = "1717200000.dat<>Aiko live thread (12)\n"
+
+        async def _side(url, **_kw):
+            if str(url).endswith("/streaming/subject.txt"):
+                resp = MagicMock(is_success=True, status_code=200, content=subject.encode("shift_jis"))
+                return resp
+            if str(url).endswith("/streaming/dat/1717200000.dat"):
+                return MagicMock(is_success=False, status_code=404, content=b"")
+            return MagicMock(is_success=True, status_code=200, content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("Aiko", "all_info")
+
+        parse.assert_not_called()
+        assert len(result) == 1
+        assert result[0].published_at == datetime.fromtimestamp(1717200000, tz=timezone.utc)
+        assert result[0].raw_payload["date_parsed"] is False
+
+    @pytest.mark.asyncio
     async def test_filters_keyword_found_only_in_google_news_summary(self):
         entry = _rss_entry(
             link="https://5ch.net/test/read.cgi/news/1",
