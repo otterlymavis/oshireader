@@ -147,6 +147,32 @@ test("5ch proxy fetches whitelisted real itest subback pages", async (context) =
   assert.match(await response.text(), /Aiko thread/);
 });
 
+test("5ch proxy retries flaky real itest subback upstream failures", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let attempts = 0;
+  globalThis.fetch = async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Response("bad gateway", { status: 502 });
+    }
+    return new Response("* [2026年6月25日 17時59分 話題度:43 13レス Aiko retry](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)", {
+      status: 200,
+    });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=itest_subback&board_key=nogizaka", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(attempts, 2);
+  assert.match(await response.text(), /Aiko retry/);
+});
+
 test("5ch proxy rejects non-whitelisted itest board keys", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/fivech-proxy?resource=itest_subback&board_key=../../secret", {

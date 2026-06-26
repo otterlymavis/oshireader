@@ -4,6 +4,8 @@ const DEFAULT_RETRY_DELAY_MS = 5_000;
 const DEFAULT_STALE_AFTER_MINUTES = 35;
 const RSS_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_PROXY_TIMEOUT_MS = 20_000;
+const FIVECH_ITEST_UPSTREAM_ATTEMPTS = 3;
+const FIVECH_ITEST_CACHE_SECONDS = 10 * 60;
 const FIVECH_ALLOWED_BOARDS = new Set([
   "sweet.2ch.sc/headline",
   "ai.2ch.sc/newsalpha",
@@ -119,6 +121,18 @@ function utf8TextResponse(body, status = 200) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fiveChItestCacheRequest(boardKey) {
+  return new Request(`https://oshireader.internal-cache/fivech-itest/${encodeURIComponent(boardKey)}`);
+}
+
+function hasDefaultCache() {
+  return typeof caches !== "undefined" && caches.default;
+}
+
 function requireBearer(request, env) {
   const expected = normalizeBearerToken(requireAdminToken(env));
   const actual = normalizeBearerToken(request.headers.get("authorization") || "");
@@ -187,11 +201,13 @@ async function proxyFiveCh(request, env) {
   const resource = url.searchParams.get("resource") || "subject";
 
   let upstream;
+  let itestBoardKey = "";
   if (resource === "itest_subback") {
     const boardKey = url.searchParams.get("board_key") || "";
     if (!FIVECH_ITEST_ALLOWED_BOARDS.has(boardKey)) {
       return json({ detail: "Unsupported board_key" }, 400);
     }
+    itestBoardKey = boardKey;
     upstream = `https://r.jina.ai/http://https://itest.5ch.net/subback/${boardKey}`;
   } else {
     const board = normalizeFiveChBoard(url.searchParams.get("board_url") || "");
@@ -211,19 +227,56 @@ async function proxyFiveCh(request, env) {
     }
   }
 
-  const response = await fetch(upstream, {
-    headers: {
-      "user-agent": "Monazilla/1.00 OshiReader/1.0",
-      "accept": "text/plain,text/html;q=0.8,*/*;q=0.5",
-      "accept-language": "ja,en;q=0.9",
-    },
-    signal: AbortSignal.timeout(FIVECH_PROXY_TIMEOUT_MS),
-  });
-  const body = await response.arrayBuffer();
-  if (!response.ok) {
-    return json({ detail: "Upstream 5ch failed", status: response.status, bytes: body.byteLength }, 502);
+  let cacheRequest = null;
+  if (resource === "itest_subback" && hasDefaultCache()) {
+    cacheRequest = fiveChItestCacheRequest(itestBoardKey);
+    const cached = await caches.default.match(cacheRequest);
+    if (cached) {
+      return cached;
+    }
   }
-  if (resource === "itest_subback") return utf8TextResponse(body);
+
+  let lastStatus = 0;
+  let lastBytes = 0;
+  let body = null;
+  for (let attempt = 1; attempt <= FIVECH_ITEST_UPSTREAM_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(upstream, {
+        headers: {
+          "user-agent": "Monazilla/1.00 OshiReader/1.0",
+          "accept": "text/plain,text/html;q=0.8,*/*;q=0.5",
+          "accept-language": "ja,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(FIVECH_PROXY_TIMEOUT_MS),
+      });
+      body = await response.arrayBuffer();
+      lastStatus = response.status;
+      lastBytes = body.byteLength;
+      if (response.ok && body.byteLength > 0) {
+        break;
+      }
+      body = null;
+    } catch (error) {
+      lastStatus = 0;
+      lastBytes = 0;
+    }
+    if (attempt < FIVECH_ITEST_UPSTREAM_ATTEMPTS) {
+      await sleep(500 * attempt);
+    }
+  }
+
+  if (!body) {
+    return json({ detail: "Upstream 5ch failed", status: lastStatus, bytes: lastBytes }, 502);
+  }
+
+  if (resource === "itest_subback") {
+    const response = utf8TextResponse(body);
+    response.headers.set("cache-control", `public, max-age=${FIVECH_ITEST_CACHE_SECONDS}`);
+    if (cacheRequest && hasDefaultCache()) {
+      await caches.default.put(cacheRequest, response.clone());
+    }
+    return response;
+  }
   return textResponse(body);
 }
 
