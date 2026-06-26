@@ -1897,10 +1897,11 @@ class TestNoteFetch:
         with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
-        assert result == []
+        assert len(result) == 1
+        assert result[0].raw_payload["matched_hashtag"] == "Aiko"
 
     @pytest.mark.asyncio
-    async def test_rss_filters_keyword_found_only_in_summary_or_author(self):
+    async def test_rss_records_hashtag_match_for_scheduler_relevance(self):
         entry = _FeedEntry(
             id="nid1",
             link="https://note.com/u/n/nid1",
@@ -1918,7 +1919,11 @@ class TestNoteFetch:
         with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
-        assert result == []
+        assert len(result) == 1
+        assert result[0].raw_payload == {
+            "feed_url": "https://note.com/hashtag/Aiko/rss",
+            "matched_hashtag": "Aiko",
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,18 @@ from app.connectors.base import contains_keyword
 from app.models import Match, SourceItem, WatchTerm
 
 
+def _matches_note_hashtag(search_term: str, item) -> bool:
+    if getattr(item, "platform", None) != "note":
+        return False
+    raw_payload = getattr(item, "raw_payload", None) or {}
+    if not isinstance(raw_payload, dict):
+        return False
+    return contains_keyword(search_term, raw_payload.get("matched_hashtag"))
+
+
 def primary_text_matches(search_term: str, item) -> bool:
+    if _matches_note_hashtag(search_term, item):
+        return True
     title = (item.title or "").strip()
     if item.media_type in {"video", "image"}:
         return contains_keyword(search_term, title, item.content_text, item.author)

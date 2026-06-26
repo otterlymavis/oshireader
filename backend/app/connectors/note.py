@@ -12,7 +12,6 @@ from app.connectors.base import (
     CollectionMode,
     SourceItemCreate,
     parse_feed_date,
-    title_contains_keyword,
 )
 
 log = logging.getLogger(__name__)
@@ -55,8 +54,6 @@ class NoteConnector(BaseConnector):
             title = entry.get("title")
             summary = entry.get("summary") or ""
             author = entry.get("author")
-            if not title_contains_keyword(keyword, title):
-                continue
             item_id = entry.get("id") or link.rstrip("/").split("/")[-1] or link
             thumb = None
             for enc in entry.get("enclosures", []):
@@ -77,7 +74,7 @@ class NoteConnector(BaseConnector):
                     title=title,
                     content_text=summary or None,
                     thumbnail_url=thumb,
-                    raw_payload={"feed_url": url},
+                    raw_payload={"feed_url": url, "matched_hashtag": keyword},
                 )
             )
         return items

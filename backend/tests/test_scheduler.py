@@ -257,6 +257,24 @@ class TestFetchOne:
         assert result == []
 
     @pytest.mark.asyncio
+    async def test_keeps_note_hashtag_match_without_visible_keyword(self):
+        from app.connectors.base import SourceItemCreate
+        item = SourceItemCreate(
+            platform="note",
+            item_id="x1",
+            url="https://note.com/u/n/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="hashtagged post with a different title",
+            content_text="no visible match here",
+            raw_payload={"matched_hashtag": "Aiko"},
+        )
+        connector = self._connector(return_value=[item])
+        connector.PLATFORM = "note"
+        result = await _fetch_one(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert result == [item]
+
+    @pytest.mark.asyncio
     async def test_text_only_item_matches_post_body(self):
         from app.connectors.base import SourceItemCreate
         item = SourceItemCreate(
