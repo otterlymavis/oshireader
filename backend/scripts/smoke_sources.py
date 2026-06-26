@@ -139,13 +139,21 @@ def _sample_item(item: Any, keyword: str | None) -> dict[str, Any]:
     content_text = getattr(item, "content_text", None)
     author = getattr(item, "author", None)
     primary_text = title or content_text
+    relevance_match = primary_text_matches(keyword or "", item)
+    raw_payload = getattr(item, "raw_payload", None) or {}
+    date_source = raw_payload.get("date_source") if isinstance(raw_payload, dict) else None
+    last_post_at = raw_payload.get("last_post_at") if isinstance(raw_payload, dict) else None
+    subback_published_at = raw_payload.get("subback_published_at") if isinstance(raw_payload, dict) else None
     return {
         "title": _short(primary_text),
         "author": _short(author, 80),
         "keyword_match": contains_keyword(keyword or "", title, content_text, author),
-        "primary_text_match": contains_keyword(keyword or "", primary_text),
+        "primary_text_match": relevance_match,
         "media_type": getattr(item, "media_type", None),
         "published_at": published_value,
+        "date_source": date_source,
+        "last_post_at": last_post_at,
+        "subback_published_at": subback_published_at,
         "url": getattr(item, "url", None),
     }
 
@@ -382,7 +390,7 @@ async def _main() -> int:
     mode = CollectionMode.MEDIA_ONLY if args.media_only else CollectionMode.ALL_INFO
     platforms = set(args.platform)
 
-    if args.simple or platforms:
+    if args.simple:
         results = await run_smoke(keywords[0], platforms, max(args.samples, 0))
         return _print_simple_report(results)
 

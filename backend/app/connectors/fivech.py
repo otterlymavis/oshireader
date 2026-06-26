@@ -52,7 +52,8 @@ _ITEST_DATE_RE = re.compile(
 _DIRECT_REQUEST_CONCURRENCY = 12
 _ITEST_REQUEST_CONCURRENCY = 3
 _ITEST_PROXY_ATTEMPTS = 3
-_ITEST_DAT_CONCURRENCY = 3
+_ITEST_JINA_ATTEMPTS = 3
+_ITEST_DAT_CONCURRENCY = 1
 _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
 _FIVECH_INDEX_MAX_AGE = timedelta(days=31)
@@ -307,11 +308,19 @@ class FiveChConnector(BaseConnector):
         text = await self._fetch_itest_board_via_proxy(client, board_key)
         try:
             if text is None:
-                response = await client.get(url)
-                if not response.is_success:
-                    log.debug("5ch itest board returned %d for %s", response.status_code, board_key)
-                else:
-                    text = response.text
+                for attempt in range(1, _ITEST_JINA_ATTEMPTS + 1):
+                    response = await client.get(url)
+                    if response.is_success:
+                        text = response.text
+                        break
+                    log.debug(
+                        "5ch itest board returned %d for %s attempt %d",
+                        response.status_code,
+                        board_key,
+                        attempt,
+                    )
+                    if attempt < _ITEST_JINA_ATTEMPTS:
+                        await asyncio.sleep(0.5 * attempt)
         except Exception as exc:
             log.debug("5ch itest board fetch error for %s: %s", board_key, exc)
         if not text:
@@ -326,7 +335,11 @@ class FiveChConnector(BaseConnector):
         )
         return [
             item for item in dated
-            if isinstance(item, SourceItemCreate) and _is_recent_index_result(item.published_at)
+            if (
+                isinstance(item, SourceItemCreate)
+                and (item.raw_payload or {}).get("date_source") == "dat_latest_post"
+                and _is_recent_index_result(item.published_at)
+            )
         ]
 
     def _parse_itest_board(
@@ -448,9 +461,23 @@ class FiveChConnector(BaseConnector):
             return None
         url = f"https://r.jina.ai/http://http://{server}.5ch.net/{board_key}/dat/{thread_id}.dat"
         try:
-            response = await client.get(url)
-            if response.is_success and response.text:
-                return _parse_dat_latest_post_at(response.text)
+            for attempt in range(1, _ITEST_JINA_ATTEMPTS + 1):
+                response = await client.get(url)
+                if response.is_success and response.text:
+                    latest = _parse_dat_latest_post_at(response.text)
+                    if latest is not None:
+                        return latest
+                else:
+                    log.debug(
+                        "5ch itest dat returned %d for %s/%s/%s attempt %d",
+                        response.status_code,
+                        server,
+                        board_key,
+                        thread_id,
+                        attempt,
+                    )
+                if attempt < _ITEST_JINA_ATTEMPTS:
+                    await asyncio.sleep(0.5 * attempt)
         except Exception as exc:
             log.debug("5ch itest dat fetch error for %s/%s/%s: %s", server, board_key, thread_id, exc)
         return None
@@ -650,7 +677,7 @@ class FiveChConnector(BaseConnector):
         return None
 
     async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
-        encoded = quote(f"{keyword} site:5ch.net")
+        encoded = quote(f"{keyword} site:5ch.io")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
 
         feed = None
@@ -739,7 +766,7 @@ class FiveChConnector(BaseConnector):
         return items
 
     async def _fetch_gnews_proxy(self, keyword: str) -> list[SourceItemCreate]:
-        query = f"{keyword} site:5ch.net"
+        query = f"{keyword} site:5ch.io"
         for target, source in (("google", "google_news_proxy"), ("bing", "bing_news_proxy")):
             content = await fetch_search_rss_via_proxy(query, target=target)
             if not content:

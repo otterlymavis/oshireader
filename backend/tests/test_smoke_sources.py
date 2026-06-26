@@ -22,15 +22,22 @@ class FakeConnector:
         return self.items
 
 
-def _item(title: str, item_id: str = "item", content_text: str | None = None) -> SourceItemCreate:
+def _item(
+    title: str,
+    item_id: str = "item",
+    content_text: str | None = None,
+    platform: str = "fake",
+    raw_payload: dict | None = None,
+) -> SourceItemCreate:
     return SourceItemCreate(
-        platform="fake",
+        platform=platform,
         item_id=item_id,
         url=f"https://example.com/{item_id}",
         published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         media_type="article",
         title=title,
         content_text=content_text,
+        raw_payload=raw_payload,
     )
 
 
@@ -104,3 +111,24 @@ async def test_rich_check_connector_accepts_keyword_matching_items():
     assert result.ok is True
     assert result.status == "ok"
     assert result.samples[0]["keyword_match"] is True
+
+
+@pytest.mark.asyncio
+async def test_rich_check_connector_uses_ingestion_relevance():
+    result = await _check_connector(
+        FakeConnector([
+            _item(
+                "hashtagged note without visible term",
+                platform="note",
+                raw_payload={"matched_hashtag": "Aiko"},
+            )
+        ]),
+        ["Aiko"],
+        CollectionMode.ALL_INFO,
+        page_limit=0,
+    )
+
+    assert result.ok is True
+    assert result.status == "ok"
+    assert result.samples[0]["keyword_match"] is False
+    assert result.samples[0]["primary_text_match"] is True

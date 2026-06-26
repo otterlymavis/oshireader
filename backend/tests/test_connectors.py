@@ -468,10 +468,13 @@ class TestFiveChFetch:
         markdown = """
 *   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
+        dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             if str(url).startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
                 return MagicMock(is_success=True, status_code=200, text=markdown)
+            if str(url).startswith("https://r.jina.ai/http://http://mevius.5ch.net/nogizaka/dat/1782410369.dat"):
+                return MagicMock(is_success=True, status_code=200, text=dat, content=dat.encode())
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
@@ -482,20 +485,81 @@ class TestFiveChFetch:
         assert len(result) == 1
         assert result[0].item_id == "5ch:mevius:nogizaka:1782410369"
         assert result[0].url == "https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369"
-        assert result[0].published_at == datetime(2026, 6, 25, 8, 59, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 6, 25, 8, 59, 29, tzinfo=timezone.utc)
+        assert result[0].raw_payload["source"] == "5ch_itest"
+        assert result[0].raw_payload["date_source"] == "dat_latest_post"
+
+    @pytest.mark.asyncio
+    async def test_real_itest_retries_jina_subback_throttling(self):
+        markdown = """
+*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+"""
+        dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
+        attempts = 0
+
+        async def _side(url, **_kw):
+            nonlocal attempts
+            url_text = str(url)
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
+                attempts += 1
+                if attempts == 1:
+                    return MagicMock(is_success=False, status_code=429, text="", content=b"")
+                return MagicMock(is_success=True, status_code=200, text=markdown, content=markdown.encode())
+            if url_text.startswith("https://r.jina.ai/http://http://mevius.5ch.net/nogizaka/dat/1782410369.dat"):
+                return MagicMock(is_success=True, status_code=200, text=dat, content=dat.encode())
+            return MagicMock(is_success=True, status_code=200, text="", content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()) as sleep, \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("乃木坂46", "all_info")
+
+        parse.assert_not_called()
+        sleep.assert_awaited_once()
+        assert attempts == 2
+        assert len(result) == 1
         assert result[0].raw_payload["source"] == "5ch_itest"
 
     @pytest.mark.asyncio
-    async def test_real_itest_uses_worker_proxy_when_jina_is_blocked(self):
+    async def test_real_itest_drops_threads_without_latest_dat_date(self):
         markdown = """
 *   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
 
         async def _side(url, **_kw):
             url_text = str(url)
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
+                return MagicMock(is_success=True, status_code=200, text=markdown, content=markdown.encode())
+            if url_text.startswith("https://r.jina.ai/http://http://mevius.5ch.net/nogizaka/dat/1782410369.dat"):
+                return MagicMock(is_success=True, status_code=200, text="", content=b"")
+            return MagicMock(is_success=True, status_code=200, text="", content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("乃木坂46", "all_info")
+
+        parse.assert_called()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_real_itest_uses_worker_proxy_when_jina_is_blocked(self):
+        from urllib.parse import parse_qs, urlparse
+
+        markdown = """
+*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+"""
+        dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
             if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/"):
                 return MagicMock(is_success=False, status_code=401, text="", content=b"")
             if url_text.startswith("https://worker.example/fivech-proxy"):
+                query = parse_qs(urlparse(url_text).query)
+                resource = query.get("resource", [""])[0]
+                if resource == "itest_dat":
+                    return MagicMock(is_success=True, status_code=200, text=dat, content=dat.encode())
                 return MagicMock(is_success=True, status_code=200, text=markdown, content=markdown.encode())
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
@@ -519,20 +583,28 @@ class TestFiveChFetch:
             "name<>sage<>2026/06/24(水) 20:18:37.20 ID:first<> first <>\n"
             "name<>sage<>2026/06/26(金) 20:00:21.58 ID:last<> latest <>\n"
         )
+        dat_attempts = 0
 
         async def _side(url, **_kw):
+            nonlocal dat_attempts
             url_text = str(url)
             if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
                 return MagicMock(is_success=True, status_code=200, text=markdown, content=markdown.encode())
             if url_text.startswith("https://r.jina.ai/http://http://mevius.5ch.net/nogizaka/dat/1782410369.dat"):
+                dat_attempts += 1
+                if dat_attempts == 1:
+                    return MagicMock(is_success=False, status_code=429, text="", content=b"")
                 return MagicMock(is_success=True, status_code=200, text=dat, content=dat.encode())
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()) as sleep, \
              patch("app.connectors.fivech.feedparser.parse") as parse:
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
         parse.assert_not_called()
+        sleep.assert_awaited_once()
+        assert dat_attempts == 2
         assert len(result) == 1
         assert result[0].published_at == datetime(2026, 6, 26, 11, 0, 21, tzinfo=timezone.utc)
         assert result[0].raw_payload["subback_published_at"] == "2026-05-10T01:00:00+00:00"
