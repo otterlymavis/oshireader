@@ -49,6 +49,7 @@ _ITEST_DATE_RE = re.compile(
     r"(?P<hour>\d{1,2})時(?P<minute>\d{1,2})分"
 )
 _DIRECT_REQUEST_CONCURRENCY = 12
+_ITEST_REQUEST_CONCURRENCY = 3
 _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
 _FIVECH_INDEX_MAX_AGE = timedelta(days=31)
@@ -132,8 +133,8 @@ class _ThreadHit:
     posts: int
 
 
-async def _gather_limited(coros):
-    semaphore = asyncio.Semaphore(_DIRECT_REQUEST_CONCURRENCY)
+async def _gather_limited(coros, concurrency: int = _DIRECT_REQUEST_CONCURRENCY):
+    semaphore = asyncio.Semaphore(concurrency)
 
     async def run(coro):
         async with semaphore:
@@ -258,22 +259,30 @@ class FiveChConnector(BaseConnector):
         return await self._fetch_gnews(keyword)
 
     async def _fetch_real_itest(self, keyword: str) -> list[SourceItemCreate]:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-            board_results = await _gather_limited(
-                [self._fetch_itest_board(client, board_key, keyword) for board_key in _ITEST_BOARD_KEYS]
-            )
-
         items: list[SourceItemCreate] = []
         seen: set[str] = set()
-        for result in board_results:
-            if isinstance(result, Exception):
-                log.debug("5ch itest board scan failed: %s", result)
-                continue
-            for item in result:
-                if item.item_id in seen:
-                    continue
-                seen.add(item.item_id)
-                items.append(item)
+
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+            for start in range(0, len(_ITEST_BOARD_KEYS), _ITEST_REQUEST_CONCURRENCY):
+                board_batch = _ITEST_BOARD_KEYS[start:start + _ITEST_REQUEST_CONCURRENCY]
+                board_results = await _gather_limited(
+                    [self._fetch_itest_board(client, board_key, keyword) for board_key in board_batch],
+                    concurrency=_ITEST_REQUEST_CONCURRENCY,
+                )
+
+                for result in board_results:
+                    if isinstance(result, Exception):
+                        log.debug("5ch itest board scan failed: %s", result)
+                        continue
+                    for item in result:
+                        if item.item_id in seen:
+                            continue
+                        seen.add(item.item_id)
+                        items.append(item)
+
+                if items:
+                    break
+
         items.sort(key=lambda item: item.published_at, reverse=True)
         return items[:_REAL_5CH_LIMIT]
 
@@ -284,7 +293,7 @@ class FiveChConnector(BaseConnector):
         keyword: str,
     ) -> list[SourceItemCreate]:
         url = f"https://r.jina.ai/http://https://itest.5ch.net/subback/{board_key}"
-        text = await self._fetch_itest_board_via_proxy(board_key)
+        text = await self._fetch_itest_board_via_proxy(client, board_key)
         try:
             if text is None:
                 response = await client.get(url)
@@ -345,18 +354,17 @@ class FiveChConnector(BaseConnector):
                 break
         return items
 
-    async def _fetch_itest_board_via_proxy(self, board_key: str) -> str | None:
+    async def _fetch_itest_board_via_proxy(self, client: httpx.AsyncClient, board_key: str) -> str | None:
         proxy_url = settings.source_5ch_proxy_url.strip()
         token = settings.admin_api_token.strip()
         if not proxy_url or not token:
             return None
         url = f"{proxy_url}?{urlencode({'resource': 'itest_subback', 'board_key': board_key})}"
         try:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-                if not response.is_success:
-                    return None
-                return response.text
+            response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+            if not response.is_success:
+                return None
+            return response.text
         except Exception as exc:
             log.debug("5ch itest proxy fetch error for %s: %s", board_key, exc)
             return None
