@@ -35,14 +35,17 @@ _GNEWS_MD_ITEM_RE = re.compile(
 
 
 def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
-    """Return a timezone-aware UTC datetime from a feedparser entry, falling back to now."""
-    for attr in ("published_parsed", "updated_parsed"):
+    """Return the newest feed activity date, falling back to now."""
+    dates: list[datetime] = []
+    for attr in ("updated_parsed", "published_parsed"):
         t = getattr(entry, attr, None)
         if t:
             try:
-                return datetime(*t[:6], tzinfo=timezone.utc)
+                dates.append(datetime(*t[:6], tzinfo=timezone.utc))
             except Exception:
                 pass
+    if dates:
+        return max(dates)
     return datetime.now(timezone.utc)
 
 

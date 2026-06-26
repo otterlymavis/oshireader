@@ -44,17 +44,35 @@ def _parse_timestamp_value(val: object) -> Optional[datetime]:
 
 
 def _parse_tver_date(content: dict) -> Optional[datetime]:
-    # Unix timestamps (seconds) — most reliable
-    for key in ("publishedAt", "publish_start", "deliveryStartAt", "broadcastDate", "airDate", "startAt"):
+    # Unix/ISO timestamps. Prefer newest activity/update-style value when present.
+    candidates: list[datetime] = []
+    for key in (
+        "updatedAt",
+        "updateAt",
+        "modifiedAt",
+        "lastModifiedAt",
+        "lastUpdatedAt",
+        "episodeUpdatedAt",
+        "publishedAt",
+        "publish_start",
+        "deliveryStartAt",
+        "broadcastDate",
+        "airDate",
+        "startAt",
+    ):
         parsed_value = _parse_timestamp_value(content.get(key))
         if parsed_value:
-            return parsed_value
+            candidates.append(parsed_value)
 
     view_status = content.get("viewStatus")
     if isinstance(view_status, dict):
-        parsed_value = _parse_timestamp_value(view_status.get("startAt"))
-        if parsed_value:
-            return parsed_value
+        for key in ("updatedAt", "lastUpdatedAt", "startAt"):
+            parsed_value = _parse_timestamp_value(view_status.get(key))
+            if parsed_value:
+                candidates.append(parsed_value)
+
+    if candidates:
+        return max(candidates)
 
     # Parse broadcastDateLabel: "6月5日(金)放送分", "5月29日(金) 18:29", "2021年放送"
     label = content.get("broadcastDateLabel") or ""

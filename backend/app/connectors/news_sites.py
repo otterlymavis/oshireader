@@ -54,18 +54,30 @@ def _extract_window_state(html: str) -> dict:
     return state if isinstance(state, dict) else {}
 
 
-def _parse_ameba_timestamp(value: object) -> datetime:
+def _parse_optional_ameba_timestamp(value: object) -> datetime | None:
     if isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
         except Exception:
-            pass
+            return None
     if isinstance(value, str) and value.strip():
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
         except Exception:
-            pass
+            return None
+    return None
+
+
+def _parse_ameba_timestamp(value: object) -> datetime:
+    parsed = _parse_optional_ameba_timestamp(value)
+    if parsed:
+        return parsed
     return datetime.now(timezone.utc)
+
+
+def _parse_ameba_activity_timestamp(*values: object) -> datetime:
+    dates = [parsed for value in values if (parsed := _parse_optional_ameba_timestamp(value))]
+    return max(dates) if dates else datetime.now(timezone.utc)
 
 
 def _parse_jst_datetime(value: str | None) -> datetime:
@@ -443,8 +455,12 @@ class AmebloConnector(_GNewsSiteConnector):
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=item_url,
-                    published_at=_parse_ameba_timestamp(
-                        raw.get("entryCreatedDatetime") or raw.get("publishedTime")
+                    published_at=_parse_ameba_activity_timestamp(
+                        raw.get("entryUpdatedDatetime"),
+                        raw.get("updatedTime"),
+                        raw.get("updatedAt"),
+                        raw.get("entryCreatedDatetime"),
+                        raw.get("publishedTime"),
                     ),
                     media_type="article",
                     author=blog_title,

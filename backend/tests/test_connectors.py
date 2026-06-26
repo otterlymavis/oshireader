@@ -77,11 +77,27 @@ def _http_mock(status_code=200, content=b"", text="", is_success=True):
 
 
 class TestParseFeedDate:
-    def test_returns_published_parsed_when_present(self):
+    def test_returns_published_parsed_when_only_published_present(self):
         # feedparser returns time.struct_time-like 9-tuples; we slice [:6]
         entry = _entry(published_parsed=(2024, 6, 15, 10, 30, 0, 5, 167, 0))
         result = parse_feed_date(entry)
         assert result == datetime(2024, 6, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    def test_prefers_updated_parsed_when_newer(self):
+        entry = _entry(
+            published_parsed=(2024, 6, 15, 10, 30, 0, 5, 167, 0),
+            updated_parsed=(2024, 6, 16, 9, 0, 0, 6, 168, 0),
+        )
+        result = parse_feed_date(entry)
+        assert result == datetime(2024, 6, 16, 9, 0, 0, tzinfo=timezone.utc)
+
+    def test_keeps_published_parsed_when_updated_is_older(self):
+        entry = _entry(
+            published_parsed=(2024, 6, 16, 9, 0, 0, 6, 168, 0),
+            updated_parsed=(2024, 6, 15, 10, 30, 0, 5, 167, 0),
+        )
+        result = parse_feed_date(entry)
+        assert result == datetime(2024, 6, 16, 9, 0, 0, tzinfo=timezone.utc)
 
     def test_falls_back_to_updated_parsed(self):
         entry = _entry(
@@ -186,6 +202,13 @@ class TestParseTverDate:
         # publishedAt is missing, deliveryStartAt has the value
         result = _parse_tver_date({"deliveryStartAt": 1717200000})
         assert result == datetime.fromtimestamp(1717200000, tz=timezone.utc)
+
+    def test_prefers_newest_update_timestamp(self):
+        result = _parse_tver_date({
+            "publishedAt": 1717200000,
+            "updatedAt": 1717286400,
+        })
+        assert result == datetime.fromtimestamp(1717286400, tz=timezone.utc)
 
     def test_broadcast_date_label_year_only(self):
         result = _parse_tver_date({"broadcastDateLabel": "2021年放送"})
@@ -1025,6 +1048,28 @@ class TestNewsSiteFetch:
         assert result[0].author == "クムルクダ子のブログ"
         assert result[0].thumbnail_url == "https://stat.ameba.jp/image.jpg"
         assert result[0].raw_payload["source"] == "ameba_search"
+        gnews.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ameblo_uses_updated_entry_timestamp(self):
+        html = self._ameba_html([
+            {
+                "entryId": 12969666351,
+                "amebaId": "ps-jj-myonsun",
+                "entryCreatedDatetime": 1717200000000,
+                "entryUpdatedDatetime": 1717286400000,
+                "blogTitle": "クムルクダ子のブログ",
+                "entryTitle": "日本映画『国宝』視聴♪",
+                "entryContent": "吉沢亮 update",
+            }
+        ])
+        connector = AmebloConnector()
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=html)), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock()) as gnews:
+            result = await connector.fetch("吉沢亮", "all_info")
+
+        assert len(result) == 1
+        assert result[0].published_at == datetime.fromtimestamp(1717286400, tz=timezone.utc)
         gnews.assert_not_called()
 
     @pytest.mark.asyncio
