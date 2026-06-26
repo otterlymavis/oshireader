@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import re
 from typing import Optional
@@ -23,6 +23,9 @@ GOOGLE_NEWS_HEADERS = {
     "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
     "Accept-Language": "ja,en;q=0.9",
 }
+
+SEARCH_RESULT_MAX_AGE = timedelta(days=31)
+SEARCH_RESULT_FUTURE_GRACE = timedelta(days=1)
 
 _GNEWS_MD_ITEM_RE = re.compile(
     r"^### \[(?P<title>.+?)\]\((?P<url>https://news\.google\.com/rss/articles/[^)]+)\)"
@@ -64,6 +67,16 @@ def parse_google_news_markdown(text: str) -> list[dict]:
             "published_at": published,
         })
     return items
+
+
+def is_recent_search_result(published_at: datetime) -> bool:
+    """Return whether a search/RSS item belongs in the current source window."""
+    published = published_at
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    published = published.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - SEARCH_RESULT_MAX_AGE <= published <= now + SEARCH_RESULT_FUTURE_GRACE
 
 
 async def fetch_search_rss_via_proxy(query: str, target: str = "google") -> bytes | None:

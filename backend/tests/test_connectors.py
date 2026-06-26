@@ -846,6 +846,15 @@ class TestOriconFetch:
         assert result == []
 
     @pytest.mark.asyncio
+    async def test_filters_stale_google_news_items(self):
+        entry = _rss_entry(link="https://oricon.co.jp/old", title="Aiko old - ORICON NEWS")
+        entry.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
+        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
     async def test_returns_empty_on_http_error(self):
         with patch("app.connectors.oricon.httpx.AsyncClient",
                    _http_mock(status_code=500, is_success=False)):
@@ -1513,6 +1522,16 @@ class TestNicoNicoFetch:
         assert result[0].item_id == "sm12345"
         assert result[0].thumbnail_url == "https://cdn.nicovideo.jp/t.jpg"
         assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_rss_filters_stale_items(self):
+        entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm12345", title="Aiko old cover")
+        entry.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
+             patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
+            result = await NicoNicoConnector().fetch("Aiko", "all_info")
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_extracts_video_id_from_watch_url(self):

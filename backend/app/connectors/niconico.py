@@ -16,6 +16,7 @@ from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
     fetch_search_rss_via_proxy,
+    is_recent_search_result,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -91,7 +92,6 @@ class NicoNicoConnector(BaseConnector):
 
             if vid_id in seen:
                 continue
-            seen.add(vid_id)
 
             title = (entry.get("title") or "").strip()
             if not title:
@@ -99,6 +99,10 @@ class NicoNicoConnector(BaseConnector):
             summary = entry.get("summary") or ""
             if not contains_keyword(keyword, title, summary, entry.get("author")):
                 continue
+            published = parse_feed_date(entry)
+            if not is_recent_search_result(published):
+                continue
+            seen.add(vid_id)
 
             # Thumbnail: from media:thumbnail, media:content, or description HTML
             thumb: str | None = None
@@ -123,7 +127,7 @@ class NicoNicoConnector(BaseConnector):
                     platform=self.PLATFORM,
                     item_id=str(vid_id),
                     url=f"https://www.nicovideo.jp/watch/{vid_id}" if vid_m else link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="video",
                     author=author,
                     title=title,
@@ -157,19 +161,22 @@ class NicoNicoConnector(BaseConnector):
             item_id = entry.get("id") or link
             if item_id in seen:
                 continue
-            seen.add(item_id)
             title = (entry.get("title") or "").strip()
             summary = entry.get("summary") or ""
             if not title:
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if not is_recent_search_result(published):
+                continue
+            seen.add(item_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="video",
                     title=title,
                     content_text=summary or None,
@@ -199,6 +206,8 @@ class NicoNicoConnector(BaseConnector):
         for entry in parse_google_news_markdown(resp.text)[:25]:
             title = entry["title"]
             if not title_contains_keyword(keyword, title):
+                continue
+            if not is_recent_search_result(entry["published_at"]):
                 continue
             items.append(
                 SourceItemCreate(
@@ -232,13 +241,16 @@ class NicoNicoConnector(BaseConnector):
                     continue
                 if not title_contains_keyword(keyword, title):
                     continue
+                published = parse_feed_date(entry)
+                if not is_recent_search_result(published):
+                    continue
                 seen.add(item_id)
                 items.append(
                     SourceItemCreate(
                         platform=self.PLATFORM,
                         item_id=item_id,
                         url=link,
-                        published_at=parse_feed_date(entry),
+                        published_at=published,
                         media_type="video",
                         title=title,
                         content_text=entry.get("summary") or None,

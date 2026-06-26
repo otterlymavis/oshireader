@@ -12,6 +12,7 @@ from app.connectors.base import (
     BaseConnector,
     CollectionMode,
     fetch_search_rss_via_proxy,
+    is_recent_search_result,
     SourceItemCreate,
     parse_feed_date,
     title_contains_keyword,
@@ -78,19 +79,22 @@ class OriconConnector(BaseConnector):
             item_id = entry.get("id") or link
             if item_id in seen:
                 continue
-            seen.add(item_id)
             title = _clean_title(entry.get("title", ""))
             summary = entry.get("summary") or ""
             if not title:
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if not is_recent_search_result(published):
+                continue
+            seen.add(item_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     author="ORICON NEWS",
                     title=title,

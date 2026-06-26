@@ -22,6 +22,7 @@ from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
     fetch_search_rss_via_proxy,
+    is_recent_search_result,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -30,8 +31,6 @@ from app.connectors.base import (
 log = logging.getLogger(__name__)
 
 _WHITESPACE_RE = re.compile(r"\s+")
-_SEARCH_RESULT_MAX_AGE = timedelta(days=31)
-_SEARCH_RESULT_FUTURE_GRACE = timedelta(days=1)
 
 
 def _clean_html_fragment(value: str | None) -> str | None:
@@ -79,12 +78,6 @@ def _parse_jst_datetime(value: str | None) -> datetime:
         except ValueError:
             pass
     return datetime.now(timezone.utc)
-
-
-def _is_recent_search_result(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _SEARCH_RESULT_MAX_AGE <= published <= now + _SEARCH_RESULT_FUTURE_GRACE
 
 
 class _GNewsSiteConnector(BaseConnector):
@@ -136,7 +129,7 @@ class _GNewsSiteConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
-            if not _is_recent_search_result(published):
+            if not is_recent_search_result(published):
                 continue
             items.append(
                 SourceItemCreate(
@@ -188,7 +181,7 @@ class _GNewsSiteConnector(BaseConnector):
                 title = self.TITLE_SUFFIX_RE.sub("", title).strip()
             if not title or not title_contains_keyword(keyword, title):
                 continue
-            if not _is_recent_search_result(entry["published_at"]):
+            if not is_recent_search_result(entry["published_at"]):
                 continue
             items.append(
                 SourceItemCreate(
@@ -234,7 +227,7 @@ class _GNewsSiteConnector(BaseConnector):
                 continue
             seen.add(item_id)
             published = parse_feed_date(entry)
-            if not _is_recent_search_result(published):
+            if not is_recent_search_result(published):
                 continue
             items.append(
                 SourceItemCreate(
@@ -292,7 +285,7 @@ class _GNewsSiteConnector(BaseConnector):
                 continue
             seen.add(item_id)
             published = parse_feed_date(entry)
-            if not _is_recent_search_result(published):
+            if not is_recent_search_result(published):
                 continue
             items.append(
                 SourceItemCreate(
@@ -345,7 +338,7 @@ class _GNewsSiteConnector(BaseConnector):
             if not title:
                 continue
             published = parse_feed_date(entry)
-            if not _is_recent_search_result(published):
+            if not is_recent_search_result(published):
                 continue
             items.append(
                 SourceItemCreate(
@@ -544,7 +537,7 @@ class RealSoundConnector(_GNewsSiteConnector):
             author = article.select_one(".entry-author")
             image = article.select_one("img[src]")
             published = _parse_jst_datetime(time_element.get("datetime") if time_element else None)
-            if not _is_recent_search_result(published):
+            if not is_recent_search_result(published):
                 continue
             items.append(
                 SourceItemCreate(
