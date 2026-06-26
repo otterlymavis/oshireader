@@ -39,8 +39,49 @@ _DAT_DATE_RE = re.compile(
     r"\([^)]+\)\s+"
     r"(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})"
 )
+_ITEST_THREAD_RE = re.compile(
+    r"^\*\s+\[(?P<date>\d{4}年\d{1,2}月\d{1,2}日\s+\d{1,2}時\d{1,2}分)\s+"
+    r"話題度:(?P<momentum>\d+)\s+(?P<posts>\d+)レス\s+(?P<title>.+?)\]"
+    r"\((?P<url>https://itest\.5ch\.(?:io|net)/(?P<server>[^/]+)/test/read\.cgi/(?P<board>[^/]+)/(?P<thread_id>\d+))\)"
+)
+_ITEST_DATE_RE = re.compile(
+    r"(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s+"
+    r"(?P<hour>\d{1,2})時(?P<minute>\d{1,2})分"
+)
 _DIRECT_REQUEST_CONCURRENCY = 12
 _DIRECT_DAT_LIMIT = 25
+_REAL_5CH_LIMIT = 25
+
+_ITEST_BOARD_KEYS: tuple[str, ...] = (
+    "nogizaka",
+    "keyakizaka46",
+    "akb",
+    "akbsaloon",
+    "world48",
+    "idol",
+    "uraidol",
+    "indieidol",
+    "netidol",
+    "idolplus",
+    "geino",
+    "mnewsplus",
+    "mnewsalpha",
+    "news",
+    "newsplus",
+    "musicnews",
+    "drama",
+    "tvsaloon",
+    "tv",
+    "tvd",
+    "am",
+    "musicj",
+    "musicjm",
+    "musicjf",
+    "musicjg",
+    "music",
+    "streaming",
+    "sns",
+)
 
 # 5ch itself is often Cloudflare-blocked for server-side fetches.  2ch.sc mirrors
 # the same board/thread formats and exposes subject.txt/dat files directly.
@@ -176,6 +217,24 @@ def _parse_dat_latest_post_at(text: str) -> datetime | None:
     return None
 
 
+def _parse_itest_datetime(value: str) -> datetime | None:
+    match = _ITEST_DATE_RE.search(value)
+    if not match:
+        return None
+    try:
+        local = datetime(
+            int(match.group("year")),
+            int(match.group("month")),
+            int(match.group("day")),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            tzinfo=JST,
+        )
+    except ValueError:
+        return None
+    return local.astimezone(timezone.utc)
+
+
 class FiveChConnector(BaseConnector):
     PLATFORM = "5ch"
     SUPPORTS_MEDIA_FILTER = False
@@ -184,11 +243,90 @@ class FiveChConnector(BaseConnector):
         if mode == CollectionMode.MEDIA_ONLY:
             return []
 
+        items = await self._fetch_real_itest(keyword)
+        if items:
+            return items
+        log.warning("5ch real itest scan returned no items for %r; using 2ch.sc mirror fallback", keyword)
+
         items = await self._fetch_direct(keyword)
         if items:
             return items
         log.warning("5ch direct thread scan returned no items for %r; using Google News fallback", keyword)
         return await self._fetch_gnews(keyword)
+
+    async def _fetch_real_itest(self, keyword: str) -> list[SourceItemCreate]:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+            board_results = await _gather_limited(
+                [self._fetch_itest_board(client, board_key, keyword) for board_key in _ITEST_BOARD_KEYS]
+            )
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for result in board_results:
+            if isinstance(result, Exception):
+                log.debug("5ch itest board scan failed: %s", result)
+                continue
+            for item in result:
+                if item.item_id in seen:
+                    continue
+                seen.add(item.item_id)
+                items.append(item)
+        items.sort(key=lambda item: item.published_at, reverse=True)
+        return items[:_REAL_5CH_LIMIT]
+
+    async def _fetch_itest_board(
+        self,
+        client: httpx.AsyncClient,
+        board_key: str,
+        keyword: str,
+    ) -> list[SourceItemCreate]:
+        url = f"https://r.jina.ai/http://https://itest.5ch.net/subback/{board_key}"
+        try:
+            response = await client.get(url)
+            if not response.is_success:
+                log.debug("5ch itest board returned %d for %s", response.status_code, board_key)
+                return []
+        except Exception as exc:
+            log.debug("5ch itest board fetch error for %s: %s", board_key, exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        for line in response.text.splitlines():
+            match = _ITEST_THREAD_RE.match(line.strip())
+            if not match:
+                continue
+            title = html.unescape(match.group("title")).strip()
+            if not title_contains_keyword(keyword, title):
+                continue
+            published_at = _parse_itest_datetime(match.group("date")) or _thread_created_at(match.group("thread_id"))
+            server = match.group("server")
+            board = match.group("board")
+            thread_id = match.group("thread_id")
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=f"5ch:{server}:{board}:{thread_id}",
+                    url=f"https://itest.5ch.io/{server}/test/read.cgi/{board}/{thread_id}",
+                    published_at=published_at,
+                    media_type="text",
+                    title=title,
+                    content_text=f"{match.group('posts')} posts",
+                    thumbnail_url=None,
+                    raw_payload={
+                        "source": "5ch_itest",
+                        "keyword": keyword,
+                        "server": server,
+                        "board": board,
+                        "thread_id": thread_id,
+                        "posts": int(match.group("posts")),
+                        "momentum": int(match.group("momentum")),
+                        "date_parsed": True,
+                    },
+                )
+            )
+            if len(items) >= _REAL_5CH_LIMIT:
+                break
+        return items
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:
         async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:

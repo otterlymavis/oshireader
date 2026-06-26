@@ -435,6 +435,28 @@ class TestTwitterConnectorNoToken:
 
 class TestFiveChFetch:
     @pytest.mark.asyncio
+    async def test_prefers_real_itest_threads_over_2ch_mirror(self):
+        markdown = """
+*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+"""
+
+        async def _side(url, **_kw):
+            if str(url).startswith("https://r.jina.ai/http://https://itest.5ch.net/subback/nogizaka"):
+                return MagicMock(is_success=True, status_code=200, text=markdown)
+            return MagicMock(is_success=True, status_code=200, text="", content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("乃木坂46", "all_info")
+
+        parse.assert_not_called()
+        assert len(result) == 1
+        assert result[0].item_id == "5ch:mevius:nogizaka:1782410369"
+        assert result[0].url == "https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369"
+        assert result[0].published_at == datetime(2026, 6, 25, 8, 59, tzinfo=timezone.utc)
+        assert result[0].raw_payload["source"] == "5ch_itest"
+
+    @pytest.mark.asyncio
     async def test_direct_scan_returns_thread_with_latest_post_date(self):
         subject = "1778433981.dat<>【元乃木坂４６】相楽伊織応援スレ★16【いおり】 (64)\n"
         dat = (
