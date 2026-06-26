@@ -633,7 +633,7 @@ class TestGirlsChannelFetch:
     <html><body>
       <li>
         <h3><a href="/topics/12345/">Thread Title アイコ</a></h3>
-        <time datetime="2024-06-15T10:30:00+09:00">2024年6月15日</time>
+        <time datetime="2026-06-24T10:30:00+09:00">2026年6月24日</time>
       </li>
       <li>
         <h3><a href="/topics/99999/">Another アイコ thread</a></h3>
@@ -724,6 +724,16 @@ class TestGirlsChannelFetch:
     def test_direct_parser_filters_items_without_keyword(self):
         html = """<html><body>
           <li><h3><a href="/topics/12345/">unrelated thread</a></h3></li>
+        </body></html>"""
+        result = GirlsChannelConnector()._parse_html(html, "Aiko")
+        assert result == []
+
+    def test_direct_parser_filters_stale_dated_items(self):
+        html = """<html><body>
+          <li>
+            <h3><a href="/topics/12345/">Aiko old thread</a></h3>
+            <time datetime="2026-04-23T15:00:00+00:00">2026年4月23日</time>
+          </li>
         </body></html>"""
         result = GirlsChannelConnector()._parse_html(html, "Aiko")
         assert result == []

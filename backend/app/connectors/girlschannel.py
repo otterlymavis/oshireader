@@ -39,6 +39,14 @@ HEADERS = {
     "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://girlschannel.net/",
 }
+_MAX_INDEX_AGE = timedelta(days=31)
+_FUTURE_GRACE = timedelta(days=1)
+
+
+def _is_recent(published_at: datetime) -> bool:
+    published = published_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 
 def _parse_jp_date(text: str) -> datetime | None:
@@ -161,6 +169,8 @@ class GirlsChannelConnector(BaseConnector):
             date_parsed = published is not None
             if not published:
                 published = datetime.now(timezone.utc)
+            elif not _is_recent(published):
+                continue
 
             items.append(
                 SourceItemCreate(
@@ -206,19 +216,22 @@ class GirlsChannelConnector(BaseConnector):
             item_id = entry.get("id") or link
             if item_id in seen:
                 continue
-            seen.add(item_id)
             title = (entry.get("title") or "").strip()
             summary = entry.get("summary") or ""
             if not title:
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent(published):
+                continue
+            seen.add(item_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="text",
                     title=title,
                     content_text=summary or None,
