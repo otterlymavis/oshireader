@@ -52,7 +52,13 @@ class _FakeFeed:
 
 
 def _rss_entry(link="https://example.com/1", title="Title", summary="", item_id=None):
-    return _FeedEntry(id=item_id or link, link=link, title=title, summary=summary)
+    return _FeedEntry(
+        id=item_id or link,
+        link=link,
+        title=title,
+        summary=summary,
+        published_parsed=(2026, 6, 24, 10, 0, 0, 2, 175, 0),
+    )
 
 
 def _http_mock(status_code=200, content=b"", text="", is_success=True):
@@ -936,6 +942,17 @@ class TestRSSConnectorFetch:
         with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
             result = await RSSConnector().fetch("aiko", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_stale_history_proxy_items(self):
+        stale = _rss_entry(link="https://example.com/old", title="Aiko old news")
+        stale.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
+        fake_feed = _FakeFeed([stale])
+        with patch("app.connectors.rss.FEEDS", []), \
+             patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
+            result = await RSSConnector().fetch("Aiko", "all_info")
         assert result == []
 
 
@@ -2335,7 +2352,7 @@ def _yt_gnews_ctx(content=b"", is_success=True, get_exc=None):
 
 
 def _yt_api_item(vid_id="v001", title="Aiko Test MV", channel="Test Ch",
-                 published="2024-01-15T10:00:00Z",
+                 published="2026-06-20T10:00:00Z",
                  thumb="https://i.ytimg.com/vi/v001/thumb.jpg"):
     return {
         "id": {"videoId": vid_id},
@@ -2554,6 +2571,20 @@ class TestYouTubeGnewsFetch:
     @pytest.mark.asyncio
     async def test_filters_gnews_items_without_keyword(self):
         entry = _FeedEntry(link="https://youtube.com/watch?v=other", id="other", title="unrelated video")
+        fake_feed = _FakeFeed([entry])
+        with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_stale_gnews_items(self):
+        entry = _FeedEntry(
+            link="https://youtube.com/watch?v=old",
+            id="old",
+            title="Aiko old video",
+            published_parsed=(2026, 3, 28, 13, 18, 13, 5, 87, 0),
+        )
         fake_feed = _FakeFeed([entry])
         with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
              patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):

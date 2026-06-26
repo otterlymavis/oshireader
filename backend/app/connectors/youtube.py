@@ -25,6 +25,14 @@ _RELATIVE_RE = re.compile(
     r'(\d+)[\s\xa0\u3000]*(second|minute|hour|day|week|month|year|秒|分|時間|日|週間?|週|ヶ月|か月|年)'
 )
 _YTDATA_RE = re.compile(r"ytInitialData\s*=\s*({.+?});", re.S)
+_MAX_RESULT_AGE = timedelta(days=31)
+_FUTURE_GRACE = timedelta(days=1)
+
+
+def _is_recent(published_at: datetime) -> bool:
+    published = published_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - _MAX_RESULT_AGE <= published <= now + _FUTURE_GRACE
 
 
 def _parse_youtube_relative(text: str) -> Optional[datetime]:
@@ -55,7 +63,7 @@ class YouTubeConnector(BaseConnector):
         self.api_key = api_key
 
     async def _fetch_api(self, keyword: str) -> list[SourceItemCreate]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+        cutoff = datetime.now(timezone.utc) - _MAX_RESULT_AGE
         params = {
             "part": "snippet",
             "q": keyword,
@@ -85,6 +93,8 @@ class YouTubeConnector(BaseConnector):
             ):
                 continue
             published = datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00"))
+            if not _is_recent(published):
+                continue
             thumb = snippet.get("thumbnails", {}).get("medium", {}).get("url")
             items.append(
                 SourceItemCreate(
@@ -135,7 +145,6 @@ class YouTubeConnector(BaseConnector):
             log.warning("Failed to parse ytInitialData JSON: %s", e)
             return []
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
         items: list[SourceItemCreate] = []
         for content in contents:
             item_section = content.get("itemSectionRenderer", {})
@@ -162,7 +171,7 @@ class YouTubeConnector(BaseConnector):
                     rel_text = vr.get("publishedTimeText", {}).get("simpleText", "")
                     published_at = _parse_youtube_relative(rel_text) or datetime.now(timezone.utc)
 
-                    if published_at < cutoff:
+                    if not _is_recent(published_at):
                         continue
                     if not contains_keyword(keyword, title, desc, channel):
                         continue
@@ -216,12 +225,15 @@ class YouTubeConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent(published):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="video",
                     title=title,
                     content_text=summary or None,

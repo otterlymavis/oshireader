@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, quote_plus
 
 import feedparser
@@ -21,6 +22,14 @@ log = logging.getLogger(__name__)
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
 }
+_MAX_INDEX_AGE = timedelta(days=31)
+_FUTURE_GRACE = timedelta(days=1)
+
+
+def _is_recent(published_at: datetime) -> bool:
+    published = published_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 # Curated public RSS feeds — Japanese entertainment / idol news, no login needed.
 # sponichi and hochi removed their RSS feeds; natalie/tv removed their TV section feed.
@@ -58,6 +67,8 @@ class RSSConnector(BaseConnector):
                     if not title_contains_keyword(keyword, title):
                         continue
                     published = parse_feed_date(entry)
+                    if not _is_recent(published):
+                        continue
                     thumb = None
                     for enc in entry.get("enclosures", []):
                         if enc.get("type", "").startswith("image"):
@@ -108,12 +119,15 @@ class RSSConnector(BaseConnector):
             item_id = entry.get("id") or link
             if not link or not title_contains_keyword(keyword, title) or item_id in seen:
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent(published):
+                continue
             seen.add(item_id)
             items.append(SourceItemCreate(
                 platform=self.PLATFORM,
                 item_id=item_id,
                 url=link,
-                published_at=parse_feed_date(entry),
+                published_at=published,
                 media_type="article",
                 title=title,
                 content_text=entry.get("summary") or None,
@@ -150,6 +164,8 @@ class RSSConnector(BaseConnector):
             title = entry["title"]
             if not title_contains_keyword(keyword, title):
                 continue
+            if not _is_recent(entry["published_at"]):
+                continue
             items.append(SourceItemCreate(
                 platform=self.PLATFORM,
                 item_id=entry["url"],
@@ -176,12 +192,15 @@ class RSSConnector(BaseConnector):
             item_id = entry.get("id") or link
             if not link or not title_contains_keyword(keyword, title) or item_id in seen:
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent(published):
+                continue
             seen.add(item_id)
             items.append(SourceItemCreate(
                 platform=self.PLATFORM,
                 item_id=item_id,
                 url=link,
-                published_at=parse_feed_date(entry),
+                published_at=published,
                 media_type="article",
                 title=title,
                 content_text=entry.get("summary") or None,
@@ -215,12 +234,15 @@ class RSSConnector(BaseConnector):
             item_id = entry.get("id") or link
             if not link or not title_contains_keyword(keyword, title) or item_id in seen:
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent(published):
+                continue
             seen.add(item_id)
             items.append(SourceItemCreate(
                 platform=self.PLATFORM,
                 item_id=item_id,
                 url=link,
-                published_at=parse_feed_date(entry),
+                published_at=published,
                 media_type="article",
                 title=title,
                 content_text=entry.get("summary") or None,
