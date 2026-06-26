@@ -51,6 +51,7 @@ _ITEST_DATE_RE = re.compile(
 )
 _DIRECT_REQUEST_CONCURRENCY = 12
 _ITEST_REQUEST_CONCURRENCY = 3
+_ITEST_PROXY_ATTEMPTS = 3
 _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
 _FIVECH_INDEX_MAX_AGE = timedelta(days=31)
@@ -187,12 +188,10 @@ def _fivech_proxy_configured() -> bool:
 
 
 def _fivech_proxy_urls() -> tuple[str, ...]:
-    urls: list[str] = []
+    urls: list[str] = [_DEFAULT_5CH_PROXY_URL]
     configured = settings.source_5ch_proxy_url.strip()
-    if configured:
+    if configured and configured not in urls:
         urls.append(configured)
-    if _DEFAULT_5CH_PROXY_URL not in urls:
-        urls.append(_DEFAULT_5CH_PROXY_URL)
     return tuple(urls)
 
 
@@ -371,12 +370,28 @@ class FiveChConnector(BaseConnector):
             return None
         for proxy_url in _fivech_proxy_urls():
             url = f"{proxy_url}?{urlencode({'resource': 'itest_subback', 'board_key': board_key})}"
-            try:
-                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-                if response.is_success:
-                    return response.text
-            except Exception as exc:
-                log.debug("5ch itest proxy fetch error for %s via %s: %s", board_key, proxy_url, exc)
+            for attempt in range(1, _ITEST_PROXY_ATTEMPTS + 1):
+                try:
+                    response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                    if response.is_success and response.text:
+                        return response.text
+                    log.debug(
+                        "5ch itest proxy returned %d for %s via %s attempt %d",
+                        response.status_code,
+                        board_key,
+                        proxy_url,
+                        attempt,
+                    )
+                except Exception as exc:
+                    log.debug(
+                        "5ch itest proxy fetch error for %s via %s attempt %d: %s",
+                        board_key,
+                        proxy_url,
+                        attempt,
+                        exc,
+                    )
+                if attempt < _ITEST_PROXY_ATTEMPTS:
+                    await asyncio.sleep(0.5 * attempt)
         return None
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:

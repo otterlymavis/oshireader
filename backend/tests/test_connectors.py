@@ -473,6 +473,7 @@ class TestFiveChFetch:
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.fivech.settings.admin_api_token", "secret"), \
              patch("app.connectors.fivech.settings.source_5ch_proxy_url", "https://worker.example/fivech-proxy"), \
+             patch("app.connectors.fivech._DEFAULT_5CH_PROXY_URL", "https://worker.example/fivech-proxy"), \
              patch("app.connectors.fivech.feedparser.parse") as parse:
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
@@ -555,6 +556,7 @@ class TestFiveChFetch:
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.fivech.settings.admin_api_token", "secret"), \
              patch("app.connectors.fivech.settings.source_5ch_proxy_url", "https://worker.example/fivech-proxy"), \
+             patch("app.connectors.fivech._DEFAULT_5CH_PROXY_URL", "https://worker.example/fivech-proxy"), \
              patch("app.connectors.fivech.feedparser.parse") as parse:
             result = await FiveChConnector()._fetch_direct("Aiko")
 
