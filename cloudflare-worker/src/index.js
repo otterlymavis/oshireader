@@ -37,6 +37,36 @@ const FIVECH_ALLOWED_BOARDS = new Set([
   "anago.2ch.sc/streaming",
   "anago.2ch.sc/sns",
 ]);
+const FIVECH_ITEST_ALLOWED_BOARDS = new Set([
+  "nogizaka",
+  "keyakizaka46",
+  "akb",
+  "akbsaloon",
+  "world48",
+  "idol",
+  "uraidol",
+  "indieidol",
+  "netidol",
+  "idolplus",
+  "geino",
+  "mnewsplus",
+  "mnewsalpha",
+  "news",
+  "newsplus",
+  "musicnews",
+  "drama",
+  "tvsaloon",
+  "tv",
+  "tvd",
+  "am",
+  "musicj",
+  "musicjm",
+  "musicjf",
+  "musicjg",
+  "music",
+  "streaming",
+  "sns",
+]);
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -74,6 +104,16 @@ function textResponse(body, status = 200) {
     status,
     headers: {
       "content-type": "text/plain; charset=shift_jis",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function utf8TextResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
       "cache-control": "no-store",
     },
   });
@@ -144,23 +184,31 @@ async function proxyFiveCh(request, env) {
   if (!requireBearer(request, env)) return unauthorized();
 
   const url = new URL(request.url);
-  const board = normalizeFiveChBoard(url.searchParams.get("board_url") || "");
   const resource = url.searchParams.get("resource") || "subject";
-  if (!board) {
-    return json({ detail: "Unsupported board" }, 400);
-  }
 
   let upstream;
-  if (resource === "subject") {
-    upstream = `${board}subject.txt`;
-  } else if (resource === "dat") {
-    const threadID = url.searchParams.get("thread_id") || "";
-    if (!/^\d{9,12}$/.test(threadID)) {
-      return json({ detail: "Invalid thread_id" }, 400);
+  if (resource === "itest_subback") {
+    const boardKey = url.searchParams.get("board_key") || "";
+    if (!FIVECH_ITEST_ALLOWED_BOARDS.has(boardKey)) {
+      return json({ detail: "Unsupported board_key" }, 400);
     }
-    upstream = `${board}dat/${threadID}.dat`;
+    upstream = `https://r.jina.ai/http://https://itest.5ch.net/subback/${boardKey}`;
   } else {
-    return json({ detail: "Unsupported resource" }, 400);
+    const board = normalizeFiveChBoard(url.searchParams.get("board_url") || "");
+    if (!board) {
+      return json({ detail: "Unsupported board" }, 400);
+    }
+    if (resource === "subject") {
+      upstream = `${board}subject.txt`;
+    } else if (resource === "dat") {
+      const threadID = url.searchParams.get("thread_id") || "";
+      if (!/^\d{9,12}$/.test(threadID)) {
+        return json({ detail: "Invalid thread_id" }, 400);
+      }
+      upstream = `${board}dat/${threadID}.dat`;
+    } else {
+      return json({ detail: "Unsupported resource" }, 400);
+    }
   }
 
   const response = await fetch(upstream, {
@@ -173,8 +221,9 @@ async function proxyFiveCh(request, env) {
   });
   const body = await response.arrayBuffer();
   if (!response.ok) {
-    return json({ detail: "Upstream 5ch mirror failed", status: response.status, bytes: body.byteLength }, 502);
+    return json({ detail: "Upstream 5ch failed", status: response.status, bytes: body.byteLength }, 502);
   }
+  if (resource === "itest_subback") return utf8TextResponse(body);
   return textResponse(body);
 }
 

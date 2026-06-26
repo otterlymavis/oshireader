@@ -457,6 +457,30 @@ class TestFiveChFetch:
         assert result[0].raw_payload["source"] == "5ch_itest"
 
     @pytest.mark.asyncio
+    async def test_real_itest_uses_worker_proxy_when_jina_is_blocked(self):
+        markdown = """
+*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+"""
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.net/subback/"):
+                return MagicMock(is_success=False, status_code=401, text="", content=b"")
+            if url_text.startswith("https://worker.example/fivech-proxy"):
+                return MagicMock(is_success=True, status_code=200, text=markdown, content=markdown.encode())
+            return MagicMock(is_success=True, status_code=200, text="", content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.settings.admin_api_token", "secret"), \
+             patch("app.connectors.fivech.settings.source_5ch_proxy_url", "https://worker.example/fivech-proxy"), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("乃木坂46", "all_info")
+
+        parse.assert_not_called()
+        assert len(result) == 1
+        assert result[0].raw_payload["source"] == "5ch_itest"
+
+    @pytest.mark.asyncio
     async def test_direct_scan_returns_thread_with_latest_post_date(self):
         subject = "1778433981.dat<>【元乃木坂４６】相楽伊織応援スレ★16【いおり】 (64)\n"
         dat = (

@@ -124,6 +124,40 @@ test("5ch proxy validates dat thread ids", async () => {
   assert.equal(response.status, 400);
 });
 
+test("5ch proxy fetches whitelisted real itest subback pages", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  globalThis.fetch = async (url) => {
+    upstreamURL = String(url);
+    return new Response("* [2026年6月25日 17時59分 話題度:43 13レス Aiko thread](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)", {
+      status: 200,
+    });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=itest_subback&board_key=nogizaka", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(upstreamURL, "https://r.jina.ai/http://https://itest.5ch.net/subback/nogizaka");
+  assert.match(await response.text(), /Aiko thread/);
+});
+
+test("5ch proxy rejects non-whitelisted itest board keys", async () => {
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=itest_subback&board_key=../../secret", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 400);
+});
+
 test("health reports stale polling as degraded", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });

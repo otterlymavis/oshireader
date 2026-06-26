@@ -284,17 +284,30 @@ class FiveChConnector(BaseConnector):
         keyword: str,
     ) -> list[SourceItemCreate]:
         url = f"https://r.jina.ai/http://https://itest.5ch.net/subback/{board_key}"
+        text: str | None = None
         try:
             response = await client.get(url)
             if not response.is_success:
                 log.debug("5ch itest board returned %d for %s", response.status_code, board_key)
-                return []
+            else:
+                text = response.text
         except Exception as exc:
             log.debug("5ch itest board fetch error for %s: %s", board_key, exc)
+        if text is None:
+            text = await self._fetch_itest_board_via_proxy(board_key)
+        if not text:
             return []
 
+        return self._parse_itest_board(text, board_key, keyword)
+
+    def _parse_itest_board(
+        self,
+        text: str,
+        board_key: str,
+        keyword: str,
+    ) -> list[SourceItemCreate]:
         items: list[SourceItemCreate] = []
-        for line in response.text.splitlines():
+        for line in text.splitlines():
             match = _ITEST_THREAD_RE.match(line.strip())
             if not match:
                 continue
@@ -330,6 +343,22 @@ class FiveChConnector(BaseConnector):
             if len(items) >= _REAL_5CH_LIMIT:
                 break
         return items
+
+    async def _fetch_itest_board_via_proxy(self, board_key: str) -> str | None:
+        proxy_url = settings.source_5ch_proxy_url.strip()
+        token = settings.admin_api_token.strip()
+        if not proxy_url or not token:
+            return None
+        url = f"{proxy_url}?{urlencode({'resource': 'itest_subback', 'board_key': board_key})}"
+        try:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                if not response.is_success:
+                    return None
+                return response.text
+        except Exception as exc:
+            log.debug("5ch itest proxy fetch error for %s: %s", board_key, exc)
+            return None
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:
         async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
