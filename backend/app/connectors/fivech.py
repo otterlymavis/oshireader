@@ -284,17 +284,16 @@ class FiveChConnector(BaseConnector):
         keyword: str,
     ) -> list[SourceItemCreate]:
         url = f"https://r.jina.ai/http://https://itest.5ch.net/subback/{board_key}"
-        text: str | None = None
+        text = await self._fetch_itest_board_via_proxy(board_key)
         try:
-            response = await client.get(url)
-            if not response.is_success:
-                log.debug("5ch itest board returned %d for %s", response.status_code, board_key)
-            else:
-                text = response.text
+            if text is None:
+                response = await client.get(url)
+                if not response.is_success:
+                    log.debug("5ch itest board returned %d for %s", response.status_code, board_key)
+                else:
+                    text = response.text
         except Exception as exc:
             log.debug("5ch itest board fetch error for %s: %s", board_key, exc)
-        if text is None:
-            text = await self._fetch_itest_board_via_proxy(board_key)
         if not text:
             return []
 
@@ -315,6 +314,8 @@ class FiveChConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published_at = _parse_itest_datetime(match.group("date")) or _thread_created_at(match.group("thread_id"))
+            if not _is_recent_index_result(published_at):
+                continue
             server = match.group("server")
             board = match.group("board")
             thread_id = match.group("thread_id")
