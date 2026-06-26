@@ -21,6 +21,7 @@ enum BackgroundRefreshPolicy {
     static let pollTimeout: TimeInterval = 8
     static let incrementalFetchOverlap: TimeInterval = 15 * 60
     static let foregroundRefreshStaleAfter: TimeInterval = 5 * 60
+    static let activityDatePlatformIds: Set<String> = ["5ch", "girlschannel", "togetter"]
 
     static func shouldScheduleLocalFallback(hasRegisteredRemoteDeviceForCurrentEnvironment: Bool) -> Bool {
         !hasRegisteredRemoteDeviceForCurrentEnvironment
@@ -55,6 +56,10 @@ enum BackgroundRefreshPolicy {
 
     static func itemKey(_ item: FeedItem) -> String {
         "\(item.id)::\(item.watch_term_keyword)"
+    }
+
+    static func shouldUseDateWindowForPlatformRefresh(_ platformId: String) -> Bool {
+        activityDatePlatformIds.contains(Platform.normalize(platformId))
     }
 
     static func shouldTriggerPoll(forRemoteNotification userInfo: [AnyHashable: Any]) -> Bool {
@@ -311,7 +316,9 @@ final class BackgroundRefreshManager {
 
             await withTaskGroup(of: [FeedItem].self) { group in
                 for platform in platformsToFetch {
-                    let platformSince = latestFetchedAt(in: db.feedItems, platformId: platform)
+                    let platformSince = BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh(platform)
+                        ? nil
+                        : latestFetchedAt(in: db.feedItems, platformId: platform)
                     group.addTask {
                         do {
                             if let platformSince {

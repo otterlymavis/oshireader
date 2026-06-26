@@ -707,6 +707,13 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testActivityDatePlatformsUseDateWindowRefresh() throws {
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("5ch"))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("girlschannel"))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("togetter"))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("youtube"))
+    }
+
     func testIncrementalSinceIgnoresLocalOnlyCursorItems() throws {
         let backendItem = FeedItem(
             id: "youtube:cursor",

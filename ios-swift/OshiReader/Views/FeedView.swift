@@ -693,7 +693,9 @@ struct FeedView: View {
         let platformsToFetch = Array(Set(db.subscribedPlatforms.filter { $0 != "custom" }))
         await withTaskGroup(of: FeedRefreshAttempt.self) { group in
             for platform in platformsToFetch {
-                let platformSince = latestFetchedAt(for: platform)
+                let platformSince = BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh(platform)
+                    ? nil
+                    : latestFetchedAt(for: platform)
                 group.addTask {
                     await self.fetchBackendPlatform(
                         platform,
