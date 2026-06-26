@@ -30,6 +30,8 @@ from app.connectors.base import (
 log = logging.getLogger(__name__)
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_SEARCH_RESULT_MAX_AGE = timedelta(days=31)
+_SEARCH_RESULT_FUTURE_GRACE = timedelta(days=1)
 
 
 def _clean_html_fragment(value: str | None) -> str | None:
@@ -77,6 +79,12 @@ def _parse_jst_datetime(value: str | None) -> datetime:
         except ValueError:
             pass
     return datetime.now(timezone.utc)
+
+
+def _is_recent_search_result(published_at: datetime) -> bool:
+    published = published_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - _SEARCH_RESULT_MAX_AGE <= published <= now + _SEARCH_RESULT_FUTURE_GRACE
 
 
 class _GNewsSiteConnector(BaseConnector):
@@ -127,12 +135,15 @@ class _GNewsSiteConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent_search_result(published):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=summary or None,
@@ -177,6 +188,8 @@ class _GNewsSiteConnector(BaseConnector):
                 title = self.TITLE_SUFFIX_RE.sub("", title).strip()
             if not title or not title_contains_keyword(keyword, title):
                 continue
+            if not _is_recent_search_result(entry["published_at"]):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
@@ -220,12 +233,15 @@ class _GNewsSiteConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             seen.add(item_id)
+            published = parse_feed_date(entry)
+            if not _is_recent_search_result(published):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=entry.get("summary") or None,
@@ -275,12 +291,15 @@ class _GNewsSiteConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             seen.add(item_id)
+            published = parse_feed_date(entry)
+            if not _is_recent_search_result(published):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=entry.get("summary") or None,
@@ -325,12 +344,15 @@ class _GNewsSiteConnector(BaseConnector):
                 title = self.TITLE_SUFFIX_RE.sub("", title).strip()
             if not title:
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent_search_result(published):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=summary or None,

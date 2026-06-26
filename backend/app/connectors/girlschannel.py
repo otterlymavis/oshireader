@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import feedparser
@@ -45,14 +45,13 @@ def _parse_jp_date(text: str) -> datetime | None:
     """Try to parse Japanese date text into a UTC datetime."""
     now = datetime.now(timezone.utc)
     if m := _HOURS_AGO_RE.search(text):
-        from datetime import timedelta
         return now - timedelta(hours=int(m.group(1)))
     if m := _MINS_AGO_RE.search(text):
-        from datetime import timedelta
         return now - timedelta(minutes=int(m.group(1)))
     if m := _JP_DATE_RE.search(text):
         try:
-            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+            jst = timezone(timedelta(hours=9))
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=jst).astimezone(timezone.utc)
         except ValueError:
             pass
     return None
