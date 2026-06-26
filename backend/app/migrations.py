@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.orm import Session
@@ -272,6 +272,11 @@ def apply_startup_migrations(engine: Engine) -> None:
         _purge_irrelevant_matches()
         _record_migration(RELEVANCE_SLUG)
 
+    PURGE_5CH_SLUG = "purge_legacy_5ch_mirror_and_stale_v1"
+    if not _migration_applied(PURGE_5CH_SLUG):
+        _purge_legacy_5ch_items(engine)
+        _record_migration(PURGE_5CH_SLUG)
+
 def _purge_irrelevant_matches() -> None:
     db: Session = SessionLocal()
     try:
@@ -284,6 +289,48 @@ def _purge_irrelevant_matches() -> None:
         raise
     finally:
         db.close()
+
+
+def _purge_legacy_5ch_items(engine: Engine) -> None:
+    """Delete old 5ch mirror rows.
+
+    5ch previously used 2ch.sc mirrors and sometimes stored long-lived stale
+    threads. The connector now prefers real itest.5ch rows and filters to the
+    recent window, so legacy mirror/stale rows should be removed from feeds.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=31)
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM source_items"
+                " WHERE platform = '5ch'"
+                " AND (url LIKE '%2ch.sc/%' OR id LIKE '5ch:2ch.sc:%' OR published_at < :cutoff)"
+            ),
+            {"cutoff": cutoff},
+        )
+        bad_count = result.scalar() or 0
+        if bad_count == 0:
+            return
+        log.info("Purging %d legacy/stale 5ch source items", bad_count)
+        conn.execute(
+            text(
+                "DELETE FROM matches WHERE source_item_id IN ("
+                "  SELECT id FROM source_items"
+                "  WHERE platform = '5ch'"
+                "  AND (url LIKE '%2ch.sc/%' OR id LIKE '5ch:2ch.sc:%' OR published_at < :cutoff)"
+                ")"
+            ),
+            {"cutoff": cutoff},
+        )
+        conn.execute(
+            text(
+                "DELETE FROM source_items"
+                " WHERE platform = '5ch'"
+                " AND (url LIKE '%2ch.sc/%' OR id LIKE '5ch:2ch.sc:%' OR published_at < :cutoff)"
+            ),
+            {"cutoff": cutoff},
+        )
+        conn.execute(text("DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"))
 
 
 def _purge_girlschannel_googlenews_items(engine: Engine) -> None:

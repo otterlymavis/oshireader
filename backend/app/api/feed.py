@@ -19,9 +19,10 @@ router = APIRouter(prefix="/api/feed", tags=["feed"])
 
 _MAX_FEED_SCAN_ROWS = 2000
 
-# These platforms host long-lived threads / community content — skip date filters
-# so they always reach the client (mirrors the iOS app's skipCutoff logic).
-_TIMELESS_PLATFORMS = ("5ch", "girlschannel", "togetter")
+# These platforms host long-lived community content. 5ch is intentionally not
+# included: the connector now uses real current itest.5ch rows, and old 2ch
+# mirror rows should not bypass normal feed windows.
+_TIMELESS_PLATFORMS = ("girlschannel", "togetter")
 
 # Sort key: every platform by its real published / last-updated date, never by fetch
 # (match-discovery) time — girlschannel/togetter scrapers heal published_at to the real
