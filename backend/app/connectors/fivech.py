@@ -32,6 +32,7 @@ HEADERS = {
 }
 
 JST = timezone(timedelta(hours=9))
+_DEFAULT_5CH_PROXY_URL = "https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/fivech-proxy"
 
 _SUBJECT_LINE_RE = re.compile(r"^(?P<thread_id>\d+)\.dat<>(?P<title>.+?)\s*\((?P<posts>\d+)\)\s*$")
 _DAT_DATE_RE = re.compile(
@@ -182,7 +183,17 @@ def _has_subject_rows(text: str) -> bool:
 
 
 def _fivech_proxy_configured() -> bool:
-    return bool(settings.source_5ch_proxy_url.strip() and settings.admin_api_token.strip())
+    return bool(settings.admin_api_token.strip() and _fivech_proxy_urls())
+
+
+def _fivech_proxy_urls() -> tuple[str, ...]:
+    urls: list[str] = []
+    configured = settings.source_5ch_proxy_url.strip()
+    if configured:
+        urls.append(configured)
+    if _DEFAULT_5CH_PROXY_URL not in urls:
+        urls.append(_DEFAULT_5CH_PROXY_URL)
+    return tuple(urls)
 
 
 def _thread_url(hit: _ThreadHit) -> str:
@@ -355,19 +366,18 @@ class FiveChConnector(BaseConnector):
         return items
 
     async def _fetch_itest_board_via_proxy(self, client: httpx.AsyncClient, board_key: str) -> str | None:
-        proxy_url = settings.source_5ch_proxy_url.strip()
         token = settings.admin_api_token.strip()
-        if not proxy_url or not token:
+        if not token:
             return None
-        url = f"{proxy_url}?{urlencode({'resource': 'itest_subback', 'board_key': board_key})}"
-        try:
-            response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-            if not response.is_success:
-                return None
-            return response.text
-        except Exception as exc:
-            log.debug("5ch itest proxy fetch error for %s: %s", board_key, exc)
-            return None
+        for proxy_url in _fivech_proxy_urls():
+            url = f"{proxy_url}?{urlencode({'resource': 'itest_subback', 'board_key': board_key})}"
+            try:
+                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                if response.is_success:
+                    return response.text
+            except Exception as exc:
+                log.debug("5ch itest proxy fetch error for %s via %s: %s", board_key, proxy_url, exc)
+        return None
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:
         async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
@@ -499,23 +509,22 @@ class FiveChConnector(BaseConnector):
         resource: str,
         thread_id: str | None = None,
     ) -> bytes | None:
-        proxy_url = settings.source_5ch_proxy_url.strip()
         token = settings.admin_api_token.strip()
-        if not proxy_url or not token:
+        if not token:
             return None
         params = {"board_url": board_url, "resource": resource}
         if thread_id:
             params["thread_id"] = thread_id
-        url = f"{proxy_url}?{urlencode(params)}"
-        try:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-                if not response.is_success:
-                    return None
-                return response.content
-        except Exception as exc:
-            log.debug("5ch proxy fetch error for %s %s: %s", board_url, resource, exc)
-            return None
+        for proxy_url in _fivech_proxy_urls():
+            url = f"{proxy_url}?{urlencode(params)}"
+            try:
+                async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+                    response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                    if response.is_success:
+                        return response.content
+            except Exception as exc:
+                log.debug("5ch proxy fetch error for %s %s via %s: %s", board_url, resource, proxy_url, exc)
+        return None
 
     async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
         encoded = quote(f"{keyword} site:5ch.net")
