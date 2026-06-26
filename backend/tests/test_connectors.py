@@ -447,7 +447,7 @@ class TestFiveChFetch:
 """
 
         async def _side(url, **_kw):
-            if str(url).startswith("https://r.jina.ai/http://https://itest.5ch.net/subback/nogizaka"):
+            if str(url).startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
                 return MagicMock(is_success=True, status_code=200, text=markdown)
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
@@ -470,7 +470,7 @@ class TestFiveChFetch:
 
         async def _side(url, **_kw):
             url_text = str(url)
-            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.net/subback/"):
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/"):
                 return MagicMock(is_success=False, status_code=401, text="", content=b"")
             if url_text.startswith("https://worker.example/fivech-proxy"):
                 return MagicMock(is_success=True, status_code=200, text=markdown, content=markdown.encode())
@@ -1713,7 +1713,7 @@ class TestNoteFetch:
         assert result[0].thumbnail_url == "https://assets.st-note.com/media/t.jpg"
 
     @pytest.mark.asyncio
-    async def test_rss_keeps_hashtag_items_without_keyword_in_title(self):
+    async def test_rss_filters_items_without_keyword(self):
         entry = _FeedEntry(
             id="nid1",
             link="https://note.com/u/n/nid1",
@@ -1732,11 +1732,10 @@ class TestNoteFetch:
         with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].raw_payload["matched_hashtag"] == "Aiko"
+        assert result == []
 
     @pytest.mark.asyncio
-    async def test_rss_records_hashtag_match_for_scheduler_relevance(self):
+    async def test_rss_filters_keyword_found_only_in_summary_or_author(self):
         entry = _FeedEntry(
             id="nid1",
             link="https://note.com/u/n/nid1",
@@ -1754,11 +1753,7 @@ class TestNoteFetch:
         with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].raw_payload == {
-            "feed_url": "https://note.com/hashtag/Aiko/rss",
-            "matched_hashtag": "Aiko",
-        }
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
