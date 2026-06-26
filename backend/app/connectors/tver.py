@@ -18,6 +18,14 @@ log = logging.getLogger(__name__)
 _YEAR_RE = re.compile(r'^(\d{4})年')
 _MONTH_DAY_RE = re.compile(r'(\d+)月(\d+)日')
 _TIME_RE = re.compile(r'(\d+):(\d+)')
+_MAX_INDEX_AGE = timedelta(days=31)
+_FUTURE_GRACE = timedelta(days=1)
+
+
+def _is_recent(published_at: datetime) -> bool:
+    published = published_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 
 def _parse_timestamp_value(val: object) -> Optional[datetime]:
@@ -205,6 +213,9 @@ class TVERConnector(BaseConnector):
                     if not published_at:
                         log.debug("Skipping TVer item without trustworthy date: %s", ep_id)
                         continue
+                    if not _is_recent(published_at):
+                        log.debug("Skipping stale TVer item %s dated %s", ep_id, published_at)
+                        continue
 
                     raw_payload = dict(ep)
                     raw_payload["date_source"] = date_source
@@ -267,12 +278,15 @@ class TVERConnector(BaseConnector):
             item_id = entry.get("id") or link
             if not link or not contains_keyword(keyword, title) or item_id in seen:
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent(published):
+                continue
             seen.add(item_id)
             items.append(SourceItemCreate(
                 platform=self.PLATFORM,
                 item_id=item_id,
                 url=link,
-                published_at=parse_feed_date(entry),
+                published_at=published,
                 media_type="video",
                 title=title,
                 content_text=entry.get("summary") or None,

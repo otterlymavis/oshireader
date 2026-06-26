@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import feedparser
@@ -15,6 +15,14 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept-Language": "ja,en;q=0.9",
 }
+_MAX_INDEX_AGE = timedelta(days=31)
+_FUTURE_GRACE = timedelta(days=1)
+
+
+def _is_recent(published_at: datetime) -> bool:
+    published = published_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 
 class TogetterConnector(BaseConnector):
@@ -121,6 +129,8 @@ class TogetterConnector(BaseConnector):
             date_parsed = published is not None
             if not published:
                 published = datetime.now(timezone.utc)
+            elif not _is_recent(published):
+                continue
 
             items.append(
                 SourceItemCreate(
@@ -175,12 +185,15 @@ class TogetterConnector(BaseConnector):
             item_id = entry.get("id") or link
             if not link or not contains_keyword(keyword, title) or item_id in seen:
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent(published):
+                continue
             seen.add(item_id)
             items.append(SourceItemCreate(
                 platform=self.PLATFORM,
                 item_id=item_id,
                 url=link,
-                published_at=parse_feed_date(entry),
+                published_at=published,
                 media_type="article",
                 title=title,
                 content_text=entry.get("summary") or None,

@@ -1085,7 +1085,7 @@ _TOGETTER_HTML = """
   <li>
     <h3>Aikoの人気まとめ</h3>
     <a href="https://togetter.com/li/1234567">Aikoのまとめ</a>
-    <time datetime="2024-01-15T12:00:00+00:00">Jan 15</time>
+    <time datetime="2026-06-24T12:00:00+00:00">Jun 24</time>
     <img src="https://i.togetter.com/t.jpg" />
   </li>
 </ul></body></html>
@@ -1111,7 +1111,7 @@ class TestTogetterFetch:
           <li>
             <h3>吉沢亮 古いまとめ</h3>
             <a href="https://togetter.com/li/100">吉沢亮 old</a>
-            <time datetime="2026-05-05T23:57:13+09:00">old</time>
+            <time datetime="2026-06-10T23:57:13+09:00">older</time>
           </li>
         </ul></body></html>
         """
@@ -1120,7 +1120,7 @@ class TestTogetterFetch:
           <li>
             <h3>吉沢亮 新しいタグまとめ</h3>
             <a href="https://togetter.com/li/200">吉沢亮 new</a>
-            <time datetime="2026-05-29T07:56:04+09:00">new</time>
+            <time datetime="2026-06-25T07:56:04+09:00">new</time>
           </li>
         </ul></body></html>
         """
@@ -1137,9 +1137,25 @@ class TestTogetterFetch:
 
         assert len(result) == 2
         assert result[0].item_id == "200"
-        assert result[0].published_at.isoformat() == "2026-05-29T07:56:04+09:00"
+        assert result[0].published_at.isoformat() == "2026-06-25T07:56:04+09:00"
         assert result[0].raw_payload["source"] == "tag_search"
         assert any(call.get("sort") == "created_at" for call in calls)
+
+    @pytest.mark.asyncio
+    async def test_filters_stale_html_results(self):
+        html = """
+        <html><body><ul>
+          <li>
+            <h3>Aiko staleまとめ</h3>
+            <a href="https://togetter.com/li/300">Aiko stale</a>
+            <time datetime="2026-03-11T13:17:39+09:00">stale</time>
+          </li>
+        </ul></body></html>
+        """
+        with patch("app.connectors.togetter.httpx.AsyncClient",
+                   _http_mock(text=html, is_success=True)):
+            result = await TogetterConnector().fetch("Aiko", "all_info")
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_http_error(self):
@@ -1954,7 +1970,7 @@ def _tver_client_ctx(token_resp, search_resp=None, token_exc=None, search_exc=No
 
 
 def _tver_ep(ep_id="ep001", title="Aiko Drama", ep_type="episode",
-             published_at_unix=1700000000, thumb=None, author="NHK"):
+             published_at_unix=1781913600, thumb=None, author="NHK"):
     content = {
         "id": ep_id,
         "title": title,
@@ -2029,7 +2045,7 @@ class TestTVERFetch:
         ep = _tver_ep(ep_id="epdetail", title="Aiko Detail", published_at_unix=None)
         sr = _tver_search_resp(episodes=[ep])
         detail = MagicMock(is_success=True, status_code=200)
-        detail.json.return_value = {"viewStatus": {"startAt": 1773907200, "endAt": 1782831599}}
+        detail.json.return_value = {"viewStatus": {"startAt": 1782302400, "endAt": 1782831599}}
         client_mock = AsyncMock()
         client_mock.post = AsyncMock(return_value=tr)
         client_mock.get = AsyncMock(side_effect=[sr, detail])
@@ -2041,7 +2057,7 @@ class TestTVERFetch:
             result = await TVERConnector().fetch("Aiko", "all_info")
 
         assert len(result) == 1
-        assert result[0].published_at == datetime.fromtimestamp(1773907200, tz=timezone.utc)
+        assert result[0].published_at == datetime.fromtimestamp(1782302400, tz=timezone.utc)
         assert result[0].raw_payload["date_source"] == "episode_detail"
 
     @pytest.mark.asyncio
@@ -2062,6 +2078,16 @@ class TestTVERFetch:
              patch.object(TVERConnector, "_fetch_indexed_history", new=AsyncMock(return_value=[])):
             result = await TVERConnector().fetch("Aiko", "all_info")
 
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_stale_search_date_skips_episode(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="epold", title="Aiko Old", published_at_unix=1590969600)
+        sr = _tver_search_resp(episodes=[ep])
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)), \
+             patch.object(TVERConnector, "_fetch_indexed_history", new=AsyncMock(return_value=[])):
+            result = await TVERConnector().fetch("Aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
