@@ -51,6 +51,8 @@ _ITEST_DATE_RE = re.compile(
 _DIRECT_REQUEST_CONCURRENCY = 12
 _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
+_FIVECH_INDEX_MAX_AGE = timedelta(days=31)
+_FIVECH_INDEX_FUTURE_GRACE = timedelta(days=1)
 
 _ITEST_BOARD_KEYS: tuple[str, ...] = (
     "nogizaka",
@@ -235,6 +237,12 @@ def _parse_itest_datetime(value: str) -> datetime | None:
     return local.astimezone(timezone.utc)
 
 
+def _is_recent_index_result(published_at: datetime) -> bool:
+    published = published_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    return now - _FIVECH_INDEX_MAX_AGE <= published <= now + _FIVECH_INDEX_FUTURE_GRACE
+
+
 class FiveChConnector(BaseConnector):
     PLATFORM = "5ch"
     SUPPORTS_MEDIA_FILTER = False
@@ -246,12 +254,7 @@ class FiveChConnector(BaseConnector):
         items = await self._fetch_real_itest(keyword)
         if items:
             return items
-        log.warning("5ch real itest scan returned no items for %r; using 2ch.sc mirror fallback", keyword)
-
-        items = await self._fetch_direct(keyword)
-        if items:
-            return items
-        log.warning("5ch direct thread scan returned no items for %r; using Google News fallback", keyword)
+        log.warning("5ch real itest scan returned no items for %r; using real 5ch index fallback", keyword)
         return await self._fetch_gnews(keyword)
 
     async def _fetch_real_itest(self, keyword: str) -> list[SourceItemCreate]:
@@ -477,7 +480,7 @@ class FiveChConnector(BaseConnector):
             return None
 
     async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
-        encoded = quote(f"{keyword} site:5ch.net OR site:2ch.sc")
+        encoded = quote(f"{keyword} site:5ch.net")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
 
         feed = None
@@ -507,12 +510,15 @@ class FiveChConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if not _is_recent_index_result(published):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="text",
                     title=title,
                     content_text=summary or None,
@@ -545,6 +551,8 @@ class FiveChConnector(BaseConnector):
             title = entry["title"]
             if not title_contains_keyword(keyword, title):
                 continue
+            if not _is_recent_index_result(entry["published_at"]):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
@@ -561,7 +569,7 @@ class FiveChConnector(BaseConnector):
         return items
 
     async def _fetch_gnews_proxy(self, keyword: str) -> list[SourceItemCreate]:
-        query = f"{keyword} site:5ch.net OR site:2ch.sc"
+        query = f"{keyword} site:5ch.net"
         for target, source in (("google", "google_news_proxy"), ("bing", "bing_news_proxy")):
             content = await fetch_search_rss_via_proxy(query, target=target)
             if not content:
@@ -577,13 +585,16 @@ class FiveChConnector(BaseConnector):
                     continue
                 if not title_contains_keyword(keyword, title):
                     continue
+                published = parse_feed_date(entry)
+                if not _is_recent_index_result(published):
+                    continue
                 seen.add(item_id)
                 items.append(
                     SourceItemCreate(
                         platform=self.PLATFORM,
                         item_id=item_id,
                         url=link,
-                        published_at=parse_feed_date(entry),
+                        published_at=published,
                         media_type="text",
                         title=title,
                         content_text=entry.get("summary") or None,
