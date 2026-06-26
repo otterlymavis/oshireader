@@ -129,6 +129,12 @@ function fiveChItestCacheRequest(boardKey) {
   return new Request(`https://oshireader.internal-cache/fivech-itest-io/${encodeURIComponent(boardKey)}`);
 }
 
+function fiveChItestDatCacheRequest(server, boardKey, threadID) {
+  return new Request(
+    `https://oshireader.internal-cache/fivech-itest-dat/${encodeURIComponent(server)}/${encodeURIComponent(boardKey)}/${encodeURIComponent(threadID)}`,
+  );
+}
+
 function hasDefaultCache() {
   return typeof caches !== "undefined" && caches.default;
 }
@@ -202,6 +208,8 @@ async function proxyFiveCh(request, env) {
 
   let upstream;
   let itestBoardKey = "";
+  let itestServer = "";
+  let itestThreadID = "";
   if (resource === "itest_subback") {
     const boardKey = url.searchParams.get("board_key") || "";
     if (!FIVECH_ITEST_ALLOWED_BOARDS.has(boardKey)) {
@@ -209,6 +217,23 @@ async function proxyFiveCh(request, env) {
     }
     itestBoardKey = boardKey;
     upstream = `https://r.jina.ai/http://https://itest.5ch.io/subback/${boardKey}`;
+  } else if (resource === "itest_dat") {
+    const boardKey = url.searchParams.get("board_key") || "";
+    const server = url.searchParams.get("server") || "";
+    const threadID = url.searchParams.get("thread_id") || "";
+    if (!FIVECH_ITEST_ALLOWED_BOARDS.has(boardKey)) {
+      return json({ detail: "Unsupported board_key" }, 400);
+    }
+    if (!/^[a-z0-9-]{2,32}$/.test(server)) {
+      return json({ detail: "Invalid server" }, 400);
+    }
+    if (!/^\d{9,12}$/.test(threadID)) {
+      return json({ detail: "Invalid thread_id" }, 400);
+    }
+    itestBoardKey = boardKey;
+    itestServer = server;
+    itestThreadID = threadID;
+    upstream = `https://r.jina.ai/http://http://${server}.5ch.net/${boardKey}/dat/${threadID}.dat`;
   } else {
     const board = normalizeFiveChBoard(url.searchParams.get("board_url") || "");
     if (!board) {
@@ -230,6 +255,12 @@ async function proxyFiveCh(request, env) {
   let cacheRequest = null;
   if (resource === "itest_subback" && hasDefaultCache()) {
     cacheRequest = fiveChItestCacheRequest(itestBoardKey);
+    const cached = await caches.default.match(cacheRequest);
+    if (cached) {
+      return cached;
+    }
+  } else if (resource === "itest_dat" && hasDefaultCache()) {
+    cacheRequest = fiveChItestDatCacheRequest(itestServer, itestBoardKey, itestThreadID);
     const cached = await caches.default.match(cacheRequest);
     if (cached) {
       return cached;
@@ -270,6 +301,14 @@ async function proxyFiveCh(request, env) {
   }
 
   if (resource === "itest_subback") {
+    const response = utf8TextResponse(body);
+    response.headers.set("cache-control", `public, max-age=${FIVECH_ITEST_CACHE_SECONDS}`);
+    if (cacheRequest && hasDefaultCache()) {
+      await caches.default.put(cacheRequest, response.clone());
+    }
+    return response;
+  }
+  if (resource === "itest_dat") {
     const response = utf8TextResponse(body);
     response.headers.set("cache-control", `public, max-age=${FIVECH_ITEST_CACHE_SECONDS}`);
     if (cacheRequest && hasDefaultCache()) {

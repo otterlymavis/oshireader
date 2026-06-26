@@ -147,6 +147,40 @@ test("5ch proxy fetches whitelisted real itest subback pages", async (context) =
   assert.match(await response.text(), /Aiko thread/);
 });
 
+test("5ch proxy fetches whitelisted real itest dat pages", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  globalThis.fetch = async (url) => {
+    upstreamURL = String(url);
+    return new Response("name<>sage<>2026/06/26(金) 20:00:21.58 ID:x<>latest<>\n", {
+      status: 200,
+    });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=itest_dat&server=mevius&board_key=nogizaka&thread_id=1782471621", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(upstreamURL, "https://r.jina.ai/http://http://mevius.5ch.net/nogizaka/dat/1782471621.dat");
+  assert.match(await response.text(), /2026\/06\/26/);
+});
+
+test("5ch proxy rejects invalid real itest dat server", async () => {
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=itest_dat&server=../secret&board_key=nogizaka&thread_id=1782471621", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 400);
+});
+
 test("5ch proxy retries flaky real itest subback upstream failures", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });

@@ -52,6 +52,7 @@ _ITEST_DATE_RE = re.compile(
 _DIRECT_REQUEST_CONCURRENCY = 12
 _ITEST_REQUEST_CONCURRENCY = 3
 _ITEST_PROXY_ATTEMPTS = 3
+_ITEST_DAT_CONCURRENCY = 3
 _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
 _FIVECH_INDEX_MAX_AGE = timedelta(days=31)
@@ -316,7 +317,17 @@ class FiveChConnector(BaseConnector):
         if not text:
             return []
 
-        return self._parse_itest_board(text, board_key, keyword)
+        items = self._parse_itest_board(text, board_key, keyword)
+        if not items:
+            return []
+        dated = await _gather_limited(
+            [self._apply_itest_latest_post_at(client, item) for item in items],
+            concurrency=_ITEST_DAT_CONCURRENCY,
+        )
+        return [
+            item for item in dated
+            if isinstance(item, SourceItemCreate) and _is_recent_index_result(item.published_at)
+        ]
 
     def _parse_itest_board(
         self,
@@ -332,18 +343,16 @@ class FiveChConnector(BaseConnector):
             title = html.unescape(match.group("title")).strip()
             if not title_contains_keyword(keyword, title):
                 continue
-            published_at = _parse_itest_datetime(match.group("date")) or _thread_created_at(match.group("thread_id"))
-            if not _is_recent_index_result(published_at):
-                continue
             server = match.group("server")
             board = match.group("board")
             thread_id = match.group("thread_id")
+            subback_at = _parse_itest_datetime(match.group("date")) or _thread_created_at(thread_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=f"5ch:{server}:{board}:{thread_id}",
                     url=f"https://itest.5ch.io/{server}/test/read.cgi/{board}/{thread_id}",
-                    published_at=published_at,
+                    published_at=subback_at,
                     media_type="text",
                     title=title,
                     content_text=f"{match.group('posts')} posts",
@@ -356,6 +365,8 @@ class FiveChConnector(BaseConnector):
                         "thread_id": thread_id,
                         "posts": int(match.group("posts")),
                         "momentum": int(match.group("momentum")),
+                        "subback_published_at": subback_at.isoformat(),
+                        "date_source": "subback",
                         "date_parsed": True,
                     },
                 )
@@ -363,6 +374,28 @@ class FiveChConnector(BaseConnector):
             if len(items) >= _REAL_5CH_LIMIT:
                 break
         return items
+
+    async def _apply_itest_latest_post_at(
+        self,
+        client: httpx.AsyncClient,
+        item: SourceItemCreate,
+    ) -> SourceItemCreate:
+        payload = item.raw_payload or {}
+        latest = await self._fetch_itest_latest_post_at(
+            client,
+            str(payload.get("server") or ""),
+            str(payload.get("board") or ""),
+            str(payload.get("thread_id") or ""),
+        )
+        if latest is not None:
+            item.published_at = latest
+            item.raw_payload = {
+                **payload,
+                "last_post_at": latest.isoformat(),
+                "date_source": "dat_latest_post",
+                "date_parsed": True,
+            }
+        return item
 
     async def _fetch_itest_board_via_proxy(self, client: httpx.AsyncClient, board_key: str) -> str | None:
         token = settings.admin_api_token.strip()
@@ -392,6 +425,81 @@ class FiveChConnector(BaseConnector):
                     )
                 if attempt < _ITEST_PROXY_ATTEMPTS:
                     await asyncio.sleep(0.5 * attempt)
+        return None
+
+    async def _fetch_itest_latest_post_at(
+        self,
+        client: httpx.AsyncClient,
+        server: str,
+        board_key: str,
+        thread_id: str,
+    ) -> datetime | None:
+        text = await self._fetch_itest_dat_via_proxy(client, server, board_key, thread_id)
+        if text:
+            latest = _parse_dat_latest_post_at(text)
+            if latest is not None:
+                return latest
+
+        if (
+            not re.fullmatch(r"[a-z0-9-]{2,32}", server)
+            or board_key not in _ITEST_BOARD_KEYS
+            or not re.fullmatch(r"\d{9,12}", thread_id)
+        ):
+            return None
+        url = f"https://r.jina.ai/http://http://{server}.5ch.net/{board_key}/dat/{thread_id}.dat"
+        try:
+            response = await client.get(url)
+            if response.is_success and response.text:
+                return _parse_dat_latest_post_at(response.text)
+        except Exception as exc:
+            log.debug("5ch itest dat fetch error for %s/%s/%s: %s", server, board_key, thread_id, exc)
+        return None
+
+    async def _fetch_itest_dat_via_proxy(
+        self,
+        client: httpx.AsyncClient,
+        server: str,
+        board_key: str,
+        thread_id: str,
+    ) -> str | None:
+        token = settings.admin_api_token.strip()
+        if not token:
+            return None
+        if (
+            not re.fullmatch(r"[a-z0-9-]{2,32}", server)
+            or board_key not in _ITEST_BOARD_KEYS
+            or not re.fullmatch(r"\d{9,12}", thread_id)
+        ):
+            return None
+        params = {
+            "resource": "itest_dat",
+            "server": server,
+            "board_key": board_key,
+            "thread_id": thread_id,
+        }
+        for proxy_url in _fivech_proxy_urls():
+            url = f"{proxy_url}?{urlencode(params)}"
+            try:
+                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                if response.is_success and response.text:
+                    return response.text
+                log.debug(
+                    "5ch itest dat proxy returned %d for %s/%s/%s via %s",
+                    response.status_code,
+                    server,
+                    board_key,
+                    thread_id,
+                    proxy_url,
+                )
+            except Exception as exc:
+                log.debug(
+                    "5ch itest dat proxy fetch error for %s/%s/%s via %s: %s",
+                    server,
+                    board_key,
+                    thread_id,
+                    proxy_url,
+                    exc,
+                )
         return None
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:
