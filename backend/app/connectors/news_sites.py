@@ -543,14 +543,15 @@ class RealSoundConnector(_GNewsSiteConnector):
             excerpt = article.select_one(".entry-excerpt")
             author = article.select_one(".entry-author")
             image = article.select_one("img[src]")
+            published = _parse_jst_datetime(time_element.get("datetime") if time_element else None)
+            if not _is_recent_search_result(published):
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_url,
                     url=item_url,
-                    published_at=_parse_jst_datetime(
-                        time_element.get("datetime") if time_element else None
-                    ),
+                    published_at=published,
                     media_type="article",
                     author=author.get_text(" ", strip=True) if author else None,
                     title=title,

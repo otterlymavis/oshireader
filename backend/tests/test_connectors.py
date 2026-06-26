@@ -979,9 +979,9 @@ class TestNewsSiteFetch:
     async def test_realsound_uses_direct_search_results(self):
         html = """
         <article class="entry-summary">
-          <time datetime="2023-06-30T05:30"></time>
+          <time datetime="2026-06-25T05:30"></time>
           <h3 class="entry-title">
-            <a href="/2023/06/post-1364043.html">吉沢亮がゲスト出演</a>
+            <a href="/2026/06/post-1364043.html">吉沢亮がゲスト出演</a>
           </h3>
           <p class="entry-excerpt">番組の出演者が発表された。</p>
           <div class="entry-author">リアルサウンド編集部</div>
@@ -995,10 +995,10 @@ class TestNewsSiteFetch:
 
         assert len(result) == 1
         assert result[0].title == "吉沢亮がゲスト出演"
-        assert result[0].url == "https://realsound.jp/2023/06/post-1364043.html"
+        assert result[0].url == "https://realsound.jp/2026/06/post-1364043.html"
         assert result[0].thumbnail_url == "https://realsound.jp/wp-content/uploads/example.jpg"
         assert result[0].author == "リアルサウンド編集部"
-        assert result[0].published_at == datetime(2023, 6, 29, 20, 30, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 6, 24, 20, 30, tzinfo=timezone.utc)
         gnews.assert_not_awaited()
 
     @pytest.mark.asyncio
