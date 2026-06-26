@@ -126,7 +126,7 @@ function sleep(ms) {
 }
 
 function fiveChItestCacheRequest(boardKey) {
-  return new Request(`https://oshireader.internal-cache/fivech-itest/${encodeURIComponent(boardKey)}`);
+  return new Request(`https://oshireader.internal-cache/fivech-itest-io/${encodeURIComponent(boardKey)}`);
 }
 
 function hasDefaultCache() {
@@ -208,7 +208,7 @@ async function proxyFiveCh(request, env) {
       return json({ detail: "Unsupported board_key" }, 400);
     }
     itestBoardKey = boardKey;
-    upstream = `https://r.jina.ai/http://https://itest.5ch.net/subback/${boardKey}`;
+    upstream = `https://r.jina.ai/http://https://itest.5ch.io/subback/${boardKey}`;
   } else {
     const board = normalizeFiveChBoard(url.searchParams.get("board_url") || "");
     if (!board) {

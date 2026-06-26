@@ -143,7 +143,7 @@ test("5ch proxy fetches whitelisted real itest subback pages", async (context) =
   );
 
   assert.equal(response.status, 200);
-  assert.equal(upstreamURL, "https://r.jina.ai/http://https://itest.5ch.net/subback/nogizaka");
+  assert.equal(upstreamURL, "https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka");
   assert.match(await response.text(), /Aiko thread/);
 });
 

@@ -302,7 +302,7 @@ class FiveChConnector(BaseConnector):
         board_key: str,
         keyword: str,
     ) -> list[SourceItemCreate]:
-        url = f"https://r.jina.ai/http://https://itest.5ch.net/subback/{board_key}"
+        url = f"https://r.jina.ai/http://https://itest.5ch.io/subback/{board_key}"
         text = await self._fetch_itest_board_via_proxy(client, board_key)
         try:
             if text is None:

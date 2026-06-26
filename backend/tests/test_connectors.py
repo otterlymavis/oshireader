@@ -1713,7 +1713,7 @@ class TestNoteFetch:
         assert result[0].thumbnail_url == "https://assets.st-note.com/media/t.jpg"
 
     @pytest.mark.asyncio
-    async def test_rss_filters_items_without_keyword(self):
+    async def test_rss_keeps_hashtag_items_without_keyword_in_title(self):
         entry = _FeedEntry(
             id="nid1",
             link="https://note.com/u/n/nid1",
@@ -1732,10 +1732,11 @@ class TestNoteFetch:
         with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
-        assert result == []
+        assert len(result) == 1
+        assert result[0].raw_payload["matched_hashtag"] == "Aiko"
 
     @pytest.mark.asyncio
-    async def test_rss_filters_keyword_found_only_in_summary_or_author(self):
+    async def test_rss_records_hashtag_match_for_scheduler_relevance(self):
         entry = _FeedEntry(
             id="nid1",
             link="https://note.com/u/n/nid1",
@@ -1753,7 +1754,11 @@ class TestNoteFetch:
         with patch("app.connectors.note.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch("app.connectors.note.feedparser.parse", return_value=fake_feed):
             result = await NoteConnector().fetch("Aiko", "all_info")
-        assert result == []
+        assert len(result) == 1
+        assert result[0].raw_payload == {
+            "feed_url": "https://note.com/hashtag/Aiko/rss",
+            "matched_hashtag": "Aiko",
+        }
 
 
 # ---------------------------------------------------------------------------
