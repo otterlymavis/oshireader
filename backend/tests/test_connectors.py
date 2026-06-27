@@ -18,7 +18,12 @@ from app.connectors.base import (
     parse_google_news_markdown,
     title_contains_keyword,
 )
-from app.connectors.fivech import FiveChConnector, _parse_bbsmenu_board_urls, _rotated_extra_board_urls
+from app.connectors.fivech import (
+    FiveChConnector,
+    _DIRECT_BOARD_URLS,
+    _parse_bbsmenu_board_urls,
+    _rotated_extra_board_urls,
+)
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
@@ -764,6 +769,15 @@ class TestFiveChFetch:
             "http://anago.2ch.sc/actor/",
             "http://awabi.2ch.sc/cinema/",
         )
+
+    def test_direct_priority_boards_include_extra_entertainment_matches(self):
+        assert {
+            "http://hayabusa3.2ch.sc/news4viptasu/",
+            "http://sweet.2ch.sc/patisserie/",
+            "http://anago.2ch.sc/mass/",
+            "http://ai.2ch.sc/kokusai/",
+            "http://nozomi.2ch.sc/4649/",
+        }.issubset(set(_DIRECT_BOARD_URLS))
 
     @pytest.mark.asyncio
     async def test_direct_board_urls_reuses_fresh_bbsmenu_cache(self):
