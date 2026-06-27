@@ -153,6 +153,26 @@ test("5ch proxy allows extra bbsmenu boards with numeric and hobby paths", async
   ]);
 });
 
+test("5ch proxy allows news5plus board used by backend priority scan", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  globalThis.fetch = async (url) => {
+    upstreamURL = String(url);
+    return new Response("1764163919.dat<>吉沢亮 NY and LA screening (8)\n", { status: 200 });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fanago.2ch.sc%2Fnews5plus%2F", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(upstreamURL, "http://anago.2ch.sc/news5plus/subject.txt");
+});
+
 test("5ch proxy rejects non-whitelisted boards", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fexample.com%2Fnews%2F", {

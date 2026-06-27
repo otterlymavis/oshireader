@@ -12,6 +12,7 @@ const FIVECH_ALLOWED_BOARDS = new Set([
   "hayabusa3.2ch.sc/mnewsalpha",
   "ai.2ch.sc/newsplus",
   "hayabusa3.2ch.sc/mnewsplus",
+  "anago.2ch.sc/news5plus",
   "nozomi.2ch.sc/snsplus",
   "hayabusa3.2ch.sc/news",
   "hayabusa3.2ch.sc/news4viptasu",
