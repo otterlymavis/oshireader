@@ -4,6 +4,7 @@ import asyncio
 import html
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlencode, urlparse
@@ -49,15 +50,22 @@ _ITEST_DATE_RE = re.compile(
     r"(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s+"
     r"(?P<hour>\d{1,2})時(?P<minute>\d{1,2})分"
 )
-_DIRECT_REQUEST_CONCURRENCY = 12
+_DIRECT_REQUEST_CONCURRENCY = 96
 _ITEST_REQUEST_CONCURRENCY = 3
 _ITEST_PROXY_ATTEMPTS = 3
 _ITEST_JINA_ATTEMPTS = 3
 _ITEST_DAT_CONCURRENCY = 1
 _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
+_DIRECT_SUFFICIENT_RESULT_COUNT = 5
+_DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS = 6.0
+_DIRECT_EXTRA_SCAN_CURSOR_STEP = _DIRECT_REQUEST_CONCURRENCY
+_DIRECT_EXTRA_SCAN_OFFSET_LIMIT = 512
+_ITEST_FETCH_TIMEOUT_SECONDS = 5.0
 _FIVECH_INDEX_MAX_AGE = timedelta(days=31)
 _FIVECH_INDEX_FUTURE_GRACE = timedelta(days=1)
+_DIRECT_BBSMENU_URL = "http://menu.2ch.sc/bbsmenu.html"
+_DIRECT_BBSMENU_CACHE_TTL_SECONDS = 3600.0
 
 _ITEST_BOARD_KEYS: tuple[str, ...] = (
     "nogizaka",
@@ -106,6 +114,7 @@ _DIRECT_BOARD_URLS: tuple[str, ...] = (
     "http://anago.2ch.sc/geino/",
     "http://hayabusa3.2ch.sc/mnewsalpha/",
     "http://hayabusa3.2ch.sc/mnewsplus/",
+    "http://anago.2ch.sc/news5plus/",
     "http://sweet.2ch.sc/headline/",
     "http://ai.2ch.sc/newsalpha/",
     "http://ai.2ch.sc/newsplus/",
@@ -113,9 +122,16 @@ _DIRECT_BOARD_URLS: tuple[str, ...] = (
     "http://hayabusa3.2ch.sc/news/",
     "http://ikura.2ch.sc/musicnews/",
     "http://awabi.2ch.sc/drama/",
+    "http://awabi.2ch.sc/cinema/",
     "http://anago.2ch.sc/tvsaloon/",
     "http://toro.2ch.sc/tv/",
     "http://awabi.2ch.sc/tvd/",
+    "http://nozomi.2ch.sc/nhkdrama/",
+    "http://anago.2ch.sc/cm/",
+    "http://anago.2ch.sc/actor/",
+    "http://anago.2ch.sc/mendol/",
+    "http://toro.2ch.sc/sfx/",
+    "http://maguro.2ch.sc/fortune/",
     "http://anago.2ch.sc/am/",
     "http://awabi.2ch.sc/musicj/",
     "http://awabi.2ch.sc/musicjm/",
@@ -125,6 +141,14 @@ _DIRECT_BOARD_URLS: tuple[str, ...] = (
     "http://anago.2ch.sc/streaming/",
     "http://anago.2ch.sc/sns/",
 )
+_BBSMENU_BOARD_RE = re.compile(
+    r"""href\s*=\s*["']?(?P<url>(?:https?:)?//[a-z0-9.-]+\.2ch\.sc/[a-z0-9_-]+/)["'\s>]""",
+    re.IGNORECASE,
+)
+_direct_bbsmenu_cache: tuple[str, ...] | None = None
+_direct_bbsmenu_cache_at = 0.0
+_direct_bbsmenu_cache_lock = asyncio.Lock()
+_direct_extra_scan_offsets: dict[str, int] = {}
 
 
 @dataclass(frozen=True)
@@ -156,6 +180,65 @@ def _board_parts(board_url: str) -> tuple[str, str]:
     host = parsed.netloc
     board_key = parsed.path.strip("/").split("/")[-1]
     return host, board_key
+
+
+def _normalize_board_url(url: str) -> str | None:
+    raw_url = html.unescape(url.strip())
+    if raw_url.startswith("//"):
+        raw_url = f"http:{raw_url}"
+    parsed = urlparse(raw_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc.endswith(".2ch.sc"):
+        return None
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if len(path_parts) != 1 or not re.fullmatch(r"[a-z0-9_-]+", path_parts[0], re.IGNORECASE):
+        return None
+    return f"http://{parsed.netloc.lower()}/{path_parts[0]}/"
+
+
+def _parse_bbsmenu_board_urls(text: str) -> tuple[str, ...]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in _BBSMENU_BOARD_RE.finditer(text):
+        normalized = _normalize_board_url(match.group("url"))
+        if normalized is None or normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
+    return tuple(urls)
+
+
+def _merge_board_urls(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for url in group:
+            normalized = _normalize_board_url(url)
+            if normalized is None or normalized in seen:
+                continue
+            seen.add(normalized)
+            urls.append(normalized)
+    return tuple(urls)
+
+
+def _cached_direct_board_urls() -> tuple[str, ...] | None:
+    if _direct_bbsmenu_cache is None:
+        return None
+    if time.monotonic() - _direct_bbsmenu_cache_at > _DIRECT_BBSMENU_CACHE_TTL_SECONDS:
+        return None
+    return _direct_bbsmenu_cache
+
+
+def _rotated_extra_board_urls(keyword: str, board_urls: tuple[str, ...]) -> tuple[str, ...]:
+    if not board_urls:
+        return board_urls
+    key = keyword.strip().casefold()
+    offset = _direct_extra_scan_offsets.get(key, 0) % len(board_urls)
+    if key not in _direct_extra_scan_offsets and len(_direct_extra_scan_offsets) >= _DIRECT_EXTRA_SCAN_OFFSET_LIMIT:
+        _direct_extra_scan_offsets.pop(next(iter(_direct_extra_scan_offsets)))
+    _direct_extra_scan_offsets[key] = (offset + _DIRECT_EXTRA_SCAN_CURSOR_STEP) % len(board_urls)
+    if offset == 0:
+        return board_urls
+    return board_urls[offset:] + board_urls[:offset]
 
 
 def _parse_subject(text: str, board_url: str, keyword: str) -> list[_ThreadHit]:
@@ -264,11 +347,52 @@ class FiveChConnector(BaseConnector):
         if mode == CollectionMode.MEDIA_ONLY:
             return []
 
-        items = await self._fetch_real_itest(keyword)
+        direct_items = [
+            item for item in await self._fetch_direct(keyword)
+            if (
+                (item.raw_payload or {}).get("date_parsed") is True
+                and _is_recent_index_result(item.published_at)
+            )
+        ]
+        if len(direct_items) >= _DIRECT_SUFFICIENT_RESULT_COUNT:
+            return direct_items[:_REAL_5CH_LIMIT]
+
+        try:
+            items = await asyncio.wait_for(
+                self._fetch_real_itest(keyword),
+                timeout=_ITEST_FETCH_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            log.warning("5ch real itest scan timed out for %r; using 2ch.sc latest-reply results", keyword)
+            items = []
+
         if items:
-            return items
-        log.warning("5ch real itest scan returned no items for %r; using real 5ch index fallback", keyword)
+            if direct_items:
+                items = self._merge_latest_reply_items([*items, *direct_items])
+            return items[:_REAL_5CH_LIMIT]
+        if direct_items:
+            return direct_items
+        log.warning("5ch latest-reply scans returned no items for %r; using real 5ch index fallback", keyword)
         return await self._fetch_gnews(keyword)
+
+    def _merge_latest_reply_items(self, items: list[SourceItemCreate]) -> list[SourceItemCreate]:
+        by_key: dict[str, SourceItemCreate] = {}
+        for item in items:
+            key = self._thread_merge_key(item)
+            existing = by_key.get(key)
+            if existing is None or item.published_at > existing.published_at:
+                by_key[key] = item
+        merged = list(by_key.values())
+        merged.sort(key=lambda item: item.published_at, reverse=True)
+        return merged
+
+    def _thread_merge_key(self, item: SourceItemCreate) -> str:
+        payload = item.raw_payload or {}
+        board = payload.get("board")
+        thread_id = payload.get("thread_id")
+        if board and thread_id:
+            return f"thread:{board}:{thread_id}"
+        return f"url:{item.url.rstrip('/')}"
 
     async def _fetch_real_itest(self, keyword: str) -> list[SourceItemCreate]:
         items: list[SourceItemCreate] = []
@@ -291,9 +415,6 @@ class FiveChConnector(BaseConnector):
                             continue
                         seen.add(item.item_id)
                         items.append(item)
-
-                if items:
-                    break
 
         items.sort(key=lambda item: item.published_at, reverse=True)
         return items[:_REAL_5CH_LIMIT]
@@ -531,39 +652,119 @@ class FiveChConnector(BaseConnector):
 
     async def _fetch_direct(self, keyword: str) -> list[SourceItemCreate]:
         async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
-            hits: list[_ThreadHit] = []
             seen: set[tuple[str, str, str]] = set()
-            for start in range(0, len(_DIRECT_BOARD_URLS), _DIRECT_REQUEST_CONCURRENCY):
-                board_batch = _DIRECT_BOARD_URLS[start:start + _DIRECT_REQUEST_CONCURRENCY]
-                subject_results = await _gather_limited(
-                    [self._fetch_subject(client, board_url, keyword) for board_url in board_batch]
+            priority_hits = await self._fetch_direct_hits(client, _DIRECT_BOARD_URLS, keyword, seen)
+            priority_items = await self._build_direct_items(client, priority_hits, keyword)
+            priority_recent = [
+                item for item in priority_items
+                if (
+                    (item.raw_payload or {}).get("date_parsed") is True
+                    and _is_recent_index_result(item.published_at)
                 )
+            ]
+            if len(priority_recent) >= _DIRECT_SUFFICIENT_RESULT_COUNT:
+                priority_items.sort(key=lambda item: item.published_at, reverse=True)
+                return priority_items[:_REAL_5CH_LIMIT]
 
-                for result in subject_results:
-                    if isinstance(result, Exception):
-                        log.debug("5ch subject scan failed: %s", result)
-                        continue
-                    for hit in result:
-                        key = (hit.host, hit.board_key, hit.thread_id)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        hits.append(hit)
-                if len(hits) >= _DIRECT_DAT_LIMIT:
-                    break
+            board_urls = await self._fetch_direct_board_urls(client)
+            priority_urls = set(_merge_board_urls(_DIRECT_BOARD_URLS))
+            extra_board_urls = tuple(url for url in board_urls if url not in priority_urls)
+            extra_board_urls = _rotated_extra_board_urls(keyword, extra_board_urls)
+            try:
+                extra_hits = await asyncio.wait_for(
+                    self._fetch_direct_hits(
+                        client,
+                        extra_board_urls,
+                        keyword,
+                        seen,
+                        remaining=max(0, _DIRECT_DAT_LIMIT - len(priority_hits)),
+                    ),
+                    timeout=_DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS,
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                log.warning("5ch expanded 2ch.sc board scan timed out for %r; using partial priority results", keyword)
+                extra_hits = []
+            extra_items = await self._build_direct_items(client, extra_hits, keyword)
 
-            if not hits:
-                return []
+        items = [*priority_items, *extra_items]
+        items.sort(key=lambda item: item.published_at, reverse=True)
+        return items[:_REAL_5CH_LIMIT]
 
-            dated = await _gather_limited(
-                [self._build_direct_item(client, hit, keyword) for hit in hits[:_DIRECT_DAT_LIMIT]]
+    async def _fetch_direct_hits(
+        self,
+        client: httpx.AsyncClient,
+        board_urls: tuple[str, ...],
+        keyword: str,
+        seen: set[tuple[str, str, str]],
+        remaining: int = _DIRECT_DAT_LIMIT,
+    ) -> list[_ThreadHit]:
+        hits: list[_ThreadHit] = []
+        if remaining <= 0:
+            return hits
+        for start in range(0, len(board_urls), _DIRECT_REQUEST_CONCURRENCY):
+            board_batch = board_urls[start:start + _DIRECT_REQUEST_CONCURRENCY]
+            subject_results = await _gather_limited(
+                [self._fetch_subject(client, board_url, keyword) for board_url in board_batch]
             )
 
-        items: list[SourceItemCreate] = [
-            item for item in dated if isinstance(item, SourceItemCreate)
-        ]
-        items.sort(key=lambda item: item.published_at, reverse=True)
-        return items[:25]
+            for result in subject_results:
+                if isinstance(result, Exception):
+                    log.debug("5ch subject scan failed: %s", result)
+                    continue
+                for hit in result:
+                    key = (hit.host, hit.board_key, hit.thread_id)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    hits.append(hit)
+                    if len(hits) >= remaining:
+                        return hits
+        return hits
+
+    async def _build_direct_items(
+        self,
+        client: httpx.AsyncClient,
+        hits: list[_ThreadHit],
+        keyword: str,
+    ) -> list[SourceItemCreate]:
+        if not hits:
+            return []
+        dated = await _gather_limited(
+            [self._build_direct_item(client, hit, keyword) for hit in hits[:_DIRECT_DAT_LIMIT]]
+        )
+        return [item for item in dated if isinstance(item, SourceItemCreate)]
+
+    async def _fetch_direct_board_urls(self, client: httpx.AsyncClient) -> tuple[str, ...]:
+        cached = _cached_direct_board_urls()
+        if cached is not None:
+            return cached
+
+        async with _direct_bbsmenu_cache_lock:
+            cached = _cached_direct_board_urls()
+            if cached is not None:
+                return cached
+            return await self._refresh_direct_board_urls(client)
+
+    async def _refresh_direct_board_urls(self, client: httpx.AsyncClient) -> tuple[str, ...]:
+        global _direct_bbsmenu_cache, _direct_bbsmenu_cache_at
+        try:
+            response = await client.get(_DIRECT_BBSMENU_URL)
+            text = response.text if isinstance(getattr(response, "text", None), str) else _decode_shift_jis(response.content)
+            if response.is_success and text:
+                menu_urls = _parse_bbsmenu_board_urls(text)
+                if menu_urls:
+                    merged = _merge_board_urls(_DIRECT_BOARD_URLS, menu_urls)
+                    _direct_bbsmenu_cache = merged
+                    _direct_bbsmenu_cache_at = time.monotonic()
+                    return merged
+                log.debug("5ch bbsmenu returned no parseable board URLs")
+            else:
+                log.debug("5ch bbsmenu returned status %d", response.status_code)
+        except Exception as exc:
+            log.debug("5ch bbsmenu fetch error: %s", exc)
+        if _direct_bbsmenu_cache is not None:
+            return _direct_bbsmenu_cache
+        return _DIRECT_BOARD_URLS
 
     async def _fetch_subject(
         self,

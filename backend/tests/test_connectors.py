@@ -1,6 +1,7 @@
 """Unit tests for connector utilities that don't need HTTP calls."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,6 +10,7 @@ import httpx as _httpx_mod
 import json as _json_mod
 import pytest
 
+from app.connectors import fivech as fivech_module
 from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
@@ -16,7 +18,7 @@ from app.connectors.base import (
     parse_google_news_markdown,
     title_contains_keyword,
 )
-from app.connectors.fivech import FiveChConnector
+from app.connectors.fivech import FiveChConnector, _parse_bbsmenu_board_urls, _rotated_extra_board_urls
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
@@ -612,6 +614,236 @@ class TestFiveChFetch:
         assert result[0].raw_payload["date_source"] == "dat_latest_post"
 
     @pytest.mark.asyncio
+    async def test_real_itest_scans_all_board_batches_and_sorts_by_latest_reply(self):
+        early_board = """
+*   [2026年6月20日 10時00分 話題度:12 31レス 【乃木坂46】older thread](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1781900000)
+"""
+        later_board = """
+*   [2026年6月19日 09時00分 話題度:8 12レス 【乃木坂46】new reply thread](https://itest.5ch.io/krsw/test/read.cgi/akbsaloon/1781800000)
+"""
+        old_dat = "name<>sage<>2026/06/25(木) 10:00:00.00 ID:last<> old latest <>\n"
+        new_dat = "name<>sage<>2026/06/26(金) 21:30:00.00 ID:last<> new latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
+                return MagicMock(is_success=True, status_code=200, text=early_board, content=early_board.encode())
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/akbsaloon"):
+                return MagicMock(is_success=True, status_code=200, text=later_board, content=later_board.encode())
+            if url_text.startswith("https://r.jina.ai/http://http://mevius.5ch.net/nogizaka/dat/1781900000.dat"):
+                return MagicMock(is_success=True, status_code=200, text=old_dat, content=old_dat.encode())
+            if url_text.startswith("https://r.jina.ai/http://http://krsw.5ch.net/akbsaloon/dat/1781800000.dat"):
+                return MagicMock(is_success=True, status_code=200, text=new_dat, content=new_dat.encode())
+            return MagicMock(is_success=True, status_code=200, text="", content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("乃木坂46", "all_info")
+
+        parse.assert_not_called()
+        assert [item.raw_payload["board"] for item in result] == ["akbsaloon", "nogizaka"]
+        assert [item.published_at for item in result] == [
+            datetime(2026, 6, 26, 12, 30, tzinfo=timezone.utc),
+            datetime(2026, 6, 25, 1, 0, tzinfo=timezone.utc),
+        ]
+        assert all(item.raw_payload["date_source"] == "dat_latest_post" for item in result)
+
+    @pytest.mark.asyncio
+    async def test_fetch_falls_back_to_recent_2ch_latest_reply_items(self):
+        subject = (
+            "1778433981.dat<>【元乃木坂４６】相楽伊織応援スレ★16【いおり】 (64)\n"
+            "1717200000.dat<>【乃木坂46】stale thread without dat (12)\n"
+        )
+        dat = "君の名は<><>2026/06/25(木) 11:26:55.28 ID:last<> latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/"):
+                return MagicMock(is_success=True, status_code=200, text="", content=b"")
+            if url_text.endswith("/nogizaka/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, text="", content=subject.encode("shift_jis"))
+            if url_text.endswith("/nogizaka/dat/1778433981.dat"):
+                return MagicMock(is_success=True, status_code=200, text="", content=dat.encode("shift_jis"))
+            if url_text.endswith("/nogizaka/dat/1717200000.dat"):
+                return MagicMock(is_success=False, status_code=404, text="", content=b"")
+            return MagicMock(is_success=True, status_code=200, text="", content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("乃木坂46", "all_info")
+
+        parse.assert_not_called()
+        assert len(result) == 1
+        assert result[0].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1778433981"
+        assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
+        assert result[0].raw_payload["source"] == "2ch.sc_subject"
+        assert result[0].raw_payload["date_parsed"] is True
+
+    @pytest.mark.asyncio
+    async def test_fetch_merges_partial_itest_with_recent_2ch_latest_reply_items(self):
+        itest_markdown = """
+*   [2026年6月25日 17時59分 話題度:43 13レス 吉沢亮 itest thread](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+"""
+        actor_subject = "1779315692.dat<>吉沢亮48 (485)\n"
+        cinema_subject = "1780890135.dat<>【李相日】国宝【吉沢亮/横浜流星/渡辺謙】★28幕目 (398)\n"
+        itest_dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
+        actor_dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
+        cinema_dat = "name<>sage<>2026/06/27(土) 00:07:43.00 ID:last<> latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text.startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
+                return MagicMock(is_success=True, status_code=200, text=itest_markdown, content=itest_markdown.encode())
+            if url_text.startswith("https://r.jina.ai/http://http://mevius.5ch.net/nogizaka/dat/1782410369.dat"):
+                return MagicMock(is_success=True, status_code=200, text=itest_dat, content=itest_dat.encode())
+            if url_text.endswith("/actor/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=actor_subject.encode("shift_jis"))
+            if url_text.endswith("/cinema/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=cinema_subject.encode("shift_jis"))
+            if url_text.endswith("/actor/dat/1779315692.dat"):
+                return MagicMock(is_success=True, status_code=200, content=actor_dat.encode("shift_jis"))
+            if url_text.endswith("/cinema/dat/1780890135.dat"):
+                return MagicMock(is_success=True, status_code=200, content=cinema_dat.encode("shift_jis"))
+            return MagicMock(is_success=True, status_code=200, text="", content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector().fetch("吉沢亮", "all_info")
+
+        parse.assert_not_called()
+        assert [item.raw_payload["source"] for item in result[:3]] == [
+            "2ch.sc_subject",
+            "2ch.sc_subject",
+            "5ch_itest",
+        ]
+        assert [item.published_at for item in result[:3]] == [
+            datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc),
+            datetime(2026, 6, 26, 15, 7, 43, tzinfo=timezone.utc),
+            datetime(2026, 6, 25, 8, 59, 29, tzinfo=timezone.utc),
+        ]
+
+    def test_merge_latest_reply_items_dedupes_mirrored_threads_by_board_and_id(self):
+        connector = FiveChConnector()
+        older_itest = SourceItemCreate(
+            platform="5ch",
+            item_id="5ch:itest:mnewsplus:1782467821",
+            url="https://itest.5ch.io/hayabusa9/test/read.cgi/mnewsplus/1782467821",
+            published_at=datetime(2026, 6, 26, 10, 4, 39, tzinfo=timezone.utc),
+            media_type="article",
+            title="吉沢亮 itest mirror",
+            raw_payload={"board": "mnewsplus", "thread_id": "1782467821", "source": "5ch_itest"},
+        )
+        newer_direct = SourceItemCreate(
+            platform="5ch",
+            item_id="2ch.sc:hayabusa3.2ch.sc:mnewsplus:1782467821",
+            url="http://hayabusa3.2ch.sc/test/read.cgi/mnewsplus/1782467821/",
+            published_at=datetime(2026, 6, 26, 21, 53, 42, tzinfo=timezone.utc),
+            media_type="article",
+            title="吉沢亮 2ch.sc mirror",
+            raw_payload={"board": "mnewsplus", "thread_id": "1782467821", "source": "2ch.sc_subject"},
+        )
+
+        result = connector._merge_latest_reply_items([older_itest, newer_direct])
+
+        assert result == [newer_direct]
+
+    def test_parse_bbsmenu_board_urls_keeps_2ch_boards_deduped(self):
+        html = """
+<A HREF=http://hayabusa3.2ch.sc/mnewsplus/>芸スポ速報+</A>
+<A HREF=//anago.2ch.sc/actor/>男性俳優</A>
+<a href="https://awabi.2ch.sc/cinema/">映画作品・人</a>
+<a href='http://awabi.2ch.sc/cinema/'>duplicate</a>
+<a href="https://example.com/not-2ch/">skip</a>
+<a href="http://awabi.2ch.sc/test/read.cgi/cinema/1780890135/">skip thread</a>
+"""
+
+        assert _parse_bbsmenu_board_urls(html) == (
+            "http://hayabusa3.2ch.sc/mnewsplus/",
+            "http://anago.2ch.sc/actor/",
+            "http://awabi.2ch.sc/cinema/",
+        )
+
+    @pytest.mark.asyncio
+    async def test_direct_board_urls_reuses_fresh_bbsmenu_cache(self):
+        fivech_module._direct_bbsmenu_cache = None
+        fivech_module._direct_bbsmenu_cache_at = 0.0
+        bbsmenu = "<A HREF=//dynamic.2ch.sc/rareboard/>rare board</A>"
+        response = MagicMock(is_success=True, status_code=200, text=bbsmenu, content=bbsmenu.encode("shift_jis"))
+        client = MagicMock()
+        client.get = AsyncMock(return_value=response)
+        connector = FiveChConnector()
+
+        first = await connector._fetch_direct_board_urls(client)
+        second = await connector._fetch_direct_board_urls(client)
+
+        assert "http://dynamic.2ch.sc/rareboard/" in first
+        assert second == first
+        client.get.assert_awaited_once_with("http://menu.2ch.sc/bbsmenu.html")
+        fivech_module._direct_bbsmenu_cache = None
+        fivech_module._direct_bbsmenu_cache_at = 0.0
+
+    @pytest.mark.asyncio
+    async def test_direct_board_urls_uses_stale_cache_when_refresh_fails(self):
+        cached = (
+            "http://anago.2ch.sc/actor/",
+            "http://dynamic.2ch.sc/rareboard/",
+        )
+        fivech_module._direct_bbsmenu_cache = cached
+        fivech_module._direct_bbsmenu_cache_at = (
+            fivech_module.time.monotonic()
+            - fivech_module._DIRECT_BBSMENU_CACHE_TTL_SECONDS
+            - 1
+        )
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=RuntimeError("network unavailable"))
+
+        result = await FiveChConnector()._fetch_direct_board_urls(client)
+
+        assert result == cached
+        client.get.assert_awaited_once_with("http://menu.2ch.sc/bbsmenu.html")
+        fivech_module._direct_bbsmenu_cache = None
+        fivech_module._direct_bbsmenu_cache_at = 0.0
+
+    def test_rotated_extra_board_urls_advances_per_keyword(self):
+        fivech_module._direct_extra_scan_offsets.clear()
+        boards = (
+            "http://dynamic.2ch.sc/one/",
+            "http://dynamic.2ch.sc/two/",
+            "http://dynamic.2ch.sc/three/",
+            "http://dynamic.2ch.sc/four/",
+        )
+
+        with patch("app.connectors.fivech._DIRECT_EXTRA_SCAN_CURSOR_STEP", 2):
+            first = _rotated_extra_board_urls("吉沢亮", boards)
+            second = _rotated_extra_board_urls("吉沢亮", boards)
+            other_keyword = _rotated_extra_board_urls("乃木坂46", boards)
+
+        assert first == boards
+        assert second == (
+            "http://dynamic.2ch.sc/three/",
+            "http://dynamic.2ch.sc/four/",
+            "http://dynamic.2ch.sc/one/",
+            "http://dynamic.2ch.sc/two/",
+        )
+        assert other_keyword == boards
+        fivech_module._direct_extra_scan_offsets.clear()
+
+    def test_rotated_extra_board_urls_caps_keyword_offsets(self):
+        fivech_module._direct_extra_scan_offsets.clear()
+        boards = (
+            "http://dynamic.2ch.sc/one/",
+            "http://dynamic.2ch.sc/two/",
+        )
+
+        with patch("app.connectors.fivech._DIRECT_EXTRA_SCAN_OFFSET_LIMIT", 2):
+            _rotated_extra_board_urls("first", boards)
+            _rotated_extra_board_urls("second", boards)
+            _rotated_extra_board_urls("third", boards)
+
+        assert list(fivech_module._direct_extra_scan_offsets) == ["second", "third"]
+        fivech_module._direct_extra_scan_offsets.clear()
+
+    @pytest.mark.asyncio
     async def test_direct_scan_returns_thread_with_latest_post_date(self):
         subject = "1778433981.dat<>【元乃木坂４６】相楽伊織応援スレ★16【いおり】 (64)\n"
         dat = (
@@ -641,6 +873,115 @@ class TestFiveChFetch:
         assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
         assert result[0].raw_payload["source"] == "2ch.sc_subject"
         assert result[0].raw_payload["date_parsed"] is True
+
+    @pytest.mark.asyncio
+    async def test_direct_scan_uses_bbsmenu_boards_beyond_static_list(self):
+        bbsmenu = """
+<A HREF=http://dynamic.2ch.sc/rareboard/>rare board</A>
+"""
+        subject = "1778433981.dat<>吉沢亮 rare dynamic board thread (64)\n"
+        dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text == "http://menu.2ch.sc/bbsmenu.html":
+                return MagicMock(is_success=True, status_code=200, text=bbsmenu, content=bbsmenu.encode("shift_jis"))
+            if url_text.endswith("/rareboard/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=subject.encode("shift_jis"))
+            if url_text.endswith("/rareboard/dat/1778433981.dat"):
+                return MagicMock(is_success=True, status_code=200, content=dat.encode("shift_jis"))
+            return MagicMock(is_success=True, status_code=200, content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector()._fetch_direct("吉沢亮")
+
+        parse.assert_not_called()
+        assert any(item.raw_payload["board"] == "rareboard" for item in result)
+        rare = next(item for item in result if item.raw_payload["board"] == "rareboard")
+        assert rare.item_id == "2ch.sc:dynamic.2ch.sc:rareboard:1778433981"
+        assert rare.published_at == datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_direct_scan_returns_priority_results_when_expanded_scan_times_out(self):
+        connector = FiveChConnector()
+        priority_item = SourceItemCreate(
+            platform="5ch",
+            item_id="2ch.sc:anago.2ch.sc:actor:1779315692",
+            url="http://anago.2ch.sc/test/read.cgi/actor/1779315692/",
+            published_at=datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc),
+            media_type="text",
+            title="吉沢亮48",
+            raw_payload={"source": "2ch.sc_subject", "board": "actor", "thread_id": "1779315692", "date_parsed": True},
+        )
+        extra_scan_boards: list[tuple[str, ...]] = []
+
+        async def _hits(_client, board_urls, _keyword, _seen, remaining=25):
+            if "rareboard" in "".join(board_urls):
+                extra_scan_boards.append(board_urls)
+                await asyncio.sleep(0.1)
+                return ["extra-hit"]
+            return ["priority-hit"]
+
+        async def _items(_client, hits, _keyword):
+            if hits == ["priority-hit"]:
+                return [priority_item]
+            return []
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx()), \
+             patch.object(connector, "_fetch_direct_board_urls", new=AsyncMock(return_value=(
+                 "http://anago.2ch.sc/actor/",
+                 "http://dynamic.2ch.sc/otherboard/",
+                 "http://dynamic.2ch.sc/rareboard/",
+             ))), \
+             patch.object(connector, "_fetch_direct_hits", new=AsyncMock(side_effect=_hits)), \
+             patch.object(connector, "_build_direct_items", new=AsyncMock(side_effect=_items)), \
+             patch("app.connectors.fivech._direct_extra_scan_offsets", {"吉沢亮".casefold(): 1}), \
+             patch("app.connectors.fivech._DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS", 0.01):
+            result = await connector._fetch_direct("吉沢亮")
+
+        assert result == [priority_item]
+        assert extra_scan_boards == [(
+            "http://dynamic.2ch.sc/rareboard/",
+            "http://dynamic.2ch.sc/otherboard/",
+        )]
+
+    @pytest.mark.asyncio
+    async def test_direct_scan_includes_actor_movie_and_cm_boards(self):
+        actor_subject = "1779315692.dat<>吉沢亮48 (485)\n"
+        cinema_subject = "1780890135.dat<>【李相日】国宝【吉沢亮/横浜流星/渡辺謙】★28幕目 (398)\n"
+        cm_subject = "1765167675.dat<>中居と吉沢亮と国分のせいでフジ日テレやCM窮地★2 (386)\n"
+        actor_dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
+        cinema_dat = "name<>sage<>2026/06/27(土) 00:07:43.00 ID:last<> latest <>\n"
+        cm_dat = "name<>sage<>2026/06/26(金) 18:34:35.00 ID:last<> latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text.endswith("/actor/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=actor_subject.encode("shift_jis"))
+            if url_text.endswith("/cinema/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=cinema_subject.encode("shift_jis"))
+            if url_text.endswith("/cm/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=cm_subject.encode("shift_jis"))
+            if url_text.endswith("/actor/dat/1779315692.dat"):
+                return MagicMock(is_success=True, status_code=200, content=actor_dat.encode("shift_jis"))
+            if url_text.endswith("/cinema/dat/1780890135.dat"):
+                return MagicMock(is_success=True, status_code=200, content=cinema_dat.encode("shift_jis"))
+            if url_text.endswith("/cm/dat/1765167675.dat"):
+                return MagicMock(is_success=True, status_code=200, content=cm_dat.encode("shift_jis"))
+            return MagicMock(is_success=True, status_code=200, content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector()._fetch_direct("吉沢亮")
+
+        parse.assert_not_called()
+        assert [item.raw_payload["board"] for item in result[:3]] == ["actor", "cinema", "cm"]
+        assert [item.published_at for item in result[:3]] == [
+            datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc),
+            datetime(2026, 6, 26, 15, 7, 43, tzinfo=timezone.utc),
+            datetime(2026, 6, 26, 9, 34, 35, tzinfo=timezone.utc),
+        ]
 
     @pytest.mark.asyncio
     async def test_direct_scan_falls_back_to_thread_id_date_when_dat_missing(self):
