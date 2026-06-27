@@ -613,6 +613,21 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
     matches_total = db.query(func.count(Match.id)).scalar()
     terms = db.query(WatchTerm).all()
     by_platform = db.query(SourceItem.platform, func.count(SourceItem.id)).group_by(SourceItem.platform).all()
+    matches_by_term_platform_rows = (
+        db.query(
+            WatchTerm.id,
+            WatchTerm.keyword,
+            SourceItem.platform,
+            func.count(Match.id),
+            func.max(SourceItem.published_at),
+            func.max(Match.created_at),
+        )
+        .join(Match, Match.watch_term_id == WatchTerm.id)
+        .join(SourceItem, Match.source_item_id == SourceItem.id)
+        .group_by(WatchTerm.id, WatchTerm.keyword, SourceItem.platform)
+        .order_by(WatchTerm.keyword, SourceItem.platform)
+        .all()
+    )
     device_tokens = db.query(APNSDeviceToken.environment, func.count(APNSDeviceToken.token)).group_by(
         APNSDeviceToken.environment
     ).all()
@@ -726,6 +741,24 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             ],
         },
         "items_by_platform": {p: c for p, c in by_platform},
+        "matches_by_term_platform": [
+            {
+                "term_id": term_id,
+                "keyword": keyword,
+                "platform": platform,
+                "match_count": count,
+                "latest_published_at": latest_published_at,
+                "latest_matched_at": latest_matched_at,
+            }
+            for (
+                term_id,
+                keyword,
+                platform,
+                count,
+                latest_published_at,
+                latest_matched_at,
+            ) in matches_by_term_platform_rows
+        ],
         "apns": {
             "configured": apns_configured(),
             "server_environment": "sandbox" if settings.apns_use_sandbox else "production",

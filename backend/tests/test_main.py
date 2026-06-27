@@ -125,6 +125,16 @@ class TestAdminStats:
         assert len(data["watch_terms"]) == 1
         assert data["watch_terms"][0]["keyword"] == "Aiko"
         assert data["items_by_platform"] == {"youtube": 1}
+        assert data["matches_by_term_platform"] == [
+            {
+                "term_id": term.id,
+                "keyword": "Aiko",
+                "platform": "youtube",
+                "match_count": 1,
+                "latest_published_at": item.published_at.isoformat().replace("+00:00", "Z"),
+                "latest_matched_at": match.created_at.isoformat().replace("+00:00", "Z"),
+            }
+        ]
 
     def test_stats_groups_items_by_platform(self, client, db_session):
         now = datetime.now(timezone.utc)
