@@ -123,6 +123,36 @@ test("5ch proxy allows actor board resources used by backend priority scan", asy
   assert.equal(upstreamURL, "http://anago.2ch.sc/actor/subject.txt");
 });
 
+test("5ch proxy allows extra bbsmenu boards with numeric and hobby paths", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const upstreamURLs = [];
+  globalThis.fetch = async (url) => {
+    upstreamURLs.push(String(url));
+    return new Response("1711500623.dat<>吉沢亮 extra thread (12)\n", { status: 200 });
+  };
+
+  const numeric = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fnozomi.2ch.sc%2F4649%2F", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+  const hobby = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fsweet.2ch.sc%2Fpatisserie%2F", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(numeric.status, 200);
+  assert.equal(hobby.status, 200);
+  assert.deepEqual(upstreamURLs, [
+    "http://nozomi.2ch.sc/4649/subject.txt",
+    "http://sweet.2ch.sc/patisserie/subject.txt",
+  ]);
+});
+
 test("5ch proxy rejects non-whitelisted boards", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fexample.com%2Fnews%2F", {
