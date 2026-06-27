@@ -58,7 +58,7 @@ _ITEST_DAT_CONCURRENCY = 1
 _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
 _DIRECT_SUFFICIENT_RESULT_COUNT = 5
-_DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS = 6.0
+_DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS = 9.0
 _DIRECT_EXTRA_SCAN_CURSOR_STEP = _DIRECT_REQUEST_CONCURRENCY
 _DIRECT_EXTRA_SCAN_OFFSET_LIMIT = 512
 _ITEST_FETCH_TIMEOUT_SECONDS = 5.0
@@ -349,10 +349,7 @@ class FiveChConnector(BaseConnector):
 
         direct_items = [
             item for item in await self._fetch_direct(keyword)
-            if (
-                (item.raw_payload or {}).get("date_parsed") is True
-                and _is_recent_index_result(item.published_at)
-            )
+            if (item.raw_payload or {}).get("date_parsed") is True
         ]
         if len(direct_items) >= _DIRECT_SUFFICIENT_RESULT_COUNT:
             return direct_items[:_REAL_5CH_LIMIT]
@@ -655,17 +652,6 @@ class FiveChConnector(BaseConnector):
             seen: set[tuple[str, str, str]] = set()
             priority_hits = await self._fetch_direct_hits(client, _DIRECT_BOARD_URLS, keyword, seen)
             priority_items = await self._build_direct_items(client, priority_hits, keyword)
-            priority_recent = [
-                item for item in priority_items
-                if (
-                    (item.raw_payload or {}).get("date_parsed") is True
-                    and _is_recent_index_result(item.published_at)
-                )
-            ]
-            if len(priority_recent) >= _DIRECT_SUFFICIENT_RESULT_COUNT:
-                priority_items.sort(key=lambda item: item.published_at, reverse=True)
-                return priority_items[:_REAL_5CH_LIMIT]
-
             board_urls = await self._fetch_direct_board_urls(client)
             priority_urls = set(_merge_board_urls(_DIRECT_BOARD_URLS))
             extra_board_urls = tuple(url for url in board_urls if url not in priority_urls)

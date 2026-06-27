@@ -319,16 +319,19 @@ class TestFeedAPI:
         filtered_ids = [r["item"]["id"] for r in client.get("/api/feed/?days=30&platform=togetter").json()]
         assert old_togetter.id in filtered_ids, "forum filter should show all threads regardless of age"
 
-    def test_5ch_platform_filter_respects_days_window(self, client, db_session):
+    def test_5ch_platform_filter_bypasses_days_window(self, client, db_session):
         term = _make_term(db_session, keyword="Aiko")
         old_5ch = _make_item(db_session, platform="5ch", item_id="old", days_ago=180, title="Aiko old thread")
         fresh_5ch = _make_item(db_session, platform="5ch", item_id="fresh", days_ago=1, title="Aiko fresh thread")
         _make_match(db_session, term, old_5ch)
         _make_match(db_session, term, fresh_5ch)
 
+        all_ids = [r["item"]["id"] for r in client.get("/api/feed/?days=30").json()]
+        assert old_5ch.id not in all_ids
+
         filtered_ids = [r["item"]["id"] for r in client.get("/api/feed/?days=30&platform=5ch").json()]
         assert fresh_5ch.id in filtered_ids
-        assert old_5ch.id not in filtered_ids
+        assert old_5ch.id in filtered_ids
 
     def test_feed_media_type_filter(self, client, db_session):
         term = _make_term(db_session)
@@ -539,7 +542,7 @@ class TestFeedAPI:
         ids = [r["item"]["id"] for r in resp.json()]
         assert old_togetter.id in ids, "timeless platform item must bypass the since filter"
 
-    def test_5ch_since_filter_respects_match_age(self, client, db_session):
+    def test_5ch_since_filter_bypasses_match_age(self, client, db_session):
         from urllib.parse import quote
 
         term = _make_term(db_session, keyword="Aiko")
@@ -555,4 +558,4 @@ class TestFeedAPI:
         resp = client.get(f"/api/feed/?since={since_ts}&platform=5ch")
         assert resp.status_code == 200
         ids = [r["item"]["id"] for r in resp.json()]
-        assert old_5ch.id not in ids
+        assert old_5ch.id in ids

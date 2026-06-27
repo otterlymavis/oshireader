@@ -903,6 +903,37 @@ class TestFiveChFetch:
         assert rare.published_at == datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc)
 
     @pytest.mark.asyncio
+    async def test_direct_scan_expands_bbsmenu_even_with_enough_priority_results(self):
+        bbsmenu = """
+<A HREF=http://dynamic.2ch.sc/rareboard/>rare board</A>
+"""
+        priority_subject = "\n".join(
+            f"17784339{i}.dat<>吉沢亮 priority thread {i} (64)"
+            for i in range(5)
+        )
+        extra_subject = "1778433999.dat<>吉沢亮 rare dynamic board thread (64)\n"
+        dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
+
+        async def _side(url, **_kw):
+            url_text = str(url)
+            if url_text == "http://menu.2ch.sc/bbsmenu.html":
+                return MagicMock(is_success=True, status_code=200, text=bbsmenu, content=bbsmenu.encode("shift_jis"))
+            if url_text.endswith("/actor/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=priority_subject.encode("shift_jis"))
+            if url_text.endswith("/rareboard/subject.txt"):
+                return MagicMock(is_success=True, status_code=200, content=extra_subject.encode("shift_jis"))
+            if "/dat/" in url_text:
+                return MagicMock(is_success=True, status_code=200, content=dat.encode("shift_jis"))
+            return MagicMock(is_success=True, status_code=200, content=b"")
+
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+             patch("app.connectors.fivech.feedparser.parse") as parse:
+            result = await FiveChConnector()._fetch_direct("吉沢亮")
+
+        parse.assert_not_called()
+        assert any(item.raw_payload["board"] == "rareboard" for item in result)
+
+    @pytest.mark.asyncio
     async def test_direct_scan_returns_priority_results_when_expanded_scan_times_out(self):
         connector = FiveChConnector()
         priority_item = SourceItemCreate(
