@@ -26,6 +26,7 @@ class LocalDB: ObservableObject {
     private let maxContentCacheBytes = 1_000_000
     private let maxFeedItems = 600
     private let minFeedItemsPerSubscribedPlatform = 8
+    private let minFeedItemsPerDiscussionPlatform = 25
     private let discussionActivityPlatforms: Set<String> = ["5ch", "girlschannel", "togetter"]
 
     // Bump this whenever a migration step is added below.
@@ -323,12 +324,13 @@ class LocalDB: ObservableObject {
         // when those items were fetched successfully.
         for platformId in subscribed.sorted() {
             var keptForPlatform = 0
+            let targetCount = minRetainedFeedItems(for: platformId)
             for item in sortedItems where Platform.normalize(item.platform) == platformId {
                 let key = itemKey(item)
                 guard selectedKeys.insert(key).inserted else { continue }
                 selected.append(item)
                 keptForPlatform += 1
-                if keptForPlatform >= minFeedItemsPerSubscribedPlatform { break }
+                if keptForPlatform >= targetCount { break }
             }
         }
 
@@ -348,6 +350,12 @@ class LocalDB: ObservableObject {
             if lhsKey != rhsKey { return lhsKey < rhsKey }
             return lhs.url < rhs.url
         }
+    }
+
+    private func minRetainedFeedItems(for platformId: String) -> Int {
+        discussionActivityPlatforms.contains(platformId)
+            ? minFeedItemsPerDiscussionPlatform
+            : minFeedItemsPerSubscribedPlatform
     }
 
     // Sort every item by its real published / last-updated date — never by fetch time.

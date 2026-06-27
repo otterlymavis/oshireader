@@ -1006,6 +1006,35 @@ final class OshiReaderTests: XCTestCase {
                        "Oldest item should be evicted by the 600-item cap and not stored (and therefore not notified)")
     }
 
+    func testCappedFeedItemsRetainMoreDiscussionPlatformItems() {
+        db.setSubscribedPlatforms(platforms: ["news", "5ch"])
+        let fmt = ISO8601DateFormatter()
+        let base = Date(timeIntervalSinceReferenceDate: 0)
+
+        let newsItems: [FeedItem] = (1...600).map { i in
+            let ts = fmt.string(from: base.addingTimeInterval(Double(i) * 60))
+            return FeedItem(
+                id: "news:\(i)", platform: "news", url: "https://news.example.com/\(i)",
+                title: "Aiko news item \(i)", content_text: "Aiko news content", author: nil,
+                thumbnail_url: nil, media_type: "article", published_at: ts,
+                watch_term_keyword: "Aiko", fetched_at: ts
+            )
+        }
+        let fiveChItems: [FeedItem] = (1...30).map { i in
+            let ts = fmt.string(from: base.addingTimeInterval(Double(i) * 30))
+            return FeedItem(
+                id: "5ch:\(i)", platform: "5ch", url: "https://example.5ch.net/test/read.cgi/thread/\(i)",
+                title: "Aiko thread \(i)", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "article", published_at: ts, watch_term_keyword: "Aiko", fetched_at: ts
+            )
+        }
+
+        _ = db.mergeItems(newItems: newsItems + fiveChItems)
+
+        XCTAssertEqual(db.feedItems.count, 600)
+        XCTAssertEqual(db.feedItems.filter { $0.platform == "5ch" }.count, 25)
+    }
+
     // MARK: - Feature 3: Feed Querying & Filters (Strict matches, platform toggles, days)
     func testFeedQueryingFilters() throws {
         let formatter = ISO8601DateFormatter()
