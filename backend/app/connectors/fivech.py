@@ -347,12 +347,13 @@ class FiveChConnector(BaseConnector):
         if mode == CollectionMode.MEDIA_ONLY:
             return []
 
-        direct_items = [
-            item for item in await self._fetch_direct(keyword)
+        direct_items = await self._fetch_direct(keyword)
+        parsed_direct_items = [
+            item for item in direct_items
             if (item.raw_payload or {}).get("date_parsed") is True
         ]
-        if len(direct_items) >= _DIRECT_SUFFICIENT_RESULT_COUNT:
-            return direct_items[:_REAL_5CH_LIMIT]
+        if len(parsed_direct_items) >= _DIRECT_SUFFICIENT_RESULT_COUNT:
+            return parsed_direct_items[:_REAL_5CH_LIMIT]
 
         try:
             items = await asyncio.wait_for(
@@ -364,13 +365,26 @@ class FiveChConnector(BaseConnector):
             items = []
 
         if items:
-            if direct_items:
-                items = self._merge_latest_reply_items([*items, *direct_items])
+            if parsed_direct_items:
+                items = self._merge_latest_reply_items([*items, *parsed_direct_items])
             return items[:_REAL_5CH_LIMIT]
         if direct_items:
-            return direct_items
+            return self._prioritize_parsed_direct_items(direct_items)
         log.warning("5ch latest-reply scans returned no items for %r; using real 5ch index fallback", keyword)
         return await self._fetch_gnews(keyword)
+
+    def _prioritize_parsed_direct_items(
+        self,
+        items: list[SourceItemCreate],
+    ) -> list[SourceItemCreate]:
+        return sorted(
+            items,
+            key=lambda item: (
+                bool((item.raw_payload or {}).get("date_parsed") is True),
+                item.published_at,
+            ),
+            reverse=True,
+        )[:_REAL_5CH_LIMIT]
 
     def _merge_latest_reply_items(self, items: list[SourceItemCreate]) -> list[SourceItemCreate]:
         by_key: dict[str, SourceItemCreate] = {}

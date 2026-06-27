@@ -673,11 +673,13 @@ class TestFiveChFetch:
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
         parse.assert_not_called()
-        assert len(result) == 1
+        assert len(result) == 2
         assert result[0].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1778433981"
         assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
         assert result[0].raw_payload["source"] == "2ch.sc_subject"
         assert result[0].raw_payload["date_parsed"] is True
+        assert result[1].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1717200000"
+        assert result[1].raw_payload["date_parsed"] is False
 
     @pytest.mark.asyncio
     async def test_fetch_merges_partial_itest_with_recent_2ch_latest_reply_items(self):
@@ -1034,6 +1036,48 @@ class TestFiveChFetch:
         assert len(result) == 1
         assert result[0].published_at == datetime.fromtimestamp(1717200000, tz=timezone.utc)
         assert result[0].raw_payload["date_parsed"] is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_keeps_subject_fallbacks_when_latest_post_dates_are_sparse(self):
+        connector = FiveChConnector()
+        parsed_recent = SourceItemCreate(
+            platform="5ch",
+            item_id="2ch.sc:hayabusa3.2ch.sc:mnewsplus:1782467821",
+            url="http://hayabusa3.2ch.sc/test/read.cgi/mnewsplus/1782467821/",
+            published_at=datetime(2026, 6, 27, 3, 3, 55, tzinfo=timezone.utc),
+            media_type="text",
+            title="吉沢亮 fresh parsed",
+            raw_payload={"source": "2ch.sc_subject", "date_parsed": True},
+        )
+        parsed_old = SourceItemCreate(
+            platform="5ch",
+            item_id="2ch.sc:awabi.2ch.sc:tvd:1712752146",
+            url="http://awabi.2ch.sc/test/read.cgi/tvd/1712752146/",
+            published_at=datetime(2026, 6, 7, 3, 18, 19, tzinfo=timezone.utc),
+            media_type="text",
+            title="吉沢亮 older parsed",
+            raw_payload={"source": "2ch.sc_subject", "date_parsed": True},
+        )
+        subject_fallback = SourceItemCreate(
+            platform="5ch",
+            item_id="2ch.sc:anago.2ch.sc:actor:1779315692",
+            url="http://anago.2ch.sc/test/read.cgi/actor/1779315692/",
+            published_at=datetime.fromtimestamp(1779315692, tz=timezone.utc),
+            media_type="text",
+            title="吉沢亮48",
+            raw_payload={"source": "2ch.sc_subject", "date_parsed": False},
+        )
+
+        with patch.object(
+            connector,
+            "_fetch_direct",
+            new=AsyncMock(return_value=[subject_fallback, parsed_old, parsed_recent]),
+        ), patch.object(connector, "_fetch_real_itest", new=AsyncMock(return_value=[])), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock()) as gnews:
+            result = await connector.fetch("吉沢亮", "all_info")
+
+        gnews.assert_not_awaited()
+        assert result == [parsed_recent, parsed_old, subject_fallback]
 
     @pytest.mark.asyncio
     async def test_direct_scan_uses_worker_proxy_when_subject_and_dat_are_unparseable(self):
