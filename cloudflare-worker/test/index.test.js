@@ -102,6 +102,27 @@ test("5ch proxy fetches only whitelisted board resources", async (context) => {
   assert.equal(upstreamURL, "http://toro.2ch.sc/nogizaka/subject.txt");
 });
 
+test("5ch proxy allows actor board resources used by backend priority scan", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  globalThis.fetch = async (url) => {
+    upstreamURL = String(url);
+    return new Response("1779315692.dat<>吉沢亮48 (485)\n", { status: 200 });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fanago.2ch.sc%2Factor%2F", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "1779315692.dat<>吉沢亮48 (485)\n");
+  assert.equal(upstreamURL, "http://anago.2ch.sc/actor/subject.txt");
+});
+
 test("5ch proxy rejects non-whitelisted boards", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/fivech-proxy?resource=subject&board_url=http%3A%2F%2Fexample.com%2Fnews%2F", {
