@@ -59,7 +59,7 @@ _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "toget
 _NOTIFICATION_FRESHNESS_WINDOW = timedelta(hours=2)
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
-_FIVECH_FETCH_TIMEOUT_SECONDS = 15.0
+_FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 
 
 def _build_connectors(db) -> list[BaseConnector]:
