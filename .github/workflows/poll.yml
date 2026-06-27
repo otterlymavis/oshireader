@@ -75,6 +75,7 @@ jobs:
               "notification_health": notification_health,
               "pending_notifications": pending_notifications,
               "watch_terms": data.get("watch_terms", []),
+              "matches_by_term_platform": data.get("matches_by_term_platform", []),
               "recent_events": data.get("recent_events", [])[:10],
           }
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
