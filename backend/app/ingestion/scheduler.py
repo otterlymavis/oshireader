@@ -488,22 +488,52 @@ def _preview_for_match(match: Match, source_item: SourceItem) -> dict:
     }
 
 
+def _newest_notification_candidate(
+    newest_candidate: tuple[bool, datetime, dict] | None,
+    *,
+    source_item: SourceItem,
+    match: Match,
+    observed_at: datetime,
+) -> tuple[bool, datetime, dict]:
+    published_at = source_item.published_at
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    published_at_is_estimated = _published_at_is_estimated(source_item, observed_at)
+    if (
+        newest_candidate is None
+        or _candidate_is_newer(
+            candidate_is_estimated=published_at_is_estimated,
+            candidate_published_at=published_at,
+            current_is_estimated=newest_candidate[0],
+            current_published_at=newest_candidate[1],
+        )
+    ):
+        return (
+            published_at_is_estimated,
+            published_at,
+            _preview_for_match(match, source_item),
+        )
+    return newest_candidate
+
+
 def _queue_duplicate_term_notifications(
     db,
     term: WatchTerm,
     raw_items: list[SourceItemCreate],
     observed_at: datetime,
+    discussion_reply_source_ids: set[str] | None = None,
 ) -> None:
     duplicate_terms = _duplicate_notification_terms(db, term)
     if not duplicate_terms or not raw_items:
         return
 
+    discussion_reply_source_ids = discussion_reply_source_ids or set()
     source_item_ids = list(dict.fromkeys(raw.composite_id for raw in raw_items))
 
     for duplicate_term in duplicate_terms:
         existing_match_ids = {
-            r[0]
-            for r in db.query(Match.source_item_id)
+            r[0]: r[1]
+            for r in db.query(Match.source_item_id, Match.id)
             .filter(
                 Match.watch_term_id == duplicate_term.id,
                 Match.source_item_id.in_(source_item_ids),
@@ -526,15 +556,34 @@ def _queue_duplicate_term_notifications(
                 continue
             match = Match(watch_term_id=duplicate_term.id, source_item_id=source_item_id)
             db.add(match)
-            existing_match_ids.add(source_item_id)
+            existing_match_ids[source_item_id] = match.id
             new_matches.append((match, source_item))
 
-        if not new_matches:
+        reply_update_matches = [
+            (source_item_id, match_id)
+            for source_item_id, match_id in existing_match_ids.items()
+            if source_item_id in discussion_reply_source_ids and match_id is not None
+        ]
+
+        if not new_matches and not reply_update_matches:
             continue
 
         db.flush()
         notification_count = 0
         newest_candidate: tuple[bool, datetime, dict] | None = None
+        for source_item_id, match_id in reply_update_matches:
+            source_item = db.get(SourceItem, source_item_id)
+            match = db.get(Match, match_id)
+            if source_item is None or match is None:
+                continue
+            notification_count += 1
+            newest_candidate = _newest_notification_candidate(
+                newest_candidate,
+                source_item=source_item,
+                match=match,
+                observed_at=observed_at,
+            )
+
         for match, source_item in new_matches:
             if not _is_notification_eligible(
                 term=duplicate_term,
@@ -670,6 +719,7 @@ async def _poll_once_unlocked() -> None:
                             new_count = 0
                             notification_count = 0
                             newest_candidate: tuple[bool, datetime, dict] | None = None
+                            discussion_reply_source_ids: set[str] = set()
                             ids = [raw.composite_id for raw in items]
                             now = datetime.now(timezone.utc)
 
@@ -684,8 +734,8 @@ async def _poll_once_unlocked() -> None:
                             }
                             existing_source_ids = set(existing_items.keys())
                             existing_match_ids = {
-                                r[0]
-                                for r in db.query(Match.source_item_id)
+                                r[0]: r[1]
+                                for r in db.query(Match.source_item_id, Match.id)
                                 .filter(
                                     Match.watch_term_id == term.id,
                                     Match.source_item_id.in_(ids),
@@ -703,6 +753,7 @@ async def _poll_once_unlocked() -> None:
                                 published_at = raw.published_at
                                 if published_at.tzinfo is None:
                                     published_at = published_at.replace(tzinfo=timezone.utc)
+                                discussion_reply_match_id: int | None = None
                                 if raw.composite_id not in existing_source_ids:
                                     db.add(
                                         SourceItem(
@@ -755,6 +806,25 @@ async def _poll_once_unlocked() -> None:
                                                 stored_aware.isoformat(),
                                                 published_at.isoformat(),
                                             )
+                                            if (
+                                                raw.platform in _DISCUSSION_PLATFORMS
+                                                and raw.composite_id in existing_match_ids
+                                            ):
+                                                discussion_reply_match_id = existing_match_ids[raw.composite_id]
+                                                discussion_reply_source_ids.add(raw.composite_id)
+
+                                if discussion_reply_match_id is not None:
+                                    db.flush()
+                                    source_item = db.get(SourceItem, raw.composite_id)
+                                    match = db.get(Match, discussion_reply_match_id)
+                                    if source_item is not None and match is not None:
+                                        notification_count += 1
+                                        newest_candidate = _newest_notification_candidate(
+                                            newest_candidate,
+                                            source_item=source_item,
+                                            match=match,
+                                            observed_at=now,
+                                        )
 
                             # Flush source_items before inserting matches so that
                             # SQLite's FOREIGN KEY enforcement (PRAGMA foreign_keys=ON)
@@ -766,7 +836,7 @@ async def _poll_once_unlocked() -> None:
                                 if raw.composite_id not in existing_match_ids:
                                     match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
                                     db.add(match)
-                                    existing_match_ids.add(raw.composite_id)
+                                    existing_match_ids[raw.composite_id] = match.id
                                     new_count += 1
                                     new_matches.append((match, raw))
 
@@ -788,24 +858,12 @@ async def _poll_once_unlocked() -> None:
                                 ):
                                     continue
                                 notification_count += 1
-                                published_at = source_item.published_at
-                                if published_at.tzinfo is None:
-                                    published_at = published_at.replace(tzinfo=timezone.utc)
-                                published_at_is_estimated = _published_at_is_estimated(source_item, now)
-                                if (
-                                    newest_candidate is None
-                                    or _candidate_is_newer(
-                                        candidate_is_estimated=published_at_is_estimated,
-                                        candidate_published_at=published_at,
-                                        current_is_estimated=newest_candidate[0],
-                                        current_published_at=newest_candidate[1],
-                                    )
-                                ):
-                                    newest_candidate = (
-                                        published_at_is_estimated,
-                                        published_at,
-                                        _preview_for_match(match, source_item),
-                                    )
+                                newest_candidate = _newest_notification_candidate(
+                                    newest_candidate,
+                                    source_item=source_item,
+                                    match=match,
+                                    observed_at=now,
+                                )
 
                             _queue_pending_notification(
                                 db,
@@ -813,7 +871,13 @@ async def _poll_once_unlocked() -> None:
                                 notification_count,
                                 newest_candidate,
                             )
-                            _queue_duplicate_term_notifications(db, term, items, now)
+                            _queue_duplicate_term_notifications(
+                                db,
+                                term,
+                                items,
+                                now,
+                                discussion_reply_source_ids=discussion_reply_source_ids,
+                            )
                             db.flush()
                             db.commit()
                             if new_count:

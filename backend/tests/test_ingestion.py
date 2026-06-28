@@ -324,6 +324,126 @@ class TestIngestionNotifications:
         mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_existing_discussion_reply_update_is_notified(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(days=14),
+        )
+        existing = SourceItem(
+            id="5ch:old-thread",
+            platform="5ch",
+            item_id="old-thread",
+            url="https://itest.5ch.io/news4vip/test/read.cgi/example/1780000000",
+            published_at=datetime.now(timezone.utc) - timedelta(days=7),
+            media_type="article",
+            title="Aiko old discussion",
+            content_text="Aiko initial discussion",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, existing])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
+        db_session.commit()
+
+        reply_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+        updated_thread = _make_item(
+            platform="5ch",
+            item_id="old-thread",
+            published_at=reply_at,
+            title="Aiko old discussion",
+            content_text="Aiko new reply",
+            raw_payload={"date_parsed": True},
+        )
+        connector = _mock_connector("5ch", [updated_thread])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        db_session.expire_all()
+        assert db_session.query(Match).filter(Match.watch_term_id == term.id).count() == 1
+        refreshed = db_session.get(SourceItem, "5ch:old-thread")
+        assert refreshed is not None
+        assert refreshed.published_at.replace(tzinfo=timezone.utc) == reply_at
+        mock_notify.assert_called_once()
+        _, called_term, called_count, preview_item = mock_notify.call_args.args
+        assert called_term.keyword == "Aiko"
+        assert called_count == 1
+        assert preview_item["id"] == "5ch:old-thread"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_term_existing_discussion_reply_update_is_notified(
+        self,
+        db_engine,
+        db_session,
+    ):
+        global_term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+        )
+        owner_term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            owner_device_secret="owner-secret",
+        )
+        existing = SourceItem(
+            id="5ch:shared-old-thread",
+            platform="5ch",
+            item_id="shared-old-thread",
+            url="https://itest.5ch.io/news4vip/test/read.cgi/example/1780000001",
+            published_at=datetime.now(timezone.utc) - timedelta(days=7),
+            media_type="article",
+            title="Aiko shared old discussion",
+            content_text="Aiko initial discussion",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([global_term, owner_term, existing])
+        db_session.flush()
+        db_session.add_all(
+            [
+                Match(watch_term_id=global_term.id, source_item_id=existing.id),
+                Match(watch_term_id=owner_term.id, source_item_id=existing.id),
+            ]
+        )
+        db_session.commit()
+        global_term_id = global_term.id
+        owner_term_id = owner_term.id
+
+        updated_thread = _make_item(
+            platform="5ch",
+            item_id="shared-old-thread",
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+            title="Aiko shared old discussion",
+            content_text="Aiko new reply",
+            raw_payload={"date_parsed": True},
+        )
+        connector = _mock_connector("5ch", [updated_thread])
+        notified_term_ids: list[int] = []
+
+        async def fake_notify(_db, notified_term, _count, _preview_item):
+            notified_term_ids.append(notified_term.id)
+            return True
+
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=fake_notify), \
+             patch.object(settings, "poll_terms_per_run", 1):
+            await _poll_once_unlocked()
+
+        assert notified_term_ids == [global_term_id, owner_term_id]
+        db_session.expire_all()
+        assert db_session.query(Match).count() == 2
+
+    @pytest.mark.asyncio
     async def test_estimated_publication_date_is_not_notified(
         self,
         db_engine,
