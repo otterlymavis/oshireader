@@ -21,7 +21,6 @@ enum BackgroundRefreshPolicy {
     static let pollTimeout: TimeInterval = 8
     static let incrementalFetchOverlap: TimeInterval = 15 * 60
     static let foregroundRefreshStaleAfter: TimeInterval = 5 * 60
-    static let activityDatePlatformIds: Set<String> = ["5ch", "girlschannel", "togetter"]
 
     static func shouldScheduleLocalFallback(hasRegisteredRemoteDeviceForCurrentEnvironment: Bool) -> Bool {
         !hasRegisteredRemoteDeviceForCurrentEnvironment
@@ -59,7 +58,7 @@ enum BackgroundRefreshPolicy {
     }
 
     static func shouldUseDateWindowForPlatformRefresh(_ platformId: String) -> Bool {
-        activityDatePlatformIds.contains(Platform.normalize(platformId))
+        Platform.shouldUseDateWindowRefresh(platformId)
     }
 
     static func shouldTriggerPoll(forRemoteNotification userInfo: [AnyHashable: Any]) -> Bool {
@@ -306,7 +305,7 @@ final class BackgroundRefreshManager {
             }
 
             let platformsToFetch = NetworkManager.shared.isLiveBackgroundPushTesting ? [] : db.subscribedPlatforms
-                .filter { $0 != "custom" }
+                .filter { Platform.shouldFetchFromBackend($0) }
                 .sorted { lhs, rhs in
                     let lhsHasItems = latestFetchedAt(in: db.feedItems, platformId: lhs) != nil
                     let rhsHasItems = latestFetchedAt(in: db.feedItems, platformId: rhs) != nil

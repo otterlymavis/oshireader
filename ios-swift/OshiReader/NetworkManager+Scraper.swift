@@ -242,35 +242,23 @@ extension NetworkManager {
 
     // MARK: - Consolidated Local Fallback
 
-    static let googleNewsFallbackSites: [(site: String, platform: String)] = [
-        ("news.yahoo.co.jp", "yahoonews"),
-        ("mdpr.jp", "mdpr"),
-        ("oricon.co.jp", "oricon"),
-        // NOTE: girlschannel is intentionally omitted because the backend serves it
-        // via direct scrape, and scraping it here too creates duplicate per-oshi rows.
-        ("5ch.net", "5ch"),
-        // Newer sources often only populate from the device's own network.
-        ("smartnews.com", "smartnews"),
-        ("ameblo.jp", "ameblo"),
-        ("dot.asahi.com", "aera"),
-        ("hochi.news", "hochi"),
-        ("sponichi.co.jp", "sponichi"),
-        ("news.livedoor.com", "livedoor"),
-        ("mantan-web.jp", "mantanweb"),
-        ("barks.jp", "barks"),
-        ("realsound.jp", "realsound"),
-        ("cinemacafe.net", "cinemacafe"),
-        ("togetter.com", "togetter"),
-        ("tver.jp", "tver"),
-        ("x.com", "twitter"),
-    ]
+    static let googleNewsFallbackSites: [(site: String, platform: String)] =
+        Platform.googleNewsFallbackSites()
 
-    func scrapeLocalFallbacks(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
+    func scrapeLocalFallbacks(
+        keyword: String,
+        tagKeyword: String? = nil,
+        platformIds: Set<String>? = nil
+    ) async -> [FeedItem] {
         let tag = tagKeyword ?? keyword
         return await withTaskGroup(of: [FeedItem].self) { group in
-            group.addTask { await self.scrapeRSSFallback(keyword: keyword, tagKeyword: tag) }
-            group.addTask { await self.scrapeNiconicoRSS(keyword: keyword, tagKeyword: tag) }
-            for fallback in Self.googleNewsFallbackSites {
+            if Platform.usesNewsRSSFallback(for: platformIds) {
+                group.addTask { await self.scrapeRSSFallback(keyword: keyword, tagKeyword: tag) }
+            }
+            if Platform.usesNiconicoRSSFallback(for: platformIds) {
+                group.addTask { await self.scrapeNiconicoRSS(keyword: keyword, tagKeyword: tag) }
+            }
+            for fallback in Platform.googleNewsFallbackSites(for: platformIds) {
                 group.addTask {
                     await self.scrapeGoogleNewsSite(
                         keyword: keyword,

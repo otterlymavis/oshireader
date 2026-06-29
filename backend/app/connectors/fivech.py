@@ -50,7 +50,8 @@ _ITEST_DATE_RE = re.compile(
     r"(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s+"
     r"(?P<hour>\d{1,2})時(?P<minute>\d{1,2})分"
 )
-_DIRECT_REQUEST_CONCURRENCY = 96
+_DIRECT_SUBJECT_CONCURRENCY = 12
+_DIRECT_DAT_CONCURRENCY = 8
 _ITEST_REQUEST_CONCURRENCY = 3
 _ITEST_PROXY_ATTEMPTS = 3
 _ITEST_JINA_ATTEMPTS = 3
@@ -59,7 +60,9 @@ _DIRECT_DAT_LIMIT = 25
 _REAL_5CH_LIMIT = 25
 _DIRECT_SUFFICIENT_RESULT_COUNT = 5
 _DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS = 24.0
-_DIRECT_EXTRA_SCAN_CURSOR_STEP = _DIRECT_REQUEST_CONCURRENCY
+# Advance by the intended extra-board scan window, not the per-batch concurrency.
+# The timeout loop may process several 12-board batches before it stops.
+_DIRECT_EXTRA_SCAN_CURSOR_STEP = 96
 _DIRECT_EXTRA_SCAN_OFFSET_LIMIT = 512
 _ITEST_FETCH_TIMEOUT_SECONDS = 5.0
 _FIVECH_INDEX_MAX_AGE = timedelta(days=31)
@@ -166,7 +169,7 @@ class _ThreadHit:
     posts: int
 
 
-async def _gather_limited(coros, concurrency: int = _DIRECT_REQUEST_CONCURRENCY):
+async def _gather_limited(coros, concurrency: int = _DIRECT_SUBJECT_CONCURRENCY):
     semaphore = asyncio.Semaphore(concurrency)
 
     async def run(coro):
@@ -675,20 +678,14 @@ class FiveChConnector(BaseConnector):
             priority_urls = set(_merge_board_urls(_DIRECT_BOARD_URLS))
             extra_board_urls = tuple(url for url in board_urls if url not in priority_urls)
             extra_board_urls = _rotated_extra_board_urls(keyword, extra_board_urls)
-            try:
-                extra_hits = await asyncio.wait_for(
-                    self._fetch_direct_hits(
-                        client,
-                        extra_board_urls,
-                        keyword,
-                        seen,
-                        remaining=max(0, _DIRECT_DAT_LIMIT - len(priority_hits)),
-                    ),
-                    timeout=_DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS,
-                )
-            except (asyncio.TimeoutError, TimeoutError):
-                log.warning("5ch expanded 2ch.sc board scan timed out for %r; using partial priority results", keyword)
-                extra_hits = []
+            extra_hits = await self._fetch_direct_hits(
+                client,
+                extra_board_urls,
+                keyword,
+                seen,
+                remaining=max(0, _DIRECT_DAT_LIMIT - len(priority_hits)),
+                timeout_seconds=_DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS,
+            )
             extra_items = await self._build_direct_items(client, extra_hits, keyword)
 
         items = [*priority_items, *extra_items]
@@ -702,28 +699,50 @@ class FiveChConnector(BaseConnector):
         keyword: str,
         seen: set[tuple[str, str, str]],
         remaining: int = _DIRECT_DAT_LIMIT,
+        timeout_seconds: float | None = None,
     ) -> list[_ThreadHit]:
         hits: list[_ThreadHit] = []
         if remaining <= 0:
             return hits
-        for start in range(0, len(board_urls), _DIRECT_REQUEST_CONCURRENCY):
-            board_batch = board_urls[start:start + _DIRECT_REQUEST_CONCURRENCY]
-            subject_results = await _gather_limited(
-                [self._fetch_subject(client, board_url, keyword) for board_url in board_batch]
-            )
-
-            for result in subject_results:
-                if isinstance(result, Exception):
-                    log.debug("5ch subject scan failed: %s", result)
-                    continue
-                for hit in result:
-                    key = (hit.host, hit.board_key, hit.thread_id)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    hits.append(hit)
-                    if len(hits) >= remaining:
+        deadline = (
+            time.monotonic() + timeout_seconds
+            if timeout_seconds is not None
+            else None
+        )
+        for start in range(0, len(board_urls), _DIRECT_SUBJECT_CONCURRENCY):
+            if deadline is not None and time.monotonic() >= deadline:
+                log.warning("5ch expanded 2ch.sc board scan timed out for %r; using partial results", keyword)
+                return hits
+            board_batch = board_urls[start:start + _DIRECT_SUBJECT_CONCURRENCY]
+            tasks = [
+                asyncio.create_task(self._fetch_subject(client, board_url, keyword))
+                for board_url in board_batch
+            ]
+            try:
+                timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+                for task in asyncio.as_completed(tasks, timeout=timeout):
+                    try:
+                        result = await task
+                    except asyncio.TimeoutError:
+                        log.warning("5ch expanded 2ch.sc board scan timed out for %r; using partial results", keyword)
                         return hits
+                    except Exception as exc:
+                        log.debug("5ch subject scan failed: %s", exc)
+                        continue
+                    for hit in result:
+                        key = (hit.host, hit.board_key, hit.thread_id)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        hits.append(hit)
+                        if len(hits) >= remaining:
+                            return hits
+            finally:
+                pending = [task for task in tasks if not task.done()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
         return hits
 
     async def _build_direct_items(
@@ -735,7 +754,8 @@ class FiveChConnector(BaseConnector):
         if not hits:
             return []
         dated = await _gather_limited(
-            [self._build_direct_item(client, hit, keyword) for hit in hits[:_DIRECT_DAT_LIMIT]]
+            [self._build_direct_item(client, hit, keyword) for hit in hits[:_DIRECT_DAT_LIMIT]],
+            concurrency=_DIRECT_DAT_CONCURRENCY,
         )
         return [item for item in dated if isinstance(item, SourceItemCreate)]
 

@@ -963,7 +963,7 @@ class TestFiveChFetch:
         )
         extra_scan_boards: list[tuple[str, ...]] = []
 
-        async def _hits(_client, board_urls, _keyword, _seen, remaining=25):
+        async def _hits(_client, board_urls, _keyword, _seen, remaining=25, **_kw):
             if "rareboard" in "".join(board_urls):
                 extra_scan_boards.append(board_urls)
                 await asyncio.sleep(0.1)
@@ -992,6 +992,48 @@ class TestFiveChFetch:
             "http://dynamic.2ch.sc/rareboard/",
             "http://dynamic.2ch.sc/otherboard/",
         )]
+
+    @pytest.mark.asyncio
+    async def test_direct_hit_scan_preserves_completed_hits_when_timeout_expires(self):
+        connector = FiveChConnector()
+
+        async def _subject(_client, board_url, keyword):
+            if "fastboard" in board_url:
+                return [
+                    fivech_module._ThreadHit(
+                        board_url=board_url,
+                        board_key="fastboard",
+                        host="dynamic.2ch.sc",
+                        thread_id="1778433999",
+                        title=f"{keyword} rare dynamic board thread",
+                        posts=64,
+                    )
+                ]
+            await asyncio.sleep(0.1)
+            return [
+                fivech_module._ThreadHit(
+                    board_url=board_url,
+                    board_key="slowboard",
+                    host="dynamic.2ch.sc",
+                    thread_id="1778434000",
+                    title=f"{keyword} slow dynamic board thread",
+                    posts=12,
+                )
+            ]
+
+        with patch.object(connector, "_fetch_subject", new=AsyncMock(side_effect=_subject)):
+            hits = await connector._fetch_direct_hits(
+                MagicMock(),
+                (
+                    "http://dynamic.2ch.sc/fastboard/",
+                    "http://dynamic.2ch.sc/slowboard/",
+                ),
+                "吉沢亮",
+                set(),
+                timeout_seconds=0.01,
+            )
+
+        assert [hit.board_key for hit in hits] == ["fastboard"]
 
     @pytest.mark.asyncio
     async def test_direct_scan_includes_actor_movie_and_cm_boards(self):

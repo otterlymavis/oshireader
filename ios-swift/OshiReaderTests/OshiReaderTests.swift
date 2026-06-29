@@ -1168,6 +1168,29 @@ final class OshiReaderTests: XCTestCase {
 
         XCTAssertTrue(missing.isEmpty, "Missing platform definitions: \(missing)")
     }
+
+    func testPlatformFetchCapabilitiesDriveRefreshDecisions() throws {
+        XCTAssertTrue(Platform.shouldFetchFromBackend("youtube"))
+        XCTAssertTrue(Platform.shouldFetchFromBackend("5ch"))
+        XCTAssertFalse(Platform.shouldFetchFromBackend("custom"))
+        XCTAssertFalse(Platform.shouldFetchFromBackend("unknown-platform"))
+
+        XCTAssertTrue(Platform.shouldRunDeviceFallback("5ch"))
+        XCTAssertTrue(Platform.shouldRunDeviceFallback("news"))
+        XCTAssertFalse(Platform.shouldRunDeviceFallback("girlschannel"))
+        XCTAssertFalse(Platform.shouldRunDeviceFallback("youtube"))
+        XCTAssertFalse(Platform.shouldRunDeviceFallback("custom"))
+
+        XCTAssertTrue(Platform.shouldUseDateWindowRefresh("5ch"))
+        XCTAssertTrue(Platform.shouldUseDateWindowRefresh("girlschannel"))
+        XCTAssertTrue(Platform.shouldUseDateWindowRefresh("togetter"))
+        XCTAssertFalse(Platform.shouldUseDateWindowRefresh("news"))
+    }
+
+    func testScopedGoogleNewsFallbackSitesOnlyIncludeRequestedFallbackPlatforms() throws {
+        let sites = Platform.googleNewsFallbackSites(for: Set(["5ch", "girlschannel", "youtube", "custom"]))
+        XCTAssertEqual(sites.map(\.platform), ["5ch"])
+    }
     
     // MARK: - skipDateCutoff flag: forum platforms always pass date filter
     func testSkipDateCutoffAllowsOldForumItems() throws {

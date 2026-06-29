@@ -37,13 +37,17 @@ private struct FeedRefreshReport {
             addedCount: addedCount,
             detail: detail
         ))
-        if itemCount > 0 { backendReturnedItems = true }
+        if Self.isUsefulBackendAttempt(strategy: strategy, addedCount: addedCount) {
+            backendReturnedItems = true
+        }
         self.addedCount += addedCount
     }
 
     mutating func append(_ attempt: FeedRefreshAttempt) {
         attempts.append(attempt)
-        if attempt.itemCount > 0 { backendReturnedItems = true }
+        if Self.isUsefulBackendAttempt(strategy: attempt.strategy, addedCount: attempt.addedCount) {
+            backendReturnedItems = true
+        }
         addedCount += attempt.addedCount
     }
 
@@ -51,6 +55,11 @@ private struct FeedRefreshReport {
         attempts.append(contentsOf: other.attempts)
         backendReturnedItems = backendReturnedItems || other.backendReturnedItems
         addedCount += other.addedCount
+    }
+
+    private static func isUsefulBackendAttempt(strategy: String, addedCount: Int) -> Bool {
+        guard addedCount > 0 else { return false }
+        return strategy.hasPrefix("backend_feed") || strategy.hasPrefix("backend_platform_")
     }
 }
 
@@ -252,7 +261,9 @@ struct FeedView: View {
                                         : (isSelected ? Color.white : meta.fg)
                                     Button(action: {
                                         selectedPlatform = isSelected ? nil : platformId
-                                        if !isSelected && !hasItems(for: platformId) {
+                                        if !isSelected,
+                                           !hasItems(for: platformId),
+                                           Platform.shouldFetchFromBackend(platformId) {
                                             Task {
                                                 await fetchBackendPlatform(platformId)
                                             }
@@ -559,9 +570,12 @@ struct FeedView: View {
         defer { isRefreshing = false; isScrapingFallback = false }
 
         var report = await quickRefresh()
-        isRefreshing = false
 
         guard !Task.isCancelled else { return }
+        guard !report.backendReturnedItems else {
+            await sendNoResultsDiagnosticIfNeeded(report)
+            return
+        }
         // Scrape device-side after the backend pass. The backend's Render datacenter IP is
         // blocked by Google News (503) and niconico (403), so many sources (niconico, 5ch,
         // smartnews, ameblo, aera, hochi, sponichi, livedoor, mantanweb, barks,
@@ -580,7 +594,6 @@ struct FeedView: View {
             await sendNoResultsDiagnosticIfNeeded(report)
             return
         }
-        Self.lastDeviceScrapeAt = Date()
         isScrapingFallback = true
         report.append(await deepFallback(triggerBackendPoll: !report.backendReturnedItems))
         await sendNoResultsDiagnosticIfNeeded(report)
@@ -690,7 +703,9 @@ struct FeedView: View {
         guard !Task.isCancelled else { return report }
 
         // 3. Per-platform fetches in parallel
-        let platformsToFetch = Array(Set(db.subscribedPlatforms.filter { $0 != "custom" }))
+        let platformsToFetch = Array(Set(db.subscribedPlatforms.filter {
+            Platform.shouldFetchFromBackend($0)
+        }))
         await withTaskGroup(of: FeedRefreshAttempt.self) { group in
             for platform in platformsToFetch {
                 let platformSince = BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh(platform)
@@ -748,6 +763,9 @@ struct FeedView: View {
                     addedCount: added,
                     detail: "days=\(days)"
                 )
+                if report.backendReturnedItems {
+                    return report
+                }
             } catch {
                 report.record(
                     strategy: "backend_feed_after_poll",
@@ -757,12 +775,28 @@ struct FeedView: View {
             }
         }
         let activeTerms = db.terms.filter { $0.is_active }
+        guard !activeTerms.isEmpty else {
+            report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no active terms")
+            return report
+        }
+        let fallbackPlatforms = Set(db.subscribedPlatforms.filter {
+            Platform.shouldRunDeviceFallback($0)
+        })
+        guard !fallbackPlatforms.isEmpty else {
+            report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no subscribed fallback platforms")
+            return report
+        }
+        Self.lastDeviceScrapeAt = Date()
         await withTaskGroup(of: [FeedItem].self) { group in
             for term in activeTerms {
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
                     group.addTask {
-                        await NetworkManager.shared.scrapeLocalFallbacks(keyword: searchTerm, tagKeyword: term.keyword)
+                        await NetworkManager.shared.scrapeLocalFallbacks(
+                            keyword: searchTerm,
+                            tagKeyword: term.keyword,
+                            platformIds: fallbackPlatforms
+                        )
                     }
                 }
             }
