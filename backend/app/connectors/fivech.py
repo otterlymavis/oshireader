@@ -50,8 +50,8 @@ _ITEST_DATE_RE = re.compile(
     r"(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s+"
     r"(?P<hour>\d{1,2})時(?P<minute>\d{1,2})分"
 )
-_DIRECT_SUBJECT_CONCURRENCY = 12
-_DIRECT_DAT_CONCURRENCY = 8
+_DIRECT_SUBJECT_CONCURRENCY = 4
+_DIRECT_DAT_CONCURRENCY = 3
 _ITEST_REQUEST_CONCURRENCY = 3
 _ITEST_PROXY_ATTEMPTS = 3
 _ITEST_JINA_ATTEMPTS = 3
@@ -61,8 +61,8 @@ _REAL_5CH_LIMIT = 25
 _DIRECT_SUFFICIENT_RESULT_COUNT = 5
 _DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS = 24.0
 # Advance by the intended extra-board scan window, not the per-batch concurrency.
-# The timeout loop may process several 12-board batches before it stops.
-_DIRECT_EXTRA_SCAN_CURSOR_STEP = 96
+# The timeout loop may process several subject batches before it stops.
+_DIRECT_EXTRA_SCAN_CURSOR_STEP = 32
 _DIRECT_EXTRA_SCAN_OFFSET_LIMIT = 512
 _ITEST_FETCH_TIMEOUT_SECONDS = 5.0
 _FIVECH_INDEX_MAX_AGE = timedelta(days=31)
@@ -798,7 +798,7 @@ class FiveChConnector(BaseConnector):
         keyword: str,
     ) -> list[_ThreadHit]:
         if _fivech_proxy_configured():
-            content = await self._fetch_proxy_resource(board_url, "subject")
+            content = await self._fetch_proxy_resource(client, board_url, "subject")
             if content:
                 text = _decode_shift_jis(content)
                 hits = _parse_subject(text, board_url, keyword)
@@ -815,7 +815,7 @@ class FiveChConnector(BaseConnector):
             log.debug("5ch subject returned status %d for %s", resp.status_code, board_url)
         except Exception as exc:
             log.debug("5ch subject fetch error for %s: %s", board_url, exc)
-        return await self._fetch_subject_via_proxy(board_url, keyword)
+        return await self._fetch_subject_via_proxy(client, board_url, keyword)
 
     async def _build_direct_item(
         self,
@@ -854,7 +854,7 @@ class FiveChConnector(BaseConnector):
         hit: _ThreadHit,
     ) -> datetime | None:
         if _fivech_proxy_configured():
-            published_at = await self._fetch_latest_post_at_via_proxy(hit)
+            published_at = await self._fetch_latest_post_at_via_proxy(client, hit)
             if published_at is not None:
                 return published_at
         try:
@@ -865,22 +865,32 @@ class FiveChConnector(BaseConnector):
                     return published_at
         except Exception as exc:
             log.debug("5ch dat fetch error for %s/%s: %s", hit.board_key, hit.thread_id, exc)
-        return await self._fetch_latest_post_at_via_proxy(hit)
+        return await self._fetch_latest_post_at_via_proxy(client, hit)
 
-    async def _fetch_subject_via_proxy(self, board_url: str, keyword: str) -> list[_ThreadHit]:
-        content = await self._fetch_proxy_resource(board_url, "subject")
+    async def _fetch_subject_via_proxy(
+        self,
+        client: httpx.AsyncClient,
+        board_url: str,
+        keyword: str,
+    ) -> list[_ThreadHit]:
+        content = await self._fetch_proxy_resource(client, board_url, "subject")
         if not content:
             return []
         return _parse_subject(_decode_shift_jis(content), board_url, keyword)
 
-    async def _fetch_latest_post_at_via_proxy(self, hit: _ThreadHit) -> datetime | None:
-        content = await self._fetch_proxy_resource(hit.board_url, "dat", hit.thread_id)
+    async def _fetch_latest_post_at_via_proxy(
+        self,
+        client: httpx.AsyncClient,
+        hit: _ThreadHit,
+    ) -> datetime | None:
+        content = await self._fetch_proxy_resource(client, hit.board_url, "dat", hit.thread_id)
         if not content:
             return None
         return _parse_dat_latest_post_at(_decode_shift_jis(content))
 
     async def _fetch_proxy_resource(
         self,
+        client: httpx.AsyncClient,
         board_url: str,
         resource: str,
         thread_id: str | None = None,
@@ -894,10 +904,9 @@ class FiveChConnector(BaseConnector):
         for proxy_url in _fivech_proxy_urls():
             url = f"{proxy_url}?{urlencode(params)}"
             try:
-                async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                    response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-                    if response.is_success:
-                        return response.content
+                response = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                if response.is_success:
+                    return response.content
             except Exception as exc:
                 log.debug("5ch proxy fetch error for %s %s via %s: %s", board_url, resource, proxy_url, exc)
         return None
