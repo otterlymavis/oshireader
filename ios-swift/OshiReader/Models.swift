@@ -1,6 +1,10 @@
 import Foundation
 
 enum _ISO8601Cache {
+    private static let lock = NSLock()
+    private static var parsedDates: [String: Date?] = [:]
+    private static let maxParsedDateCacheEntries = 4096
+
     static let withFractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -20,16 +24,37 @@ enum _ISO8601Cache {
             return df
         }
     }()
+
+    static func cachedDate(from value: String) -> Date? {
+        lock.lock()
+        if let index = parsedDates.index(forKey: value) {
+            let cached = parsedDates[index].value
+            lock.unlock()
+            return cached
+        }
+
+        let parsed = parseDateLocked(value)
+        if parsedDates.count >= maxParsedDateCacheEntries {
+            parsedDates.removeAll(keepingCapacity: true)
+        }
+        parsedDates.updateValue(parsed, forKey: value)
+        lock.unlock()
+        return parsed
+    }
+
+    private static func parseDateLocked(_ value: String) -> Date? {
+        if let date = withFractional.date(from: value) { return date }
+        if let date = withoutFractional.date(from: value) { return date }
+        // Naive datetime (no timezone) from older backend rows — treat as UTC
+        for df in naiveFormatters {
+            if let date = df.date(from: value) { return date }
+        }
+        return nil
+    }
 }
 
 func parseISO8601Date(_ value: String) -> Date? {
-    if let date = _ISO8601Cache.withFractional.date(from: value) { return date }
-    if let date = _ISO8601Cache.withoutFractional.date(from: value) { return date }
-    // Naive datetime (no timezone) from older backend rows — treat as UTC
-    for df in _ISO8601Cache.naiveFormatters {
-        if let date = df.date(from: value) { return date }
-    }
-    return nil
+    _ISO8601Cache.cachedDate(from: value)
 }
 
 private enum _DisplayTextRegex {

@@ -1965,6 +1965,32 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertNil(parseISO8601Date(""))
     }
 
+    func testParseISO8601DateHandlesRepeatedConcurrentCalls() throws {
+        let values = [
+            "2024-06-15T10:30:00.123456Z",
+            "2024-06-15T10:30:00Z",
+            "2024-06-15T19:30:00+09:00",
+            "2024-06-15T10:30:00",
+            "not a date",
+            "",
+        ]
+        let lock = NSLock()
+        var mismatches: [String] = []
+
+        DispatchQueue.concurrentPerform(iterations: 500) { index in
+            let value = values[index % values.count]
+            let date = parseISO8601Date(value)
+            let expectedNil = value.isEmpty || value == "not a date"
+            if expectedNil != (date == nil) {
+                lock.lock()
+                mismatches.append(value)
+                lock.unlock()
+            }
+        }
+
+        XCTAssertTrue(mismatches.isEmpty, "Unexpected parse results for \(mismatches)")
+    }
+
     // MARK: - cleanDisplayText
     func testCleanDisplayTextHTMLEntities() throws {
         XCTAssertEqual(cleanDisplayText("Fish &amp; Chips"), "Fish & Chips")
