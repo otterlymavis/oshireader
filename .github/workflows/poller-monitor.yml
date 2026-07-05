@@ -100,6 +100,7 @@ jobs:
           python3 - "$STATUS" "$BODY" <<'PY'
           import json
           import sys
+          from datetime import datetime, timezone
 
           status = sys.argv[1]
           with open(sys.argv[2], encoding="utf-8") as response_file:
@@ -128,7 +129,43 @@ jobs:
           if notification_health.get("healthy") is not True:
               failures.append(f"notification health is degraded: {notification_health}")
           if pending_notifications:
-              failures.append(f"pending notifications remain: {pending_notifications}")
+              latest_poll = payload.get("latest_poll") or {}
+              latest_poll_created_at = latest_poll.get("created_at")
+              pending_updated_at = [
+                  pending.get("updated_at")
+                  for pending in pending_notifications
+                  if pending.get("updated_at")
+              ]
+
+              active_poll_is_fresh = False
+              pending_rows_are_fresh = False
+              now = datetime.now(timezone.utc)
+
+              if latest_poll.get("status") == "started" and latest_poll_created_at:
+                  started_at = datetime.fromisoformat(
+                      latest_poll_created_at.replace("Z", "+00:00")
+                  )
+                  if started_at.tzinfo is None:
+                      started_at = started_at.replace(tzinfo=timezone.utc)
+                  active_poll_is_fresh = (now - started_at).total_seconds() <= 20 * 60
+
+              if pending_updated_at and len(pending_updated_at) == len(pending_notifications):
+                  pending_rows_are_fresh = True
+                  for updated_at in pending_updated_at:
+                      parsed = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                      if parsed.tzinfo is None:
+                          parsed = parsed.replace(tzinfo=timezone.utc)
+                      if (now - parsed).total_seconds() > 20 * 60:
+                          pending_rows_are_fresh = False
+                          break
+
+              if active_poll_is_fresh and pending_rows_are_fresh:
+                  print(
+                      "Pending notifications are fresh while a poll is still running; "
+                      "treating this monitor check as healthy."
+                  )
+              else:
+                  failures.append(f"pending notifications remain: {pending_notifications}")
           if failures:
               raise SystemExit("; ".join(failures))
           PY
