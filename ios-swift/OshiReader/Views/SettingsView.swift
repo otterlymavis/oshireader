@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var notificationTestMessage: String? = nil
     @State private var notificationTestSucceeded = false
     @State private var isSendingNotificationTest = false
+    @State private var settingsErrorMessage: String? = nil
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     @AppStorage(BackgroundRefreshLiveTestProbe.resultKey) private var liveBackgroundRefreshResult = ""
     
@@ -181,13 +182,11 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings.keywordRow.\(term.keyword)")
                     }
                     .onDelete { offsets in
-                        for index in offsets {
-                            let term = db.terms[index]
-                            if addingAliasForId == term.id { addingAliasForId = nil }
-                            db.deleteTerm(id: term.id)
-                            Task {
-                                _ = try? await NetworkManager.shared.deleteWatchTerm(id: term.id)
-                            }
+                        let termsToDelete = offsets.compactMap { index in
+                            db.terms.indices.contains(index) ? db.terms[index] : nil
+                        }
+                        for term in termsToDelete {
+                            deleteTermFromSettings(term)
                         }
                     }
                     
@@ -456,6 +455,35 @@ struct SettingsView: View {
                 }
             } message: {
                 Text(i18n.t("clearAllDataMessage"))
+            }
+            .alert(
+                settingsErrorMessage ?? "",
+                isPresented: Binding(
+                    get: { settingsErrorMessage != nil },
+                    set: { if !$0 { settingsErrorMessage = nil } }
+                )
+            ) {
+                Button(i18n.t("ok"), role: .cancel) {
+                    settingsErrorMessage = nil
+                }
+            }
+        }
+    }
+
+    private func deleteTermFromSettings(_ term: WatchTerm) {
+        if addingAliasForId == term.id { addingAliasForId = nil }
+        Task {
+            do {
+                try await NetworkManager.shared.deleteWatchTermIfSynced(term)
+                await MainActor.run {
+                    db.markTermDeleteConfirmed(term)
+                    db.deleteTerm(id: term.id)
+                }
+            } catch {
+                await MainActor.run {
+                    AppLogger.network.error("deleteWatchTerm(\(term.id)) failed from Settings: \(error.localizedDescription)")
+                    settingsErrorMessage = i18n.t("errorStopFollowingFailed")
+                }
             }
         }
     }

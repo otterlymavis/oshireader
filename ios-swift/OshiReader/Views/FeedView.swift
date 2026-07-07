@@ -82,6 +82,8 @@ struct FeedView: View {
     @State private var showFilterSheet = false
     @State private var showAddUrlSheet = false
     @State private var showReorderSheet = false
+    @State private var pendingUnfollowTerm: WatchTerm? = nil
+    @State private var unfollowingTermIds: Set<String> = []
     
     @State private var customUrlString = ""
     @State private var customUrlTitle = ""
@@ -398,21 +400,19 @@ struct FeedView: View {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    stopFollowingButton(for: item)
                                     Button(role: .destructive) {
-                                        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
-                                        if selectedItem?.id == item.id { selectedItem = nil }
+                                        deleteFeedItem(item, clearSelection: true)
                                     } label: {
                                         Label(i18n.t("delete"), systemImage: "trash")
                                     }
                                 }
                                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button {
-                                        _ = db.toggleSaved(item: item)
-                                    } label: {
-                                        Label(savedItemIds.contains(item.id) ? i18n.t("unsave") : i18n.t("save"),
-                                              systemImage: savedItemIds.contains(item.id) ? "bookmark.slash" : "bookmark")
-                                    }
-                                    .tint(theme.colors.primary)
+                                    saveToggleButton(for: item)
+                                }
+                                .contextMenu {
+                                    saveToggleButton(for: item)
+                                    stopFollowingButton(for: item)
                                 }
                             } else {
                                 NavigationLink(destination: ReaderView(feedItem: item)) {
@@ -424,20 +424,19 @@ struct FeedView: View {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    stopFollowingButton(for: item)
                                     Button(role: .destructive) {
-                                        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
+                                        deleteFeedItem(item, clearSelection: false)
                                     } label: {
                                         Label(i18n.t("delete"), systemImage: "trash")
                                     }
                                 }
                                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button {
-                                        _ = db.toggleSaved(item: item)
-                                    } label: {
-                                        Label(savedItemIds.contains(item.id) ? i18n.t("unsave") : i18n.t("save"),
-                                              systemImage: savedItemIds.contains(item.id) ? "bookmark.slash" : "bookmark")
-                                    }
-                                    .tint(theme.colors.primary)
+                                    saveToggleButton(for: item)
+                                }
+                                .contextMenu {
+                                    saveToggleButton(for: item)
+                                    stopFollowingButton(for: item)
                                 }
                             }
                         }
@@ -518,6 +517,22 @@ struct FeedView: View {
         .sheet(isPresented: $showReorderSheet) {
             ReorderSourcesSheet(theme: theme, i18n: i18n)
         }
+        .alert(
+            i18n.tFormat("stopFollowingTitleFmt", pendingUnfollowTerm?.keyword ?? ""),
+            isPresented: Binding(
+                get: { pendingUnfollowTerm != nil },
+                set: { if !$0 { pendingUnfollowTerm = nil } }
+            )
+        ) {
+            Button(i18n.t("cancel"), role: .cancel) {
+                pendingUnfollowTerm = nil
+            }
+            Button(i18n.t("stopFollowing"), role: .destructive) {
+                confirmStopFollowing()
+            }
+        } message: {
+            Text(i18n.t("stopFollowingMessage"))
+        }
         .accessibilityIdentifier("feed.screen")
         .onChange(of: selectedKeyword) { displayedCount = 20 }
         .onChange(of: selectedPlatform) { displayedCount = 20 }
@@ -537,7 +552,8 @@ struct FeedView: View {
                 let hasTerms = !db.terms.isEmpty || pulledNew
                 let needsForegroundRefresh = db.feedItems.isEmpty ||
                     BackgroundRefreshPolicy.shouldRefreshOnForeground(items: db.feedItems)
-                if hasTerms, needsForegroundRefresh {
+                let hasRecoverableCache = !db.feedItems.isEmpty
+                if (hasTerms || hasRecoverableCache), needsForegroundRefresh {
                     await refreshFeed()
                 }
             }
@@ -906,6 +922,81 @@ struct FeedView: View {
 
     private func matchesPlatform(_ item: FeedItem, platformId: String) -> Bool {
         Platform.normalize(item.platform) == platformId
+    }
+
+    @ViewBuilder
+    private func saveToggleButton(for item: FeedItem) -> some View {
+        Button {
+            _ = db.toggleSaved(item: item)
+        } label: {
+            Label(savedItemIds.contains(item.id) ? i18n.t("unsave") : i18n.t("save"),
+                  systemImage: savedItemIds.contains(item.id) ? "bookmark.slash" : "bookmark")
+        }
+        .tint(theme.colors.primary)
+    }
+
+    @ViewBuilder
+    private func stopFollowingButton(for item: FeedItem) -> some View {
+        if let term = db.term(matchingKeyword: item.watch_term_keyword) {
+            Button(role: .destructive) {
+                pendingUnfollowTerm = term
+            } label: {
+                Label(i18n.t("stopFollowing"), systemImage: "person.crop.circle.badge.xmark")
+            }
+            .tint(.red)
+            .disabled(unfollowingTermIds.contains(term.id))
+        }
+    }
+
+    private func deleteFeedItem(_ item: FeedItem, clearSelection: Bool) {
+        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
+        if clearSelection, selectedItem?.id == item.id { selectedItem = nil }
+        guard let watchTermID = backendWatchTermID(for: item) else { return }
+        Task {
+            do {
+                try await NetworkManager.shared.muteFeedItem(
+                    sourceItemID: item.id,
+                    watchTermID: watchTermID
+                )
+            } catch {
+                AppLogger.network.error("muteFeedItem(\(item.id), term=\(watchTermID)) failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func backendWatchTermID(for item: FeedItem) -> Int? {
+        if let watchTermID = item.watch_term_id {
+            return watchTermID
+        }
+        guard let term = db.term(matchingKeyword: item.watch_term_keyword) else {
+            return nil
+        }
+        return Int(term.id)
+    }
+
+    private func confirmStopFollowing() {
+        guard let term = pendingUnfollowTerm else { return }
+        pendingUnfollowTerm = nil
+        guard !unfollowingTermIds.contains(term.id) else { return }
+        unfollowingTermIds.insert(term.id)
+        Task {
+            do {
+                try await NetworkManager.shared.deleteWatchTermIfSynced(term)
+                await MainActor.run {
+                    if selectedKeyword == term.keyword { selectedKeyword = nil }
+                    if selectedItem?.watch_term_keyword == term.keyword { selectedItem = nil }
+                    db.markTermDeleteConfirmed(term)
+                    db.deleteTerm(id: term.id)
+                    unfollowingTermIds.remove(term.id)
+                }
+            } catch {
+                await MainActor.run {
+                    AppLogger.network.error("deleteWatchTerm(\(term.id)) failed: \(error.localizedDescription)")
+                    refreshErrorMessage = "errorStopFollowingFailed"
+                    unfollowingTermIds.remove(term.id)
+                }
+            }
+        }
     }
 }
 

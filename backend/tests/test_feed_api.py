@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from app.config import settings
-from app.models import APNSDeviceToken, Match, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, Match, MutedFeedItem, SourceItem, WatchTerm
 
 # Supply a token so admin endpoints work in tests.
 os.environ.setdefault("ADMIN_API_TOKEN", "test-token")
@@ -249,6 +249,147 @@ class TestFeedAPI:
         assert len(rows) == 1
         assert rows[0]["item"]["id"] == owned_item.id
         assert rows[0]["watch_term_keyword"] == "Owned"
+
+    def test_mute_feed_item_removes_only_that_match_and_keeps_term(self, client, db_session):
+        term = _make_term(db_session, keyword="Discussion")
+        muted_item = _make_item(db_session, item_id="muted", title="Discussion noisy thread")
+        kept_item = _make_item(db_session, item_id="kept", title="Discussion quiet thread")
+        _make_match(db_session, term, muted_item)
+        _make_match(db_session, term, kept_item)
+
+        resp = client.post(
+            "/api/feed/muted-items",
+            json={
+                "source_item_id": muted_item.id,
+                "watch_term_id": term.id,
+            },
+            headers=_AUTH,
+        )
+
+        assert resp.status_code == 204
+        db_session.expire_all()
+        assert db_session.query(WatchTerm).filter_by(id=term.id).one().keyword == "Discussion"
+        assert (
+            db_session.query(Match)
+            .filter_by(watch_term_id=term.id, source_item_id=muted_item.id)
+            .count()
+            == 0
+        )
+        assert (
+            db_session.query(Match)
+            .filter_by(watch_term_id=term.id, source_item_id=kept_item.id)
+            .count()
+            == 1
+        )
+        assert (
+            db_session.query(MutedFeedItem)
+            .filter_by(watch_term_id=term.id, source_item_id=muted_item.id)
+            .count()
+            == 1
+        )
+
+        rows = client.get("/api/feed/").json()
+        assert [row["item"]["id"] for row in rows] == [kept_item.id]
+
+    def test_mute_feed_item_rejects_non_string_payload(self, client):
+        resp = client.post(
+            "/api/feed/muted-items",
+            json={
+                "source_item_id": 123,
+                "watch_term_id": 1,
+            },
+            headers=_AUTH,
+        )
+
+        assert resp.status_code == 422
+        assert "source_item_id" in resp.text
+
+    def test_registered_device_can_only_mute_owned_item(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        other_secret = "other-device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        other_owner_secret = hashlib.sha256(other_secret.encode()).hexdigest()
+        db_session.add_all([
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+            APNSDeviceToken(
+                token="b" * 64,
+                environment="sandbox",
+                device_secret=other_owner_secret,
+                is_verified=True,
+            ),
+        ])
+        owned_term = _make_term(db_session, keyword="Owned", owner_device_secret=owner_secret)
+        other_term = _make_term(db_session, keyword="Other", owner_device_secret=other_owner_secret)
+        owned_item = _make_item(db_session, item_id="owned-mute", title="Owned item")
+        other_item = _make_item(db_session, item_id="other-mute", title="Other item")
+        _make_match(db_session, owned_term, owned_item)
+        _make_match(db_session, other_term, other_item)
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            other_resp = client.post(
+                "/api/feed/muted-items",
+                json={
+                    "source_item_id": other_item.id,
+                    "watch_term_id": other_term.id,
+                },
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+            owned_resp = client.post(
+                "/api/feed/muted-items",
+                json={
+                    "source_item_id": owned_item.id,
+                    "watch_term_id": owned_term.id,
+                },
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert other_resp.status_code == 404
+        assert owned_resp.status_code == 204
+        assert db_session.query(MutedFeedItem).filter_by(source_item_id=other_item.id).count() == 0
+        assert db_session.query(MutedFeedItem).filter_by(source_item_id=owned_item.id).count() == 1
+
+    def test_mute_feed_item_targets_exact_term_id_for_duplicate_keywords(self, client, db_session):
+        older = _make_term(db_session, keyword="Duplicate")
+        newer = _make_term(db_session, keyword="Duplicate")
+        older_item = _make_item(db_session, item_id="duplicate-older", title="Duplicate older")
+        newer_item = _make_item(db_session, item_id="duplicate-newer", title="Duplicate newer")
+        _make_match(db_session, older, older_item)
+        _make_match(db_session, newer, newer_item)
+
+        resp = client.post(
+            "/api/feed/muted-items",
+            json={
+                "source_item_id": older_item.id,
+                "watch_term_id": older.id,
+            },
+            headers=_AUTH,
+        )
+
+        assert resp.status_code == 204
+        assert (
+            db_session.query(MutedFeedItem)
+            .filter_by(watch_term_id=older.id, source_item_id=older_item.id)
+            .count()
+            == 1
+        )
+        assert (
+            db_session.query(MutedFeedItem)
+            .filter_by(watch_term_id=newer.id, source_item_id=older_item.id)
+            .count()
+            == 0
+        )
+        assert (
+            db_session.query(Match)
+            .filter_by(watch_term_id=newer.id, source_item_id=newer_item.id)
+            .count()
+            == 1
+        )
 
     def test_match_redirect_opens_source_url(self, client, db_session):
         term = _make_term(db_session)

@@ -28,6 +28,9 @@ class LocalDB: ObservableObject {
     private let minFeedItemsPerSubscribedPlatform = 8
     private let minFeedItemsPerDiscussionPlatform = 25
     private let discussionActivityPlatforms: Set<String> = ["5ch", "girlschannel", "togetter"]
+    private let termDeleteTombstonesFileName = "term_delete_tombstones"
+    private let termDeleteTombstoneLifetime: TimeInterval = 10 * 60
+    private var termDeleteTombstones: [String: Date] = [:]
 
     // Bump this whenever a migration step is added below.
     private static let currentSchemaVersion = 3
@@ -59,6 +62,10 @@ class LocalDB: ObservableObject {
         self.compositions = loadFromFile(name: "oshi_compositions", defaultValue: [:])
         let hiddenArray: [String] = loadFromFile(name: "hidden_items", defaultValue: [])
         self.hiddenItems = Set(hiddenArray)
+        self.termDeleteTombstones = loadFromFile(name: termDeleteTombstonesFileName, defaultValue: [:])
+        pruneTermDeleteTombstones()
+        applyPersistedTermDeletes()
+        repairMissingTermsFromCachedFeed()
     }
 
     // MARK: - Schema Migrations
@@ -121,6 +128,17 @@ class LocalDB: ObservableObject {
         }
     }
 
+    private func repairMissingTermsFromCachedFeed() {
+        guard terms.isEmpty else { return }
+        let keywords = Array(Set(feedItems.map(\.watch_term_keyword).filter { !$0.isEmpty })).sorted()
+        guard !keywords.isEmpty else { return }
+        terms = keywords.map {
+            WatchTerm(keyword: $0, collection_mode: .allInfo, is_active: true, notify_on_new: true, repaired_from_cache: true)
+        }
+        saveToFile(name: "terms", value: terms)
+        AppLogger.persistence.info("Repaired \(keywords.count) missing watch terms from cached feed items")
+    }
+
     private func loadFromFile<T: Decodable>(name: String, defaultValue: T) -> T {
         let url = fileURL(for: name)
         guard FileManager.default.fileExists(atPath: url.path) else { return defaultValue }
@@ -155,7 +173,11 @@ class LocalDB: ObservableObject {
 
     // MARK: - Watch Terms
     func saveTerm(keyword: String, collectionMode: CollectionMode = .allInfo) -> WatchTerm {
-        let term = WatchTerm(keyword: keyword.trimmingCharacters(in: .whitespacesAndNewlines), collection_mode: collectionMode)
+        let trimmedKeyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        if termDeleteTombstones.removeValue(forKey: trimmedKeyword) != nil {
+            saveTermDeleteTombstones()
+        }
+        let term = WatchTerm(keyword: trimmedKeyword, collection_mode: collectionMode)
         terms.insert(term, at: 0)
         saveToFile(name: "terms", value: terms)
         return term
@@ -185,14 +207,61 @@ class LocalDB: ObservableObject {
         }
     }
 
+    func term(matchingKeyword keyword: String) -> WatchTerm? {
+        terms.first { $0.keyword == keyword }
+    }
+
+    func markTermDeleteConfirmed(_ term: WatchTerm) {
+        pruneTermDeleteTombstones()
+        termDeleteTombstones[term.keyword] = Date()
+        saveTermDeleteTombstones()
+    }
+
+    func shouldSkipBackendTermAfterLocalDelete(_ term: WatchTerm) -> Bool {
+        pruneTermDeleteTombstones()
+        return termDeleteTombstones[term.keyword] != nil
+    }
+
+    private func pruneTermDeleteTombstones() {
+        let originalCount = termDeleteTombstones.count
+        let cutoff = Date().addingTimeInterval(-termDeleteTombstoneLifetime)
+        termDeleteTombstones = termDeleteTombstones.filter { $0.value >= cutoff }
+        if termDeleteTombstones.count != originalCount {
+            saveTermDeleteTombstones()
+        }
+    }
+
+    private func saveTermDeleteTombstones() {
+        saveToFile(name: termDeleteTombstonesFileName, value: termDeleteTombstones)
+    }
+
+    private func applyPersistedTermDeletes() {
+        guard !termDeleteTombstones.isEmpty else { return }
+        let deletedKeywords = Set(termDeleteTombstones.keys)
+        let originalTermCount = terms.count
+        let originalFeedCount = feedItems.count
+        terms.removeAll { deletedKeywords.contains($0.keyword) }
+        feedItems.removeAll { deletedKeywords.contains($0.watch_term_keyword) }
+        guard terms.count != originalTermCount || feedItems.count != originalFeedCount else { return }
+        saveToFile(name: "feed_items", value: feedItems)
+        saveToFile(name: "terms", value: terms)
+        AppLogger.persistence.info("Applied \(deletedKeywords.count) persisted watch-term delete tombstones")
+    }
+
     func deleteTerm(id: String) {
         if let idx = terms.firstIndex(where: { $0.id == id }) {
             let keyword = terms[idx].keyword
             terms.remove(at: idx)
-            saveToFile(name: "terms", value: terms)
             feedItems.removeAll(where: { $0.watch_term_keyword == keyword })
             saveToFile(name: "feed_items", value: feedItems)
+            saveToFile(name: "terms", value: terms)
         }
+    }
+
+    func deleteTerm(keyword: String) -> WatchTerm? {
+        guard let term = term(matchingKeyword: keyword) else { return nil }
+        deleteTerm(id: term.id)
+        return term
     }
 
     // MARK: - Feed Items & Merging
@@ -241,6 +310,7 @@ class LocalDB: ObservableObject {
                     media_type: existing.media_type,
                     published_at: mergedPublishedAt(existing: existing, incoming: item),
                     watch_term_keyword: existing.watch_term_keyword,
+                    watch_term_id: existing.watch_term_id ?? item.watch_term_id,
                     fetched_at: item.fetched_at
                 )
                 currentMap[key] = merged
@@ -735,7 +805,8 @@ class LocalDB: ObservableObject {
     func clearAllData() {
         let fileNames = [
             "terms", "feed_items", "saved_pages", "custom_urls",
-            "subscribed_platforms", "oshi_avatars", "oshi_compositions", "hidden_items"
+            "subscribed_platforms", "oshi_avatars", "oshi_compositions", "hidden_items",
+            termDeleteTombstonesFileName
         ]
         terms = []
         feedItems = []
@@ -747,6 +818,7 @@ class LocalDB: ObservableObject {
         oshiAvatars = [:]
         compositions = [:]
         hiddenItems = []
+        termDeleteTombstones = [:]
 
         for name in fileNames {
             let url = fileURL(for: name)

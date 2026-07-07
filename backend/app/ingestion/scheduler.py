@@ -41,6 +41,7 @@ from app.models import (
     BackendEvent,
     CollectionMode,
     Match,
+    MutedFeedItem,
     PendingNotification,
     PlatformCredential,
     SourceItem,
@@ -60,6 +61,7 @@ _NOTIFICATION_FRESHNESS_WINDOW = timedelta(hours=2)
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
 _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
+_MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
 
 
 def _build_connectors(db) -> list[BaseConnector]:
@@ -540,6 +542,15 @@ def _queue_duplicate_term_notifications(
             )
             .all()
         }
+        muted_source_ids = {
+            r[0]
+            for r in db.query(MutedFeedItem.source_item_id)
+            .filter(
+                MutedFeedItem.watch_term_id == duplicate_term.id,
+                MutedFeedItem.source_item_id.in_(source_item_ids),
+            )
+            .all()
+        }
         term_had_existing_matches = (
             db.query(Match.id)
             .filter(Match.watch_term_id == duplicate_term.id)
@@ -549,6 +560,8 @@ def _queue_duplicate_term_notifications(
 
         new_matches: list[tuple[Match, SourceItem]] = []
         for source_item_id in source_item_ids:
+            if source_item_id in muted_source_ids:
+                continue
             if source_item_id in existing_match_ids:
                 continue
             source_item = db.get(SourceItem, source_item_id)
@@ -562,7 +575,9 @@ def _queue_duplicate_term_notifications(
         reply_update_matches = [
             (source_item_id, match_id)
             for source_item_id, match_id in existing_match_ids.items()
-            if source_item_id in discussion_reply_source_ids and match_id is not None
+            if source_item_id in discussion_reply_source_ids
+            and source_item_id not in muted_source_ids
+            and match_id is not None
         ]
 
         if not new_matches and not reply_update_matches:
@@ -742,6 +757,15 @@ async def _poll_once_unlocked() -> None:
                                 )
                                 .all()
                             }
+                            muted_source_ids = {
+                                r[0]
+                                for r in db.query(MutedFeedItem.source_item_id)
+                                .filter(
+                                    MutedFeedItem.watch_term_id == term.id,
+                                    MutedFeedItem.source_item_id.in_(ids),
+                                )
+                                .all()
+                            }
                             term_had_existing_matches = (
                                 db.query(Match.id)
                                 .filter(Match.watch_term_id == term.id)
@@ -750,6 +774,8 @@ async def _poll_once_unlocked() -> None:
                             )
 
                             for raw in items:
+                                if raw.composite_id in muted_source_ids:
+                                    continue
                                 published_at = raw.published_at
                                 if published_at.tzinfo is None:
                                     published_at = published_at.replace(tzinfo=timezone.utc)
@@ -833,6 +859,8 @@ async def _poll_once_unlocked() -> None:
 
                             new_matches: list[tuple[Match, SourceItemCreate]] = []
                             for raw in items:
+                                if raw.composite_id in muted_source_ids:
+                                    continue
                                 if raw.composite_id not in existing_match_ids:
                                     match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
                                     db.add(match)
@@ -961,6 +989,38 @@ def _prune_old_items(db) -> None:
     pair — O(1) round-trips regardless of how many (platform, term) combos exist.
     Requires SQLite ≥ 3.25 / PostgreSQL ≥ 8.4 (both satisfied in production).
     """
+    _prune_old_items_with_limit(db, muted_per_term_limit=_MUTED_FEED_ITEMS_PER_TERM_LIMIT)
+
+
+def _delete_orphan_source_items(db) -> None:
+    db.execute(sa_text(
+        "DELETE FROM source_items "
+        "WHERE id NOT IN (SELECT source_item_id FROM matches) "
+        "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
+    ))
+
+
+def _prune_old_muted_feed_items(db, per_term_limit: int) -> int:
+    if per_term_limit <= 0:
+        return 0
+
+    result = db.execute(sa_text("""
+        DELETE FROM muted_feed_items WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY watch_term_id
+                           ORDER BY created_at IS NULL ASC, created_at DESC, id DESC
+                       ) AS rn
+                FROM muted_feed_items
+            ) ranked
+            WHERE rn > :per_term_limit
+        )
+    """), {"per_term_limit": per_term_limit})
+    return result.rowcount or 0
+
+
+def _prune_old_items_with_limit(db, muted_per_term_limit: int) -> None:
     try:
         result = db.execute(sa_text("""
             DELETE FROM matches WHERE id IN (
@@ -977,13 +1037,12 @@ def _prune_old_items(db) -> None:
                 WHERE rn > 200
             )
         """))
-        pruned = result.rowcount
-        if pruned:
-            db.execute(sa_text(
-                "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
-            ))
+        pruned = result.rowcount or 0
+        muted_pruned = _prune_old_muted_feed_items(db, muted_per_term_limit)
+        if pruned or muted_pruned:
+            _delete_orphan_source_items(db)
             db.commit()
-            log.info("Pruned %d old match records", pruned)
+            log.info("Pruned %d old match records and %d muted feed items", pruned, muted_pruned)
     except Exception as exc:
         log.warning("Prune failed: %s", exc)
         db.rollback()

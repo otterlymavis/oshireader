@@ -40,6 +40,10 @@ extension NetworkManager {
 
         let backendByKeyword = firstTermByKeyword(backendTerms)
         for term in localTerms {
+            let shouldSkipAfterDelete = await MainActor.run {
+                LocalDB.shared.shouldSkipBackendTermAfterLocalDelete(term)
+            }
+            if shouldSkipAfterDelete { continue }
             if let serverTerm = backendByKeyword[term.keyword] {
                 let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
                     localTerm: term,
@@ -87,6 +91,10 @@ extension NetworkManager {
         }
         var changed = false
         for term in backendTerms {
+            let shouldSkipAfterDelete = await MainActor.run {
+                LocalDB.shared.shouldSkipBackendTermAfterLocalDelete(term)
+            }
+            if shouldSkipAfterDelete { continue }
             if let localTerm = localByKeyword[term.keyword] {
                 if localTerm != term {
                     await MainActor.run { LocalDB.shared.replaceTerm(localId: localTerm.id, with: term) }
@@ -156,8 +164,21 @@ extension NetworkManager {
             URL(string: "\(apiBase)/api/watch-terms/\(id)")!,
             method: "DELETE",
             authorized: true,
-            deviceAuthorized: true
+            deviceAuthorized: true,
+            additionalAcceptedStatuses: [404]
         )
+    }
+
+    func deleteWatchTermIfSynced(_ term: WatchTerm) async throws {
+        if UUID(uuidString: term.id) == nil {
+            try await deleteWatchTerm(id: term.id)
+            return
+        }
+        guard term.repaired_from_cache else { return }
+        let backendTerms = try await fetchWatchTerms()
+        if let serverTerm = firstTermByKeyword(backendTerms)[term.keyword] {
+            try await deleteWatchTerm(id: serverTerm.id)
+        }
     }
 
     // MARK: - Feed
@@ -178,6 +199,22 @@ extension NetworkManager {
             acceptRange: 200...200
         )
         return backendItems.map { $0.toFeedItem() }
+    }
+
+    func muteFeedItem(sourceItemID: String, watchTermID: Int) async throws {
+        if isUITesting { return }
+        let body: [String: Any] = [
+            "source_item_id": sourceItemID,
+            "watch_term_id": watchTermID,
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        try await apiVoid(
+            URL(string: "\(apiBase)/api/feed/muted-items")!,
+            method: "POST",
+            body: bodyData,
+            authorized: true,
+            deviceAuthorized: true
+        )
     }
 
     // MARK: - Credentials

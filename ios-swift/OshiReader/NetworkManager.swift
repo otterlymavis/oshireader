@@ -220,6 +220,7 @@ class NetworkManager {
         authorized: Bool = false,
         deviceAuthorized: Bool = false,
         acceptRange: ClosedRange<Int> = 200...299,
+        additionalAcceptedStatuses: Set<Int> = [],
         timeout: TimeInterval = 30
     ) async throws {
         var request = URLRequest(url: url)
@@ -236,7 +237,10 @@ class NetworkManager {
         guard var http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
-        if !acceptRange.contains(http.statusCode),
+        let isAcceptedStatus = { (status: Int) in
+            acceptRange.contains(status) || additionalAcceptedStatuses.contains(status)
+        }
+        if !isAcceptedStatus(http.statusCode),
            let retriedRequest = await retryingAfterDeviceCredentialRefresh(
                request,
                deviceAuthorized: deviceAuthorized,
@@ -248,7 +252,7 @@ class NetworkManager {
             }
             http = retriedHTTP
         }
-        guard acceptRange.contains(http.statusCode) else {
+        guard isAcceptedStatus(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
     }

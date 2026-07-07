@@ -68,6 +68,35 @@ final class OshiReaderUITests: XCTestCase {
         readerModeButton?.tap()
     }
 
+    func testStopFollowingFromFeedCard() throws {
+        tapTab(index: 0, labels: ["Feed"])
+
+        let headline = app.staticTexts["UITest Oshi headline"]
+        XCTAssertTrue(headline.waitForExistence(timeout: 3))
+
+        let card = app.buttons["feed.card"]
+        XCTAssertTrue(card.waitForExistence(timeout: 3))
+        card.swipeLeft()
+
+        let stopFollowing = waitForAnyButton(
+            containing: ["Stop Following", "フォロー解除", "停止追蹤", "停止追踪"],
+            timeout: 3
+        )
+        XCTAssertNotNil(stopFollowing)
+        stopFollowing?.tap()
+
+        let confirm = ["Stop Following", "フォロー解除", "停止追蹤", "停止追踪"]
+            .map { app.alerts.buttons[$0] }
+            .first { $0.waitForExistence(timeout: 1) }
+        XCTAssertNotNil(confirm)
+        confirm?.tap()
+
+        XCTAssertFalse(headline.waitForExistence(timeout: 2))
+
+        tapTab(index: 4, labels: ["Settings"])
+        XCTAssertFalse(app.staticTexts["UITest Oshi"].waitForExistence(timeout: 2))
+    }
+
     func testSavedReaderFlow() throws {
         tapTab(index: 2, labels: ["Saved"])
 

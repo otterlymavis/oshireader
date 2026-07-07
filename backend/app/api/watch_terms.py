@@ -175,5 +175,9 @@ def delete_term(
         raise HTTPException(404, "Watch term not found")
     db.delete(term)
     db.flush()
-    db.execute(text("DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"))
+    db.execute(text(
+        "DELETE FROM source_items "
+        "WHERE id NOT IN (SELECT source_item_id FROM matches) "
+        "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
+    ))
     db.commit()

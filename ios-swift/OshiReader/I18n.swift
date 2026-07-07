@@ -153,6 +153,24 @@ class I18nManager: ObservableObject {
             "zh-TW": "取消儲存",
             "zh-CN": "取消保存"
         ],
+        "stopFollowing": [
+            "en": "Stop Following",
+            "ja": "フォロー解除",
+            "zh-TW": "停止追蹤",
+            "zh-CN": "停止追踪"
+        ],
+        "stopFollowingTitleFmt": [
+            "en": "Stop following “%@”?",
+            "ja": "「%@」のフォローを解除しますか？",
+            "zh-TW": "停止追蹤「%@」？",
+            "zh-CN": "停止追踪“%@”？"
+        ],
+        "stopFollowingMessage": [
+            "en": "This removes the keyword, its cached posts, and future notifications for that follow.",
+            "ja": "このキーワード、保存済みの投稿、今後の通知が削除されます。",
+            "zh-TW": "這會移除該關鍵字、已快取的貼文，以及之後的通知。",
+            "zh-CN": "这会移除该关键字、已缓存的帖子，以及之后的通知。"
+        ],
         "offlineSaved": [
             "en": "Saved for Offline",
             "ja": "オフライン保存済み",
@@ -922,6 +940,12 @@ class I18nManager: ObservableObject {
             "ja": "更新に失敗しました",
             "zh-TW": "更新失敗",
             "zh-CN": "刷新失败"
+        ],
+        "errorStopFollowingFailed": [
+            "en": "Couldn't stop following. Try again when the connection is stable.",
+            "ja": "フォロー解除に失敗しました。接続が安定してからもう一度お試しください。",
+            "zh-TW": "無法停止追蹤。請在連線穩定後再試一次。",
+            "zh-CN": "无法停止追踪。请在连接稳定后重试。"
         ],
         "errorDecode": [
             "en": "Server response error",

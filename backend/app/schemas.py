@@ -8,11 +8,17 @@ from pydantic import BaseModel, Field, field_validator
 from app.models import CollectionMode
 
 
-def _clean_keyword(v: str) -> str:
+def _clean_nonblank_string(v: object, field_name: str) -> str:
+    if not isinstance(v, str):
+        raise ValueError(f"{field_name} must be a string")
     stripped = v.strip()
     if not stripped:
-        raise ValueError("keyword must not be blank")
+        raise ValueError(f"{field_name} must not be blank")
     return stripped
+
+
+def _clean_keyword(v: object) -> str:
+    return _clean_nonblank_string(v, "keyword")
 
 
 def _clean_aliases_list(v: list) -> list:
@@ -194,3 +200,13 @@ class FeedItemOut(BaseModel):
     @classmethod
     def stamp_utc(cls, v: datetime) -> datetime:
         return _utc(v)
+
+
+class FeedItemMuteIn(BaseModel):
+    source_item_id: str = Field(min_length=1, max_length=500)
+    watch_term_id: int = Field(ge=1)
+
+    @field_validator("source_item_id", mode="before")
+    @classmethod
+    def strip_nonblank(cls, v: object, info) -> str:
+        return _clean_nonblank_string(v, info.field_name)

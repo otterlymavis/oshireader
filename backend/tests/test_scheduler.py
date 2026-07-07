@@ -24,12 +24,25 @@ from app.ingestion.scheduler import (
     _fetch_one,
     _prune_irrelevant_matches,
     _prune_old_items,
+    _prune_old_items_with_limit,
     _poll_term_window,
+    _queue_duplicate_term_notifications,
     _search_terms_for,
 )
+from app.connectors.base import SourceItemCreate
 from app.connectors.youtube import YouTubeConnector
 from app.connectors.twitter import TwitterConnector
-from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PlatformCredential, SourceItem, WatchTerm
+from app.models import (
+    APNSDeviceToken,
+    BackendEvent,
+    CollectionMode,
+    Match,
+    MutedFeedItem,
+    PendingNotification,
+    PlatformCredential,
+    SourceItem,
+    WatchTerm,
+)
 
 
 @pytest.fixture()
@@ -96,6 +109,61 @@ class TestPruneOldItems:
             .count()
         )
         assert orphans == 0
+
+    def test_prune_preserves_muted_source_items(self, db):
+        term = WatchTerm(keyword="muted", aliases=[])
+        item = SourceItem(
+            id="news:muted",
+            platform="news",
+            item_id="muted",
+            url="https://example.com/muted",
+            published_at=datetime.now(timezone.utc) - timedelta(days=5),
+            media_type="article",
+        )
+        db.add_all([term, item])
+        db.commit()
+        db.add(MutedFeedItem(watch_term_id=term.id, source_item_id=item.id))
+        db.commit()
+
+        _prune_old_items(db)
+
+        assert db.get(SourceItem, item.id) is not None
+
+    def test_prune_caps_muted_source_items_per_term(self, db):
+        term = WatchTerm(keyword="muted", aliases=[])
+        db.add(term)
+        db.commit()
+
+        now = datetime.now(timezone.utc)
+        for index in range(4):
+            item = SourceItem(
+                id=f"news:muted{index}",
+                platform="news",
+                item_id=f"muted{index}",
+                url=f"https://example.com/muted/{index}",
+                published_at=now - timedelta(minutes=4 - index),
+                media_type="article",
+            )
+            db.add(item)
+            db.flush()
+            db.add(MutedFeedItem(
+                watch_term_id=term.id,
+                source_item_id=item.id,
+                created_at=now - timedelta(minutes=4 - index),
+            ))
+        db.commit()
+
+        _prune_old_items_with_limit(db, muted_per_term_limit=2)
+
+        remaining_source_ids = {
+            mute.source_item_id
+            for mute in db.query(MutedFeedItem).order_by(MutedFeedItem.created_at.desc()).all()
+        }
+        assert remaining_source_ids == {"news:muted2", "news:muted3"}
+        assert db.get(SourceItem, "news:muted0") is None
+        assert db.get(SourceItem, "news:muted1") is None
+        assert db.get(SourceItem, "news:muted2") is not None
+        assert db.get(SourceItem, "news:muted3") is not None
 
     def test_prune_skips_community_platforms(self, db):
         term = WatchTerm(keyword="k3", aliases=[])
@@ -383,6 +451,74 @@ class TestConnectorBatches:
             batches = _connector_batches(connectors)
 
         assert [len(batch) for batch in batches] == [1, 1, 1]
+
+
+class TestMutedFeedItems:
+    def _source_item(self, db, item_id: str = "thread1") -> SourceItem:
+        item = SourceItem(
+            id=f"5ch:{item_id}",
+            platform="5ch",
+            item_id=item_id,
+            url=f"https://example.com/{item_id}",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            media_type="article",
+            title="Aiko discussion",
+        )
+        db.add(item)
+        db.commit()
+        return item
+
+    def _raw_item(self, item: SourceItem) -> SourceItemCreate:
+        return SourceItemCreate(
+            platform=item.platform,
+            item_id=item.item_id,
+            url=item.url,
+            published_at=datetime.now(timezone.utc),
+            media_type=item.media_type,
+            title=item.title,
+            raw_payload={"date_parsed": True},
+        )
+
+    def test_duplicate_notifications_do_not_recreate_muted_match(self, db):
+        primary = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        duplicate = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        item = self._source_item(db)
+        db.add_all([primary, duplicate])
+        db.commit()
+        db.add(MutedFeedItem(watch_term_id=duplicate.id, source_item_id=item.id))
+        db.commit()
+
+        _queue_duplicate_term_notifications(
+            db,
+            primary,
+            [self._raw_item(item)],
+            datetime.now(timezone.utc),
+        )
+
+        assert db.query(Match).filter_by(watch_term_id=duplicate.id, source_item_id=item.id).count() == 0
+        assert db.get(PendingNotification, duplicate.id) is None
+
+    def test_duplicate_notifications_ignore_muted_reply_update_match(self, db):
+        primary = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        duplicate = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        item = self._source_item(db)
+        db.add_all([primary, duplicate])
+        db.commit()
+        db.add_all([
+            Match(watch_term_id=duplicate.id, source_item_id=item.id),
+            MutedFeedItem(watch_term_id=duplicate.id, source_item_id=item.id),
+        ])
+        db.commit()
+
+        _queue_duplicate_term_notifications(
+            db,
+            primary,
+            [self._raw_item(item)],
+            datetime.now(timezone.utc),
+            discussion_reply_source_ids={item.id},
+        )
+
+        assert db.get(PendingNotification, duplicate.id) is None
 
 
 class TestPollTermWindow:

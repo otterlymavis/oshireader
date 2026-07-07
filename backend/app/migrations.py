@@ -171,6 +171,52 @@ def _create_watch_term_keyword_indexes(engine: Engine) -> None:
             ))
 
 
+def _muted_feed_items_table_ddl(engine: Engine) -> str:
+    id_column = "id INTEGER PRIMARY KEY"
+    if engine.dialect.name == "postgresql":
+        id_column = "id SERIAL PRIMARY KEY"
+    elif engine.dialect.name == "sqlite":
+        id_column = "id INTEGER PRIMARY KEY AUTOINCREMENT"
+    return f"""
+            CREATE TABLE IF NOT EXISTS muted_feed_items (
+                {id_column},
+                watch_term_id INTEGER NOT NULL REFERENCES watch_terms(id) ON DELETE CASCADE,
+                source_item_id VARCHAR NOT NULL REFERENCES source_items(id),
+                created_at TIMESTAMP,
+                UNIQUE (watch_term_id, source_item_id)
+            )
+        """
+
+
+def _repair_postgres_muted_feed_items_id_default(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            DO $$
+            DECLARE
+                next_id BIGINT;
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'muted_feed_items'
+                      AND column_name = 'id'
+                      AND column_default IS NULL
+                      AND is_identity = 'NO'
+                ) THEN
+                    CREATE SEQUENCE IF NOT EXISTS muted_feed_items_id_seq;
+                    ALTER SEQUENCE muted_feed_items_id_seq OWNED BY muted_feed_items.id;
+                    SELECT COALESCE(MAX(id), 0) + 1 INTO next_id FROM muted_feed_items;
+                    EXECUTE format('ALTER SEQUENCE muted_feed_items_id_seq RESTART WITH %s', next_id);
+                    ALTER TABLE muted_feed_items
+                        ALTER COLUMN id SET DEFAULT nextval('muted_feed_items_id_seq'::regclass);
+                END IF;
+            END $$;
+        """))
+
+
 def apply_startup_migrations(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
 
@@ -241,6 +287,16 @@ def apply_startup_migrations(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS ix_source_items_published_at"
             " ON source_items (published_at DESC)"
         ))
+        conn.execute(text(_muted_feed_items_table_ddl(engine)))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_muted_feed_items_watch_term_id"
+            " ON muted_feed_items (watch_term_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_muted_feed_items_source_item_id"
+            " ON muted_feed_items (source_item_id)"
+        ))
+    _repair_postgres_muted_feed_items_id_default(engine)
 
     # One-time cleanup (guarded): remove source_items where published_at ≈ matched_at
     # (within 60 s) for platforms whose date parsers previously fell back to
@@ -330,7 +386,11 @@ def _purge_legacy_5ch_items(engine: Engine) -> None:
             ),
             {"cutoff": cutoff},
         )
-        conn.execute(text("DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"))
+        conn.execute(text(
+            "DELETE FROM source_items "
+            "WHERE id NOT IN (SELECT source_item_id FROM matches) "
+            "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
+        ))
 
 
 def _purge_girlschannel_googlenews_items(engine: Engine) -> None:
@@ -387,5 +447,7 @@ def _purge_bad_date_items(engine: Engine, platforms: tuple[str, ...]) -> None:
             )
         """))
         conn.execute(text(
-            "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
+            "DELETE FROM source_items "
+            "WHERE id NOT IN (SELECT source_item_id FROM matches) "
+            "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
         ))

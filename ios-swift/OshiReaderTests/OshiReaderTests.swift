@@ -74,6 +74,102 @@ final class OshiReaderTests: XCTestCase {
         _ = keepTerm // suppress unused warning
     }
 
+    func testDeleteTermByKeywordReturnsDeletedTermAndRemovesFeedItems() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        let term = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        _ = db.mergeItems(newItems: [
+            FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
+                     title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now)
+        ])
+
+        let deleted = db.deleteTerm(keyword: "Aiko")
+
+        XCTAssertEqual(deleted?.id, term.id)
+        XCTAssertTrue(db.terms.isEmpty)
+        XCTAssertTrue(db.feedItems.isEmpty)
+    }
+
+    func testMergePreservesBackendWatchTermID() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        _ = db.mergeItems(newItems: [
+            FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
+                     title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Aiko",
+                     watch_term_id: 42, fetched_at: now)
+        ])
+        _ = db.mergeItems(newItems: [
+            FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
+                     title: "Aiko video extended title", content_text: "more", author: nil,
+                     thumbnail_url: nil, media_type: "video", published_at: now,
+                     watch_term_keyword: "Aiko", fetched_at: now)
+        ])
+
+        XCTAssertEqual(db.feedItems.first?.watch_term_id, 42)
+    }
+
+    func testDeleteTermTombstoneSkipsBackendSyncUntilKeywordIsSavedAgain() throws {
+        let term = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        db.markTermDeleteConfirmed(term)
+        db.deleteTerm(id: term.id)
+
+        XCTAssertTrue(db.shouldSkipBackendTermAfterLocalDelete(term))
+        XCTAssertTrue(
+            db.shouldSkipBackendTermAfterLocalDelete(
+                WatchTerm(id: "server-aiko", keyword: "Aiko", collection_mode: .mediaOnly)
+            )
+        )
+
+        let newTerm = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        XCTAssertFalse(db.shouldSkipBackendTermAfterLocalDelete(newTerm))
+    }
+
+    func testUnconfirmedDeleteDoesNotCompleteLocalDeleteOnLoad() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
+        let item = FeedItem(id: "news:1", platform: "news", url: "https://news/1",
+                            title: "Aiko news", content_text: nil, author: nil, thumbnail_url: nil,
+                            media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now)
+        try JSONEncoder().encode([term])
+            .write(to: tempDir.appendingPathComponent("terms.json"))
+        try JSONEncoder().encode([item])
+            .write(to: tempDir.appendingPathComponent("feed_items.json"))
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.terms.map(\.keyword), ["Aiko"])
+        XCTAssertEqual(freshDB.feedItems.map(\.watch_term_keyword), ["Aiko"])
+        XCTAssertFalse(freshDB.shouldSkipBackendTermAfterLocalDelete(term))
+    }
+
+    func testPersistedDeleteTombstoneCompletesLocalDeleteOnLoad() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
+        let items = [
+            FeedItem(id: "news:1", platform: "news", url: "https://news/1",
+                     title: "Aiko news", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "article", published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+            FeedItem(id: "news:2", platform: "news", url: "https://news/2",
+                     title: "Haruka news", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "article", published_at: now, watch_term_keyword: "Haruka", fetched_at: now),
+        ]
+        try JSONEncoder().encode([term, WatchTerm(id: "43", keyword: "Haruka", collection_mode: .allInfo)])
+            .write(to: tempDir.appendingPathComponent("terms.json"))
+        try JSONEncoder().encode(items)
+            .write(to: tempDir.appendingPathComponent("feed_items.json"))
+        try JSONEncoder().encode(["Aiko": Date()])
+            .write(to: tempDir.appendingPathComponent("term_delete_tombstones.json"))
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.terms.map(\.keyword), ["Haruka"])
+        XCTAssertEqual(freshDB.feedItems.map(\.watch_term_keyword), ["Haruka"])
+        XCTAssertTrue(freshDB.shouldSkipBackendTermAfterLocalDelete(term))
+    }
+
     func testSaveTermTrimsWhitespace() throws {
         let term = db.saveTerm(keyword: "  Aiko  ", collectionMode: .allInfo)
         XCTAssertEqual(term.keyword, "Aiko")
@@ -2177,6 +2273,47 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(freshDB.terms.count, 0)
     }
 
+    func testMissingTermsAreRepairedFromCachedFeedItems() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let cached = [
+            FeedItem(
+                id: "note:cached-1",
+                platform: "note",
+                url: "https://note.com/example/n/1",
+                title: "Cached Aiko note",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: now,
+                watch_term_keyword: "Aiko",
+                fetched_at: now
+            ),
+            FeedItem(
+                id: "youtube:cached-2",
+                platform: "youtube",
+                url: "https://youtube.com/watch?v=2",
+                title: "Cached Miku video",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "video",
+                published_at: now,
+                watch_term_keyword: "Miku",
+                fetched_at: now
+            ),
+        ]
+        let data = try JSONEncoder().encode(cached)
+        try data.write(to: tempDir.appendingPathComponent("feed_items.json"))
+        try "[]".write(to: tempDir.appendingPathComponent("terms.json"), atomically: true, encoding: .utf8)
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.terms.map(\.keyword).sorted(), ["Aiko", "Miku"])
+        XCTAssertTrue(freshDB.terms.allSatisfy(\.is_active))
+        XCTAssertTrue(freshDB.terms.allSatisfy(\.repaired_from_cache))
+    }
+
     // MARK: - setSourcesOrder / setWallpaper / setOshiAvatar
     func testSetSourcesOrderUpdatesAndClearsOnClearAll() throws {
         db.setSourcesOrder(order: ["youtube", "news", "tver"])
@@ -2579,6 +2716,78 @@ final class NetworkManagerTests: XCTestCase {
         catch { XCTFail("Unexpected error: \(error)") }
     }
 
+    func testDeleteWatchTermAccepts404AsAlreadyDeleted() async throws {
+        MockURLProtocol.handler = { _ in (Data(), Self.response(status: 404)) }
+
+        do { try await NetworkManager.shared.deleteWatchTerm(id: "99") }
+        catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testDeleteWatchTermIfSyncedSkipsLocalUUID() async throws {
+        var requestCount = 0
+        MockURLProtocol.handler = { _ in
+            requestCount += 1
+            return (Data(), Self.response(status: 204))
+        }
+        let localOnlyTerm = WatchTerm(id: UUID().uuidString, keyword: "Aiko", collection_mode: .allInfo)
+
+        try await NetworkManager.shared.deleteWatchTermIfSynced(localOnlyTerm)
+
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    func testDeleteWatchTermIfSyncedResolvesRepairedUUIDByKeyword() async throws {
+        let backendTerm = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
+        let backendData = try JSONEncoder().encode([backendTerm])
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: "Aiko",
+            collection_mode: .allInfo,
+            repaired_from_cache: true
+        )
+        var requestedPaths: [String] = []
+        MockURLProtocol.handler = { request in
+            requestedPaths.append(request.url?.path ?? "")
+            if request.url?.path == "/api/watch-terms" {
+                return (backendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms/42" {
+                XCTAssertEqual(request.httpMethod, "DELETE")
+                return (Data(), Self.response(status: 204))
+            }
+            XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        try await NetworkManager.shared.deleteWatchTermIfSynced(repairedTerm)
+
+        XCTAssertEqual(requestedPaths, ["/api/watch-terms", "/api/watch-terms/42"])
+    }
+
+    func testMuteFeedItemPostsSourceAndWatchTermIDs() async throws {
+        var capturedBody: [String: Any] = [:]
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/feed/muted-items")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            if let body = request.httpBody,
+               let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                capturedBody = parsed
+            } else {
+                XCTFail("Expected JSON request body")
+            }
+            return (Data(), Self.response(status: 204))
+        }
+
+        try await NetworkManager.shared.muteFeedItem(
+            sourceItemID: "youtube:test123",
+            watchTermID: 42
+        )
+
+        XCTAssertEqual(capturedBody["source_item_id"] as? String, "youtube:test123")
+        XCTAssertEqual(capturedBody["watch_term_id"] as? Int, 42)
+    }
+
     // Network connection error → propagated as URLError (not swallowed)
     func testFetchWatchTermsNetworkErrorPropagates() async throws {
         MockURLProtocol.errorHandler = { _ in URLError(.notConnectedToInternet) }
@@ -2764,6 +2973,7 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items.first?.id, "youtube:test123")
         XCTAssertEqual(items.first?.watch_term_keyword, "Aiko")
+        XCTAssertEqual(items.first?.watch_term_id, 2)
         XCTAssertEqual(items.first?.media_type, "video")
     }
 

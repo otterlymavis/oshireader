@@ -55,6 +55,8 @@ def prune_irrelevant_matches(db, terms: list[WatchTerm] | None = None) -> int:
     if removed:
         db.flush()
         db.execute(text(
-            "DELETE FROM source_items WHERE id NOT IN (SELECT source_item_id FROM matches)"
+            "DELETE FROM source_items "
+            "WHERE id NOT IN (SELECT source_item_id FROM matches) "
+            "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
         ))
     return removed

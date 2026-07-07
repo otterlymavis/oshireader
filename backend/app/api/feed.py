@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, require_admin_or_device_auth
 from app.database import get_db
-from app.models import Match, SourceItem, WatchTerm
+from app.models import Match, MutedFeedItem, SourceItem, WatchTerm
 from app.relevance import watch_term_matches
-from app.schemas import FeedItemOut, SourceItemOut
+from app.schemas import FeedItemMuteIn, FeedItemOut, SourceItemOut
 
 router = APIRouter(prefix="/api/feed", tags=["feed"])
 
@@ -47,6 +47,42 @@ def redirect_match(match_id: int, db: Session = Depends(get_db)):
     return RedirectResponse(url=source_url, status_code=307)
 
 
+@router.post("/muted-items", status_code=204)
+def mute_feed_item(
+    body: FeedItemMuteIn,
+    auth: AuthContext = Depends(require_admin_or_device_auth),
+    db: Session = Depends(get_db),
+):
+    term = db.get(WatchTerm, body.watch_term_id)
+    if term is None or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
+        raise HTTPException(404, "Watch term not found")
+
+    source_item = db.get(SourceItem, body.source_item_id)
+    if source_item is None:
+        raise HTTPException(404, "Feed item not found")
+
+    existing_mute = (
+        db.query(MutedFeedItem)
+        .filter(
+            MutedFeedItem.watch_term_id == term.id,
+            MutedFeedItem.source_item_id == source_item.id,
+        )
+        .first()
+    )
+    if existing_mute is None:
+        db.add(MutedFeedItem(watch_term_id=term.id, source_item_id=source_item.id))
+
+    (
+        db.query(Match)
+        .filter(
+            Match.watch_term_id == term.id,
+            Match.source_item_id == source_item.id,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+
+
 @router.get("/", response_model=list[FeedItemOut])
 def get_feed(
     term_id: Optional[int] = Query(None),
@@ -63,6 +99,12 @@ def get_feed(
         db.query(Match, SourceItem, WatchTerm)
         .join(SourceItem, Match.source_item_id == SourceItem.id)
         .join(WatchTerm, Match.watch_term_id == WatchTerm.id)
+        .outerjoin(
+            MutedFeedItem,
+            (MutedFeedItem.watch_term_id == Match.watch_term_id)
+            & (MutedFeedItem.source_item_id == Match.source_item_id),
+        )
+        .filter(MutedFeedItem.id.is_(None))
         .order_by(_FEED_SORT_KEY.desc())
     )
     if not auth.is_admin:

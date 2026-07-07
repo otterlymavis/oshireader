@@ -100,19 +100,21 @@ struct WatchTerm: Identifiable, Codable, Hashable {
     var is_active: Bool
     var notify_on_new: Bool
     var aliases: [String]
+    var repaired_from_cache: Bool
     let created_at: String
 
     enum CodingKeys: String, CodingKey {
-        case id, keyword, collection_mode, is_active, notify_on_new, aliases, created_at
+        case id, keyword, collection_mode, is_active, notify_on_new, aliases, repaired_from_cache, created_at
     }
 
-    init(id: String = UUID().uuidString, keyword: String, collection_mode: CollectionMode = .allInfo, is_active: Bool = true, notify_on_new: Bool = true, aliases: [String] = [], created_at: String = _ISO8601Cache.withoutFractional.string(from: Date())) {
+    init(id: String = UUID().uuidString, keyword: String, collection_mode: CollectionMode = .allInfo, is_active: Bool = true, notify_on_new: Bool = true, aliases: [String] = [], repaired_from_cache: Bool = false, created_at: String = _ISO8601Cache.withoutFractional.string(from: Date())) {
         self.id = id
         self.keyword = keyword
         self.collection_mode = collection_mode
         self.is_active = is_active
         self.notify_on_new = notify_on_new
         self.aliases = aliases
+        self.repaired_from_cache = repaired_from_cache
         self.created_at = created_at
     }
 
@@ -132,6 +134,7 @@ struct WatchTerm: Identifiable, Codable, Hashable {
         self.is_active = try container.decodeIfPresent(Bool.self, forKey: .is_active) ?? true
         self.notify_on_new = try container.decodeIfPresent(Bool.self, forKey: .notify_on_new) ?? true
         self.aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        self.repaired_from_cache = try container.decodeIfPresent(Bool.self, forKey: .repaired_from_cache) ?? false
         self.created_at = try container.decodeIfPresent(String.self, forKey: .created_at) ?? _ISO8601Cache.withoutFractional.string(from: Date())
     }
 }
@@ -161,6 +164,7 @@ struct FeedItem: Codable, Hashable, Identifiable {
     let media_type: String
     let published_at: String
     let watch_term_keyword: String
+    var watch_term_id: Int? = nil
     let fetched_at: String
 }
 
@@ -184,6 +188,7 @@ struct BackendFeedItem: Codable {
             media_type: item.media_type ?? "article",
             published_at: item.published_at,
             watch_term_keyword: watch_term_keyword,
+            watch_term_id: watch_term_id,
             fetched_at: matched_at
         )
     }

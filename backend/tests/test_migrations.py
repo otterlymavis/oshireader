@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from app.database import Base
 import app.migrations as _migrations_mod
 from app.migrations import _add_missing_columns, _purge_bad_date_items, apply_startup_migrations
-from app.models import APNSDeviceToken, Match, MigrationLog, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, Match, MigrationLog, MutedFeedItem, SourceItem, WatchTerm
 
 
 @pytest.fixture()
@@ -52,6 +52,33 @@ class TestApplyStartupMigrations:
         with patch("app.migrations.SessionLocal", Session):
             apply_startup_migrations(fresh_engine)
             apply_startup_migrations(fresh_engine)  # must not raise
+
+    def test_muted_feed_item_id_autogenerates_after_startup_migration(self, fresh_engine):
+        Session = sessionmaker(bind=fresh_engine)
+        with patch("app.migrations.SessionLocal", Session):
+            apply_startup_migrations(fresh_engine)
+
+        db = Session()
+        try:
+            term = WatchTerm(keyword="Muted", aliases=[])
+            item = SourceItem(
+                id="news:muted",
+                platform="news",
+                item_id="muted",
+                url="https://example.com/muted",
+                published_at=datetime.now(timezone.utc),
+                media_type="article",
+                title="Muted",
+            )
+            db.add_all([term, item])
+            db.flush()
+            mute = MutedFeedItem(watch_term_id=term.id, source_item_id=item.id)
+            db.add(mute)
+            db.commit()
+
+            assert mute.id is not None
+        finally:
+            db.close()
 
     def test_purge_migration_recorded_after_first_run(self, fresh_engine):
         Session = sessionmaker(bind=fresh_engine)
