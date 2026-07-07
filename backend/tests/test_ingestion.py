@@ -380,6 +380,75 @@ class TestIngestionNotifications:
         assert preview_item["id"] == "5ch:old-thread"
 
     @pytest.mark.asyncio
+    async def test_new_item_preview_outranks_existing_discussion_reply_update(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(days=14),
+        )
+        existing = SourceItem(
+            id="5ch:old-thread",
+            platform="5ch",
+            item_id="old-thread",
+            url="https://itest.5ch.io/news4vip/test/read.cgi/example/1780000000",
+            published_at=datetime.now(timezone.utc) - timedelta(days=7),
+            media_type="article",
+            title="Aiko old discussion",
+            content_text="Aiko initial discussion",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, existing])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
+        db_session.commit()
+
+        reply_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        new_item_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+        updated_thread = _make_item(
+            platform="5ch",
+            item_id="old-thread",
+            published_at=reply_at,
+            title="Aiko old discussion",
+            content_text="Aiko new reply",
+            raw_payload={"date_parsed": True},
+        )
+        new_video = _make_item(
+            platform="youtube",
+            item_id="fresh-video",
+            published_at=new_item_at,
+            title="Aiko fresh video",
+            content_text="Aiko fresh video",
+            raw_payload={"date_parsed": True},
+        )
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[
+                _mock_connector("5ch", [updated_thread]),
+                _mock_connector("youtube", [new_video]),
+            ],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=mock_notify,
+        ):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+        _, called_term, called_count, preview_item = mock_notify.call_args.args
+        assert called_term.keyword == "Aiko"
+        assert called_count == 2
+        assert preview_item["id"] == "youtube:fresh-video"
+
+    @pytest.mark.asyncio
     async def test_duplicate_term_existing_discussion_reply_update_is_notified(
         self,
         db_engine,

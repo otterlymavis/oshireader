@@ -62,6 +62,8 @@ _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
 _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
+_PREVIEW_SOURCE_NEW_MATCH = "new_match"
+_PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
 
 
 def _build_connectors(db) -> list[BaseConnector]:
@@ -415,13 +417,17 @@ def _is_notification_eligible(
 
 def _candidate_is_newer(
     *,
+    candidate_rank: int = 1,
     candidate_is_estimated: bool,
     candidate_published_at: datetime,
+    current_rank: int = 1,
     current_is_estimated: bool,
     current_published_at: datetime | None,
 ) -> bool:
     if current_published_at is None:
         return True
+    if candidate_rank != current_rank:
+        return candidate_rank > current_rank
     if current_published_at.tzinfo is None:
         current_published_at = current_published_at.replace(tzinfo=timezone.utc)
     if current_is_estimated != candidate_is_estimated:
@@ -429,6 +435,14 @@ def _candidate_is_newer(
     if candidate_published_at != current_published_at:
         return candidate_published_at > current_published_at
     return False
+
+
+def _notification_preview_rank(preview_item: dict | None) -> int:
+    if not preview_item:
+        return 1
+    if preview_item.get("notification_preview_source") == _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE:
+        return 0
+    return 1
 
 
 def _queue_pending_notification(
@@ -451,8 +465,10 @@ def _queue_pending_notification(
         return
     candidate_is_estimated, candidate_published_at, candidate_preview = newest_candidate
     if _candidate_is_newer(
+        candidate_rank=_notification_preview_rank(candidate_preview),
         candidate_is_estimated=candidate_is_estimated,
         candidate_published_at=candidate_published_at,
+        current_rank=_notification_preview_rank(pending.preview_item),
         current_is_estimated=bool(pending.preview_is_estimated),
         current_published_at=pending.preview_published_at,
     ):
@@ -473,11 +489,16 @@ def _duplicate_notification_terms(db, term: WatchTerm) -> list[WatchTerm]:
     )
 
 
-def _preview_for_match(match: Match, source_item: SourceItem) -> dict:
+def _preview_for_match(
+    match: Match,
+    source_item: SourceItem,
+    preview_source: str = _PREVIEW_SOURCE_NEW_MATCH,
+) -> dict:
     public_base_url = settings.backend_public_url.rstrip("/")
     return {
         "id": source_item.id,
         "match_id": match.id,
+        "notification_preview_source": preview_source,
         "platform": source_item.platform,
         "url": source_item.url,
         "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
@@ -496,6 +517,7 @@ def _newest_notification_candidate(
     source_item: SourceItem,
     match: Match,
     observed_at: datetime,
+    preview_source: str = _PREVIEW_SOURCE_NEW_MATCH,
 ) -> tuple[bool, datetime, dict]:
     published_at = source_item.published_at
     if published_at.tzinfo is None:
@@ -504,8 +526,12 @@ def _newest_notification_candidate(
     if (
         newest_candidate is None
         or _candidate_is_newer(
+            candidate_rank=_notification_preview_rank(
+                {"notification_preview_source": preview_source}
+            ),
             candidate_is_estimated=published_at_is_estimated,
             candidate_published_at=published_at,
+            current_rank=_notification_preview_rank(newest_candidate[2]),
             current_is_estimated=newest_candidate[0],
             current_published_at=newest_candidate[1],
         )
@@ -513,7 +539,7 @@ def _newest_notification_candidate(
         return (
             published_at_is_estimated,
             published_at,
-            _preview_for_match(match, source_item),
+            _preview_for_match(match, source_item, preview_source),
         )
     return newest_candidate
 
@@ -597,6 +623,7 @@ def _queue_duplicate_term_notifications(
                 source_item=source_item,
                 match=match,
                 observed_at=observed_at,
+                preview_source=_PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE,
             )
 
         for match, source_item in new_matches:
@@ -608,24 +635,12 @@ def _queue_duplicate_term_notifications(
             ):
                 continue
             notification_count += 1
-            published_at = source_item.published_at
-            if published_at.tzinfo is None:
-                published_at = published_at.replace(tzinfo=timezone.utc)
-            published_at_is_estimated = _published_at_is_estimated(source_item, observed_at)
-            if (
-                newest_candidate is None
-                or _candidate_is_newer(
-                    candidate_is_estimated=published_at_is_estimated,
-                    candidate_published_at=published_at,
-                    current_is_estimated=newest_candidate[0],
-                    current_published_at=newest_candidate[1],
-                )
-            ):
-                newest_candidate = (
-                    published_at_is_estimated,
-                    published_at,
-                    _preview_for_match(match, source_item),
-                )
+            newest_candidate = _newest_notification_candidate(
+                newest_candidate,
+                source_item=source_item,
+                match=match,
+                observed_at=observed_at,
+            )
 
         _queue_pending_notification(
             db,
@@ -850,6 +865,7 @@ async def _poll_once_unlocked() -> None:
                                             source_item=source_item,
                                             match=match,
                                             observed_at=now,
+                                            preview_source=_PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE,
                                         )
 
                             # Flush source_items before inserting matches so that
