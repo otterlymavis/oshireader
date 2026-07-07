@@ -40,6 +40,8 @@ class LocalDB: ObservableObject {
         self.storeDirectory = directory
         loadAll()
         runMigrationsIfNeeded()
+        logStartupCacheDiagnostics()
+        repairMissingTermsFromCachedFeed()
         pruneContentCache()
     }
 
@@ -65,7 +67,6 @@ class LocalDB: ObservableObject {
         self.termDeleteTombstones = loadFromFile(name: termDeleteTombstonesFileName, defaultValue: [:])
         pruneTermDeleteTombstones()
         applyPersistedTermDeletes()
-        repairMissingTermsFromCachedFeed()
     }
 
     // MARK: - Schema Migrations
@@ -129,14 +130,27 @@ class LocalDB: ObservableObject {
     }
 
     private func repairMissingTermsFromCachedFeed() {
-        guard terms.isEmpty else { return }
-        let keywords = Array(Set(feedItems.map(\.watch_term_keyword).filter { !$0.isEmpty })).sorted()
+        let existingKeywords = Set(terms.map(\.keyword))
+        let cachedKeywords = Set(feedItems.map(\.watch_term_keyword).filter { !$0.isEmpty })
+        let keywords = cachedKeywords.subtracting(existingKeywords).sorted()
         guard !keywords.isEmpty else { return }
-        terms = keywords.map {
+        terms.append(contentsOf: keywords.map {
             WatchTerm(keyword: $0, collection_mode: .allInfo, is_active: true, notify_on_new: true, repaired_from_cache: true)
-        }
+        })
         saveToFile(name: "terms", value: terms)
         AppLogger.persistence.info("Repaired \(keywords.count) missing watch terms from cached feed items")
+    }
+
+    private func logStartupCacheDiagnostics() {
+        let termKeywords = Set(terms.map(\.keyword).filter { !$0.isEmpty })
+        let cachedKeywords = Set(feedItems.map(\.watch_term_keyword).filter { !$0.isEmpty })
+        let missingTermCount = cachedKeywords.subtracting(termKeywords).count
+        let summary = "Local cache startup: terms=\(termKeywords.count) cached_feed_keywords=\(cachedKeywords.count) missing_terms=\(missingTermCount) tombstones=\(termDeleteTombstones.count) feed_items=\(feedItems.count)"
+        if missingTermCount > 0 {
+            AppLogger.persistence.warning("\(summary)")
+        } else {
+            AppLogger.persistence.info("\(summary)")
+        }
     }
 
     private func loadFromFile<T: Decodable>(name: String, defaultValue: T) -> T {
