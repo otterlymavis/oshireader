@@ -793,6 +793,8 @@ async def _poll_once_unlocked() -> None:
             },
         )
 
+        await _flush_pending_notifications(db)
+
         for term in terms:
             term_had_existing_matches_before_poll = (
                 db.query(Match.id)

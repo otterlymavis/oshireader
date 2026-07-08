@@ -990,6 +990,63 @@ class TestIngestionNotifications:
             retry_db.close()
 
     @pytest.mark.asyncio
+    async def test_pending_notification_is_retried_before_next_connector_fetch(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {"id": "youtube:pending", "url": "https://example.com/pending"}
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+        term_id = term.id
+
+        async def fetch(_search_term, _mode):
+            raise asyncio.CancelledError()
+
+        connector = MagicMock()
+        connector.PLATFORM = "youtube"
+        connector.fetch = fetch
+        mock_notify = AsyncMock(return_value=True)
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch(
+            "app.ingestion.scheduler._build_connectors",
+            return_value=[connector],
+        ), patch(
+            "app.ingestion.scheduler.SessionLocal",
+            TestSession,
+        ), patch(
+            "app.ingestion.scheduler.send_new_match_notifications",
+            new=mock_notify,
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+        _, called_term, called_count, preview_item = mock_notify.call_args.args
+        assert called_term.id == term_id
+        assert called_count == 1
+        assert preview_item["id"] == "youtube:pending"
+
+        retry_db = TestSession()
+        try:
+            assert retry_db.get(PendingNotification, term_id) is None
+        finally:
+            retry_db.close()
+
+    @pytest.mark.asyncio
     async def test_failed_connector_commit_is_not_included_in_notification(
         self,
         db_engine,
