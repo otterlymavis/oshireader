@@ -45,6 +45,10 @@ extension NetworkManager {
             }
             if shouldSkipAfterDelete { continue }
             if let serverTerm = backendByKeyword[term.keyword] {
+                if term.repaired_from_cache {
+                    await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
+                    continue
+                }
                 let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
                     localTerm: term,
                     serverTerm: serverTerm

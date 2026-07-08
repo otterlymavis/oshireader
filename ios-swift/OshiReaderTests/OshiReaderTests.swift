@@ -1571,6 +1571,37 @@ final class OshiReaderTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
     }
 
+    func testSchemaMigrationPrunesOrphanStrictCachedItemBeforeRepair() throws {
+        let existingTerm = WatchTerm(keyword: "Aiko")
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "note:orphan-cached-item",
+            platform: "note",
+            url: "https://note.com/example/n/orphan",
+            title: "Unrelated cached note",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: "Miku",
+            fetched_at: now
+        )
+        try JSONEncoder().encode([existingTerm]).write(
+            to: tempDir.appendingPathComponent("terms.json")
+        )
+        try JSONEncoder().encode([item]).write(
+            to: tempDir.appendingPathComponent("feed_items.json")
+        )
+        UserDefaults.standard.set(1, forKey: "localdb_schema_version")
+        defer { UserDefaults.standard.removeObject(forKey: "localdb_schema_version") }
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertFalse(freshDB.terms.contains(where: { $0.keyword == "Miku" }))
+        XCTAssertFalse(freshDB.feedItems.contains(where: { $0.id == item.id }))
+    }
+
     // MARK: - Feature 5b: Hidden items (deleteFeedItem)
     func testDeleteFeedItemHidesAndExcludesFromQuery() throws {
         let now = ISO8601DateFormatter().string(from: Date())
@@ -2306,12 +2337,60 @@ final class OshiReaderTests: XCTestCase {
         let data = try JSONEncoder().encode(cached)
         try data.write(to: tempDir.appendingPathComponent("feed_items.json"))
         try "[]".write(to: tempDir.appendingPathComponent("terms.json"), atomically: true, encoding: .utf8)
+        UserDefaults.standard.set(3, forKey: "localdb_schema_version")
+        defer { UserDefaults.standard.removeObject(forKey: "localdb_schema_version") }
 
         let freshDB = LocalDB(directory: tempDir)
 
         XCTAssertEqual(freshDB.terms.map(\.keyword).sorted(), ["Aiko", "Miku"])
         XCTAssertTrue(freshDB.terms.allSatisfy(\.is_active))
         XCTAssertTrue(freshDB.terms.allSatisfy(\.repaired_from_cache))
+    }
+
+    func testPartiallyMissingTermsAreRepairedFromCachedFeedItems() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let existingTerm = WatchTerm(id: "server-aiko", keyword: "Aiko", collection_mode: .mediaOnly, repaired_from_cache: false)
+        let cached = [
+            FeedItem(
+                id: "note:cached-1",
+                platform: "note",
+                url: "https://note.com/example/n/1",
+                title: "Cached Aiko note",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: now,
+                watch_term_keyword: "Aiko",
+                fetched_at: now
+            ),
+            FeedItem(
+                id: "youtube:cached-2",
+                platform: "youtube",
+                url: "https://youtube.com/watch?v=2",
+                title: "Cached Miku video",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "video",
+                published_at: now,
+                watch_term_keyword: "Miku",
+                fetched_at: now
+            ),
+        ]
+        try JSONEncoder().encode([existingTerm])
+            .write(to: tempDir.appendingPathComponent("terms.json"))
+        try JSONEncoder().encode(cached)
+            .write(to: tempDir.appendingPathComponent("feed_items.json"))
+        UserDefaults.standard.set(3, forKey: "localdb_schema_version")
+        defer { UserDefaults.standard.removeObject(forKey: "localdb_schema_version") }
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.terms.map(\.keyword).sorted(), ["Aiko", "Miku"])
+        XCTAssertEqual(freshDB.term(matchingKeyword: "Aiko")?.id, "server-aiko")
+        XCTAssertFalse(freshDB.term(matchingKeyword: "Aiko")?.repaired_from_cache ?? true)
+        XCTAssertTrue(freshDB.term(matchingKeyword: "Miku")?.repaired_from_cache ?? false)
     }
 
     // MARK: - setSourcesOrder / setWallpaper / setOshiAvatar
@@ -2762,6 +2841,168 @@ final class NetworkManagerTests: XCTestCase {
         try await NetworkManager.shared.deleteWatchTermIfSynced(repairedTerm)
 
         XCTAssertEqual(requestedPaths, ["/api/watch-terms", "/api/watch-terms/42"])
+    }
+
+    @MainActor
+    func testSyncWatchTermsDoesNotPatchRepairedTermWhenBackendHasKeyword() async throws {
+        let keyword = "Sync Repaired \(UUID().uuidString)"
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: [],
+            repaired_from_cache: true
+        )
+        let backendTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            is_active: false,
+            notify_on_new: false,
+            aliases: ["Aiko Alias"]
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(repairedTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        var requestedMethodsAndPaths: [String] = []
+        MockURLProtocol.handler = { request in
+            requestedMethodsAndPaths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            if request.url?.path == "/api/watch-terms" {
+                return (backendData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms"])
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.collection_mode, .mediaOnly)
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+        XCTAssertEqual(syncedTerm?.aliases, ["Aiko Alias"])
+    }
+
+    @MainActor
+    func testSyncWatchTermsCreatesRepairedTermWhenBackendLacksKeyword() async throws {
+        let keyword = "Sync Create \(UUID().uuidString)"
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: [],
+            repaired_from_cache: true
+        )
+        let createdTerm = WatchTerm(id: "42", keyword: keyword, collection_mode: .allInfo)
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(repairedTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let emptyBackendData = try JSONEncoder().encode([WatchTerm]())
+        let createdData = try JSONEncoder().encode(createdTerm)
+        var requestedMethodsAndPaths: [String] = []
+        var capturedBody: [String: Any] = [:]
+        MockURLProtocol.handler = { request in
+            requestedMethodsAndPaths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (emptyBackendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "POST" {
+                if let body = request.httpBody,
+                   let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    capturedBody = parsed
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
+                return (createdData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
+        XCTAssertEqual(capturedBody["keyword"] as? String, keyword)
+        XCTAssertEqual(capturedBody["collection_mode"] as? String, "all_info")
+        XCTAssertEqual(capturedBody["notify_on_new"] as? Bool, true)
+        XCTAssertEqual(capturedBody["is_active"] as? Bool, true)
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertFalse(syncedTerm?.repaired_from_cache ?? true)
+    }
+
+    @MainActor
+    func testSyncWatchTermsPatchesNormalLocalTermWhenBackendDiffers() async throws {
+        let keyword = "Sync Patch \(UUID().uuidString)"
+        let localTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: ["Aiko Alias"]
+        )
+        let backendTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            is_active: false,
+            notify_on_new: false,
+            aliases: []
+        )
+        let updatedTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: ["Aiko Alias"]
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(localTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        let updatedData = try JSONEncoder().encode(updatedTerm)
+        var requestedMethodsAndPaths: [String] = []
+        var capturedBody: [String: Any] = [:]
+        MockURLProtocol.handler = { request in
+            requestedMethodsAndPaths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            if request.url?.path == "/api/watch-terms" {
+                return (backendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms/42" {
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                if let body = request.httpBody,
+                   let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    capturedBody = parsed
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
+                return (updatedData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [localTerm])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "PATCH /api/watch-terms/42"])
+        XCTAssertEqual(capturedBody["collection_mode"] as? String, "all_info")
+        XCTAssertEqual(capturedBody["notify_on_new"] as? Bool, true)
+        XCTAssertEqual(capturedBody["is_active"] as? Bool, true)
+        XCTAssertEqual(capturedBody["aliases"] as? [String], ["Aiko Alias"])
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.aliases, ["Aiko Alias"])
     }
 
     func testMuteFeedItemPostsSourceAndWatchTermIDs() async throws {
