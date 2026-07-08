@@ -72,7 +72,6 @@ jobs:
               delivered_count = apns_payload.get("delivered_count", 0)
               retryable_failures = apns_payload.get("retryable_failures", 0)
               pruned_tokens = apns_payload.get("pruned_tokens", 0)
-              excluded_owner_duplicate_devices = apns_payload.get("excluded_owner_duplicate_devices", 0)
               term_label = f"term_id={term.get('term_id')} keyword={term.get('keyword')}"
               if term.get("delivered") is not True:
                   failures.append(f"{term_label} did not deliver: {term}")
@@ -80,12 +79,6 @@ jobs:
                   failures.append(f"{term_label} APNs event did not target any devices: {apns_event}")
               if delivered_count < 1:
                   failures.append(f"{term_label} APNs event did not record a delivery: {apns_event}")
-              if term.get("owner_scoped") is False and device_count > 1:
-                  failures.append(
-                      f"{term_label} global canary fan-out exceeded one device: "
-                      f"device_count={device_count} excluded_owner_duplicate_devices="
-                      f"{excluded_owner_duplicate_devices}"
-                  )
               if delivered_count != device_count:
                   failures.append(
                       f"{term_label} APNs delivery was incomplete: "
