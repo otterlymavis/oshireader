@@ -78,14 +78,14 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 3))
         card.swipeLeft()
 
-        let stopFollowing = waitForAnyButton(
-            containing: ["Stop Following", "フォロー解除", "停止追蹤", "停止追踪"],
+        let hidePost = waitForAnyButton(
+            containing: ["Hide Post", "投稿を非表示", "隱藏貼文", "隐藏帖子"],
             timeout: 3
         )
-        XCTAssertNotNil(stopFollowing)
-        stopFollowing?.tap()
+        XCTAssertNotNil(hidePost)
+        hidePost?.tap()
 
-        let confirm = ["Stop Following", "フォロー解除", "停止追蹤", "停止追踪"]
+        let confirm = ["Hide Post", "非表示にする", "隱藏貼文", "隐藏帖子"]
             .map { app.alerts.buttons[$0] }
             .first { $0.waitForExistence(timeout: 1) }
         XCTAssertNotNil(confirm)
@@ -94,7 +94,7 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertFalse(headline.waitForExistence(timeout: 2))
 
         tapTab(index: 4, labels: ["Settings"])
-        XCTAssertFalse(app.staticTexts["UITest Oshi"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["UITest Oshi"].waitForExistence(timeout: 2))
     }
 
     func testSavedReaderFlow() throws {

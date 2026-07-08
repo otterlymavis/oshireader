@@ -171,6 +171,30 @@ class I18nManager: ObservableObject {
             "zh-TW": "這會移除該關鍵字、已快取的貼文，以及之後的通知。",
             "zh-CN": "这会移除该关键字、已缓存的帖子，以及之后的通知。"
         ],
+        "hidePost": [
+            "en": "Hide Post",
+            "ja": "投稿を非表示",
+            "zh-TW": "隱藏貼文",
+            "zh-CN": "隐藏帖子"
+        ],
+        "hidePostConfirm": [
+            "en": "Hide Post",
+            "ja": "非表示にする",
+            "zh-TW": "隱藏貼文",
+            "zh-CN": "隐藏帖子"
+        ],
+        "hidePostTitleFmt": [
+            "en": "Hide “%@”?",
+            "ja": "「%@」を非表示にしますか？",
+            "zh-TW": "隱藏「%@」？",
+            "zh-CN": "隐藏“%@”？"
+        ],
+        "hidePostMessage": [
+            "en": "This hides only this post from your feed. The keyword stays followed.",
+            "ja": "この投稿だけをフィードから非表示にします。キーワードのフォローは継続されます。",
+            "zh-TW": "這只會從動態中隱藏這篇貼文。關鍵字仍會繼續追蹤。",
+            "zh-CN": "这只会从动态中隐藏这篇帖子。关键词仍会继续追踪。"
+        ],
         "offlineSaved": [
             "en": "Saved for Offline",
             "ja": "オフライン保存済み",
