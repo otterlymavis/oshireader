@@ -355,6 +355,56 @@ class TestIngestionNotifications:
         mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_old_dated_discovery_notifies_established_term(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(days=14),
+        )
+        existing = SourceItem(
+            id="youtube:existing",
+            platform="youtube",
+            item_id="existing",
+            url="https://youtube.example.com/existing",
+            published_at=datetime.now(timezone.utc) - timedelta(days=2),
+            media_type="video",
+            title="Aiko existing post",
+            content_text="Aiko existing post",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, existing])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
+        db_session.commit()
+
+        old_new_discovery = _make_item(
+            platform="youtube",
+            item_id="old-but-new-to-feed",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=12),
+            title="Aiko old but newly discovered",
+            content_text="Aiko old but newly discovered",
+            raw_payload={"date_parsed": True},
+        )
+        connector = _mock_connector("youtube", [old_new_discovery])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_called_once()
+        _, called_term, called_count, preview_item = mock_notify.call_args.args
+        assert called_term.keyword == "Aiko"
+        assert called_count == 1
+        assert preview_item["id"] == "youtube:old-but-new-to-feed"
+
+    @pytest.mark.asyncio
     async def test_existing_discussion_reply_update_is_notified(
         self,
         db_engine,

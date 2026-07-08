@@ -406,6 +406,9 @@ def _is_notification_eligible(
             observed_at - term_created_at >= _ESTIMATED_DATE_NOTIFICATION_WARMUP
         )
 
+    if term_had_existing_matches:
+        return True
+
     published_at = source_item.published_at
     if published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=timezone.utc)
@@ -791,6 +794,12 @@ async def _poll_once_unlocked() -> None:
         )
 
         for term in terms:
+            term_had_existing_matches_before_poll = (
+                db.query(Match.id)
+                .filter(Match.watch_term_id == term.id)
+                .first()
+                is not None
+            )
             for search_term in _search_terms_for(term):
                 # Keep I/O parallel without retaining every connector's response,
                 # parser tree, and result list until the slowest request finishes.
@@ -844,13 +853,6 @@ async def _poll_once_unlocked() -> None:
                                 )
                                 .all()
                             }
-                            term_had_existing_matches = (
-                                db.query(Match.id)
-                                .filter(Match.watch_term_id == term.id)
-                                .first()
-                                is not None
-                            )
-
                             for raw in items:
                                 if raw.composite_id in muted_source_ids:
                                     continue
@@ -960,7 +962,7 @@ async def _poll_once_unlocked() -> None:
                                     term=term,
                                     source_item=source_item,
                                     observed_at=now,
-                                    term_had_existing_matches=term_had_existing_matches,
+                                    term_had_existing_matches=term_had_existing_matches_before_poll,
                                 ):
                                     continue
                                 notification_candidates.append(_newest_notification_candidate(
