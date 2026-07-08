@@ -170,6 +170,31 @@ class TestIngestionNotifications:
         assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
 
     @pytest.mark.asyncio
+    async def test_each_new_item_sends_its_own_notification(self, db_engine, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        connector = _mock_connector(
+            "youtube",
+            [
+                _make_item(item_id="new1", title="Aiko first item"),
+                _make_item(item_id="new2", title="Aiko second item"),
+            ],
+        )
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        assert mock_notify.call_count == 2
+        sent_previews = [call.args[3] for call in mock_notify.call_args_list]
+        assert [preview["id"] for preview in sent_previews] == ["youtube:new1", "youtube:new2"]
+        assert [call.args[2] for call in mock_notify.call_args_list] == [1, 1]
+
+    @pytest.mark.asyncio
     async def test_same_keyword_owner_duplicate_notified_from_global_poll_slot(
         self,
         db_engine,
@@ -380,7 +405,7 @@ class TestIngestionNotifications:
         assert preview_item["id"] == "5ch:old-thread"
 
     @pytest.mark.asyncio
-    async def test_new_item_preview_outranks_existing_discussion_reply_update(
+    async def test_new_item_and_existing_discussion_reply_update_are_both_notified(
         self,
         db_engine,
         db_session,
@@ -442,11 +467,13 @@ class TestIngestionNotifications:
         ):
             await _poll_once_unlocked()
 
-        mock_notify.assert_called_once()
-        _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
-        assert called_count == 2
-        assert preview_item["id"] == "youtube:fresh-video"
+        assert mock_notify.call_count == 2
+        sent_term_keywords = [call.args[1].keyword for call in mock_notify.call_args_list]
+        sent_counts = [call.args[2] for call in mock_notify.call_args_list]
+        sent_preview_ids = [call.args[3]["id"] for call in mock_notify.call_args_list]
+        assert sent_term_keywords == ["Aiko", "Aiko"]
+        assert sent_counts == [1, 1]
+        assert sent_preview_ids == ["5ch:old-thread", "youtube:fresh-video"]
 
     @pytest.mark.asyncio
     async def test_duplicate_term_existing_discussion_reply_update_is_notified(
@@ -585,7 +612,7 @@ class TestIngestionNotifications:
         assert preview_item["id"] == "youtube:estimated-established"
 
     @pytest.mark.asyncio
-    async def test_notification_preview_matches_newest_feed_sort_date(
+    async def test_notification_sends_each_item_and_includes_parsed_feed_sort_date(
         self,
         db_engine,
         db_session,
@@ -638,9 +665,18 @@ class TestIngestionNotifications:
         ):
             await _poll_once_unlocked()
 
-        mock_notify.assert_called_once()
-        preview_item = mock_notify.call_args.args[3]
-        assert preview_item["id"] == "youtube:parsed"
+        assert mock_notify.call_count == 2
+        preview_items = [call.args[3] for call in mock_notify.call_args_list]
+        assert [call.args[2] for call in mock_notify.call_args_list] == [1, 1]
+        assert {preview_item["id"] for preview_item in preview_items} == {
+            "yahoonews:estimated",
+            "youtube:parsed",
+        }
+        parsed_preview = next(
+            preview_item for preview_item in preview_items
+            if preview_item["id"] == "youtube:parsed"
+        )
+        assert datetime.fromisoformat(parsed_preview["published_at"]).replace(tzinfo=timezone.utc) == reliable
 
     @pytest.mark.asyncio
     async def test_notification_preview_uses_stored_feed_item_date_for_existing_source(

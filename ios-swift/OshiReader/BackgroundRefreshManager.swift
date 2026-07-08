@@ -70,6 +70,12 @@ enum BackgroundRefreshPolicy {
         return true
     }
 
+    static func shouldMergePreviewBeforeRefresh(forRemoteNotification userInfo: [AnyHashable: Any]) -> Bool {
+        userInfo["preview_item"] != nil ||
+            userInfo["item_id"] != nil ||
+            userInfo["item_url"] != nil
+    }
+
     static func incrementalSince(
         in items: [FeedItem],
         platformId: String? = nil

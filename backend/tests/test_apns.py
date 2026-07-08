@@ -775,6 +775,26 @@ class TestSendOne:
         assert headers["apns-collapse-id"] == "oshireader-1"
 
     @pytest.mark.asyncio
+    async def test_sends_distinct_collapse_header_per_preview_item(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(200, {}))
+        preview = {
+            "id": "youtube:item-1",
+            "match_id": 123,
+            "url": "https://example.com/item-1",
+            "title": "Aiko item",
+        }
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            await _send_one(client, device, term, 1, preview)
+
+        headers = client.post.call_args.kwargs["headers"]
+        assert headers["apns-collapse-id"].startswith("oshireader-1-")
+        assert headers["apns-collapse-id"] != "oshireader-1"
+
+    @pytest.mark.asyncio
     async def test_returns_true_for_bad_device_token(self):
         term, device = _term_and_device()
         client = _mock_client(response=_mock_response(400, {"reason": "BadDeviceToken"}))

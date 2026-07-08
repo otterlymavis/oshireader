@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -336,8 +337,14 @@ def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> d
     return _shrink_payload(payload)
 
 
-def _collapse_id(term: WatchTerm) -> str:
-    return f"oshireader-{term.id}"[:64]
+def _collapse_id(term: WatchTerm, preview_item: dict | None = None) -> str:
+    item_key = None
+    if preview_item:
+        item_key = preview_item.get("match_id") or preview_item.get("id") or preview_item.get("url")
+    if not item_key:
+        return f"oshireader-{term.id}"[:64]
+    digest = hashlib.sha1(str(item_key).encode("utf-8")).hexdigest()[:16]
+    return f"oshireader-{term.id}-{digest}"[:64]
 
 
 def _device_identity_key(device: APNSDeviceToken) -> tuple[str, str, str]:
@@ -414,7 +421,7 @@ async def _send_one(
         "apns-topic": settings.apns_topic,
         "apns-push-type": "alert",
         "apns-priority": "10",
-        "apns-collapse-id": _collapse_id(term),
+        "apns-collapse-id": _collapse_id(term, preview_item),
     }
     payload = _payload(term, count, preview_item)
     notification_id = uuid.uuid4().hex

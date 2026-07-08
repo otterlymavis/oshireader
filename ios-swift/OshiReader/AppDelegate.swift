@@ -69,17 +69,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         BackgroundRefreshLiveTestProbe.recordStarted()
         Task { @MainActor in
             let shouldTriggerPoll = BackgroundRefreshPolicy.shouldTriggerPoll(forRemoteNotification: userInfo)
-            if !shouldTriggerPoll,
-               NotificationNavigationManager.shared.mergeNotificationItem(userInfo: userInfo) {
-                BackgroundRefreshLiveTestProbe.recordCompleted(success: true)
-                AppLogger.network.notice("Silent push merged preview payload without waiting for backend refresh")
-                completionHandler(.newData)
-                return
+            let mergedPreview = BackgroundRefreshPolicy.shouldMergePreviewBeforeRefresh(forRemoteNotification: userInfo) &&
+                NotificationNavigationManager.shared.mergeNotificationItem(userInfo: userInfo)
+            if mergedPreview {
+                AppLogger.network.notice("Silent push merged preview payload before backend feed refresh")
             }
             let refreshed = await BackgroundRefreshManager.shared.refreshFromBackend(triggerPoll: shouldTriggerPoll)
-            BackgroundRefreshLiveTestProbe.recordCompleted(success: refreshed)
+            BackgroundRefreshLiveTestProbe.recordCompleted(success: refreshed || mergedPreview)
             AppLogger.network.notice("Silent push background refresh completed success=\(refreshed)")
-            completionHandler(refreshed ? .newData : .failed)
+            completionHandler(refreshed || mergedPreview ? .newData : .failed)
         }
     }
 

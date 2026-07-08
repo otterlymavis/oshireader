@@ -64,6 +64,7 @@ _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
 _PREVIEW_SOURCE_NEW_MATCH = "new_match"
 _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
+_NotificationCandidate = tuple[bool, datetime, dict]
 
 
 def _build_connectors(db) -> list[BaseConnector]:
@@ -448,33 +449,41 @@ def _notification_preview_rank(preview_item: dict | None) -> int:
 def _queue_pending_notification(
     db,
     term: WatchTerm,
-    new_count: int,
-    newest_candidate: tuple[bool, datetime, dict] | None,
+    candidates: list[_NotificationCandidate],
 ) -> None:
-    if new_count <= 0:
+    if not candidates:
         return
 
     pending = db.get(PendingNotification, term.id)
     if pending is None:
         pending = PendingNotification(watch_term_id=term.id, new_count=0)
         db.add(pending)
-    pending.new_count += new_count
+    pending.new_count += len(candidates)
     pending.updated_at = datetime.now(timezone.utc)
+    queued_items = _pending_notification_items(pending)
+    current_preview = queued_items[-1] if queued_items else None
+    queued_items.extend(candidate[2] for candidate in candidates)
+    pending.preview_item = {"items": queued_items}
 
-    if newest_candidate is None:
-        return
-    candidate_is_estimated, candidate_published_at, candidate_preview = newest_candidate
-    if _candidate_is_newer(
-        candidate_rank=_notification_preview_rank(candidate_preview),
-        candidate_is_estimated=candidate_is_estimated,
-        candidate_published_at=candidate_published_at,
-        current_rank=_notification_preview_rank(pending.preview_item),
-        current_is_estimated=bool(pending.preview_is_estimated),
-        current_published_at=pending.preview_published_at,
-    ):
-        pending.preview_item = candidate_preview
-        pending.preview_published_at = candidate_published_at
-        pending.preview_is_estimated = candidate_is_estimated
+    for candidate_is_estimated, candidate_published_at, candidate_preview in candidates:
+        if _candidate_is_newer(
+            candidate_rank=_notification_preview_rank(candidate_preview),
+            candidate_is_estimated=candidate_is_estimated,
+            candidate_published_at=candidate_published_at,
+            current_rank=_notification_preview_rank(current_preview),
+            current_is_estimated=bool(pending.preview_is_estimated),
+            current_published_at=pending.preview_published_at,
+        ):
+            pending.preview_published_at = candidate_published_at
+            pending.preview_is_estimated = candidate_is_estimated
+            current_preview = candidate_preview
+
+
+def _pending_notification_items(pending: PendingNotification) -> list[dict]:
+    preview_item = pending.preview_item
+    if isinstance(preview_item, dict) and isinstance(preview_item.get("items"), list):
+        return [item for item in preview_item["items"] if isinstance(item, dict)]
+    return []
 
 
 def _duplicate_notification_terms(db, term: WatchTerm) -> list[WatchTerm]:
@@ -610,21 +619,19 @@ def _queue_duplicate_term_notifications(
             continue
 
         db.flush()
-        notification_count = 0
-        newest_candidate: tuple[bool, datetime, dict] | None = None
+        notification_candidates: list[_NotificationCandidate] = []
         for source_item_id, match_id in reply_update_matches:
             source_item = db.get(SourceItem, source_item_id)
             match = db.get(Match, match_id)
             if source_item is None or match is None:
                 continue
-            notification_count += 1
-            newest_candidate = _newest_notification_candidate(
-                newest_candidate,
+            notification_candidates.append(_newest_notification_candidate(
+                None,
                 source_item=source_item,
                 match=match,
                 observed_at=observed_at,
                 preview_source=_PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE,
-            )
+            ))
 
         for match, source_item in new_matches:
             if not _is_notification_eligible(
@@ -634,19 +641,17 @@ def _queue_duplicate_term_notifications(
                 term_had_existing_matches=term_had_existing_matches,
             ):
                 continue
-            notification_count += 1
-            newest_candidate = _newest_notification_candidate(
-                newest_candidate,
+            notification_candidates.append(_newest_notification_candidate(
+                None,
                 source_item=source_item,
                 match=match,
                 observed_at=observed_at,
-            )
+            ))
 
         _queue_pending_notification(
             db,
             duplicate_term,
-            notification_count,
-            newest_candidate,
+            notification_candidates,
         )
 
 
@@ -655,12 +660,40 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
     if pending is None:
         return True
     try:
-        should_clear = await send_new_match_notifications(
-            db,
-            term,
-            pending.new_count,
-            pending.preview_item,
-        )
+        pending_items = _pending_notification_items(pending)
+        if not pending_items:
+            should_clear = await send_new_match_notifications(
+                db,
+                term,
+                pending.new_count,
+                pending.preview_item,
+            )
+            if should_clear is False:
+                return False
+            db.delete(pending)
+            db.commit()
+            return True
+
+        for preview_item in list(pending_items):
+            should_clear = await send_new_match_notifications(db, term, 1, preview_item)
+            if should_clear is False:
+                return False
+
+            pending = db.get(PendingNotification, term.id)
+            if pending is None:
+                return True
+            remaining = _pending_notification_items(pending)
+            if remaining:
+                remaining = remaining[1:]
+            pending.new_count = max(0, pending.new_count - 1)
+            if remaining and pending.new_count > 0:
+                pending.preview_item = {"items": remaining}
+                pending.updated_at = datetime.now(timezone.utc)
+                db.commit()
+            else:
+                db.delete(pending)
+                db.commit()
+                return True
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -674,10 +707,6 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
         )
         return False
 
-    if should_clear is False:
-        return False
-    db.delete(pending)
-    db.commit()
     return True
 
 
@@ -747,8 +776,7 @@ async def _poll_once_unlocked() -> None:
                             continue
                         try:
                             new_count = 0
-                            notification_count = 0
-                            newest_candidate: tuple[bool, datetime, dict] | None = None
+                            notification_candidates: list[_NotificationCandidate] = []
                             discussion_reply_source_ids: set[str] = set()
                             ids = [raw.composite_id for raw in items]
                             now = datetime.now(timezone.utc)
@@ -859,14 +887,13 @@ async def _poll_once_unlocked() -> None:
                                     source_item = db.get(SourceItem, raw.composite_id)
                                     match = db.get(Match, discussion_reply_match_id)
                                     if source_item is not None and match is not None:
-                                        notification_count += 1
-                                        newest_candidate = _newest_notification_candidate(
-                                            newest_candidate,
+                                        notification_candidates.append(_newest_notification_candidate(
+                                            None,
                                             source_item=source_item,
                                             match=match,
                                             observed_at=now,
                                             preview_source=_PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE,
-                                        )
+                                        ))
 
                             # Flush source_items before inserting matches so that
                             # SQLite's FOREIGN KEY enforcement (PRAGMA foreign_keys=ON)
@@ -901,19 +928,17 @@ async def _poll_once_unlocked() -> None:
                                     term_had_existing_matches=term_had_existing_matches,
                                 ):
                                     continue
-                                notification_count += 1
-                                newest_candidate = _newest_notification_candidate(
-                                    newest_candidate,
+                                notification_candidates.append(_newest_notification_candidate(
+                                    None,
                                     source_item=source_item,
                                     match=match,
                                     observed_at=now,
-                                )
+                                ))
 
                             _queue_pending_notification(
                                 db,
                                 term,
-                                notification_count,
-                                newest_candidate,
+                                notification_candidates,
                             )
                             _queue_duplicate_term_notifications(
                                 db,

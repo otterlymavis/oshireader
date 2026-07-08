@@ -506,6 +506,17 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testRemoteNotificationPreviewPayloadStillRefreshesFeed() {
+        let userInfo: [AnyHashable: Any] = [
+            "watch_term_keyword": "Aiko",
+            "new_count": 3,
+            "preview_item": ["id": "youtube:1"],
+        ]
+
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldTriggerPoll(forRemoteNotification: userInfo))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldMergePreviewBeforeRefresh(forRemoteNotification: userInfo))
+    }
+
     func testGenericRemoteNotificationStillTriggersPoll() {
         XCTAssertTrue(BackgroundRefreshPolicy.shouldTriggerPoll(forRemoteNotification: [:]))
         XCTAssertTrue(
@@ -515,6 +526,7 @@ final class OshiReaderTests: XCTestCase {
                 ]
             )
         )
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldMergePreviewBeforeRefresh(forRemoteNotification: [:]))
     }
 
     @MainActor
