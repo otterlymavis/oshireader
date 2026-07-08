@@ -64,6 +64,7 @@ _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
 _PREVIEW_SOURCE_NEW_MATCH = "new_match"
 _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
+_PENDING_NOTIFICATION_COUNT_KEY = "_notification_count"
 _NotificationCandidate = tuple[bool, datetime, dict]
 
 
@@ -458,9 +459,19 @@ def _queue_pending_notification(
     if pending is None:
         pending = PendingNotification(watch_term_id=term.id, new_count=0)
         db.add(pending)
+    previous_count = pending.new_count
     pending.new_count += len(candidates)
     pending.updated_at = datetime.now(timezone.utc)
     queued_items = _pending_notification_items(pending)
+    if (
+        not queued_items
+        and isinstance(pending.preview_item, dict)
+        and pending.preview_item
+        and previous_count > 0
+    ):
+        legacy_item = dict(pending.preview_item)
+        legacy_item[_PENDING_NOTIFICATION_COUNT_KEY] = previous_count
+        queued_items.append(legacy_item)
     current_preview = queued_items[-1] if queued_items else None
     queued_items.extend(candidate[2] for candidate in candidates)
     pending.preview_item = {"items": queued_items}
@@ -484,6 +495,24 @@ def _pending_notification_items(pending: PendingNotification) -> list[dict]:
     if isinstance(preview_item, dict) and isinstance(preview_item.get("items"), list):
         return [item for item in preview_item["items"] if isinstance(item, dict)]
     return []
+
+
+def _pending_notification_item_count(preview_item: dict) -> int:
+    try:
+        count = int(preview_item.get(_PENDING_NOTIFICATION_COUNT_KEY, 1))
+    except (TypeError, ValueError):
+        return 1
+    return max(1, count)
+
+
+def _sendable_pending_preview(preview_item: dict) -> dict:
+    if _PENDING_NOTIFICATION_COUNT_KEY not in preview_item:
+        return preview_item
+    return {
+        key: value
+        for key, value in preview_item.items()
+        if key != _PENDING_NOTIFICATION_COUNT_KEY
+    }
 
 
 def _duplicate_notification_terms(db, term: WatchTerm) -> list[WatchTerm]:
@@ -675,7 +704,13 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
             return True
 
         for preview_item in list(pending_items):
-            should_clear = await send_new_match_notifications(db, term, 1, preview_item)
+            delivered_count = _pending_notification_item_count(preview_item)
+            should_clear = await send_new_match_notifications(
+                db,
+                term,
+                delivered_count,
+                _sendable_pending_preview(preview_item),
+            )
             if should_clear is False:
                 return False
 
@@ -685,7 +720,7 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
             remaining = _pending_notification_items(pending)
             if remaining:
                 remaining = remaining[1:]
-            pending.new_count = max(0, pending.new_count - 1)
+            pending.new_count = max(0, pending.new_count - delivered_count)
             if remaining and pending.new_count > 0:
                 pending.preview_item = {"items": remaining}
                 pending.updated_at = datetime.now(timezone.utc)

@@ -11,7 +11,13 @@ from app.connectors.base import SourceItemCreate
 from app.config import settings
 import asyncio
 
-from app.ingestion.scheduler import _poll_lock, _poll_once_unlocked, poll_once, _prune_old_items
+from app.ingestion.scheduler import (
+    _deliver_pending_notification,
+    _poll_lock,
+    _poll_once_unlocked,
+    poll_once,
+    _prune_old_items,
+)
 from app.models import Match, PendingNotification, SourceItem, WatchTerm
 
 
@@ -797,6 +803,100 @@ class TestIngestionNotifications:
             assert retry_db.query(PendingNotification).count() == 0
         finally:
             retry_db.close()
+
+    @pytest.mark.asyncio
+    async def test_partial_multi_item_notification_failure_keeps_remaining_items(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=3,
+                preview_item={
+                    "items": [
+                        {"id": "youtube:first", "url": "https://example.com/first"},
+                        {"id": "youtube:second", "url": "https://example.com/second"},
+                        {"id": "youtube:third", "url": "https://example.com/third"},
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock(side_effect=[True, False])
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is False
+        assert [call.args[2] for call in mock_notify.call_args_list] == [1, 1]
+        assert [call.args[3]["id"] for call in mock_notify.call_args_list] == [
+            "youtube:first",
+            "youtube:second",
+        ]
+        db_session.expire_all()
+        pending = db_session.get(PendingNotification, term.id)
+        assert pending is not None
+        assert pending.new_count == 2
+        assert [item["id"] for item in pending.preview_item["items"]] == [
+            "youtube:second",
+            "youtube:third",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_legacy_pending_notification_keeps_grouped_count_when_new_item_is_queued(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=2,
+                preview_item={
+                    "id": "youtube:legacy",
+                    "url": "https://example.com/legacy",
+                    "title": "Aiko legacy grouped alert",
+                },
+            )
+        )
+        db_session.commit()
+
+        connector = _mock_connector(
+            "youtube",
+            [
+                _make_item(
+                    item_id="new-after-legacy",
+                    title="Aiko new after legacy",
+                    published_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+                )
+            ],
+        )
+        mock_notify = AsyncMock(return_value=True)
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        assert [call.args[2] for call in mock_notify.call_args_list] == [2, 1]
+        assert [call.args[3]["id"] for call in mock_notify.call_args_list] == [
+            "youtube:legacy",
+            "youtube:new-after-legacy",
+        ]
+        assert all("_notification_count" not in call.args[3] for call in mock_notify.call_args_list)
+        db_session.expire_all()
+        assert db_session.get(PendingNotification, term.id) is None
 
     @pytest.mark.asyncio
     async def test_cancelled_poll_keeps_committed_notification_in_outbox(
