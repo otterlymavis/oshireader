@@ -27,6 +27,7 @@ def record_backend_event(
         db.add(BackendEvent(kind=kind, status=status, message=message, payload=payload or {}))
         db.flush()
     except Exception as exc:
+        db.rollback()
         log.warning("Failed to record backend event kind=%s status=%s: %s", kind, status, exc)
 
 
@@ -42,4 +43,5 @@ def prune_backend_events(db: Session, keep: int = 500) -> None:
         """), {"keep": keep})
         db.flush()
     except Exception as exc:
+        db.rollback()
         log.warning("Failed to prune backend events: %s", exc)
