@@ -1395,6 +1395,74 @@ class TestIngestionNotifications:
         assert db_session.get(PendingNotification, term.id) is None
 
     @pytest.mark.asyncio
+    async def test_missing_source_discussion_reply_pending_notification_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {
+                            "id": "5ch:missing-reply",
+                            "url": "https://5ch.example.com/missing-reply",
+                            "published_at": (
+                                datetime.now(timezone.utc) - timedelta(days=2)
+                            ).isoformat(),
+                            "notification_preview_source": "discussion_reply_update",
+                        }
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock()
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_discussion_reply_pending_notification_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {
+                            "url": "https://5ch.example.com/malformed-reply",
+                            "notification_preview_source": "discussion_reply_update",
+                        }
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock()
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
     async def test_failed_connector_commit_is_not_included_in_notification(
         self,
         db_engine,

@@ -554,9 +554,6 @@ def _pending_preview_is_notification_eligible(
     preview_item: dict,
     observed_at: datetime,
 ) -> bool:
-    if preview_item.get("notification_preview_source") == _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE:
-        return True
-
     source_item_id = preview_item.get("id")
     if not isinstance(source_item_id, str) or not source_item_id:
         return _fallback_pending_preview_is_fresh(term, preview_item, observed_at)
@@ -564,6 +561,9 @@ def _pending_preview_is_notification_eligible(
     source_item = db.get(SourceItem, source_item_id)
     if source_item is None:
         return _fallback_pending_preview_is_fresh(term, preview_item, observed_at)
+
+    if preview_item.get("notification_preview_source") == _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE:
+        return True
 
     return _is_notification_eligible(
         term=term,
