@@ -1130,6 +1130,106 @@ class TestIngestionNotifications:
         assert db_session.get(PendingNotification, term.id) is None
 
     @pytest.mark.asyncio
+    async def test_stale_reliable_pending_notification_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        old_item = SourceItem(
+            id="youtube:old-pending",
+            platform="youtube",
+            item_id="old-pending",
+            url="https://youtube.example.com/old-pending",
+            published_at=datetime.now(timezone.utc) - timedelta(days=2),
+            media_type="video",
+            title="Aiko old pending",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, old_item])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=old_item.id))
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {
+                            "id": old_item.id,
+                            "url": old_item.url,
+                            "published_at": old_item.published_at.isoformat(),
+                        }
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock()
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
+    async def test_stale_discussion_reply_pending_notification_is_sent(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        old_item = SourceItem(
+            id="5ch:old-pending",
+            platform="5ch",
+            item_id="old-pending",
+            url="https://5ch.example.com/old-pending",
+            published_at=datetime.now(timezone.utc) - timedelta(days=2),
+            media_type="text",
+            title="Aiko old pending",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, old_item])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=old_item.id))
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {
+                            "id": old_item.id,
+                            "url": old_item.url,
+                            "published_at": old_item.published_at.isoformat(),
+                            "notification_preview_source": "discussion_reply_update",
+                        }
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock(return_value=True)
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_called_once()
+        _, _, called_count, preview_item = mock_notify.call_args.args
+        assert called_count == 1
+        assert preview_item["id"] == old_item.id
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
     async def test_failed_connector_commit_is_not_included_in_notification(
         self,
         db_engine,

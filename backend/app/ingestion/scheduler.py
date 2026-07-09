@@ -515,6 +515,31 @@ def _sendable_pending_preview(preview_item: dict) -> dict:
     }
 
 
+def _pending_preview_is_notification_eligible(
+    db,
+    term: WatchTerm,
+    preview_item: dict,
+    observed_at: datetime,
+) -> bool:
+    if preview_item.get("notification_preview_source") == _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE:
+        return True
+
+    source_item_id = preview_item.get("id")
+    if not isinstance(source_item_id, str) or not source_item_id:
+        return True
+
+    source_item = db.get(SourceItem, source_item_id)
+    if source_item is None:
+        return True
+
+    return _is_notification_eligible(
+        term=term,
+        source_item=source_item,
+        observed_at=observed_at,
+        term_had_existing_matches=True,
+    )
+
+
 def _duplicate_notification_terms(db, term: WatchTerm) -> list[WatchTerm]:
     return (
         db.query(WatchTerm)
@@ -688,9 +713,19 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
     pending = db.get(PendingNotification, term.id)
     if pending is None:
         return True
+    observed_at = datetime.now(timezone.utc)
     try:
         pending_items = _pending_notification_items(pending)
         if not pending_items:
+            if isinstance(pending.preview_item, dict) and not _pending_preview_is_notification_eligible(
+                db,
+                term,
+                pending.preview_item,
+                observed_at,
+            ):
+                db.delete(pending)
+                db.commit()
+                return True
             should_clear = await send_new_match_notifications(
                 db,
                 term,
@@ -705,14 +740,15 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
 
         for preview_item in list(pending_items):
             delivered_count = _pending_notification_item_count(preview_item)
-            should_clear = await send_new_match_notifications(
-                db,
-                term,
-                delivered_count,
-                _sendable_pending_preview(preview_item),
-            )
-            if should_clear is False:
-                return False
+            if _pending_preview_is_notification_eligible(db, term, preview_item, observed_at):
+                should_clear = await send_new_match_notifications(
+                    db,
+                    term,
+                    delivered_count,
+                    _sendable_pending_preview(preview_item),
+                )
+                if should_clear is False:
+                    return False
 
             pending = db.get(PendingNotification, term.id)
             if pending is None:
