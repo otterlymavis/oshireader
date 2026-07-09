@@ -508,11 +508,13 @@ class TestIngestionNotifications:
         refreshed = db_session.get(SourceItem, "5ch:old-thread")
         assert refreshed is not None
         assert refreshed.published_at.replace(tzinfo=timezone.utc) == reply_at
+        assert refreshed.content_text == "Aiko new reply"
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
         assert called_term.keyword == "Aiko"
         assert called_count == 1
         assert preview_item["id"] == "5ch:old-thread"
+        assert preview_item["content_text"] == "Aiko new reply"
 
     @pytest.mark.asyncio
     async def test_estimated_discussion_reply_heal_is_notified(
@@ -563,12 +565,14 @@ class TestIngestionNotifications:
         refreshed = db_session.get(SourceItem, "girlschannel:estimated-thread")
         assert refreshed is not None
         assert refreshed.published_at.replace(tzinfo=timezone.utc) == reply_at
+        assert refreshed.content_text == "Aiko new reply"
         assert refreshed.raw_payload["date_parsed"] is True
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
         assert called_term.keyword == "Aiko"
         assert called_count == 1
         assert preview_item["id"] == "girlschannel:estimated-thread"
+        assert preview_item["content_text"] == "Aiko new reply"
 
     @pytest.mark.asyncio
     async def test_empty_payload_discussion_reply_heal_is_notified(
@@ -619,12 +623,14 @@ class TestIngestionNotifications:
         refreshed = db_session.get(SourceItem, "girlschannel:empty-payload-thread")
         assert refreshed is not None
         assert refreshed.published_at.replace(tzinfo=timezone.utc) == reply_at
+        assert refreshed.content_text == "Aiko new reply"
         assert refreshed.raw_payload["date_parsed"] is True
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
         assert called_term.keyword == "Aiko"
         assert called_count == 1
         assert preview_item["id"] == "girlschannel:empty-payload-thread"
+        assert preview_item["content_text"] == "Aiko new reply"
 
     @pytest.mark.asyncio
     async def test_new_item_and_existing_discussion_reply_update_are_both_notified(
