@@ -985,6 +985,11 @@ async def _poll_once_unlocked() -> None:
                                             source_item = db.get(SourceItem, raw.composite_id)
                                             if source_item is not None:
                                                 source_item.published_at = published_at
+                                                if raw.raw_payload:
+                                                    source_item.raw_payload = {
+                                                        **(source_item.raw_payload or {}),
+                                                        **raw.raw_payload,
+                                                    }
                                             existing_items[raw.composite_id] = published_at
                                             log.info(
                                                 "healed published_at for %s: %s → %s",
