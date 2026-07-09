@@ -1431,6 +1431,46 @@ class TestIngestionNotifications:
         assert db_session.get(PendingNotification, term.id) is None
 
     @pytest.mark.asyncio
+    async def test_fresh_missing_source_discussion_reply_pending_notification_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {
+                            "id": "5ch:missing-fresh-reply",
+                            "url": "https://5ch.example.com/missing-fresh-reply",
+                            "published_at": (
+                                datetime.now(timezone.utc) - timedelta(minutes=10)
+                            ).isoformat(),
+                            "notification_preview_source": "discussion_reply_update",
+                        }
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock()
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
     async def test_malformed_discussion_reply_pending_notification_is_cleared_without_sending(
         self,
         db_session,
