@@ -913,7 +913,12 @@ class TestIngestionNotifications:
         self,
         db_session,
     ):
-        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        published_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         db_session.add(term)
         db_session.flush()
         db_session.add(
@@ -922,9 +927,21 @@ class TestIngestionNotifications:
                 new_count=3,
                 preview_item={
                     "items": [
-                        {"id": "youtube:first", "url": "https://example.com/first"},
-                        {"id": "youtube:second", "url": "https://example.com/second"},
-                        {"id": "youtube:third", "url": "https://example.com/third"},
+                        {
+                            "id": "youtube:first",
+                            "url": "https://example.com/first",
+                            "published_at": published_at.isoformat(),
+                        },
+                        {
+                            "id": "youtube:second",
+                            "url": "https://example.com/second",
+                            "published_at": published_at.isoformat(),
+                        },
+                        {
+                            "id": "youtube:third",
+                            "url": "https://example.com/third",
+                            "published_at": published_at.isoformat(),
+                        },
                     ]
                 },
             )
@@ -971,6 +988,9 @@ class TestIngestionNotifications:
                     "id": "youtube:legacy",
                     "url": "https://example.com/legacy",
                     "title": "Aiko legacy grouped alert",
+                    "published_at": (
+                        datetime.now(timezone.utc) - timedelta(minutes=20)
+                    ).isoformat(),
                 },
             )
         )
@@ -1049,8 +1069,22 @@ class TestIngestionNotifications:
         db_engine,
         db_session,
     ):
-        term = WatchTerm(keyword="Aiko", notify_on_new=True)
-        db_session.add(term)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        item = SourceItem(
+            id="youtube:pending",
+            platform="youtube",
+            item_id="pending",
+            url="https://example.com/pending",
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+            media_type="video",
+            title="Aiko pending",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, item])
         db_session.flush()
         db_session.add(
             PendingNotification(
@@ -1162,6 +1196,112 @@ class TestIngestionNotifications:
                             "id": old_item.id,
                             "url": old_item.url,
                             "published_at": old_item.published_at.isoformat(),
+                        }
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock()
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
+    async def test_stale_missing_source_pending_notification_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {
+                            "id": "youtube:missing-pending",
+                            "url": "https://youtube.example.com/missing-pending",
+                            "published_at": (
+                                datetime.now(timezone.utc) - timedelta(days=2)
+                            ).isoformat(),
+                        }
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock()
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
+    async def test_legacy_stale_pending_notification_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "id": "youtube:legacy-stale",
+                    "url": "https://youtube.example.com/legacy-stale",
+                    "published_at": (
+                        datetime.now(timezone.utc) - timedelta(days=2)
+                    ).isoformat(),
+                },
+            )
+        )
+        db_session.commit()
+
+        mock_notify = AsyncMock()
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_notify.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_pending_notification_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {
+                            "id": "youtube:malformed-pending",
+                            "url": "https://youtube.example.com/malformed-pending",
                         }
                     ]
                 },

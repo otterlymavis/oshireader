@@ -515,6 +515,39 @@ def _sendable_pending_preview(preview_item: dict) -> dict:
     }
 
 
+def _parse_pending_preview_published_at(preview_item: dict) -> datetime | None:
+    value = preview_item.get("published_at")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _fallback_pending_preview_is_fresh(
+    term: WatchTerm,
+    preview_item: dict,
+    observed_at: datetime,
+) -> bool:
+    published_at = _parse_pending_preview_published_at(preview_item)
+    if published_at is None:
+        return False
+
+    term_created_at = term.created_at or observed_at
+    if term_created_at.tzinfo is None:
+        term_created_at = term_created_at.replace(tzinfo=timezone.utc)
+
+    cutoff = max(
+        observed_at - _NOTIFICATION_FRESHNESS_WINDOW,
+        term_created_at - _WATCH_TERM_CLOCK_SKEW,
+    )
+    return published_at >= cutoff
+
+
 def _pending_preview_is_notification_eligible(
     db,
     term: WatchTerm,
@@ -526,11 +559,11 @@ def _pending_preview_is_notification_eligible(
 
     source_item_id = preview_item.get("id")
     if not isinstance(source_item_id, str) or not source_item_id:
-        return True
+        return _fallback_pending_preview_is_fresh(term, preview_item, observed_at)
 
     source_item = db.get(SourceItem, source_item_id)
     if source_item is None:
-        return True
+        return _fallback_pending_preview_is_fresh(term, preview_item, observed_at)
 
     return _is_notification_eligible(
         term=term,
