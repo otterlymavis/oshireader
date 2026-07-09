@@ -106,15 +106,16 @@ def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
         for event in events
         if isinstance(event.payload, dict) and event.payload.get("term_id") is not None
     }
-    active_term_ids = set()
+    active_notify_term_ids = set()
     if term_ids:
-        active_term_ids = {
+        active_notify_term_ids = {
             term_id
             for (term_id,) in (
                 db.query(WatchTerm.id)
                 .filter(
                     WatchTerm.id.in_(term_ids),
                     WatchTerm.is_active == True,  # noqa: E712
+                    WatchTerm.notify_on_new == True,  # noqa: E712
                 )
                 .all()
             )
@@ -122,7 +123,7 @@ def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
 
     for event in events:
         term_id = event.payload.get("term_id") if isinstance(event.payload, dict) else None
-        if term_id is None or term_id in active_term_ids:
+        if term_id is None or term_id in active_notify_term_ids:
             return event
     return None
 

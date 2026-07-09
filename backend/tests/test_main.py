@@ -389,6 +389,33 @@ class TestAdminStats:
         assert data["latest_apns"]["id"] == stale.id
         assert data["latest_relevant_apns"] is None
 
+    def test_stats_ignores_latest_apns_for_muted_active_term(self, client, db_session):
+        notifying = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        muted = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=False)
+        db_session.add_all([notifying, muted])
+        db_session.flush()
+        relevant = BackendEvent(
+            kind="apns",
+            status="attempted",
+            message="APNs notification attempted",
+            payload={"term_id": notifying.id, "delivered_count": 1},
+        )
+        skipped = BackendEvent(
+            kind="apns",
+            status="skipped",
+            message="Watch term notifications are disabled",
+            payload={"term_id": muted.id, "new_count": 1},
+        )
+        db_session.add_all([relevant, skipped])
+        db_session.commit()
+
+        r = client.get("/api/admin/stats")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["latest_apns"]["id"] == skipped.id
+        assert data["latest_relevant_apns"]["id"] == relevant.id
+
     def test_stats_includes_pending_notifications(self, client, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret="owner-secret")
         db_session.add(term)
