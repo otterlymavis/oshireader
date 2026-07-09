@@ -26,43 +26,80 @@ jobs:
 
       - name: Trigger backend poll
         run: |
-          BODY=$(mktemp)
-          STATUS=$(curl -sS -o "$BODY" -w "%{http_code} time=%{time_total}s" -X POST \
-            "$BACKEND_URL/api/admin/poll" \
-            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --max-time 260)
-          echo "Response status: $STATUS"
-          echo "Response body: $(cat "$BODY")"
-          CODE=${STATUS%% *}
-          if [ "$CODE" != "200" ] && [ "$CODE" != "202" ]; then
-            echo "Poll request failed with status $CODE"
-            exit 1
-          fi
+          for attempt in $(seq 1 18); do
+            BODY=$(mktemp)
+            STATUS=$(curl -sS -o "$BODY" -w "%{http_code} time=%{time_total}s" -X POST \
+              "$BACKEND_URL/api/admin/poll" \
+              -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --max-time 260)
+            echo "Attempt $attempt response status: $STATUS"
+            echo "Attempt $attempt response body: $(cat "$BODY")"
+            CODE=${STATUS%% *}
+            if [ "$CODE" != "200" ] && [ "$CODE" != "202" ]; then
+              echo "Poll request failed with status $CODE"
+              exit 1
+            fi
+
+            POLL_STATUS=$(python3 - "$BODY" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              print((json.load(fh).get("status") or "").strip())
+          PY
+          )
+            rm -f "$BODY"
+
+            if [ "$POLL_STATUS" = "poll completed" ]; then
+              exit 0
+            fi
+            if [ "$POLL_STATUS" = "poll still running (request timed out)" ]; then
+              echo "Poll is still running after request timeout; diagnostics will wait for the outbox to settle."
+              exit 0
+            fi
+            if [ "$POLL_STATUS" != "poll already running" ]; then
+              echo "Unexpected poll response status: $POLL_STATUS"
+              exit 1
+            fi
+            if [ "$attempt" -eq 18 ]; then
+              echo "Backend poll remained busy after $attempt attempts"
+              exit 1
+            fi
+            sleep 20
+          done
 
       - name: Validate backend notification diagnostics
         if: always()
         run: |
-          BODY=$(mktemp)
-          STATUS=$(curl -sS -o "$BODY" -w "%{http_code}" \
-            "$BACKEND_URL/api/admin/stats" \
-            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-            --max-time 30)
-          if [ "$STATUS" != "200" ]; then
-            echo "Stats request failed with status $STATUS"
-            echo "Response body: $(cat "$BODY")"
-            exit 1
-          fi
-          python3 - "$BODY" <<'PY'
+          for attempt in $(seq 1 24); do
+            BODY=$(mktemp)
+            STATUS=$(curl -sS -o "$BODY" -w "%{http_code}" \
+              "$BACKEND_URL/api/admin/stats" \
+              -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+              --max-time 30)
+            if [ "$STATUS" != "200" ]; then
+              echo "Stats attempt $attempt failed with status $STATUS"
+              echo "Response body: $(cat "$BODY")"
+              rm -f "$BODY"
+              if [ "$attempt" -eq 24 ]; then
+                exit 1
+              fi
+              sleep 15
+              continue
+            fi
+            if python3 - "$BODY" "$attempt" <<'PY'
           import json
           import sys
 
           with open(sys.argv[1], "r", encoding="utf-8") as fh:
               data = json.load(fh)
+          attempt = sys.argv[2]
 
           apns = data.get("apns", {})
           notification_health = data.get("notification_health") or {}
           pending_notifications = data.get("pending_notifications") or []
+          latest_poll = data.get("latest_poll") or {}
           summary = {
               "items_total": data.get("items_total"),
               "matches_total": data.get("matches_total"),
@@ -74,21 +111,37 @@ jobs:
               ),
               "notification_health": notification_health,
               "pending_notifications": pending_notifications,
+              "latest_poll": latest_poll,
+              "latest_successful_poll": data.get("latest_successful_poll"),
               "watch_terms": data.get("watch_terms", []),
               "matches_by_term_platform": data.get("matches_by_term_platform", []),
               "recent_events": data.get("recent_events", [])[:10],
           }
+          print(f"Diagnostics attempt {attempt}")
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
           failures = []
           if apns.get("configured") is not True:
               failures.append("APNs is not configured")
           if notification_health.get("healthy") is not True:
               failures.append(f"notification_health is degraded: {notification_health}")
+          if latest_poll.get("status") == "started":
+              failures.append(f"poll is still running: {latest_poll}")
           if pending_notifications:
               failures.append(f"pending notifications remain after poll: {pending_notifications}")
           if failures:
               raise SystemExit("; ".join(failures))
           PY
+            then
+              rm -f "$BODY"
+              exit 0
+            fi
+            rm -f "$BODY"
+            if [ "$attempt" -eq 24 ]; then
+              exit 1
+            fi
+            echo "Diagnostics not settled yet; retrying."
+            sleep 15
+          done
 
       - name: Send failure alert
         if: failure()
