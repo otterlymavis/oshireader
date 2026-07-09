@@ -57,7 +57,6 @@ _queued_task: asyncio.Task | None = None
 # Platforms where published_at should reflect "last reply/activity" rather than original
 # post date. We update published_at whenever we see a more recent date from the connector.
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "togetter"})
-_NOTIFICATION_FRESHNESS_WINDOW = timedelta(hours=2)
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
 _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
@@ -192,6 +191,11 @@ def connector_fetch_timeout_seconds(connector: BaseConnector) -> float:
     if connector.PLATFORM == "5ch":
         return max(timeout, _FIVECH_FETCH_TIMEOUT_SECONDS)
     return timeout
+
+
+def _notification_freshness_window() -> timedelta:
+    minutes = max(1, settings.notification_freshness_window_minutes)
+    return timedelta(minutes=minutes)
 
 
 def _connector_batches(connectors: list[BaseConnector]) -> list[list[BaseConnector]]:
@@ -411,7 +415,7 @@ def _is_notification_eligible(
         published_at = published_at.replace(tzinfo=timezone.utc)
 
     cutoff = max(
-        observed_at - _NOTIFICATION_FRESHNESS_WINDOW,
+        observed_at - _notification_freshness_window(),
         term_created_at - _WATCH_TERM_CLOCK_SKEW,
     )
     return published_at >= cutoff
@@ -542,7 +546,7 @@ def _fallback_pending_preview_is_fresh(
         term_created_at = term_created_at.replace(tzinfo=timezone.utc)
 
     cutoff = max(
-        observed_at - _NOTIFICATION_FRESHNESS_WINDOW,
+        observed_at - _notification_freshness_window(),
         term_created_at - _WATCH_TERM_CLOCK_SKEW,
     )
     return published_at >= cutoff

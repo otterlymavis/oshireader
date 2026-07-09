@@ -22,6 +22,8 @@ from app.ingestion.scheduler import (
     _deactivate_orphaned_silent_terms,
     _disable_orphaned_notification_terms,
     _fetch_one,
+    _is_notification_eligible,
+    _notification_freshness_window,
     _prune_irrelevant_matches,
     _prune_old_items,
     _prune_old_items_with_limit,
@@ -572,6 +574,70 @@ class TestPollTermWindow:
         assert selected == terms
         assert offset == 0
         assert next_offset == 0
+
+
+class TestNotificationFreshnessWindow:
+    def test_uses_configured_freshness_window(self):
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 240
+
+            assert _notification_freshness_window() == timedelta(hours=4)
+
+    def test_treats_three_hour_old_article_as_notification_eligible(self, db):
+        observed_at = datetime(2026, 7, 9, 15, 0, tzinfo=timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            created_at=observed_at - timedelta(days=3),
+        )
+        source_item = SourceItem(
+            id="oricon:fresh-rotation-item",
+            platform="oricon",
+            item_id="fresh-rotation-item",
+            url="https://example.com/fresh",
+            published_at=observed_at - timedelta(hours=3),
+            media_type="article",
+            title="Aiko fresh article",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, source_item])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 240
+
+            assert _is_notification_eligible(
+                term=term,
+                source_item=source_item,
+                observed_at=observed_at,
+            ) is True
+
+    def test_rejects_articles_outside_configured_freshness_window(self, db):
+        observed_at = datetime(2026, 7, 9, 15, 0, tzinfo=timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            created_at=observed_at - timedelta(days=3),
+        )
+        source_item = SourceItem(
+            id="oricon:stale-item",
+            platform="oricon",
+            item_id="stale-item",
+            url="https://example.com/stale",
+            published_at=observed_at - timedelta(hours=5),
+            media_type="article",
+            title="Aiko stale article",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, source_item])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 240
+
+            assert _is_notification_eligible(
+                term=term,
+                source_item=source_item,
+                observed_at=observed_at,
+            ) is False
 
 
 class TestDisableOrphanedNotificationTerms:

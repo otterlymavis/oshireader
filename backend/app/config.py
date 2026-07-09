@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     connector_fetch_timeout_seconds: float = 8.0
     connector_concurrency: int = 1
     poll_terms_per_run: int = 1
+    notification_freshness_window_minutes: int = 240
     orphaned_notification_grace_minutes: int = 60
     admin_api_token: str = ""
     allow_unauthenticated_admin: bool = False
