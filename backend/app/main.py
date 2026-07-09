@@ -126,6 +126,27 @@ def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
     return None
 
 
+def _latest_canary_apns_event(
+    db: Session,
+    *,
+    term_id: int,
+    after_event_id: int,
+) -> BackendEvent | None:
+    events = (
+        db.query(BackendEvent)
+        .filter(BackendEvent.kind == "apns")
+        .filter(BackendEvent.id > after_event_id)
+        .order_by(BackendEvent.id.desc())
+        .limit(50)
+        .all()
+    )
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if payload.get("term_id") == term_id:
+            return event
+    return None
+
+
 def _apns_event_delivered(event: BackendEvent | None) -> bool:
     payload = event.payload if event and isinstance(event.payload, dict) else {}
     try:
@@ -582,10 +603,20 @@ async def notification_canary(
     term_results = []
     all_delivered = True
     for term in terms:
+        latest_apns_event_id = (
+            db.query(func.max(BackendEvent.id))
+            .filter(BackendEvent.kind == "apns")
+            .scalar()
+            or 0
+        )
         should_clear = await send_new_match_notifications(db, term, 1, _notification_canary_preview())
-        apns_event = _latest_relevant_apns_event(db)
+        apns_event = _latest_canary_apns_event(
+            db,
+            term_id=term.id,
+            after_event_id=latest_apns_event_id,
+        )
         delivered = _apns_event_delivered(apns_event)
-        all_delivered = all_delivered and delivered
+        all_delivered = all_delivered and should_clear and delivered
         term_results.append({
             "term_id": term.id,
             "keyword": term.keyword,
