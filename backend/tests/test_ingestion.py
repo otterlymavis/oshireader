@@ -18,7 +18,7 @@ from app.ingestion.scheduler import (
     poll_once,
     _prune_old_items,
 )
-from app.models import APNSDeviceToken, Match, PendingNotification, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, Match, PendingNotification, SourceItem, WatchTerm
 
 
 def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate:
@@ -407,6 +407,104 @@ class TestIngestionNotifications:
         )
         assert match is not None
         mock_notify.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_recent_unnotified_existing_match_gets_catchup_notification(
+        self,
+        db_engine,
+        db_session,
+    ):
+        now = datetime.now(timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=now - timedelta(days=14),
+        )
+        item = SourceItem(
+            id="yahoonews:late-existing",
+            platform="yahoonews",
+            item_id="late-existing",
+            url="https://news.example.com/late-existing",
+            published_at=now - timedelta(hours=12),
+            media_type="article",
+            title="Aiko late existing result",
+            content_text="Aiko late existing result",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, item])
+        db_session.flush()
+        db_session.add(Match(
+            watch_term_id=term.id,
+            source_item_id=item.id,
+            created_at=now - timedelta(hours=1),
+        ))
+        db_session.commit()
+        mock_notify = AsyncMock(return_value=True)
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify), \
+             patch.object(settings, "poll_terms_per_run", 0):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_awaited_once()
+        preview = mock_notify.await_args.args[3]
+        assert preview["id"] == "yahoonews:late-existing"
+
+    @pytest.mark.asyncio
+    async def test_recent_existing_match_with_delivered_apns_is_not_caught_up_again(
+        self,
+        db_engine,
+        db_session,
+    ):
+        now = datetime.now(timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=now - timedelta(days=14),
+        )
+        item = SourceItem(
+            id="yahoonews:already-delivered",
+            platform="yahoonews",
+            item_id="already-delivered",
+            url="https://news.example.com/already-delivered",
+            published_at=now - timedelta(hours=12),
+            media_type="article",
+            title="Aiko already delivered result",
+            content_text="Aiko already delivered result",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, item])
+        db_session.flush()
+        db_session.add_all([
+            Match(
+                watch_term_id=term.id,
+                source_item_id=item.id,
+                created_at=now - timedelta(hours=1),
+            ),
+            BackendEvent(
+                kind="apns",
+                status="attempted",
+                payload={
+                    "term_id": term.id,
+                    "keyword": term.keyword,
+                    "preview_item_id": item.id,
+                    "delivered_count": 1,
+                },
+            ),
+        ])
+        db_session.commit()
+        mock_notify = AsyncMock(return_value=True)
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify), \
+             patch.object(settings, "poll_terms_per_run", 0):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_older_dated_discovery_for_established_term_is_added_without_notification(

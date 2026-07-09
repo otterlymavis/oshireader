@@ -61,6 +61,7 @@ _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
 _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
+_CATCHUP_NOTIFICATION_MIN_MATCH_AGE = timedelta(minutes=10)
 _PREVIEW_SOURCE_NEW_MATCH = "new_match"
 _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
 _PENDING_NOTIFICATION_COUNT_KEY = "_notification_count"
@@ -497,6 +498,114 @@ def _queue_pending_notification(
             pending.preview_published_at = candidate_published_at
             pending.preview_is_estimated = candidate_is_estimated
             current_preview = candidate_preview
+
+
+def _pending_notification_item_ids(pending: PendingNotification | None) -> set[str]:
+    if pending is None:
+        return set()
+    ids = {
+        item_id
+        for item in _pending_notification_items(pending)
+        if isinstance((item_id := item.get("id")), str) and item_id
+    }
+    if (
+        isinstance(pending.preview_item, dict)
+        and isinstance((preview_id := pending.preview_item.get("id")), str)
+        and preview_id
+    ):
+        ids.add(preview_id)
+    return ids
+
+
+def _delivered_notification_item_ids(db, source_item_ids: list[str]) -> set[str]:
+    if not source_item_ids:
+        return set()
+    events = (
+        db.query(BackendEvent)
+        .filter(BackendEvent.kind == "apns")
+        .filter(BackendEvent.payload["preview_item_id"].as_string().in_(source_item_ids))
+        .order_by(BackendEvent.id.desc())
+        .all()
+    )
+    delivered: set[str] = set()
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        preview_item_id = payload.get("preview_item_id")
+        if not isinstance(preview_item_id, str):
+            continue
+        try:
+            delivered_count = int(payload.get("delivered_count") or 0)
+        except (TypeError, ValueError):
+            delivered_count = 0
+        if delivered_count > 0:
+            delivered.add(preview_item_id)
+    return delivered
+
+
+def _queue_recent_unnotified_match_notifications(
+    db,
+    term: WatchTerm,
+    observed_at: datetime,
+    *,
+    limit: int = 20,
+) -> int:
+    """Catch up fresh matches that were saved before notification rules changed."""
+    if not term.notify_on_new:
+        return 0
+
+    cutoff = observed_at - _notification_freshness_window()
+    catchup_created_before = observed_at - _CATCHUP_NOTIFICATION_MIN_MATCH_AGE
+    rows = (
+        db.query(Match, SourceItem)
+        .join(SourceItem, Match.source_item_id == SourceItem.id)
+        .filter(Match.watch_term_id == term.id)
+        .filter(Match.created_at >= cutoff)
+        .filter(Match.created_at <= catchup_created_before)
+        .filter(SourceItem.published_at >= cutoff)
+        .order_by(Match.created_at.asc(), Match.id.asc())
+        .limit(limit)
+        .all()
+    )
+    if not rows:
+        return 0
+
+    source_item_ids = [source_item.id for _, source_item in rows]
+    already_delivered_ids = _delivered_notification_item_ids(db, source_item_ids)
+    pending_ids = _pending_notification_item_ids(db.get(PendingNotification, term.id))
+    muted_ids = {
+        source_item_id
+        for (source_item_id,) in (
+            db.query(MutedFeedItem.source_item_id)
+            .filter(MutedFeedItem.watch_term_id == term.id)
+            .filter(MutedFeedItem.source_item_id.in_(source_item_ids))
+            .all()
+        )
+    }
+
+    candidates: list[_NotificationCandidate] = []
+    for match, source_item in rows:
+        if source_item.id in already_delivered_ids or source_item.id in pending_ids:
+            continue
+        if source_item.id in muted_ids:
+            continue
+        if _published_at_is_estimated(source_item, observed_at):
+            continue
+        if not _is_notification_eligible(
+            term=term,
+            source_item=source_item,
+            observed_at=observed_at,
+            term_had_existing_matches=True,
+        ):
+            continue
+        candidates.append(_newest_notification_candidate(
+            None,
+            source_item=source_item,
+            match=match,
+            observed_at=observed_at,
+        ))
+
+    _queue_pending_notification(db, term, candidates)
+    return len(candidates)
 
 
 def _pending_notification_items(pending: PendingNotification) -> list[dict]:
@@ -1139,6 +1248,19 @@ async def _poll_once_unlocked() -> None:
             # Deliver once after every connector and alias has contributed to the
             # database-backed outbox. If the poll is canceled or APNs raises, the
             # pending row survives and is retried at the start of the next poll.
+            catchup_count = _queue_recent_unnotified_match_notifications(
+                db,
+                term,
+                datetime.now(timezone.utc),
+            )
+            if catchup_count:
+                db.flush()
+                db.commit()
+                log.info(
+                    "queued catch-up notifications term=%r count=%d",
+                    term.keyword,
+                    catchup_count,
+                )
             await _deliver_pending_notification(db, term)
 
         await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids)
