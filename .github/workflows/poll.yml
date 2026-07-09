@@ -25,6 +25,7 @@ jobs:
           fi
 
       - name: Trigger backend poll
+        id: poll_trigger
         run: |
           for attempt in $(seq 1 18); do
             BODY=$(mktemp)
@@ -52,10 +53,12 @@ jobs:
             rm -f "$BODY"
 
             if [ "$POLL_STATUS" = "poll completed" ]; then
+              echo "diagnostics_ready=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             if [ "$POLL_STATUS" = "poll still running (request timed out)" ]; then
               echo "Poll is still running after request timeout; diagnostics will wait for the outbox to settle."
+              echo "diagnostics_ready=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             if [ "$POLL_STATUS" != "poll already running" ]; then
@@ -70,7 +73,7 @@ jobs:
           done
 
       - name: Validate backend notification diagnostics
-        if: always()
+        if: steps.poll_trigger.outputs.diagnostics_ready == 'true'
         run: |
           for attempt in $(seq 1 24); do
             BODY=$(mktemp)
