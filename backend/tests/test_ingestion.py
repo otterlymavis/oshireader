@@ -1673,12 +1673,11 @@ class TestIngestionNotifications:
         mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_notify_called_for_any_new_items(self, db_engine, db_session):
-        # Scheduler always delegates to send_new_match_notifications — the
-        # notify_on_new guard lives inside that function, tested separately.
+    async def test_notify_not_called_for_muted_terms(self, db_engine, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=False)
         db_session.add(term)
         db_session.commit()
+        term_id = term.id
 
         connector = _mock_connector("youtube", [_make_item(item_id="new2")])
         mock_notify = AsyncMock()
@@ -1688,7 +1687,11 @@ class TestIngestionNotifications:
              patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
             await _poll_once_unlocked()
 
-        mock_notify.assert_called_once()
+        mock_notify.assert_not_called()
+        db_session.expire_all()
+        assert db_session.get(SourceItem, "youtube:new2") is not None
+        assert db_session.query(Match).filter_by(watch_term_id=term_id, source_item_id="youtube:new2").count() == 1
+        assert db_session.get(PendingNotification, term_id) is None
 
     @pytest.mark.asyncio
     async def test_notify_not_called_on_second_poll_same_items(self, db_engine, db_session):

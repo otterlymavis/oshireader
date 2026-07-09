@@ -456,6 +456,11 @@ def _queue_pending_notification(
     term: WatchTerm,
     candidates: list[_NotificationCandidate],
 ) -> None:
+    if not term.notify_on_new:
+        pending = db.get(PendingNotification, term.id)
+        if pending is not None:
+            db.delete(pending)
+        return
     if not candidates:
         return
 

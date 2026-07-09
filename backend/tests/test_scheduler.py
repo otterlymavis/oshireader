@@ -29,6 +29,7 @@ from app.ingestion.scheduler import (
     _prune_old_items_with_limit,
     _poll_term_window,
     _queue_duplicate_term_notifications,
+    _queue_pending_notification,
     _search_terms_for,
 )
 from app.connectors.base import SourceItemCreate
@@ -638,6 +639,38 @@ class TestNotificationFreshnessWindow:
                 source_item=source_item,
                 observed_at=observed_at,
             ) is False
+
+
+class TestQueuePendingNotification:
+    def test_does_not_queue_for_muted_term(self, db):
+        term = WatchTerm(keyword="Aiko", notify_on_new=False, is_active=True)
+        db.add(term)
+        db.commit()
+
+        _queue_pending_notification(
+            db,
+            term,
+            [(False, datetime.now(timezone.utc), {"id": "note:new", "title": "Aiko note"})],
+        )
+        db.flush()
+
+        assert db.get(PendingNotification, term.id) is None
+
+    def test_clears_stale_pending_for_muted_term(self, db):
+        term = WatchTerm(keyword="Aiko", notify_on_new=False, is_active=True)
+        db.add(term)
+        db.commit()
+        db.add(PendingNotification(watch_term_id=term.id, new_count=1))
+        db.commit()
+
+        _queue_pending_notification(
+            db,
+            term,
+            [(False, datetime.now(timezone.utc), {"id": "note:new", "title": "Aiko note"})],
+        )
+        db.flush()
+
+        assert db.get(PendingNotification, term.id) is None
 
 
 class TestDisableOrphanedNotificationTerms:
