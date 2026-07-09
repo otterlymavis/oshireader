@@ -42,6 +42,7 @@ class APNSSendResult:
     delivered: bool = False
     should_delete_token: bool = False
     retryable_failure: bool = False
+    terminal_failure: bool = False
     notification_id: str | None = field(default=None, compare=False)
 
 
@@ -436,7 +437,7 @@ async def _send_one(
             term.id,
             _payload_size(payload),
         )
-        return APNSSendResult(notification_id=notification_id)
+        return APNSSendResult(terminal_failure=True, notification_id=notification_id)
 
     try:
         resp = await _post_with_retry(client, url, payload, headers)
@@ -458,6 +459,7 @@ async def _send_one(
     return APNSSendResult(
         should_delete_token=should_delete,
         retryable_failure=retryable,
+        terminal_failure=not retryable and not should_delete,
         notification_id=notification_id,
     )
 
@@ -563,6 +565,7 @@ async def send_new_match_notifications(
     pruned_tokens = 0
     delivered_count = 0
     retryable_failures = 0
+    terminal_failures = 0
     device_results = []
     for device, result in zip(devices, results):
         if isinstance(result, bool):
@@ -571,6 +574,8 @@ async def send_new_match_notifications(
             delivered_count += 1
         if result.retryable_failure:
             retryable_failures += 1
+        if result.terminal_failure:
+            terminal_failures += 1
         if result.should_delete_token:
             db.delete(device)
             pruned_tokens += 1
@@ -580,6 +585,7 @@ async def send_new_match_notifications(
                 "environment": device.environment,
                 "delivered": result.delivered,
                 "retryable_failure": result.retryable_failure,
+                "terminal_failure": result.terminal_failure,
                 "pruned": result.should_delete_token,
             }
             if result.notification_id:
@@ -598,6 +604,7 @@ async def send_new_match_notifications(
             "candidate_device_count": len(candidate_devices),
             "delivered_count": delivered_count,
             "retryable_failures": retryable_failures,
+            "terminal_failures": terminal_failures,
             "pruned_tokens": pruned_tokens,
             "excluded_owner_duplicate_devices": excluded_owner_duplicate_devices,
             "device_results": device_results,
@@ -605,7 +612,11 @@ async def send_new_match_notifications(
         },
     )
     db.commit()
-    return delivered_count > 0
+    return delivered_count > 0 or (
+        terminal_failures > 0
+        and retryable_failures == 0
+        and pruned_tokens == 0
+    )
 
 
 async def send_test_push(db: Session) -> dict:

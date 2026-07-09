@@ -395,6 +395,23 @@ class TestSendNewMatchNotifications:
         assert should_clear is False
 
     @pytest.mark.asyncio
+    async def test_clears_when_all_device_failures_are_terminal(self, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        device = _device("e" * 64, environment="sandbox")
+        db_session.add_all([term, device])
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(terminal_failure=True))):
+            should_clear = await send_new_match_notifications(db_session, term, 1)
+
+        assert should_clear is True
+        event = db_session.query(BackendEvent).filter_by(kind="apns").one()
+        assert event.payload["delivered_count"] == 0
+        assert event.payload["retryable_failures"] == 0
+        assert event.payload["terminal_failures"] == 1
+
+    @pytest.mark.asyncio
     async def test_keeps_good_token_device(self, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=True)
         device = _device("d" * 64, environment="sandbox")
@@ -496,6 +513,7 @@ class TestSendNewMatchNotifications:
         assert payload["device_count"] == 3
         assert payload["delivered_count"] == 1
         assert payload["retryable_failures"] == 1
+        assert payload["terminal_failures"] == 0
         assert payload["pruned_tokens"] == 1
         assert payload["device_results_truncated"] == 0
         assert payload["device_results"] == [
@@ -505,6 +523,7 @@ class TestSendNewMatchNotifications:
                 "notification_id": "n1",
                 "delivered": True,
                 "retryable_failure": False,
+                "terminal_failure": False,
                 "pruned": False,
             },
             {
@@ -513,6 +532,7 @@ class TestSendNewMatchNotifications:
                 "notification_id": "n2",
                 "delivered": False,
                 "retryable_failure": True,
+                "terminal_failure": False,
                 "pruned": False,
             },
             {
@@ -521,6 +541,7 @@ class TestSendNewMatchNotifications:
                 "notification_id": "n3",
                 "delivered": False,
                 "retryable_failure": False,
+                "terminal_failure": False,
                 "pruned": True,
             },
         ]
@@ -774,7 +795,9 @@ class TestSendOne:
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1, huge_preview)
 
-        assert result == APNSSendResult()
+        assert result.terminal_failure is True
+        assert result.delivered is False
+        assert result.retryable_failure is False
         client.post.assert_not_called()
 
     @pytest.mark.asyncio
@@ -852,7 +875,7 @@ class TestSendOne:
             s.apns_topic = "com.example.app"
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
-        assert result == APNSSendResult()
+        assert result == APNSSendResult(terminal_failure=True)
 
     @pytest.mark.asyncio
     async def test_returns_false_when_json_parse_fails(self):
