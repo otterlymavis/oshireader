@@ -321,7 +321,7 @@ class TestIngestionNotifications:
         mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_twelve_hour_old_discovery_is_added_without_notification(
+    async def test_twenty_five_hour_old_discovery_is_added_without_notification(
         self,
         db_engine,
         db_session,
@@ -336,8 +336,8 @@ class TestIngestionNotifications:
         term_id = term.id
 
         stale_discovery = _make_item(
-            item_id="twelve-hours-old",
-            published_at=datetime.now(timezone.utc) - timedelta(hours=12),
+            item_id="twenty-five-hours-old",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=25),
             title="Aiko stale discovery",
         )
         connector = _mock_connector("youtube", [stale_discovery])
@@ -351,11 +351,65 @@ class TestIngestionNotifications:
 
         db_session.expire_all()
         match = db_session.query(Match).filter(Match.watch_term_id == term_id).one()
-        assert match.source_item_id == "youtube:twelve-hours-old"
+        assert match.source_item_id == "youtube:twenty-five-hours-old"
         mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_old_dated_discovery_for_established_term_is_added_without_notification(
+    async def test_late_same_day_discovery_for_established_term_notifies(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(days=14),
+        )
+        existing = SourceItem(
+            id="youtube:existing",
+            platform="youtube",
+            item_id="existing",
+            url="https://youtube.example.com/existing",
+            published_at=datetime.now(timezone.utc) - timedelta(days=2),
+            media_type="video",
+            title="Aiko existing post",
+            content_text="Aiko existing post",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, existing])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
+        db_session.commit()
+
+        late_new_discovery = _make_item(
+            platform="youtube",
+            item_id="same-day-but-new-to-feed",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=12),
+            title="Aiko same-day but newly discovered",
+            content_text="Aiko same-day but newly discovered",
+            raw_payload={"date_parsed": True},
+        )
+        connector = _mock_connector("youtube", [late_new_discovery])
+        mock_notify = AsyncMock(return_value=True)
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        db_session.expire_all()
+        match = (
+            db_session.query(Match)
+            .filter(Match.watch_term_id == term.id)
+            .filter(Match.source_item_id == "youtube:same-day-but-new-to-feed")
+            .one()
+        )
+        assert match is not None
+        mock_notify.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_older_dated_discovery_for_established_term_is_added_without_notification(
         self,
         db_engine,
         db_session,
@@ -384,7 +438,7 @@ class TestIngestionNotifications:
         old_new_discovery = _make_item(
             platform="youtube",
             item_id="old-but-new-to-feed",
-            published_at=datetime.now(timezone.utc) - timedelta(hours=12),
+            published_at=datetime.now(timezone.utc) - timedelta(hours=25),
             title="Aiko old but newly discovered",
             content_text="Aiko old but newly discovered",
             raw_payload={"date_parsed": True},

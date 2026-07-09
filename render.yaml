@@ -19,7 +19,7 @@ services:
       - key: POLL_TERMS_PER_RUN
         value: "1"
       - key: NOTIFICATION_FRESHNESS_WINDOW_MINUTES
-        value: "240"
+        value: "1440"
       - key: ORPHANED_NOTIFICATION_GRACE_MINUTES
         value: "60"
       - key: BACKEND_PUBLIC_URL

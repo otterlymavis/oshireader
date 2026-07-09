@@ -82,7 +82,7 @@ These are intentionally conservative for the current Render instance:
 - `POLL_TERMS_PER_RUN=1`
 - `CONNECTOR_CONCURRENCY=1`
 - `CONNECTOR_FETCH_TIMEOUT_SECONDS=8`
-- `NOTIFICATION_FRESHNESS_WINDOW_MINUTES=240`
+- `NOTIFICATION_FRESHNESS_WINDOW_MINUTES=1440`
 - `ORPHANED_NOTIFICATION_GRACE_MINUTES=60`
 
 Increase them only after the service has stayed healthy for a few days, and change

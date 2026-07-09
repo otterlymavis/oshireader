@@ -581,11 +581,11 @@ class TestPollTermWindow:
 class TestNotificationFreshnessWindow:
     def test_uses_configured_freshness_window(self):
         with patch("app.ingestion.scheduler.settings") as mock_settings:
-            mock_settings.notification_freshness_window_minutes = 240
+            mock_settings.notification_freshness_window_minutes = 1440
 
-            assert _notification_freshness_window() == timedelta(hours=4)
+            assert _notification_freshness_window() == timedelta(hours=24)
 
-    def test_treats_three_hour_old_article_as_notification_eligible(self, db):
+    def test_treats_late_discovered_same_day_article_as_notification_eligible(self, db):
         observed_at = datetime(2026, 7, 9, 15, 0, tzinfo=timezone.utc)
         term = WatchTerm(
             keyword="Aiko",
@@ -596,7 +596,7 @@ class TestNotificationFreshnessWindow:
             platform="oricon",
             item_id="fresh-rotation-item",
             url="https://example.com/fresh",
-            published_at=observed_at - timedelta(hours=3),
+            published_at=observed_at - timedelta(hours=16),
             media_type="article",
             title="Aiko fresh article",
             raw_payload={"date_parsed": True},
@@ -605,7 +605,7 @@ class TestNotificationFreshnessWindow:
         db.commit()
 
         with patch("app.ingestion.scheduler.settings") as mock_settings:
-            mock_settings.notification_freshness_window_minutes = 240
+            mock_settings.notification_freshness_window_minutes = 1440
 
             assert _is_notification_eligible(
                 term=term,
@@ -624,7 +624,7 @@ class TestNotificationFreshnessWindow:
             platform="oricon",
             item_id="stale-item",
             url="https://example.com/stale",
-            published_at=observed_at - timedelta(hours=5),
+            published_at=observed_at - timedelta(hours=25),
             media_type="article",
             title="Aiko stale article",
             raw_payload={"date_parsed": True},
@@ -633,7 +633,7 @@ class TestNotificationFreshnessWindow:
         db.commit()
 
         with patch("app.ingestion.scheduler.settings") as mock_settings:
-            mock_settings.notification_freshness_window_minutes = 240
+            mock_settings.notification_freshness_window_minutes = 1440
 
             assert _is_notification_eligible(
                 term=term,
