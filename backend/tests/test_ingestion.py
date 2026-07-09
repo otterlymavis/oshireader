@@ -1867,7 +1867,12 @@ class TestIngestionDateHealing:
 
         # First poll: item has a "now-ish" placeholder date (bad)
         bad_date = datetime.now(timezone.utc)
-        item_bad = _make_item(item_id="vid1", published_at=bad_date)
+        item_bad = _make_item(
+            item_id="vid1",
+            published_at=bad_date,
+            title="Aiko original title",
+            content_text="Aiko original body",
+        )
         connector = _mock_connector("youtube", [item_bad])
         await _run_poll(db_engine, [connector])
 
@@ -1877,7 +1882,12 @@ class TestIngestionDateHealing:
 
         # Second poll: connector now returns a real date >5min old and >5min different
         real_date = datetime.now(timezone.utc) - timedelta(hours=3)
-        item_real = _make_item(item_id="vid1", published_at=real_date)
+        item_real = _make_item(
+            item_id="vid1",
+            published_at=real_date,
+            title="Aiko replacement title",
+            content_text="Aiko replacement body",
+        )
         connector2 = _mock_connector("youtube", [item_real])
         await _run_poll(db_engine, [connector2])
 
@@ -1890,6 +1900,8 @@ class TestIngestionDateHealing:
         # Should have been updated to the real date (within a few seconds)
         diff = abs((stored_dt - real_date).total_seconds())
         assert diff < 10, f"published_at not healed: stored={stored_dt}, expected≈{real_date}"
+        assert stored_after.title == "Aiko original title"
+        assert stored_after.content_text == "Aiko original body"
 
     @pytest.mark.asyncio
     async def test_does_not_heal_when_dates_are_similar(self, db_engine, db_session):

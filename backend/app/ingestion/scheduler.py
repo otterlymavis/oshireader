@@ -989,12 +989,13 @@ async def _poll_once_unlocked() -> None:
                                             source_item = db.get(SourceItem, raw.composite_id)
                                             if source_item is not None:
                                                 source_item.published_at = published_at
-                                                source_item.url = raw.url or source_item.url
-                                                source_item.media_type = raw.media_type or source_item.media_type
-                                                source_item.author = raw.author or source_item.author
-                                                source_item.title = raw.title or source_item.title
-                                                source_item.content_text = raw.content_text or source_item.content_text
-                                                source_item.thumbnail_url = raw.thumbnail_url or source_item.thumbnail_url
+                                                if raw.platform in _DISCUSSION_PLATFORMS:
+                                                    source_item.url = raw.url or source_item.url
+                                                    source_item.media_type = raw.media_type or source_item.media_type
+                                                    source_item.author = raw.author or source_item.author
+                                                    source_item.title = raw.title or source_item.title
+                                                    source_item.content_text = raw.content_text or source_item.content_text
+                                                    source_item.thumbnail_url = raw.thumbnail_url or source_item.thumbnail_url
                                                 healed_payload = {
                                                     **(source_item.raw_payload or {}),
                                                     **(raw.raw_payload or {}),
