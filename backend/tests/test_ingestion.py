@@ -1047,6 +1047,35 @@ class TestIngestionNotifications:
             retry_db.close()
 
     @pytest.mark.asyncio
+    async def test_pending_notification_for_inactive_term_is_cleared_without_sending(
+        self,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko", is_active=False, notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "items": [
+                        {"id": "youtube:pending", "url": "https://example.com/pending"}
+                    ]
+                },
+            )
+        )
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock()) as mock_send:
+            delivered = await _deliver_pending_notification(db_session, term)
+
+        assert delivered is True
+        mock_send.assert_not_called()
+        assert db_session.get(PendingNotification, term.id) is None
+
+    @pytest.mark.asyncio
     async def test_failed_connector_commit_is_not_included_in_notification(
         self,
         db_engine,

@@ -470,6 +470,16 @@ async def send_new_match_notifications(
 ) -> bool:
     if count <= 0:
         return True
+    if not term.is_active:
+        record_backend_event(
+            db,
+            "apns",
+            "skipped",
+            "Watch term is inactive",
+            {"term_id": term.id, "keyword": term.keyword, "new_count": count},
+        )
+        db.commit()
+        return True
     if not term.notify_on_new:
         record_backend_event(
             db,

@@ -212,6 +212,22 @@ class TestSendNewMatchNotifications:
         mock_send.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_skips_when_term_inactive(self, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=False, notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock()) as mock_send:
+            should_clear = await send_new_match_notifications(db_session, term, 3)
+
+        mock_send.assert_not_called()
+        assert should_clear is True
+        event = db_session.query(BackendEvent).filter(BackendEvent.kind == "apns").one()
+        assert event.status == "skipped"
+        assert event.message == "Watch term is inactive"
+
+    @pytest.mark.asyncio
     async def test_skips_when_apns_not_configured(self, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=True)
         db_session.add(term)
