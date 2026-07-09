@@ -677,7 +677,12 @@ class TestQueuePendingNotification:
 class TestDeliverPendingNotification:
     @pytest.mark.asyncio
     async def test_reloads_muted_term_before_delivery(self, db):
-        term = WatchTerm(keyword="Aiko", notify_on_new=True, is_active=True)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
         db.add(term)
         db.flush()
         db.add(PendingNotification(
@@ -707,7 +712,12 @@ class TestDeliverPendingNotification:
 
     @pytest.mark.asyncio
     async def test_reloads_deactivated_term_before_delivery(self, db):
-        term = WatchTerm(keyword="Aiko", notify_on_new=True, is_active=True)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
         db.add(term)
         db.flush()
         db.add(PendingNotification(
@@ -734,6 +744,74 @@ class TestDeliverPendingNotification:
         assert delivered is True
         assert db.get(PendingNotification, term_id) is None
         mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reloads_term_between_multi_item_deliveries(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        first = SourceItem(
+            id="youtube:first",
+            platform="youtube",
+            item_id="first",
+            url="https://example.com/first",
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+            media_type="video",
+            title="Aiko first",
+            raw_payload={"date_parsed": True},
+        )
+        second = SourceItem(
+            id="youtube:second",
+            platform="youtube",
+            item_id="second",
+            url="https://example.com/second",
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=9),
+            media_type="video",
+            title="Aiko second",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, first, second])
+        db.flush()
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=first.id),
+            Match(watch_term_id=term.id, source_item_id=second.id),
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=2,
+                preview_item={
+                    "items": [
+                        {"id": first.id, "url": first.url, "published_at": first.published_at.isoformat()},
+                        {"id": second.id, "url": second.url, "published_at": second.published_at.isoformat()},
+                    ],
+                },
+            ),
+        ])
+        db.commit()
+        term_id = term.id
+
+        ExternalSession = sessionmaker(bind=db.get_bind())
+
+        async def mute_after_first_send(*_args):
+            external_db = ExternalSession()
+            try:
+                external_term = external_db.get(WatchTerm, term_id)
+                external_term.notify_on_new = False
+                external_db.commit()
+            finally:
+                external_db.close()
+            return True
+
+        mock_send = AsyncMock(side_effect=mute_after_first_send)
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_send):
+            delivered = await _deliver_pending_notification(db, term)
+
+        assert delivered is True
+        assert mock_send.call_count == 1
+        assert mock_send.call_args.args[3]["id"] == first.id
+        assert db.get(PendingNotification, term_id) is None
 
 
 class TestDisableOrphanedNotificationTerms:

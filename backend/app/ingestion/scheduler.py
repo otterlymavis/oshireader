@@ -766,21 +766,27 @@ def _queue_duplicate_term_notifications(
         )
 
 
+def _fresh_sendable_notification_term(db, term_id: int) -> WatchTerm | None:
+    fresh_term = (
+        db.query(WatchTerm)
+        .populate_existing()
+        .filter(WatchTerm.id == term_id)
+        .first()
+    )
+    if fresh_term is None or not fresh_term.is_active or not fresh_term.notify_on_new:
+        return None
+    return fresh_term
+
+
 async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
     pending = db.get(PendingNotification, term.id)
     if pending is None:
         return True
-    fresh_term = (
-        db.query(WatchTerm)
-        .populate_existing()
-        .filter(WatchTerm.id == term.id)
-        .first()
-    )
-    if fresh_term is None or not fresh_term.is_active or not fresh_term.notify_on_new:
+    term = _fresh_sendable_notification_term(db, term.id)
+    if term is None:
         db.delete(pending)
         db.commit()
         return True
-    term = fresh_term
     observed_at = datetime.now(timezone.utc)
     try:
         pending_items = _pending_notification_items(pending)
@@ -809,6 +815,14 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
         for preview_item in list(pending_items):
             delivered_count = _pending_notification_item_count(preview_item)
             if _pending_preview_is_notification_eligible(db, term, preview_item, observed_at):
+                fresh_term = _fresh_sendable_notification_term(db, term.id)
+                if fresh_term is None:
+                    pending = db.get(PendingNotification, term.id)
+                    if pending is not None:
+                        db.delete(pending)
+                        db.commit()
+                    return True
+                term = fresh_term
                 should_clear = await send_new_match_notifications(
                     db,
                     term,
