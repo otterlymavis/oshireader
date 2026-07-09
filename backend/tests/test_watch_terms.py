@@ -623,6 +623,21 @@ class TestUpdateWatchTerm:
         assert db_session.get(PendingNotification, term.id) is None
         mock_poll.assert_not_called()
 
+    def test_deactivating_term_clears_pending_notification(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(PendingNotification(watch_term_id=term.id, new_count=2))
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
+
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is False
+        assert db_session.get(PendingNotification, term.id) is None
+        mock_poll.assert_not_called()
+
     def test_update_invalid_collection_mode_returns_422(self, client, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)

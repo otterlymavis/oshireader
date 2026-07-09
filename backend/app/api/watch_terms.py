@@ -146,7 +146,7 @@ async def update_term(
         setattr(term, k, v)
     if not auth.is_admin:
         _require_verified_notification_device(db, term)
-    if updates.get("notify_on_new") is False:
+    if updates.get("notify_on_new") is False or updates.get("is_active") is False:
         pending = db.get(PendingNotification, term.id)
         if pending is not None:
             db.delete(pending)
