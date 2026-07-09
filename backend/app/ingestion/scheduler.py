@@ -750,7 +750,7 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
     try:
         pending_items = _pending_notification_items(pending)
         if not pending_items:
-            if isinstance(pending.preview_item, dict) and not _pending_preview_is_notification_eligible(
+            if not isinstance(pending.preview_item, dict) or not _pending_preview_is_notification_eligible(
                 db,
                 term,
                 pending.preview_item,
