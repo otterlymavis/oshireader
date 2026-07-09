@@ -126,6 +126,14 @@ def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
     return None
 
 
+def _apns_event_delivered(event: BackendEvent | None) -> bool:
+    payload = event.payload if event and isinstance(event.payload, dict) else {}
+    try:
+        return int(payload.get("delivered_count") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _term_verified_device_count(db: Session, term: WatchTerm) -> int:
     query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
     if term.owner_device_secret:
@@ -574,14 +582,16 @@ async def notification_canary(
     term_results = []
     all_delivered = True
     for term in terms:
-        delivered = await send_new_match_notifications(db, term, 1, _notification_canary_preview())
+        should_clear = await send_new_match_notifications(db, term, 1, _notification_canary_preview())
         apns_event = _latest_relevant_apns_event(db)
+        delivered = _apns_event_delivered(apns_event)
         all_delivered = all_delivered and delivered
         term_results.append({
             "term_id": term.id,
             "keyword": term.keyword,
             "owner_scoped": bool(term.owner_device_secret),
             "delivered": delivered,
+            "should_clear": should_clear,
             "apns_event": _jsonable_backend_event_payload(apns_event) if apns_event else None,
         })
 

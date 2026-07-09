@@ -33,6 +33,8 @@ _APNS_PAYLOAD_SOFT_LIMIT_BYTES = 3500
 _APNS_PAYLOAD_HARD_LIMIT_BYTES = 4096
 _APNS_MAX_ATTEMPTS = 3
 _APNS_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+_APNS_TOKEN_DELETE_REASONS = {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"}
+_APNS_TERMINAL_CLEAR_REASONS = {"PayloadTooLarge"}
 _APNS_EVENT_DEVICE_RESULT_LIMIT = 25
 _DEVICE_REVALIDATION_INTERVAL = timedelta(hours=6)
 
@@ -454,12 +456,13 @@ async def _send_one(
     except Exception:
         reason = resp.text
     log.warning("APNs rejected token=%s status=%d reason=%s", device.token[-8:], resp.status_code, reason)
-    should_delete = reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"} or resp.status_code == 410
+    should_delete = reason in _APNS_TOKEN_DELETE_REASONS or resp.status_code == 410
     retryable = resp.status_code in _APNS_TRANSIENT_STATUS_CODES
+    terminal_clear = reason in _APNS_TERMINAL_CLEAR_REASONS
     return APNSSendResult(
         should_delete_token=should_delete,
-        retryable_failure=retryable,
-        terminal_failure=not retryable and not should_delete,
+        retryable_failure=retryable or (not should_delete and not terminal_clear),
+        terminal_failure=terminal_clear,
         notification_id=notification_id,
     )
 

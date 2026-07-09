@@ -532,6 +532,7 @@ class TestAdminNotificationCanary:
         assert body["keyword"] == "Aiko"
         assert body["owner_scoped"] is False
         assert body["delivered"] is True
+        assert body["should_clear"] is True
         assert body["apns_event"]["kind"] == "apns"
         assert body["apns_event"]["payload"]["delivered_count"] == 1
         assert isinstance(body["apns_event"]["created_at"], str)
@@ -547,6 +548,7 @@ class TestAdminNotificationCanary:
         ).one()
         assert event.payload["term_id"] == term.id
         assert event.payload["delivered"] is True
+        assert event.payload["should_clear"] is True
         assert isinstance(event.payload["apns_event"]["created_at"], str)
 
     def test_canary_all_terms_sends_every_active_term_with_verified_device(self, client, db_session):
@@ -653,6 +655,50 @@ class TestAdminNotificationCanary:
         ).one()
         assert event.payload["term_id"] == term.id
         assert event.payload["delivered"] is False
+
+    def test_canary_fails_when_outbox_clears_without_delivery(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        db_session.add_all([
+            term,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        async def fake_send(db, sent_term, count, _preview):
+            db.add(BackendEvent(
+                kind="apns",
+                status="attempted",
+                message="APNs notification attempted",
+                payload={
+                    "term_id": sent_term.id,
+                    "keyword": sent_term.keyword,
+                    "new_count": count,
+                    "device_count": 1,
+                    "delivered_count": 0,
+                    "retryable_failures": 0,
+                    "terminal_failures": 1,
+                    "pruned_tokens": 0,
+                },
+            ))
+            db.commit()
+            return True
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=AsyncMock(side_effect=fake_send)):
+            r = client.post("/api/admin/notification-canary")
+
+        assert r.status_code == 503
+        event = db_session.query(BackendEvent).filter_by(
+            kind="notification_canary",
+            status="failed",
+        ).one()
+        assert event.payload["term_id"] == term.id
+        assert event.payload["delivered"] is False
+        assert event.payload["should_clear"] is True
 
 
 class TestAdminAuth:

@@ -867,7 +867,7 @@ class TestSendOne:
         assert result == APNSSendResult(should_delete_token=True)
 
     @pytest.mark.asyncio
-    async def test_returns_false_for_unknown_rejection_reason(self):
+    async def test_returns_terminal_failure_for_payload_too_large(self):
         term, device = _term_and_device()
         client = _mock_client(response=_mock_response(400, {"reason": "PayloadTooLarge"}))
         with patch("app.apns._cached_auth_token", return_value="tok"), \
@@ -876,6 +876,21 @@ class TestSendOne:
             s.apns_use_sandbox = True
             result = await _send_one(client, device, term, 1)
         assert result == APNSSendResult(terminal_failure=True)
+
+    @pytest.mark.asyncio
+    async def test_keeps_provider_configuration_rejections_retryable(self):
+        term, device = _term_and_device()
+        client = _mock_client(response=_mock_response(403, {"reason": "InvalidProviderToken"}))
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_use_sandbox = True
+            result = await _send_one(client, device, term, 1)
+
+        assert result.delivered is False
+        assert result.should_delete_token is False
+        assert result.retryable_failure is True
+        assert result.terminal_failure is False
 
     @pytest.mark.asyncio
     async def test_returns_false_when_json_parse_fails(self):
