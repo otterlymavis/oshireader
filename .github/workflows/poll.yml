@@ -103,6 +103,7 @@ jobs:
           notification_health = data.get("notification_health") or {}
           pending_notifications = data.get("pending_notifications") or []
           latest_poll = data.get("latest_poll") or {}
+          latest_successful_poll = data.get("latest_successful_poll") or {}
           summary = {
               "items_total": data.get("items_total"),
               "matches_total": data.get("matches_total"),
@@ -113,12 +114,21 @@ jobs:
                   "device_tokens_by_environment_and_verification", {}
               ),
               "notification_health": notification_health,
-              "pending_notifications": pending_notifications,
-              "latest_poll": latest_poll,
-              "latest_successful_poll": data.get("latest_successful_poll"),
-              "watch_terms": data.get("watch_terms", []),
-              "matches_by_term_platform": data.get("matches_by_term_platform", []),
-              "recent_events": data.get("recent_events", [])[:10],
+              "pending_notification_count": len(pending_notifications),
+              "pending_notifications": pending_notifications[:5],
+              "pending_notifications_truncated": max(0, len(pending_notifications) - 5),
+              "latest_poll": {
+                  "id": latest_poll.get("id"),
+                  "status": latest_poll.get("status"),
+                  "created_at": latest_poll.get("created_at"),
+                  "payload": latest_poll.get("payload"),
+              },
+              "latest_successful_poll": {
+                  "id": latest_successful_poll.get("id"),
+                  "status": latest_successful_poll.get("status"),
+                  "created_at": latest_successful_poll.get("created_at"),
+                  "payload": latest_successful_poll.get("payload"),
+              },
           }
           print(f"Diagnostics attempt {attempt}")
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
