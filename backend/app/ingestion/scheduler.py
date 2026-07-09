@@ -406,9 +406,6 @@ def _is_notification_eligible(
             observed_at - term_created_at >= _ESTIMATED_DATE_NOTIFICATION_WARMUP
         )
 
-    if term_had_existing_matches:
-        return True
-
     published_at = source_item.published_at
     if published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=timezone.utc)
