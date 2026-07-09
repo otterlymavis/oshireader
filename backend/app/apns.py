@@ -569,6 +569,7 @@ async def send_new_match_notifications(
     delivered_count = 0
     retryable_failures = 0
     terminal_failures = 0
+    preview_item_id = preview_item.get("id") if isinstance(preview_item, dict) else None
     device_results = []
     for device, result in zip(devices, results):
         if isinstance(result, bool):
@@ -605,6 +606,7 @@ async def send_new_match_notifications(
             "new_count": count,
             "device_count": len(devices),
             "candidate_device_count": len(candidate_devices),
+            "preview_item_id": preview_item_id,
             "delivered_count": delivered_count,
             "retryable_failures": retryable_failures,
             "terminal_failures": terminal_failures,

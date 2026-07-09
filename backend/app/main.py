@@ -7,6 +7,7 @@ import logging
 import os
 import struct
 import traceback
+import uuid
 import zlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -130,21 +131,18 @@ def _latest_canary_apns_event(
     db: Session,
     *,
     term_id: int,
+    preview_item_id: str,
     after_event_id: int,
 ) -> BackendEvent | None:
-    events = (
+    return (
         db.query(BackendEvent)
         .filter(BackendEvent.kind == "apns")
         .filter(BackendEvent.id > after_event_id)
+        .filter(BackendEvent.payload["term_id"].as_integer() == term_id)
+        .filter(BackendEvent.payload["preview_item_id"].as_string() == preview_item_id)
         .order_by(BackendEvent.id.desc())
-        .limit(50)
-        .all()
+        .first()
     )
-    for event in events:
-        payload = event.payload if isinstance(event.payload, dict) else {}
-        if payload.get("term_id") == term_id:
-            return event
-    return None
 
 
 def _apns_event_delivered(event: BackendEvent | None) -> bool:
@@ -162,11 +160,11 @@ def _term_verified_device_count(db: Session, term: WatchTerm) -> int:
     return query.count()
 
 
-def _notification_canary_preview() -> dict:
+def _notification_canary_preview(canary_id: str) -> dict:
     now = datetime.now(timezone.utc)
     backend_url = settings.backend_public_url.rstrip("/")
     return {
-        "id": f"oshireader:canary:{int(now.timestamp())}",
+        "id": f"oshireader:canary:{canary_id}",
         "platform": "OshiReader",
         "url": backend_url,
         "title": "OshiReader notification canary",
@@ -609,10 +607,12 @@ async def notification_canary(
             .scalar()
             or 0
         )
-        should_clear = await send_new_match_notifications(db, term, 1, _notification_canary_preview())
+        preview = _notification_canary_preview(uuid.uuid4().hex)
+        should_clear = await send_new_match_notifications(db, term, 1, preview)
         apns_event = _latest_canary_apns_event(
             db,
             term_id=term.id,
+            preview_item_id=preview["id"],
             after_event_id=latest_apns_event_id,
         )
         delivered = _apns_event_delivered(apns_event)

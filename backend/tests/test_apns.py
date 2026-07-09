@@ -511,6 +511,7 @@ class TestSendNewMatchNotifications:
         event = db_session.query(BackendEvent).filter_by(kind="apns").one()
         payload = event.payload
         assert payload["device_count"] == 3
+        assert payload["preview_item_id"] is None
         assert payload["delivered_count"] == 1
         assert payload["retryable_failures"] == 1
         assert payload["terminal_failures"] == 0

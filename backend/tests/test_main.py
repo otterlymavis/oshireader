@@ -504,7 +504,7 @@ class TestAdminNotificationCanary:
         ])
         db_session.commit()
 
-        async def fake_send(db, sent_term, count, _preview):
+        async def fake_send(db, sent_term, count, preview):
             db.add(BackendEvent(
                 kind="apns",
                 status="attempted",
@@ -514,6 +514,7 @@ class TestAdminNotificationCanary:
                     "keyword": sent_term.keyword,
                     "new_count": count,
                     "device_count": 1,
+                    "preview_item_id": preview["id"],
                     "delivered_count": 1,
                     "retryable_failures": 0,
                     "pruned_tokens": 0,
@@ -540,6 +541,7 @@ class TestAdminNotificationCanary:
         _, sent_term, count, preview = mock_send.await_args.args
         assert sent_term.id == term.id
         assert count == 1
+        assert preview["id"].startswith("oshireader:canary:")
         assert preview["title"] == "OshiReader notification canary"
 
         event = db_session.query(BackendEvent).filter_by(
@@ -579,7 +581,7 @@ class TestAdminNotificationCanary:
         ])
         db_session.commit()
 
-        async def fake_send(db, sent_term, count, _preview):
+        async def fake_send(db, sent_term, count, preview):
             db.add(BackendEvent(
                 kind="apns",
                 status="attempted",
@@ -589,6 +591,7 @@ class TestAdminNotificationCanary:
                     "keyword": sent_term.keyword,
                     "new_count": count,
                     "device_count": 1,
+                    "preview_item_id": preview["id"],
                     "delivered_count": 1,
                     "retryable_failures": 0,
                     "pruned_tokens": 0,
@@ -706,7 +709,7 @@ class TestAdminNotificationCanary:
         ])
         db_session.commit()
 
-        async def fake_send(db, _sent_term, _count, _preview):
+        async def fake_send(db, _sent_term, _count, preview):
             db.add(BackendEvent(
                 kind="apns",
                 status="attempted",
@@ -714,6 +717,7 @@ class TestAdminNotificationCanary:
                 payload={
                     "term_id": other_term.id,
                     "keyword": other_term.keyword,
+                    "preview_item_id": preview["id"],
                     "delivered_count": 1,
                     "retryable_failures": 0,
                     "terminal_failures": 0,
@@ -737,6 +741,107 @@ class TestAdminNotificationCanary:
         assert event.payload["should_clear"] is True
         assert event.payload["apns_event"] is None
 
+    def test_canary_ignores_same_term_event_for_different_canary_id(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        db_session.add_all([
+            term,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        async def fake_send(db, sent_term, _count, _preview):
+            db.add(BackendEvent(
+                kind="apns",
+                status="attempted",
+                message="APNs notification attempted",
+                payload={
+                    "term_id": sent_term.id,
+                    "keyword": sent_term.keyword,
+                    "preview_item_id": "oshireader:canary:other-request",
+                    "delivered_count": 1,
+                    "retryable_failures": 0,
+                    "terminal_failures": 0,
+                    "pruned_tokens": 0,
+                },
+            ))
+            db.commit()
+            return True
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=AsyncMock(side_effect=fake_send)):
+            r = client.post("/api/admin/notification-canary")
+
+        assert r.status_code == 503
+        event = db_session.query(BackendEvent).filter_by(
+            kind="notification_canary",
+            status="failed",
+        ).one()
+        assert event.payload["term_id"] == term.id
+        assert event.payload["delivered"] is False
+        assert event.payload["should_clear"] is True
+        assert event.payload["apns_event"] is None
+
+    def test_canary_finds_matching_event_after_many_unrelated_events(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
+        other_term = WatchTerm(keyword="Other", is_active=True, notify_on_new=True)
+        db_session.add_all([
+            term,
+            other_term,
+            APNSDeviceToken(
+                token="a" * 64,
+                environment="production",
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        async def fake_send(db, sent_term, count, preview):
+            db.add(BackendEvent(
+                kind="apns",
+                status="attempted",
+                message="APNs notification attempted",
+                payload={
+                    "term_id": sent_term.id,
+                    "keyword": sent_term.keyword,
+                    "new_count": count,
+                    "device_count": 1,
+                    "preview_item_id": preview["id"],
+                    "delivered_count": 1,
+                    "retryable_failures": 0,
+                    "terminal_failures": 0,
+                    "pruned_tokens": 0,
+                },
+            ))
+            for index in range(60):
+                db.add(BackendEvent(
+                    kind="apns",
+                    status="attempted",
+                    message="Unrelated APNs notification attempted",
+                    payload={
+                        "term_id": other_term.id,
+                        "keyword": other_term.keyword,
+                        "preview_item_id": f"unrelated-{index}",
+                        "delivered_count": 1,
+                    },
+                ))
+            db.commit()
+            return True
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=AsyncMock(side_effect=fake_send)):
+            r = client.post("/api/admin/notification-canary")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["delivered"] is True
+        assert body["should_clear"] is True
+        assert body["apns_event"]["payload"]["term_id"] == term.id
+        assert body["apns_event"]["payload"]["preview_item_id"].startswith("oshireader:canary:")
+
     def test_canary_fails_when_outbox_clears_without_delivery(self, client, db_session):
         term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
         db_session.add_all([
@@ -749,7 +854,7 @@ class TestAdminNotificationCanary:
         ])
         db_session.commit()
 
-        async def fake_send(db, sent_term, count, _preview):
+        async def fake_send(db, sent_term, count, preview):
             db.add(BackendEvent(
                 kind="apns",
                 status="attempted",
@@ -759,6 +864,7 @@ class TestAdminNotificationCanary:
                     "keyword": sent_term.keyword,
                     "new_count": count,
                     "device_count": 1,
+                    "preview_item_id": preview["id"],
                     "delivered_count": 0,
                     "retryable_failures": 0,
                     "terminal_failures": 1,
