@@ -18,7 +18,7 @@ from app.ingestion.scheduler import (
     poll_once,
     _prune_old_items,
 )
-from app.models import Match, PendingNotification, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, Match, PendingNotification, SourceItem, WatchTerm
 
 
 def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate:
@@ -594,11 +594,13 @@ class TestIngestionNotifications:
         global_term = WatchTerm(
             keyword="Aiko",
             notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(days=14),
         )
         owner_term = WatchTerm(
             keyword="Aiko",
             notify_on_new=True,
             owner_device_secret="owner-secret",
+            created_at=datetime.now(timezone.utc) - timedelta(days=14),
         )
         existing = SourceItem(
             id="5ch:shared-old-thread",
@@ -611,7 +613,16 @@ class TestIngestionNotifications:
             content_text="Aiko initial discussion",
             raw_payload={"date_parsed": True},
         )
-        db_session.add_all([global_term, owner_term, existing])
+        db_session.add_all([
+            global_term,
+            owner_term,
+            existing,
+            APNSDeviceToken(
+                token="owner-token",
+                device_secret="owner-secret",
+                is_verified=True,
+            ),
+        ])
         db_session.flush()
         db_session.add_all(
             [
@@ -1343,7 +1354,7 @@ class TestIngestionNotifications:
         assert db_session.get(PendingNotification, term.id) is None
 
     @pytest.mark.asyncio
-    async def test_stale_discussion_reply_pending_notification_is_sent(
+    async def test_stale_discussion_reply_pending_notification_is_cleared_without_sending(
         self,
         db_session,
     ):
@@ -1383,15 +1394,12 @@ class TestIngestionNotifications:
         )
         db_session.commit()
 
-        mock_notify = AsyncMock(return_value=True)
+        mock_notify = AsyncMock()
         with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
             delivered = await _deliver_pending_notification(db_session, term)
 
         assert delivered is True
-        mock_notify.assert_called_once()
-        _, _, called_count, preview_item = mock_notify.call_args.args
-        assert called_count == 1
-        assert preview_item["id"] == old_item.id
+        mock_notify.assert_not_called()
         assert db_session.get(PendingNotification, term.id) is None
 
     @pytest.mark.asyncio

@@ -571,7 +571,14 @@ def _pending_preview_is_notification_eligible(
         return _fallback_pending_preview_is_fresh(term, preview_item, observed_at)
 
     if is_reply_update:
-        return True
+        if _published_at_is_estimated(source_item, observed_at):
+            return False
+        return _is_notification_eligible(
+            term=term,
+            source_item=source_item,
+            observed_at=observed_at,
+            term_had_existing_matches=True,
+        )
 
     return _is_notification_eligible(
         term=term,
@@ -975,12 +982,9 @@ async def _poll_once_unlocked() -> None:
                                             diff = abs((published_at - stored_aware).total_seconds())
                                             should_update = new_age > 300 and diff > 300
                                         if should_update:
-                                            db.query(SourceItem).filter(
-                                                SourceItem.id == raw.composite_id
-                                            ).update(
-                                                {"published_at": published_at},
-                                                synchronize_session=False,
-                                            )
+                                            source_item = db.get(SourceItem, raw.composite_id)
+                                            if source_item is not None:
+                                                source_item.published_at = published_at
                                             existing_items[raw.composite_id] = published_at
                                             log.info(
                                                 "healed published_at for %s: %s → %s",
