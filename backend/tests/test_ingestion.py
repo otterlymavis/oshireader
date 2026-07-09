@@ -571,6 +571,62 @@ class TestIngestionNotifications:
         assert preview_item["id"] == "girlschannel:estimated-thread"
 
     @pytest.mark.asyncio
+    async def test_empty_payload_discussion_reply_heal_is_notified(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc) - timedelta(days=14),
+        )
+        existing = SourceItem(
+            id="girlschannel:empty-payload-thread",
+            platform="girlschannel",
+            item_id="empty-payload-thread",
+            url="https://girlschannel.example.com/topics/empty-payload-thread/",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=3),
+            media_type="text",
+            title="Aiko empty payload discussion",
+            content_text="Aiko initial discussion",
+            raw_payload={"date_parsed": False, "source": "direct"},
+        )
+        db_session.add_all([term, existing])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
+        db_session.commit()
+
+        reply_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        updated_thread = _make_item(
+            platform="girlschannel",
+            item_id="empty-payload-thread",
+            published_at=reply_at,
+            title="Aiko empty payload discussion",
+            content_text="Aiko new reply",
+            raw_payload={},
+        )
+        connector = _mock_connector("girlschannel", [updated_thread])
+        mock_notify = AsyncMock()
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+            await _poll_once_unlocked()
+
+        db_session.expire_all()
+        refreshed = db_session.get(SourceItem, "girlschannel:empty-payload-thread")
+        assert refreshed is not None
+        assert refreshed.published_at.replace(tzinfo=timezone.utc) == reply_at
+        assert refreshed.raw_payload["date_parsed"] is True
+        mock_notify.assert_called_once()
+        _, called_term, called_count, preview_item = mock_notify.call_args.args
+        assert called_term.keyword == "Aiko"
+        assert called_count == 1
+        assert preview_item["id"] == "girlschannel:empty-payload-thread"
+
+    @pytest.mark.asyncio
     async def test_new_item_and_existing_discussion_reply_update_are_both_notified(
         self,
         db_engine,
