@@ -20,6 +20,7 @@ from app.ingestion.scheduler import (
     _connector_batches,
     _deactivate_orphaned_duplicate_terms,
     _deactivate_orphaned_silent_terms,
+    _deliver_pending_notification,
     _disable_orphaned_notification_terms,
     _fetch_one,
     _is_notification_eligible,
@@ -671,6 +672,68 @@ class TestQueuePendingNotification:
         db.flush()
 
         assert db.get(PendingNotification, term.id) is None
+
+
+class TestDeliverPendingNotification:
+    @pytest.mark.asyncio
+    async def test_reloads_muted_term_before_delivery(self, db):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True, is_active=True)
+        db.add(term)
+        db.flush()
+        db.add(PendingNotification(
+            watch_term_id=term.id,
+            new_count=1,
+            preview_item={"title": "Aiko note"},
+        ))
+        db.commit()
+        term_id = term.id
+        assert term.notify_on_new is True
+
+        ExternalSession = sessionmaker(bind=db.get_bind())
+        external_db = ExternalSession()
+        try:
+            external_term = external_db.get(WatchTerm, term_id)
+            external_term.notify_on_new = False
+            external_db.commit()
+        finally:
+            external_db.close()
+
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()) as mock_send:
+            delivered = await _deliver_pending_notification(db, term)
+
+        assert delivered is True
+        assert db.get(PendingNotification, term_id) is None
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reloads_deactivated_term_before_delivery(self, db):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True, is_active=True)
+        db.add(term)
+        db.flush()
+        db.add(PendingNotification(
+            watch_term_id=term.id,
+            new_count=1,
+            preview_item={"title": "Aiko note"},
+        ))
+        db.commit()
+        term_id = term.id
+        assert term.is_active is True
+
+        ExternalSession = sessionmaker(bind=db.get_bind())
+        external_db = ExternalSession()
+        try:
+            external_term = external_db.get(WatchTerm, term_id)
+            external_term.is_active = False
+            external_db.commit()
+        finally:
+            external_db.close()
+
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()) as mock_send:
+            delivered = await _deliver_pending_notification(db, term)
+
+        assert delivered is True
+        assert db.get(PendingNotification, term_id) is None
+        mock_send.assert_not_called()
 
 
 class TestDisableOrphanedNotificationTerms:

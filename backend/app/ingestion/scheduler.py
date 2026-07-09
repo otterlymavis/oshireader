@@ -770,6 +770,17 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
     pending = db.get(PendingNotification, term.id)
     if pending is None:
         return True
+    fresh_term = (
+        db.query(WatchTerm)
+        .populate_existing()
+        .filter(WatchTerm.id == term.id)
+        .first()
+    )
+    if fresh_term is None or not fresh_term.is_active or not fresh_term.notify_on_new:
+        db.delete(pending)
+        db.commit()
+        return True
+    term = fresh_term
     observed_at = datetime.now(timezone.utc)
     try:
         pending_items = _pending_notification_items(pending)
