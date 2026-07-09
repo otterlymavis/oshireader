@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth import AuthContext, require_admin_or_device_auth
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll
-from app.models import APNSDeviceToken, WatchTerm
+from app.models import APNSDeviceToken, PendingNotification, WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
 router = APIRouter(prefix="/api/watch-terms", tags=["watch-terms"])
@@ -146,6 +146,10 @@ async def update_term(
         setattr(term, k, v)
     if not auth.is_admin:
         _require_verified_notification_device(db, term)
+    if updates.get("notify_on_new") is False:
+        pending = db.get(PendingNotification, term.id)
+        if pending is not None:
+            db.delete(pending)
     try:
         db.commit()
     except IntegrityError:

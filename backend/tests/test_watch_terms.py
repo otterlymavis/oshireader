@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch
 
 from app.config import settings
-from app.models import APNSDeviceToken, WatchTerm
+from app.models import APNSDeviceToken, PendingNotification, WatchTerm
 
 
 class TestListWatchTerms:
@@ -606,6 +606,21 @@ class TestUpdateWatchTerm:
 
         with patch("app.api.watch_terms.queue_poll") as mock_poll:
             client.patch(f"/api/watch-terms/{term.id}", json={"notify_on_new": True})
+        mock_poll.assert_not_called()
+
+    def test_muting_term_clears_pending_notification(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(PendingNotification(watch_term_id=term.id, new_count=2))
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"notify_on_new": False})
+
+        assert resp.status_code == 200
+        assert resp.json()["notify_on_new"] is False
+        assert db_session.get(PendingNotification, term.id) is None
         mock_poll.assert_not_called()
 
     def test_update_invalid_collection_mode_returns_422(self, client, db_session):
