@@ -547,7 +547,7 @@ def _queue_recent_unnotified_match_notifications(
     term: WatchTerm,
     observed_at: datetime,
     *,
-    limit: int = 20,
+    limit: int = 200,
 ) -> int:
     """Catch up fresh matches that were saved before notification rules changed."""
     if not term.notify_on_new:
