@@ -13,6 +13,7 @@ from app.connectors.base import (
     contains_keyword,
     fetch_search_rss_via_proxy,
     parse_feed_date,
+    parse_google_news_markdown,
 )
 from app.models import CollectionMode
 
@@ -142,7 +143,49 @@ class TwitterConnector(BaseConnector):
             ))
         if items:
             return items
+        items = await self._fetch_public_index_jina(keyword, mode, url)
+        if items:
+            return items
         return await self._fetch_public_index_proxy(keyword, mode)
+
+    async def _fetch_public_index_jina(
+        self,
+        keyword: str,
+        mode: CollectionMode,
+        google_news_url: str,
+    ) -> list[SourceItemCreate]:
+        if mode == CollectionMode.MEDIA_ONLY:
+            return []
+        proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+                resp = await client.get(proxy_url)
+                if not resp.is_success:
+                    log.warning("X public-index Jina fallback returned status %d", resp.status_code)
+                    return []
+        except Exception as exc:
+            log.warning("X public-index Jina fallback failed: %s", exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in parse_google_news_markdown(resp.text)[:25]:
+            title = entry["title"]
+            link = entry["url"]
+            if not link or not contains_keyword(keyword, title) or link in seen:
+                continue
+            seen.add(link)
+            items.append(SourceItemCreate(
+                platform=self.PLATFORM,
+                item_id=link,
+                url=link,
+                published_at=entry["published_at"],
+                media_type="text",
+                title=title,
+                content_text=None,
+                raw_payload={"source": "google_news_jina", "keyword": keyword},
+            ))
+        return items
 
     async def _fetch_public_index_proxy(
         self,

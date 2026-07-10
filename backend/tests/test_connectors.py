@@ -464,6 +464,43 @@ class TestTwitterConnectorNoToken:
         result = await TwitterConnector(bearer_token="").fetch("Aiko", "media_only")
         assert result == []
 
+    @pytest.mark.asyncio
+    async def test_public_index_uses_jina_when_direct_google_is_empty(self):
+        fallback = [
+            SourceItemCreate(
+                platform="twitter",
+                item_id="https://news.google.com/rss/articles/x1",
+                url="https://news.google.com/rss/articles/x1",
+                published_at=datetime.now(timezone.utc),
+                media_type="text",
+                title="Aiko indexed X post - x.com",
+                raw_payload={"source": "google_news_jina", "keyword": "Aiko"},
+            )
+        ]
+        with patch("app.connectors.twitter.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.twitter.feedparser.parse", return_value=_FakeFeed([])), \
+             patch.object(TwitterConnector, "_fetch_public_index_jina", new=AsyncMock(return_value=fallback)):
+            result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
+        assert result == fallback
+
+    @pytest.mark.asyncio
+    async def test_jina_public_index_returns_items(self):
+        markdown = """### [Aiko indexed X post - x.com](https://news.google.com/rss/articles/x1)
+
+[Aiko indexed X post](https://news.google.com/rss/articles/x1)
+
+Wed, 24 Jun 2026 02:07:03 GMT
+"""
+        with patch("app.connectors.twitter.httpx.AsyncClient", _http_mock(text=markdown)):
+            result = await TwitterConnector(bearer_token="")._fetch_public_index_jina(
+                "Aiko",
+                "all_info",
+                "https://news.google.com/rss/search?q=Aiko%20site%3Ax.com",
+            )
+        assert len(result) == 1
+        assert result[0].title == "Aiko indexed X post - x.com"
+        assert result[0].raw_payload["source"] == "google_news_jina"
+
 
 # ---------------------------------------------------------------------------
 # HTTP-level connector tests (mock httpx.AsyncClient + feedparser.parse)
