@@ -746,7 +746,7 @@ class TestDeliverPendingNotification:
         mock_send.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reloads_term_between_multi_item_deliveries(self, db):
+    async def test_grouped_multi_item_delivery_sends_once_before_term_change(self, db):
         term = WatchTerm(
             keyword="Aiko",
             notify_on_new=True,
@@ -810,7 +810,8 @@ class TestDeliverPendingNotification:
 
         assert delivered is True
         assert mock_send.call_count == 1
-        assert mock_send.call_args.args[3]["id"] == first.id
+        assert mock_send.call_args.args[2] == 2
+        assert mock_send.call_args.args[3]["id"] == second.id
         assert db.get(PendingNotification, term_id) is None
 
 

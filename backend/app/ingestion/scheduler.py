@@ -645,6 +645,42 @@ def _sendable_pending_preview(preview_item: dict) -> dict:
     }
 
 
+def _pending_preview_is_estimated(db, preview_item: dict, observed_at: datetime) -> bool:
+    source_item_id = preview_item.get("id")
+    if not isinstance(source_item_id, str) or not source_item_id:
+        return False
+    source_item = db.get(SourceItem, source_item_id)
+    if source_item is None:
+        return False
+    return _published_at_is_estimated(source_item, observed_at)
+
+
+def _newer_pending_preview(
+    db,
+    current_preview: dict | None,
+    candidate_preview: dict,
+    observed_at: datetime,
+) -> dict:
+    candidate_published_at = _parse_pending_preview_published_at(candidate_preview)
+    current_published_at = (
+        _parse_pending_preview_published_at(current_preview)
+        if current_preview
+        else None
+    )
+    if candidate_published_at is None:
+        return current_preview or candidate_preview
+    if current_preview is None or _candidate_is_newer(
+        candidate_rank=_notification_preview_rank(candidate_preview),
+        candidate_is_estimated=_pending_preview_is_estimated(db, candidate_preview, observed_at),
+        candidate_published_at=candidate_published_at,
+        current_rank=_notification_preview_rank(current_preview),
+        current_is_estimated=_pending_preview_is_estimated(db, current_preview, observed_at),
+        current_published_at=current_published_at,
+    ):
+        return candidate_preview
+    return current_preview
+
+
 def _parse_pending_preview_published_at(preview_item: dict) -> datetime | None:
     value = preview_item.get("published_at")
     if not isinstance(value, str) or not value:
@@ -933,41 +969,41 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
             db.commit()
             return True
 
-        for preview_item in list(pending_items):
-            delivered_count = _pending_notification_item_count(preview_item)
-            if _pending_preview_is_notification_eligible(db, term, preview_item, observed_at):
-                fresh_term = _fresh_sendable_notification_term(db, term.id)
-                if fresh_term is None:
-                    pending = db.get(PendingNotification, term.id)
-                    if pending is not None:
-                        db.delete(pending)
-                        db.commit()
-                    return True
-                term = fresh_term
-                should_clear = await send_new_match_notifications(
-                    db,
-                    term,
-                    delivered_count,
-                    _sendable_pending_preview(preview_item),
-                )
-                if should_clear is False:
-                    return False
+        send_count = 0
+        send_preview: dict | None = None
+        for preview_item in pending_items:
+            if not _pending_preview_is_notification_eligible(db, term, preview_item, observed_at):
+                continue
+            send_count += _pending_notification_item_count(preview_item)
+            send_preview = _newer_pending_preview(db, send_preview, preview_item, observed_at)
 
+        if send_count <= 0 or send_preview is None:
+            db.delete(pending)
+            db.commit()
+            return True
+
+        fresh_term = _fresh_sendable_notification_term(db, term.id)
+        if fresh_term is None:
             pending = db.get(PendingNotification, term.id)
-            if pending is None:
-                return True
-            remaining = _pending_notification_items(pending)
-            if remaining:
-                remaining = remaining[1:]
-            pending.new_count = max(0, pending.new_count - delivered_count)
-            if remaining and pending.new_count > 0:
-                pending.preview_item = {"items": remaining}
-                pending.updated_at = datetime.now(timezone.utc)
-                db.commit()
-            else:
+            if pending is not None:
                 db.delete(pending)
                 db.commit()
-                return True
+            return True
+        term = fresh_term
+        should_clear = await send_new_match_notifications(
+            db,
+            term,
+            send_count,
+            _sendable_pending_preview(send_preview),
+        )
+        if should_clear is False:
+            return False
+
+        pending = db.get(PendingNotification, term.id)
+        if pending is not None:
+            db.delete(pending)
+            db.commit()
+        return True
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -984,8 +1020,12 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
     return True
 
 
-async def _flush_pending_notifications(db, exclude_term_ids: set[int] | None = None) -> None:
+async def _flush_pending_notifications(
+    db,
+    exclude_term_ids: set[int] | None = None,
+) -> set[int]:
     exclude_term_ids = exclude_term_ids or set()
+    flushed_term_ids: set[int] = set()
     for pending in db.query(PendingNotification).order_by(PendingNotification.updated_at).all():
         if pending.watch_term_id in exclude_term_ids:
             continue
@@ -994,7 +1034,9 @@ async def _flush_pending_notifications(db, exclude_term_ids: set[int] | None = N
             db.delete(pending)
             db.commit()
             continue
+        flushed_term_ids.add(term.id)
         await _deliver_pending_notification(db, term)
+    return flushed_term_ids
 
 
 async def _poll_once_unlocked() -> None:
@@ -1029,7 +1071,7 @@ async def _poll_once_unlocked() -> None:
             },
         )
 
-        await _flush_pending_notifications(db)
+        flushed_pending_term_ids = await _flush_pending_notifications(db)
 
         for term in terms:
             term_had_existing_matches_before_poll = (
@@ -1273,7 +1315,8 @@ async def _poll_once_unlocked() -> None:
                     term.keyword,
                     catchup_count,
                 )
-            await _deliver_pending_notification(db, term)
+            if term.id not in flushed_pending_term_ids:
+                await _deliver_pending_notification(db, term)
 
         await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids)
 
