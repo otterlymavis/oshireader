@@ -794,7 +794,7 @@ class TestDeliverPendingNotification:
 
         ExternalSession = sessionmaker(bind=db.get_bind())
 
-        async def mute_after_first_send(*_args):
+        async def mute_after_first_send(*_args, **_kwargs):
             external_db = ExternalSession()
             try:
                 external_term = external_db.get(WatchTerm, term_id)
@@ -812,6 +812,7 @@ class TestDeliverPendingNotification:
         assert mock_send.call_count == 1
         assert mock_send.call_args.args[2] == 2
         assert mock_send.call_args.args[3]["id"] == second.id
+        assert mock_send.call_args.kwargs["notification_item_ids"] == [first.id, second.id]
         assert db.get(PendingNotification, term_id) is None
 
 

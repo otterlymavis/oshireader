@@ -2532,7 +2532,8 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=[])):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
 
@@ -2541,9 +2542,35 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(side_effect=Exception("connection refused"))
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=[])):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_http_error_status_falls_back_to_public_index(self):
+        fallback_items = [
+            SourceItemCreate(
+                platform="twitter",
+                item_id="public-1",
+                url="https://x.com/example/status/public-1",
+                published_at=datetime.now(timezone.utc),
+                media_type="text",
+                title="Aiko public index result",
+            )
+        ]
+        resp = MagicMock()
+        resp.is_success = False
+        resp.status_code = 429
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=fallback_items)):
+            result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
+        assert result == fallback_items
 
     @pytest.mark.asyncio
     async def test_filters_tweets_without_keyword(self):
@@ -3254,6 +3281,14 @@ class TestYouTubeFetchOrchestration:
     async def test_api_failure_falls_back_to_scrape(self):
         items = [self._item("v2")]
         with patch.object(YouTubeConnector, "_fetch_api", new=AsyncMock(side_effect=Exception("api err"))), \
+             patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=items)):
+            result = await YouTubeConnector(api_key="my-key").fetch("Aiko", "all_info")
+        assert result == items
+
+    @pytest.mark.asyncio
+    async def test_empty_api_result_falls_back_to_scrape(self):
+        items = [self._item("v2b")]
+        with patch.object(YouTubeConnector, "_fetch_api", new=AsyncMock(return_value=[])), \
              patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=items)):
             result = await YouTubeConnector(api_key="my-key").fetch("Aiko", "all_info")
         assert result == items

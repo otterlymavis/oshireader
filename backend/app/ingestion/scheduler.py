@@ -517,28 +517,45 @@ def _pending_notification_item_ids(pending: PendingNotification | None) -> set[s
     return ids
 
 
-def _delivered_notification_item_ids(db, source_item_ids: list[str]) -> set[str]:
+def _delivered_notification_item_ids(
+    db,
+    term_id: int,
+    source_item_ids: list[str],
+    *,
+    since: datetime | None = None,
+) -> set[str]:
     if not source_item_ids:
         return set()
-    events = (
+    source_item_id_set = set(source_item_ids)
+    query = (
         db.query(BackendEvent)
         .filter(BackendEvent.kind == "apns")
-        .filter(BackendEvent.payload["preview_item_id"].as_string().in_(source_item_ids))
-        .order_by(BackendEvent.id.desc())
-        .all()
+        .filter(BackendEvent.status == "attempted")
+        .filter(BackendEvent.payload["term_id"].as_integer() == term_id)
     )
+    if since is not None:
+        query = query.filter(BackendEvent.created_at >= since)
+    events = query.order_by(BackendEvent.id.desc()).all()
     delivered: set[str] = set()
     for event in events:
         payload = event.payload if isinstance(event.payload, dict) else {}
-        preview_item_id = payload.get("preview_item_id")
-        if not isinstance(preview_item_id, str):
-            continue
         try:
             delivered_count = int(payload.get("delivered_count") or 0)
         except (TypeError, ValueError):
             delivered_count = 0
         if delivered_count > 0:
-            delivered.add(preview_item_id)
+            item_ids = payload.get("notification_item_ids")
+            if not isinstance(item_ids, list):
+                item_ids = []
+            event_item_ids = {
+                item_id
+                for item_id in item_ids
+                if isinstance(item_id, str) and item_id in source_item_id_set
+            }
+            preview_item_id = payload.get("preview_item_id")
+            if isinstance(preview_item_id, str) and preview_item_id in source_item_id_set:
+                event_item_ids.add(preview_item_id)
+            delivered.update(event_item_ids)
     return delivered
 
 
@@ -582,7 +599,7 @@ def _queue_recent_unnotified_match_notifications(
         return 0
 
     source_item_ids = [source_item.id for _, source_item in rows]
-    already_delivered_ids = _delivered_notification_item_ids(db, source_item_ids)
+    already_delivered_ids = _delivered_notification_item_ids(db, term.id, source_item_ids, since=cutoff)
     pending_ids = _pending_notification_item_ids(db.get(PendingNotification, term.id))
     muted_ids = {
         source_item_id
@@ -971,10 +988,14 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
 
         send_count = 0
         send_preview: dict | None = None
+        send_item_ids: list[str] = []
         for preview_item in pending_items:
             if not _pending_preview_is_notification_eligible(db, term, preview_item, observed_at):
                 continue
             send_count += _pending_notification_item_count(preview_item)
+            item_id = preview_item.get("id")
+            if isinstance(item_id, str) and item_id not in send_item_ids:
+                send_item_ids.append(item_id)
             send_preview = _newer_pending_preview(db, send_preview, preview_item, observed_at)
 
         if send_count <= 0 or send_preview is None:
@@ -995,6 +1016,7 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
             term,
             send_count,
             _sendable_pending_preview(send_preview),
+            notification_item_ids=send_item_ids,
         )
         if should_clear is False:
             return False

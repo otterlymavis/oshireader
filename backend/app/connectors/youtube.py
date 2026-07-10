@@ -247,7 +247,10 @@ class YouTubeConnector(BaseConnector):
         # Always try API first if credential is provided
         if self.api_key:
             try:
-                return await self._fetch_api(keyword)
+                items = await self._fetch_api(keyword)
+                if items:
+                    return items
+                log.info("YouTube API returned no items for %r; falling back to scrape", keyword)
             except Exception as e:
                 log.warning("YouTube API fetch failed, falling back to scrape. Error: %s", e)
 

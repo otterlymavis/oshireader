@@ -472,6 +472,7 @@ async def send_new_match_notifications(
     term: WatchTerm,
     count: int,
     preview_item: dict | None = None,
+    notification_item_ids: list[str] | None = None,
 ) -> bool:
     if count <= 0:
         return True
@@ -570,6 +571,13 @@ async def send_new_match_notifications(
     retryable_failures = 0
     terminal_failures = 0
     preview_item_id = preview_item.get("id") if isinstance(preview_item, dict) else None
+    delivered_item_ids: list[str] = []
+    seen_item_ids: set[str] = set()
+    fallback_item_ids = [preview_item_id] if isinstance(preview_item_id, str) else []
+    for item_id in notification_item_ids or fallback_item_ids:
+        if isinstance(item_id, str) and item_id and item_id not in seen_item_ids:
+            delivered_item_ids.append(item_id)
+            seen_item_ids.add(item_id)
     device_results = []
     for device, result in zip(devices, results):
         if isinstance(result, bool):
@@ -607,6 +615,7 @@ async def send_new_match_notifications(
             "device_count": len(devices),
             "candidate_device_count": len(candidate_devices),
             "preview_item_id": preview_item_id,
+            "notification_item_ids": delivered_item_ids,
             "delivered_count": delivered_count,
             "retryable_failures": retryable_failures,
             "terminal_failures": terminal_failures,

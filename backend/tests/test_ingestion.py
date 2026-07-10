@@ -220,7 +220,7 @@ class TestIngestionNotifications:
         connector = _mock_connector("youtube", [_make_item(item_id="shared-fresh")])
         notified_term_ids: list[int] = []
 
-        async def fake_notify(_db, notified_term, _count, _preview_item):
+        async def fake_notify(_db, notified_term, _count, _preview_item, **_kwargs):
             notified_term_ids.append(notified_term.id)
             return True
 
@@ -505,6 +505,141 @@ class TestIngestionNotifications:
             await _poll_once_unlocked()
 
         mock_notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recent_existing_grouped_match_with_delivered_apns_is_not_caught_up_again(
+        self,
+        db_engine,
+        db_session,
+    ):
+        now = datetime.now(timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=now - timedelta(days=14),
+        )
+        preview = SourceItem(
+            id="yahoonews:grouped-preview",
+            platform="yahoonews",
+            item_id="grouped-preview",
+            url="https://news.example.com/grouped-preview",
+            published_at=now - timedelta(hours=11),
+            media_type="article",
+            title="Aiko grouped preview result",
+            content_text="Aiko grouped preview result",
+            raw_payload={"date_parsed": True},
+        )
+        second = SourceItem(
+            id="yahoonews:grouped-second",
+            platform="yahoonews",
+            item_id="grouped-second",
+            url="https://news.example.com/grouped-second",
+            published_at=now - timedelta(hours=12),
+            media_type="article",
+            title="Aiko grouped second result",
+            content_text="Aiko grouped second result",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([term, preview, second])
+        db_session.flush()
+        db_session.add_all([
+            Match(
+                watch_term_id=term.id,
+                source_item_id=preview.id,
+                created_at=now - timedelta(hours=1),
+            ),
+            Match(
+                watch_term_id=term.id,
+                source_item_id=second.id,
+                created_at=now - timedelta(hours=1),
+            ),
+            BackendEvent(
+                kind="apns",
+                status="attempted",
+                payload={
+                    "term_id": term.id,
+                    "keyword": term.keyword,
+                    "preview_item_id": preview.id,
+                    "notification_item_ids": [preview.id, second.id],
+                    "delivered_count": 1,
+                },
+            ),
+        ])
+        db_session.commit()
+        mock_notify = AsyncMock(return_value=True)
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify), \
+             patch.object(settings, "poll_terms_per_run", 0):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recent_existing_grouped_match_for_other_term_is_still_caught_up(
+        self,
+        db_engine,
+        db_session,
+    ):
+        now = datetime.now(timezone.utc)
+        notified_term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            created_at=now - timedelta(days=14),
+        )
+        catchup_term = WatchTerm(
+            keyword="Haruka",
+            notify_on_new=True,
+            created_at=now - timedelta(days=14),
+        )
+        shared = SourceItem(
+            id="yahoonews:shared-grouped",
+            platform="yahoonews",
+            item_id="shared-grouped",
+            url="https://news.example.com/shared-grouped",
+            published_at=now - timedelta(hours=12),
+            media_type="article",
+            title="Aiko Haruka shared result",
+            content_text="Aiko Haruka shared result",
+            raw_payload={"date_parsed": True},
+        )
+        db_session.add_all([notified_term, catchup_term, shared])
+        db_session.flush()
+        db_session.add_all([
+            Match(
+                watch_term_id=catchup_term.id,
+                source_item_id=shared.id,
+                created_at=now - timedelta(hours=1),
+            ),
+            BackendEvent(
+                kind="apns",
+                status="attempted",
+                payload={
+                    "term_id": notified_term.id,
+                    "keyword": notified_term.keyword,
+                    "preview_item_id": shared.id,
+                    "notification_item_ids": [shared.id],
+                    "delivered_count": 1,
+                },
+            ),
+        ])
+        db_session.commit()
+        mock_notify = AsyncMock(return_value=True)
+        TestSession = sessionmaker(bind=db_engine)
+
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify), \
+             patch.object(settings, "poll_terms_per_run", 0):
+            await _poll_once_unlocked()
+
+        mock_notify.assert_awaited_once()
+        _, called_term, called_count, preview_item = mock_notify.await_args.args
+        assert called_term.id == catchup_term.id
+        assert called_count == 1
+        assert preview_item["id"] == shared.id
 
     @pytest.mark.asyncio
     async def test_catchup_prioritizes_non_discussion_sources(
@@ -976,7 +1111,7 @@ class TestIngestionNotifications:
         connector = _mock_connector("5ch", [updated_thread])
         notified_term_ids: list[int] = []
 
-        async def fake_notify(_db, notified_term, _count, _preview_item):
+        async def fake_notify(_db, notified_term, _count, _preview_item, **_kwargs):
             notified_term_ids.append(notified_term.id)
             return True
 
@@ -1292,6 +1427,11 @@ class TestIngestionNotifications:
         _, _, called_count, preview_item = mock_notify.call_args.args
         assert called_count == 3
         assert preview_item["id"] == "youtube:first"
+        assert mock_notify.call_args.kwargs["notification_item_ids"] == [
+            "youtube:first",
+            "youtube:second",
+            "youtube:third",
+        ]
         assert "_notification_count" not in preview_item
         db_session.expire_all()
         assert db_session.get(PendingNotification, term.id) is None
