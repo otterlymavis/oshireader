@@ -538,7 +538,7 @@ class LocalDB: ObservableObject {
             acc.items.append(item)
         }.items
 
-        return Self.diversifiedFeedOrder(deduped)
+        return deduped
     }
 
     static func normalizedURLKey(_ rawURL: String) -> String {
@@ -665,74 +665,6 @@ class LocalDB: ObservableObject {
             }
         }
         return current
-    }
-
-    private static func diversifiedFeedOrder(_ items: [FeedItem]) -> [FeedItem] {
-        guard items.count > 2 else { return items }
-
-        var remaining = items
-        var ordered: [FeedItem] = []
-        ordered.reserveCapacity(items.count)
-
-        while !remaining.isEmpty {
-            let searchLimit = min(remaining.count, 12)
-            var bestIndex = 0
-            var bestScore = repetitionScore(for: remaining[0], after: ordered)
-
-            if bestScore > 0, searchLimit > 1 {
-                for index in 1..<searchLimit {
-                    let score = repetitionScore(for: remaining[index], after: ordered)
-                    if score < bestScore {
-                        bestIndex = index
-                        bestScore = score
-                        if score == 0 { break }
-                    }
-                }
-            }
-
-            ordered.append(remaining.remove(at: bestIndex))
-        }
-
-        return ordered
-    }
-
-    private static func repetitionScore(for item: FeedItem, after ordered: [FeedItem]) -> Int {
-        guard !ordered.isEmpty else { return 0 }
-
-        let platform = Platform.normalize(item.platform)
-        let keyword = normalizedKeywordKey(item.watch_term_keyword)
-        let titleCluster = titleClusterKey(item.title)
-        let recent = ordered.suffix(4)
-        var score = 0
-
-        if let previous = ordered.last {
-            if Platform.normalize(previous.platform) == platform { score += 3 }
-            if normalizedKeywordKey(previous.watch_term_keyword) == keyword, !keyword.isEmpty { score += 2 }
-            if titleClusterKey(previous.title) == titleCluster, !titleCluster.isEmpty { score += 8 }
-        }
-
-        if recent.filter({ Platform.normalize($0.platform) == platform }).count >= 2 { score += 4 }
-        if !keyword.isEmpty,
-           recent.filter({ normalizedKeywordKey($0.watch_term_keyword) == keyword }).count >= 3 {
-            score += 2
-        }
-
-        if !titleCluster.isEmpty {
-            let matchingRecentStories = ordered.suffix(8).filter { titleClusterKey($0.title) == titleCluster }.count
-            if matchingRecentStories > 0 { score += 6 + matchingRecentStories }
-        }
-
-        return score
-    }
-
-    private static func normalizedKeywordKey(_ keyword: String) -> String {
-        keyword.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    private static func titleClusterKey(_ title: String?) -> String {
-        let key = normalizedTitleKey(title)
-        guard key.count >= 24 else { return key }
-        return String(key.prefix(32))
     }
 
     private static func isBareWebAddress(_ value: String?) -> Bool {

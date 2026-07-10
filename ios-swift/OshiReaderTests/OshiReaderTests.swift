@@ -1358,7 +1358,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(mdprResults.count, 1, "Same article from backend + device should appear once")
     }
 
-    func testQueryFeedDiversifiesConsecutivePlatformClusters() throws {
+    func testQueryFeedKeepsConsecutivePlatformClustersNewestFirst() throws {
         db.setSubscribedPlatforms(platforms: ["youtube", "tver"])
         let fmt = ISO8601DateFormatter()
         let now = Date()
@@ -1382,10 +1382,10 @@ final class OshiReaderTests: XCTestCase {
 
         let results = db.queryFeed(keyword: nil, days: 30)
 
-        XCTAssertEqual(results.map(\.id), ["youtube:1", "tver:1", "youtube:2", "youtube:3"])
+        XCTAssertEqual(results.map(\.id), ["youtube:1", "youtube:2", "youtube:3", "tver:1"])
     }
 
-    func testQueryFeedSeparatesNearDuplicateTitleClusters() throws {
+    func testQueryFeedKeepsNearDuplicateTitleClustersNewestFirst() throws {
         db.setSubscribedPlatforms(platforms: ["youtube", "niconico", "tver"])
         let fmt = ISO8601DateFormatter()
         let now = Date()
@@ -1408,7 +1408,7 @@ final class OshiReaderTests: XCTestCase {
 
         let results = db.queryFeed(keyword: nil, days: 30)
 
-        XCTAssertEqual(results.map(\.id), ["youtube:tour", "tver:episode", "niconico:tour"])
+        XCTAssertEqual(results.map(\.id), ["youtube:tour", "niconico:tour", "tver:episode"])
     }
 
     // MARK: - Custom platform keyword-filter bypass
