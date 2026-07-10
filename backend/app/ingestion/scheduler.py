@@ -542,6 +542,18 @@ def _delivered_notification_item_ids(db, source_item_ids: list[str]) -> set[str]
     return delivered
 
 
+def _catchup_candidate_sort_key(row: tuple[Match, SourceItem]) -> tuple[bool, float, int]:
+    match, source_item = row
+    published_at = source_item.published_at
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    return (
+        source_item.platform in _DISCUSSION_PLATFORMS,
+        -published_at.timestamp(),
+        match.id or 0,
+    )
+
+
 def _queue_recent_unnotified_match_notifications(
     db,
     term: WatchTerm,
@@ -583,7 +595,7 @@ def _queue_recent_unnotified_match_notifications(
     }
 
     candidates: list[_NotificationCandidate] = []
-    for match, source_item in rows:
+    for match, source_item in sorted(rows, key=_catchup_candidate_sort_key):
         if source_item.id in already_delivered_ids or source_item.id in pending_ids:
             continue
         if source_item.id in muted_ids:
