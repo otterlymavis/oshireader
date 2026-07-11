@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1799,21 +1799,23 @@ class TestTogetterFetch:
 
     @pytest.mark.asyncio
     async def test_merges_newest_title_and_tag_search_results(self):
-        direct_html = """
+        older = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0)
+        newer = datetime.now(timezone.utc).replace(microsecond=0)
+        direct_html = f"""
         <html><body><ul>
           <li>
             <h3>吉沢亮 古いまとめ</h3>
             <a href="https://togetter.com/li/100">吉沢亮 old</a>
-            <time datetime="2026-06-10T23:57:13+09:00">older</time>
+            <time datetime="{older.isoformat()}">older</time>
           </li>
         </ul></body></html>
         """
-        tag_html = """
+        tag_html = f"""
         <html><body><ul>
           <li>
             <h3>吉沢亮 新しいタグまとめ</h3>
             <a href="https://togetter.com/li/200">吉沢亮 new</a>
-            <time datetime="2026-06-25T07:56:04+09:00">new</time>
+            <time datetime="{newer.isoformat()}">new</time>
           </li>
         </ul></body></html>
         """
@@ -1830,7 +1832,7 @@ class TestTogetterFetch:
 
         assert len(result) == 2
         assert result[0].item_id == "200"
-        assert result[0].published_at.isoformat() == "2026-06-25T07:56:04+09:00"
+        assert result[0].published_at.isoformat() == newer.isoformat()
         assert result[0].raw_payload["source"] == "tag_search"
         assert any(call.get("sort") == "created_at" for call in calls)
 
@@ -2773,6 +2775,21 @@ class TestTVERFetch:
         assert result[0].url == "https://tver.jp/episodes/ep001"
         assert result[0].author == "NHK"
         assert result[0].media_type == "video"
+
+    @pytest.mark.asyncio
+    async def test_preserves_series_title_match_in_visible_text(self):
+        tr = _tver_token_resp()
+        ep = _tver_ep(ep_id="epseries", title="先日開催した番組初イベントの舞台裏に潜入！")
+        ep["content"]["description"] = ""
+        ep["content"]["seriesTitle"] = "乃木坂46番組"
+        sr = _tver_search_resp(episodes=[ep])
+
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
+            result = await TVERConnector().fetch("乃木坂46", "all_info")
+
+        assert len(result) == 1
+        assert result[0].title == "先日開催した番組初イベントの舞台裏に潜入！"
+        assert result[0].content_text == "乃木坂46番組"
 
     @pytest.mark.asyncio
     async def test_missing_search_date_uses_episode_detail_view_start(self):

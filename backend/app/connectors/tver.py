@@ -220,8 +220,15 @@ class TVERConnector(BaseConnector):
 
                     author = content.get("broadcasterName") or content.get("productionProviderName")
                     description = content.get("description") or content.get("episodeDescription")
-                    if not contains_keyword(keyword, title, description, author, content.get("seriesTitle")):
+                    series_title = content.get("seriesTitle")
+                    if not contains_keyword(keyword, title, description, author, series_title):
                         continue
+                    content_text_parts = [
+                        str(part).strip()
+                        for part in (series_title, description)
+                        if part and str(part).strip()
+                    ]
+                    content_text = "\n".join(dict.fromkeys(content_text_parts)) or None
 
                     published_at = _parse_tver_date(content)
                     date_source = "search"
@@ -248,7 +255,7 @@ class TVERConnector(BaseConnector):
                             title=str(title),
                             thumbnail_url=thumb,
                             author=author,
-                            content_text=description,
+                            content_text=content_text,
                             raw_payload=raw_payload,
                         )
                     )
