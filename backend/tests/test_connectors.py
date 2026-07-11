@@ -2021,6 +2021,25 @@ class TestYahooNewsFetch:
         assert all(r.platform == "yahoonews" for r in result)
 
     @pytest.mark.asyncio
+    async def test_falls_back_to_direct_search_when_gnews_empty(self):
+        empty_feed = _FakeFeed([])
+        html = """
+        <html><body>
+          <a href="/articles/abc123">アイコの最新情報</a>
+          <a href="https://news.yahoo.co.jp/articles/xyz789">アイコの別ニュース</a>
+          <a href="/articles/skip999">別人のニュース</a>
+        </body></html>
+        """
+        with patch("app.connectors.yahoonews.httpx.AsyncClient",
+                   _http_mock(content=b"<rss/>", text=html)), \
+             patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+
+        assert [r.item_id for r in result] == ["abc123", "xyz789"]
+        assert result[0].url == "https://news.yahoo.co.jp/articles/abc123"
+        assert result[0].raw_payload["source"] == "direct_search"
+
+    @pytest.mark.asyncio
     async def test_jina_non_success_returns_empty(self):
         with patch("app.connectors.yahoonews.httpx.AsyncClient",
                    _http_mock(status_code=500, is_success=False)):

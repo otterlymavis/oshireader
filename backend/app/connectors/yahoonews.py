@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urljoin
 
 import feedparser
 import httpx
@@ -30,6 +30,7 @@ _JINA_ARTICLE_RE = re.compile(
     r"^\s*\d+\.\s+\[(.+?)\]\((https://news\.yahoo\.co\.jp/articles/([A-Za-z0-9]+))\)",
     re.M | re.S,
 )
+_ARTICLE_ID_RE = re.compile(r"/articles/([A-Za-z0-9]+)")
 
 
 def _clean_markdown_title(value: str) -> str:
@@ -61,7 +62,57 @@ class YahooNewsConnector(BaseConnector):
         # RSS first — it carries real publish dates; Jina only as fallback (no dates available)
         items = await self._fetch_gnews_rss(stripped)
         if not items:
+            items = await self._fetch_direct_search(stripped)
+        if not items:
             items = await self._fetch_jina(stripped)
+        return items
+
+    async def _fetch_direct_search(self, keyword: str) -> list[SourceItemCreate]:
+        encoded = quote(keyword)
+        url = f"https://news.yahoo.co.jp/search?p={encoded}"
+        try:
+            async with httpx.AsyncClient(
+                timeout=15.0,
+                follow_redirects=True,
+                headers=GOOGLE_NEWS_HEADERS,
+            ) as client:
+                resp = await client.get(url)
+                if not resp.is_success:
+                    log.warning("YahooNews direct search returned status %d", resp.status_code)
+                    return []
+        except Exception as exc:
+            log.warning("YahooNews direct search error: %s", exc)
+            return []
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for anchor in soup.select('a[href*="/articles/"]'):
+            href = anchor.get("href") or ""
+            article_url = urljoin("https://news.yahoo.co.jp", href)
+            id_match = _ARTICLE_ID_RE.search(article_url)
+            if not id_match:
+                continue
+            item_id = id_match.group(1)
+            if item_id in seen:
+                continue
+            title = _clean_markdown_title(anchor.get_text(" ", strip=True))
+            if not title or not title_contains_keyword(keyword, title):
+                continue
+            seen.add(item_id)
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=item_id,
+                    url=article_url,
+                    published_at=datetime.now(timezone.utc),
+                    media_type="article",
+                    title=title,
+                    raw_payload={"keyword": keyword, "source": "direct_search"},
+                )
+            )
+            if len(items) >= 25:
+                break
         return items
 
     async def _fetch_jina(self, keyword: str) -> list[SourceItemCreate]:
