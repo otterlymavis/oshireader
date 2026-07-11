@@ -32,10 +32,14 @@ class TwitterConnector(BaseConnector):
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if not self.bearer_token:
             return await self._fetch_public_index(keyword, mode)
+        if mode != CollectionMode.MEDIA_ONLY:
+            public_items = await self._fetch_public_index(keyword, mode)
+            if public_items:
+                return public_items
         items = await self._fetch_api(keyword, mode)
         if items:
             return items
-        return await self._fetch_public_index(keyword, mode)
+        return [] if mode == CollectionMode.MEDIA_ONLY else await self._fetch_public_index(keyword, mode)
 
     async def _fetch_api(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         query = f"{keyword} has:media" if mode == CollectionMode.MEDIA_ONLY else keyword
