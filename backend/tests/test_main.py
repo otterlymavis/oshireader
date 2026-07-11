@@ -1171,3 +1171,46 @@ Wed, 24 Jun 2026 02:07:03 GMT
         assert data["direct"]["keyword_title_matches"] == 1
         assert data["jina"]["entries"] == 1
         assert data["jina"]["keyword_title_matches"] == 1
+
+
+class TestAdminTwitterProbe:
+    def test_twitter_probe_reports_no_configured_bearer(self, client):
+        with patch("app.main.settings") as mock_settings:
+            mock_settings.twitter_bearer_token = ""
+            r = client.get("/api/admin/twitter-probe", params={"keyword": "Aiko"})
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["env_has_bearer_token"] is False
+        assert data["db_has_bearer_token"] is False
+        assert data["selected_bearer_source"] is None
+        assert data["api"]["attempted"] is False
+
+    def test_twitter_probe_reports_api_status_without_token(self, client):
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.is_success = False
+        resp.json.return_value = {
+            "errors": [{
+                "title": "Unsupported Authentication",
+                "detail": "Unsupported Authentication",
+            }]
+        }
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.main.settings") as mock_settings, \
+             patch("app.main.httpx.AsyncClient", MagicMock(return_value=ctx)):
+            mock_settings.twitter_bearer_token = "env-token"
+            r = client.get("/api/admin/twitter-probe", params={"keyword": "Aiko"})
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["env_has_bearer_token"] is True
+        assert data["selected_bearer_source"] == "env"
+        assert data["api"]["attempted"] is True
+        assert data["api"]["status"] == 403
+        assert data["api"]["error_title"] == "Unsupported Authentication"

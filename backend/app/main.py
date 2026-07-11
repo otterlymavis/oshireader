@@ -43,7 +43,7 @@ from app.ingestion.scheduler import (
     start_scheduler,
 )
 from app.migrations import apply_startup_migrations
-from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PendingNotification, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PendingNotification, PlatformCredential, SourceItem, WatchTerm
 from app.schemas import ClientDiagnosticIn
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
@@ -560,6 +560,63 @@ async def source_probe(
         "worker_proxy": worker_google,
         "worker_proxy_bing": worker_bing,
     }
+
+
+@app.get("/api/admin/twitter-probe")
+async def twitter_probe(
+    _: None = Depends(require_admin_auth),
+    keyword: str = Query("吉沢亮"),
+    db: Session = Depends(get_db),
+) -> dict:
+    env_bearer = settings.twitter_bearer_token.strip()
+    db_cred = db.get(PlatformCredential, "twitter")
+    db_bearer = (db_cred.bearer_token or "").strip() if db_cred else ""
+    bearer = env_bearer or db_bearer
+    result = {
+        "keyword": keyword,
+        "env_has_bearer_token": bool(env_bearer),
+        "db_has_bearer_token": bool(db_bearer),
+        "selected_bearer_source": "env" if env_bearer else ("db" if db_bearer else None),
+        "api": {
+            "attempted": bool(bearer),
+            "status": None,
+            "data_count": 0,
+            "error_title": None,
+            "error_detail": None,
+        },
+    }
+    if not bearer:
+        return result
+
+    params = {
+        "query": keyword,
+        "max_results": 10,
+        "tweet.fields": "created_at,author_id,text",
+        "expansions": "author_id",
+        "user.fields": "name,username",
+    }
+    headers = {"Authorization": f"Bearer {bearer}"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get("https://api.twitter.com/2/tweets/search/recent", params=params, headers=headers)
+        result["api"]["status"] = resp.status_code
+        if resp.is_success:
+            data = resp.json()
+            result["api"]["data_count"] = len(data.get("data") or [])
+        else:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {}
+            errors = error_body.get("errors") if isinstance(error_body, dict) else None
+            first_error = errors[0] if isinstance(errors, list) and errors else {}
+            if isinstance(first_error, dict):
+                result["api"]["error_title"] = first_error.get("title")
+                result["api"]["error_detail"] = first_error.get("detail")
+    except Exception as exc:
+        result["api"]["error_title"] = type(exc).__name__
+        result["api"]["error_detail"] = str(exc)
+    return result
 
 
 @app.post("/api/admin/test-push")

@@ -1,0 +1,43 @@
+name: Admin Twitter probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      keyword:
+        description: Keyword to probe
+        required: true
+        default: 吉沢亮
+
+jobs:
+  twitter-probe:
+    runs-on: ubuntu-latest
+    env:
+      BACKEND_URL: https://oshireader.onrender.com
+      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+      KEYWORD: ${{ inputs.keyword }}
+    steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$ADMIN_API_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Run Twitter probe
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          params = urllib.parse.urlencode({"keyword": os.environ["KEYWORD"]})
+          url = os.environ["BACKEND_URL"].rstrip("/") + "/api/admin/twitter-probe?" + params
+          req = urllib.request.Request(
+              url,
+              headers={"Authorization": f"Bearer {os.environ['ADMIN_API_TOKEN']}"},
+          )
+          with urllib.request.urlopen(req, timeout=45) as response:
+              payload = json.load(response)
+          print(json.dumps(payload, ensure_ascii=False, indent=2))
+          PY
