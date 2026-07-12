@@ -1166,6 +1166,34 @@ class TestBuildConnectors:
         assert yt is not None
         assert yt.api_key == "db-yt-key"
 
+    def test_uses_youtube_api_key_from_db_when_env_is_whitespace(self, db):
+        cred = PlatformCredential(platform="youtube", api_key="db-yt-key")
+        db.add(cred)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = "   "
+            s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        yt = next((c for c in connectors if isinstance(c, YouTubeConnector)), None)
+        assert yt is not None
+        assert yt.api_key == "db-yt-key"
+
+    def test_ignores_whitespace_youtube_api_key_from_db(self, db):
+        cred = PlatformCredential(platform="youtube", api_key="\n  ")
+        db.add(cred)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = ""
+            s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        yt = next((c for c in connectors if isinstance(c, YouTubeConnector)), None)
+        assert yt is not None
+        assert yt.api_key == ""
+
     def test_uses_twitter_bearer_from_db_when_env_is_empty(self, db):
         cred = PlatformCredential(platform="twitter", bearer_token="db-tw-token")
         db.add(cred)
@@ -1174,6 +1202,20 @@ class TestBuildConnectors:
         with patch("app.ingestion.scheduler.settings") as s:
             s.youtube_api_key = ""
             s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        tw = next((c for c in connectors if isinstance(c, TwitterConnector)), None)
+        assert tw is not None
+        assert tw.bearer_token == "db-tw-token"
+
+    def test_uses_twitter_bearer_from_db_when_env_is_whitespace(self, db):
+        cred = PlatformCredential(platform="twitter", bearer_token="db-tw-token")
+        db.add(cred)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = ""
+            s.twitter_bearer_token = "   "
             connectors = _build_connectors(db)
 
         tw = next((c for c in connectors if isinstance(c, TwitterConnector)), None)

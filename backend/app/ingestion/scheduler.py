@@ -92,20 +92,20 @@ def _build_connectors(db) -> list[BaseConnector]:
         YahooNewsConnector(),
     ]
 
-    youtube_key = settings.youtube_api_key
+    youtube_key = settings.youtube_api_key.strip()
     if not youtube_key:
         cred = db.get(PlatformCredential, "youtube")
         if cred:
-            youtube_key = cred.api_key or ""
+            youtube_key = (cred.api_key or "").strip()
 
     # Always register YouTubeConnector so it can fetch using scrape fallback if no key is set
     connectors.append(YouTubeConnector(api_key=youtube_key))
 
-    twitter_bearer = settings.twitter_bearer_token
+    twitter_bearer = settings.twitter_bearer_token.strip()
     if not twitter_bearer:
         cred = db.get(PlatformCredential, "twitter")
         if cred:
-            twitter_bearer = cred.bearer_token or ""
+            twitter_bearer = (cred.bearer_token or "").strip()
     connectors.append(TwitterConnector(bearer_token=twitter_bearer))
 
     return connectors

@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import patch
 
+from app.models import PlatformCredential
+
 
 class TestCredentialAuth:
     def test_list_requires_auth_when_token_set(self, client):
@@ -38,6 +40,17 @@ class TestListCredentials:
             assert cred["has_api_key"] is False
             assert cred["updated_at"] is None
 
+    def test_list_treats_legacy_whitespace_credentials_as_empty(self, client, db_session):
+        db_session.add(PlatformCredential(platform="twitter", bearer_token="   ", api_key="\n"))
+        db_session.commit()
+
+        r = client.get("/api/credentials/")
+
+        assert r.status_code == 200
+        tw = next(c for c in r.json() if c["platform"] == "twitter")
+        assert tw["has_bearer_token"] is False
+        assert tw["has_api_key"] is False
+
 
 class TestUpsertCredential:
     def test_upsert_bearer_token(self, client):
@@ -74,6 +87,13 @@ class TestUpsertCredential:
         r = client.get("/api/credentials/")
         yt = next(c for c in r.json() if c["platform"] == "youtube")
         assert yt["has_bearer_token"] is False
+
+    def test_whitespace_bearer_token_clears_stored_value(self, client):
+        client.put("/api/credentials/twitter", json={"bearer_token": "tok"})
+        r = client.put("/api/credentials/twitter", json={"bearer_token": "   "})
+
+        assert r.status_code == 200
+        assert r.json()["has_bearer_token"] is False
 
     def test_updated_at_is_utc_aware(self, client):
         r = client.put("/api/credentials/youtube", json={"bearer_token": "tok"})
@@ -123,3 +143,13 @@ class TestCredentialValidation:
     def test_token_at_max_length_accepted(self, client):
         r = client.put("/api/credentials/youtube", json={"bearer_token": "t" * 500})
         assert r.status_code == 200
+
+    @pytest.mark.parametrize("field", ["bearer_token", "api_key", "api_secret"])
+    def test_padded_secret_at_max_length_accepted_after_trim(self, client, db_session, field):
+        value = "t" * 500
+        r = client.put("/api/credentials/twitter", json={field: f" {value}\n"})
+
+        assert r.status_code == 200
+        db_session.expire_all()
+        cred = db_session.get(PlatformCredential, "twitter")
+        assert getattr(cred, field) == value

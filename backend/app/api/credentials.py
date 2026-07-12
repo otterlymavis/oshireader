@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +15,17 @@ router = APIRouter(prefix="/api/credentials", tags=["credentials"])
 SUPPORTED_PLATFORMS = ["youtube", "twitter"]
 
 
+def _clean_secret(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _has_secret(value: str | None) -> bool:
+    return bool(_clean_secret(value))
+
+
 @router.get("/", response_model=list[CredentialOut])
 def list_credentials(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)):
     stored = {c.platform: c for c in db.query(PlatformCredential).all()}
@@ -22,9 +35,9 @@ def list_credentials(_: None = Depends(require_admin_auth), db: Session = Depend
         result.append(
             CredentialOut(
                 platform=platform,
-                has_bearer_token=bool(cred and cred.bearer_token),
-                has_api_key=bool(cred and cred.api_key),
-                has_api_secret=bool(cred and cred.api_secret),
+                has_bearer_token=_has_secret(cred.bearer_token) if cred else False,
+                has_api_key=_has_secret(cred.api_key) if cred else False,
+                has_api_secret=_has_secret(cred.api_secret) if cred else False,
                 updated_at=cred.updated_at if cred else None,
             )
         )
@@ -45,19 +58,19 @@ def upsert_credential(
         cred = PlatformCredential(platform=platform)
         db.add(cred)
     if body.bearer_token is not None:
-        cred.bearer_token = body.bearer_token or None
+        cred.bearer_token = _clean_secret(body.bearer_token)
     if body.api_key is not None:
-        cred.api_key = body.api_key or None
+        cred.api_key = _clean_secret(body.api_key)
     if body.api_secret is not None:
-        cred.api_secret = body.api_secret or None
+        cred.api_secret = _clean_secret(body.api_secret)
     cred.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(cred)
     return CredentialOut(
         platform=cred.platform,
-        has_bearer_token=bool(cred.bearer_token),
-        has_api_key=bool(cred.api_key),
-        has_api_secret=bool(cred.api_secret),
+        has_bearer_token=_has_secret(cred.bearer_token),
+        has_api_key=_has_secret(cred.api_key),
+        has_api_secret=_has_secret(cred.api_secret),
         updated_at=cred.updated_at,
     )
 

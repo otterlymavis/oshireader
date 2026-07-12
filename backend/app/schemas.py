@@ -31,6 +31,12 @@ def _clean_aliases_list(v: list) -> list:
     return cleaned
 
 
+def _strip_optional_string(v: object) -> object:
+    if isinstance(v, str):
+        return v.strip()
+    return v
+
+
 class WatchTermCreate(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
     aliases: list[str] = Field(default=[], max_length=20)
@@ -122,6 +128,11 @@ class CredentialUpsert(BaseModel):
     bearer_token: Optional[str] = Field(default=None, max_length=500)
     api_key: Optional[str] = Field(default=None, max_length=500)
     api_secret: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("bearer_token", "api_key", "api_secret", mode="before")
+    @classmethod
+    def strip_secret(cls, v: object) -> object:
+        return _strip_optional_string(v)
 
 
 class CredentialOut(BaseModel):
