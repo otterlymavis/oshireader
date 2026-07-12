@@ -951,7 +951,7 @@ enum ReaderContentDisplayability {
             || height >= 900
             || titleLength >= 8
 
-        if hasMeaningfulStructure && !urlLooksBlank {
+        if hasMeaningfulStructure && !blockedText && !urlLooksBlank {
             return false
         }
         return (textLength < 40 && !hasMeaningfulStructure) || (blockedText && textLength < 180) || urlLooksBlank

@@ -2316,6 +2316,22 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(ReaderContentDisplayability.shouldShowBlockedBanner(metrics: metrics))
     }
 
+    func testReaderDisplayabilityShowsBannerForBlockedShellsWithTitles() throws {
+        let metrics: [String: Any] = [
+            "textLength": 72,
+            "titleLength": 18,
+            "hasReaderContainer": false,
+            "linkCount": 3,
+            "imageCount": 1,
+            "visibleTextNodes": 1,
+            "height": 480,
+            "blockedText": true,
+            "urlLooksBlank": false
+        ]
+
+        XCTAssertTrue(ReaderContentDisplayability.shouldShowBlockedBanner(metrics: metrics))
+    }
+
     // MARK: - Search catalog
     func testAllBuiltInSearchPagesGenerateValidWebModeReaders() throws {
         let query = "UITest Oshi"
