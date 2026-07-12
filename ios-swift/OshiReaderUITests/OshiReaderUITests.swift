@@ -65,7 +65,9 @@ final class OshiReaderUITests: XCTestCase {
 
         let readerModeButton = waitForButton(identifier: "reader.modeToggleButton", timeout: 10)
         XCTAssertNotNil(readerModeButton)
+        assertReaderLoadedWithoutFallbackBanner()
         readerModeButton?.tap()
+        assertReaderLoadedWithoutFallbackBanner()
     }
 
     func testStopFollowingFromFeedCard() throws {
@@ -105,6 +107,7 @@ final class OshiReaderUITests: XCTestCase {
         (firstExistingButton(containing: "UITest saved article") ?? savedTitle).tap()
 
         XCTAssertNotNil(waitForButton(identifier: "reader.modeToggleButton", timeout: 10))
+        assertReaderLoadedWithoutFallbackBanner()
     }
 
     func testSearchFlow() throws {
@@ -539,6 +542,18 @@ final class OshiReaderUITests: XCTestCase {
             }
         }
         return element
+    }
+
+    private func assertReaderLoadedWithoutFallbackBanner(file: StaticString = #filePath, line: UInt = #line) {
+        let loadingState = app.otherElements["reader.loadingState"]
+        if loadingState.exists {
+            let loadFinished = NSPredicate(format: "exists == false")
+            expectation(for: loadFinished, evaluatedWith: loadingState)
+            waitForExpectations(timeout: 15)
+        }
+        XCTAssertFalse(app.otherElements["reader.failedState"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["reader.openInBrowserButton"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["reader.failedOpenInBrowserButton"].exists, file: file, line: line)
     }
 
     private func firstExistingTextField(labels: [String]) -> XCUIElement? {

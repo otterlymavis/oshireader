@@ -2251,6 +2251,71 @@ final class OshiReaderTests: XCTestCase {
         i18n.setLanguage(saved)
     }
 
+    // MARK: - Reader displayability
+    func testReaderDisplayabilityAllowsStructuredLowTextPages() throws {
+        let metrics: [String: Any] = [
+            "textLength": 24,
+            "titleLength": 18,
+            "hasReaderContainer": false,
+            "linkCount": NSNumber(value: 4),
+            "imageCount": 1,
+            "visibleTextNodes": 1,
+            "height": 360,
+            "blockedText": false,
+            "urlLooksBlank": false
+        ]
+
+        XCTAssertFalse(ReaderContentDisplayability.shouldShowBlockedBanner(metrics: metrics))
+    }
+
+    func testReaderDisplayabilityAllowsArticleContainersWithShortVisibleText() throws {
+        let metrics: [String: Any] = [
+            "textLength": 32,
+            "titleLength": 0,
+            "hasReaderContainer": true,
+            "linkCount": 0,
+            "imageCount": 0,
+            "visibleTextNodes": 0,
+            "height": 500,
+            "blockedText": false,
+            "urlLooksBlank": false
+        ]
+
+        XCTAssertFalse(ReaderContentDisplayability.shouldShowBlockedBanner(metrics: metrics))
+    }
+
+    func testReaderDisplayabilityShowsBannerForTrulyBlankPages() throws {
+        let metrics: [String: Any] = [
+            "textLength": 0,
+            "titleLength": 0,
+            "hasReaderContainer": false,
+            "linkCount": 0,
+            "imageCount": 0,
+            "visibleTextNodes": 0,
+            "height": 0,
+            "blockedText": false,
+            "urlLooksBlank": false
+        ]
+
+        XCTAssertTrue(ReaderContentDisplayability.shouldShowBlockedBanner(metrics: metrics))
+    }
+
+    func testReaderDisplayabilityShowsBannerForBlockedShells() throws {
+        let metrics: [String: Any] = [
+            "textLength": 86,
+            "titleLength": 0,
+            "hasReaderContainer": false,
+            "linkCount": 0,
+            "imageCount": 0,
+            "visibleTextNodes": 1,
+            "height": 320,
+            "blockedText": true,
+            "urlLooksBlank": false
+        ]
+
+        XCTAssertTrue(ReaderContentDisplayability.shouldShowBlockedBanner(metrics: metrics))
+    }
+
     // MARK: - Search catalog
     func testAllBuiltInSearchPagesGenerateValidWebModeReaders() throws {
         let query = "UITest Oshi"

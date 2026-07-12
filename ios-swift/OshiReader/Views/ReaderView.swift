@@ -638,6 +638,39 @@ struct WebViewHelper: UIViewRepresentable {
             img, video { max-width: 100% !important; height: auto !important; border-radius: 8px !important; }
             pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
             a { color: \(linkHex) !important; }
+            [data-oshireader-reader-root="true"] {
+                display: block !important;
+                max-width: 720px !important;
+                margin: 0 auto !important;
+                padding: 2px 0 28px !important;
+            }
+            [data-oshireader-reader-root="true"] p,
+            [data-oshireader-reader-root="true"] li,
+            [data-oshireader-reader-root="true"] blockquote {
+                font-size: \(fontSize)px !important;
+                line-height: 1.82 !important;
+                letter-spacing: 0 !important;
+            }
+            [data-oshireader-reader-root="true"] h1,
+            [data-oshireader-reader-root="true"] h2,
+            [data-oshireader-reader-root="true"] h3 {
+                color: \(textColorHex) !important;
+                line-height: 1.28 !important;
+                letter-spacing: 0 !important;
+                margin: 1.2em 0 0.55em !important;
+            }
+            [data-oshireader-reader-root="true"] p {
+                margin: 0 0 1.05em !important;
+            }
+            [data-oshireader-reader-root="true"] figure {
+                margin: 1.3em 0 !important;
+            }
+            [data-oshireader-reader-root="true"] figcaption,
+            [data-oshireader-reader-root="true"] time,
+            [data-oshireader-reader-root="true"] small {
+                color: \(textColorHex) !important;
+                opacity: 0.72 !important;
+            }
             """
         } else if platform == "twitter" {
             // x.com is a heavily self-styled SPA with its own dark/light theming; forcing a flat
@@ -654,6 +687,9 @@ struct WebViewHelper: UIViewRepresentable {
 
         return """
         (function() {
+            document.querySelectorAll('[data-oshireader-reader-root="true"]').forEach(function(el) {
+                el.removeAttribute('data-oshireader-reader-root');
+            });
             var style = document.getElementById('oshireader-injected-style');
             if (!style) {
                 style = document.createElement('style');
@@ -661,6 +697,35 @@ struct WebViewHelper: UIViewRepresentable {
                 document.head.appendChild(style);
             }
             style.innerHTML = `\(readerCSS)`;
+            if (\(readerMode ? "true" : "false")) {
+                var selectors = [
+                    'article',
+                    'main',
+                    '[role="main"]',
+                    '.article',
+                    '.post',
+                    '.entry-content',
+                    '.article-body',
+                    '.story-body',
+                    '.content',
+                    '#content'
+                ];
+                var best = null;
+                var bestScore = 0;
+                selectors.forEach(function(selector) {
+                    document.querySelectorAll(selector).forEach(function(el) {
+                        var text = el.innerText ? el.innerText.replace(/\\s+/g, ' ').trim() : '';
+                        var paragraphs = el.querySelectorAll('p, li, blockquote').length;
+                        var rect = el.getBoundingClientRect();
+                        var score = text.length + (paragraphs * 80) + Math.min(rect.height || 0, 1400);
+                        if (text.length >= 240 && rect.width > 0 && rect.height > 0 && score > bestScore) {
+                            best = el;
+                            bestScore = score;
+                        }
+                    });
+                });
+                if (best) best.setAttribute('data-oshireader-reader-root', 'true');
+            }
         })();
         """
     }
@@ -714,12 +779,52 @@ struct WebViewHelper: UIViewRepresentable {
             let requestURLAtCheckTime = currentRequestURL
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
                 guard let self, let webView, self.currentRequestURL == requestURLAtCheckTime else { return }
-                webView.evaluateJavaScript("document.body ? document.body.innerText.trim().length : 0") { result, _ in
-                    guard let length = result as? Int, length < 40 else { return }
+                webView.evaluateJavaScript(Self.contentDisplayabilityJS) { result, _ in
+                    guard let metrics = result as? [String: Any],
+                          ReaderContentDisplayability.shouldShowBlockedBanner(metrics: metrics) else { return }
                     DispatchQueue.main.async { self.parent.onContentBlocked() }
                 }
             }
         }
+
+        private static let contentDisplayabilityJS = """
+        (function() {
+          var body = document.body;
+          var doc = document.documentElement;
+          var text = body && body.innerText ? body.innerText.replace(/\\s+/g, ' ').trim() : '';
+          var title = document.title ? document.title.trim() : '';
+          var url = location.href || '';
+          var selectors = 'article, main, [role="main"], .article, .post, .entry-content, .content, #content';
+          var visibleTextNodes = 0;
+
+          if (body) {
+            var candidates = body.querySelectorAll('p, h1, h2, h3, li, blockquote, pre');
+            for (var i = 0; i < candidates.length; i++) {
+              var rect = candidates[i].getBoundingClientRect();
+              var nodeText = candidates[i].innerText ? candidates[i].innerText.trim() : '';
+              if (nodeText.length >= 12 && rect.width > 0 && rect.height > 0) visibleTextNodes++;
+              if (visibleTextNodes >= 3) break;
+            }
+          }
+
+          return {
+            textLength: text.length,
+            titleLength: title.length,
+            hasReaderContainer: !!(body && body.querySelector(selectors)),
+            linkCount: body ? body.querySelectorAll('a[href]').length : 0,
+            imageCount: body ? body.querySelectorAll('img, picture, video, iframe').length : 0,
+            visibleTextNodes: visibleTextNodes,
+            height: Math.max(
+              body ? body.scrollHeight : 0,
+              doc ? doc.scrollHeight : 0,
+              body ? body.offsetHeight : 0,
+              doc ? doc.offsetHeight : 0
+            ),
+            blockedText: /sign in|log in|enable javascript|unsupported browser|cannot display|couldn't display|not available|access denied|forbidden/i.test(text),
+            urlLooksBlank: /about:blank|\\/sorry\\/|\\/signin|\\/login/i.test(url)
+          };
+        })();
+        """
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             handleLoadFailure(error, in: webView)
@@ -824,6 +929,39 @@ struct WebViewHelper: UIViewRepresentable {
                 DispatchQueue.main.async { self.parent.onSaveAllImages?(urls) }
             }
         }
+    }
+}
+
+enum ReaderContentDisplayability {
+    static func shouldShowBlockedBanner(metrics: [String: Any]) -> Bool {
+        let textLength = intMetric("textLength", in: metrics)
+        let titleLength = intMetric("titleLength", in: metrics)
+        let linkCount = intMetric("linkCount", in: metrics)
+        let imageCount = intMetric("imageCount", in: metrics)
+        let visibleTextNodes = intMetric("visibleTextNodes", in: metrics)
+        let height = intMetric("height", in: metrics)
+        let hasReaderContainer = metrics["hasReaderContainer"] as? Bool ?? false
+        let blockedText = metrics["blockedText"] as? Bool ?? false
+        let urlLooksBlank = metrics["urlLooksBlank"] as? Bool ?? false
+
+        let hasMeaningfulStructure = hasReaderContainer
+            || visibleTextNodes >= 2
+            || linkCount >= 3
+            || imageCount >= 2
+            || height >= 900
+            || titleLength >= 8
+
+        if hasMeaningfulStructure && !urlLooksBlank {
+            return false
+        }
+        return (textLength < 40 && !hasMeaningfulStructure) || (blockedText && textLength < 180) || urlLooksBlank
+    }
+
+    private static func intMetric(_ key: String, in metrics: [String: Any]) -> Int {
+        if let value = metrics[key] as? Int { return value }
+        if let value = metrics[key] as? Double { return Int(value) }
+        if let value = metrics[key] as? NSNumber { return value.intValue }
+        return 0
     }
 }
 
