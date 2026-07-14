@@ -1,4 +1,5 @@
 import Photos
+import SafariServices
 import SwiftUI
 import UIKit
 import WebKit
@@ -42,10 +43,18 @@ struct ReaderView: View {
     init(feedItem: FeedItem) {
         self.feedItem = feedItem
         _readerMode = State(initialValue: Self.initialReaderMode(for: feedItem))
+        _isTranslated = State(initialValue: UserDefaults.standard.bool(forKey: "auto_translate_reader") && !Self.usesSystemSafari(for: feedItem))
     }
 
     static func initialReaderMode(for feedItem: FeedItem) -> Bool {
-        !feedItem.id.hasPrefix("search:")
+        if usesSystemSafari(for: feedItem) {
+            return false
+        }
+        return !feedItem.id.hasPrefix("search:")
+    }
+
+    static func usesSystemSafari(for feedItem: FeedItem) -> Bool {
+        feedItem.platform == "5ch"
     }
 
     var targetUrl: URL? {
@@ -54,7 +63,7 @@ struct ReaderView: View {
         }
         guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform),
               let originalUrl = URL(string: normalized) else { return nil }
-        if isTranslated {
+        if isTranslated, !Self.usesSystemSafari(for: feedItem) {
             let targetLang: String
             switch i18n.lang {
             case "ja": targetLang = "ja"
@@ -79,35 +88,43 @@ struct ReaderView: View {
         VStack(spacing: 0) {
             if let url = targetUrl {
                 ZStack {
-                    WebViewHelper(
-                        url: url,
-                        cacheId: feedItem.id,
-                        platform: feedItem.platform,
-                        themeMode: readerTheme,
-                        fontSize: fontSize,
-                        fontFamilyCSS: appearance.readerFontFamilyCSS,
-                        readerMode: readerMode,
-                        saveAllImagesCounter: saveAllImagesCounter,
-                        onLoadStateChange: { state in
-                            webLoadState = state
-                            if state == .loading {
-                                showSignInBanner = false
-                                showOpenInBrowserBanner = false
+                    if Self.usesSystemSafari(for: feedItem) {
+                        SafariReaderView(url: url)
+                            .background(bgColor)
+                            .onAppear {
+                                webLoadState = .loaded
                             }
-                        },
-                        onImageAction: { imageAction = $0 },
-                        onSaveAllImages: { urls in saveAllImages(urls) },
-                        onContentBlocked: {
-                            if feedItem.platform == "twitter" {
-                                if !isSigningIntoX { showSignInBanner = true }
-                            } else {
-                                showOpenInBrowserBanner = true
+                    } else {
+                        WebViewHelper(
+                            url: url,
+                            cacheId: feedItem.id,
+                            platform: feedItem.platform,
+                            themeMode: readerTheme,
+                            fontSize: fontSize,
+                            fontFamilyCSS: appearance.readerFontFamilyCSS,
+                            readerMode: readerMode,
+                            saveAllImagesCounter: saveAllImagesCounter,
+                            onLoadStateChange: { state in
+                                webLoadState = state
+                                if state == .loading {
+                                    showSignInBanner = false
+                                    showOpenInBrowserBanner = false
+                                }
+                            },
+                            onImageAction: { imageAction = $0 },
+                            onSaveAllImages: { urls in saveAllImages(urls) },
+                            onContentBlocked: {
+                                if feedItem.platform == "twitter" {
+                                    if !isSigningIntoX { showSignInBanner = true }
+                                } else {
+                                    showOpenInBrowserBanner = true
+                                }
                             }
-                        }
-                    )
-                    .background(bgColor)
+                        )
+                        .background(bgColor)
+                    }
 
-                    if webLoadState != .loaded {
+                    if !Self.usesSystemSafari(for: feedItem), webLoadState != .loaded {
                         readerLoadStateOverlay
                             .allowsHitTesting(webLoadState == .failed)
                     }
@@ -128,20 +145,24 @@ struct ReaderView: View {
                     .foregroundColor(theme.colors.textMuted)
             }
 
-            readerControlBar
+            if !Self.usesSystemSafari(for: feedItem) {
+                readerControlBar
+            }
         }
         .background(bgColor)
         .navigationTitle(feedItem.title ?? i18n.t("readerTitle"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    isTranslated.toggle()
-                } label: {
-                    Image(systemName: "translate")
-                        .foregroundColor(isTranslated ? theme.colors.primary : theme.colors.textMuted)
+                if !Self.usesSystemSafari(for: feedItem) {
+                    Button {
+                        isTranslated.toggle()
+                    } label: {
+                        Image(systemName: "translate")
+                            .foregroundColor(isTranslated ? theme.colors.primary : theme.colors.textMuted)
+                    }
+                    .accessibilityIdentifier("reader.translateButton")
                 }
-                .accessibilityIdentifier("reader.translateButton")
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -155,22 +176,24 @@ struct ReaderView: View {
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
-                if isSavingAllImages {
-                    ProgressView().tint(theme.colors.primary)
-                } else {
-                    Button {
-                        isSavingAllImages = true
-                        saveAllImagesCounter += 1
-                    } label: {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .foregroundColor(theme.colors.primary)
+                if !Self.usesSystemSafari(for: feedItem) {
+                    if isSavingAllImages {
+                        ProgressView().tint(theme.colors.primary)
+                    } else {
+                        Button {
+                            isSavingAllImages = true
+                            saveAllImagesCounter += 1
+                        } label: {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .foregroundColor(theme.colors.primary)
+                        }
+                        .accessibilityIdentifier("reader.saveAllImagesButton")
                     }
-                    .accessibilityIdentifier("reader.saveAllImagesButton")
                 }
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
-                if let url = URL(string: feedItem.url) {
+                if let url = targetUrl {
                     ShareLink(item: url) {
                         Image(systemName: "square.and.arrow.up")
                             .foregroundColor(theme.colors.primary)
@@ -207,7 +230,7 @@ struct ReaderView: View {
         .onAppear {
             readerTheme = theme.mode
             fontSize = appearance.readerFontSize
-            if UserDefaults.standard.bool(forKey: "auto_translate_reader") {
+            if UserDefaults.standard.bool(forKey: "auto_translate_reader"), !Self.usesSystemSafari(for: feedItem) {
                 isTranslated = true
             }
         }
@@ -820,7 +843,7 @@ struct WebViewHelper: UIViewRepresentable {
               body ? body.offsetHeight : 0,
               doc ? doc.offsetHeight : 0
             ),
-            blockedText: /sign in|log in|enable javascript|unsupported browser|cannot display|couldn't display|not available|access denied|forbidden/i.test(text),
+            blockedText: /sign in|log in|enable javascript|unsupported browser|cannot display|couldn't display|not available|access denied|forbidden|attention required|cloudflare/i.test(text + ' ' + title),
             urlLooksBlank: /about:blank|\\/sorry\\/|\\/signin|\\/login/i.test(url)
           };
         })();
@@ -896,7 +919,7 @@ struct WebViewHelper: UIViewRepresentable {
                 UIApplication.shared.open(url)
                 return
             }
-            if shouldBlockReaderRequest(url.absoluteString) {
+            if parent.platform != "5ch", shouldBlockReaderRequest(url.absoluteString) {
                 decisionHandler(.cancel)
                 return
             }
@@ -930,6 +953,20 @@ struct WebViewHelper: UIViewRepresentable {
             }
         }
     }
+}
+
+struct SafariReaderView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let configuration = SFSafariViewController.Configuration()
+        configuration.entersReaderIfAvailable = false
+        let controller = SFSafariViewController(url: url, configuration: configuration)
+        controller.dismissButtonStyle = .close
+        return controller
+    }
+
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
 
 enum ReaderContentDisplayability {
@@ -976,6 +1013,7 @@ private enum _ReaderRegex {
     )
     static let itestHost   = try? NSRegularExpression(pattern: #"^itest\.5ch\.(net|io)$"#)
     static let fivechHost  = try? NSRegularExpression(pattern: #"(^|\.)5ch\.(net|io)$"#)
+    static let twochHost   = try? NSRegularExpression(pattern: #"(^|\.)2ch\.sc$"#)
     static let itestPath   = try? NSRegularExpression(pattern: #"^/([^/]+)/test/read\.cgi/([^/]+)/(\d{9,})"#)
     static let fivechPath  = try? NSRegularExpression(pattern: #"/test/read\.cgi/([^/]+)/(\d{9,})"#)
     static let oriconArticle = try? NSRegularExpression(pattern: #"/(?:news|article)/(\d+)"#)
@@ -1008,7 +1046,13 @@ private func normalize5chReaderUrl(_ rawUrl: String) -> String {
     let hostRange = NSRange(host.startIndex..., in: host)
     let isItest  = _ReaderRegex.itestHost?.firstMatch(in: host, range: hostRange) != nil
     let isFiveCh = _ReaderRegex.fivechHost?.firstMatch(in: host, range: hostRange) != nil
-    guard isItest || isFiveCh else { return rawUrl }
+    let isTwoCh = _ReaderRegex.twochHost?.firstMatch(in: host, range: hostRange) != nil
+    guard isItest || isFiveCh || isTwoCh else { return rawUrl }
+
+    if isTwoCh {
+        // 2ch.sc mirror hosts do not always match the real itest server.
+        return rawUrl
+    }
 
     if isItest, let match = url.path.match(_ReaderRegex.itestPath) {
         let parts = match.components(separatedBy: "|")

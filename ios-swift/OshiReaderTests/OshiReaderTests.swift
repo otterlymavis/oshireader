@@ -2386,6 +2386,76 @@ final class OshiReaderTests: XCTestCase {
                        "Custom URLs opened from Search should also use web mode")
     }
 
+    func testFiveChFeedItemsOpenInWebMode() throws {
+        let item = FeedItem(
+            id: "5ch:mevius:nogizaka:1782410369",
+            platform: "5ch",
+            url: "https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369",
+            title: "5ch thread",
+            content_text: "12 posts",
+            author: "5ch",
+            thumbnail_url: nil,
+            media_type: "text",
+            published_at: "2026-06-15T00:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-15T00:00:00Z"
+        )
+
+        XCTAssertTrue(ReaderView.usesSystemSafari(for: item),
+                      "5ch should use the in-app Safari controller instead of WKWebView")
+        XCTAssertFalse(ReaderView.initialReaderMode(for: item),
+                       "5ch should keep the site reader intact instead of applying article-reader cleanup")
+    }
+
+    func testFiveChIgnoresAutoTranslateReaderURLWrapping() throws {
+        let previous = UserDefaults.standard.bool(forKey: "auto_translate_reader")
+        UserDefaults.standard.set(true, forKey: "auto_translate_reader")
+        defer { UserDefaults.standard.set(previous, forKey: "auto_translate_reader") }
+
+        let rawURL = "https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369"
+        let item = FeedItem(
+            id: "5ch:mevius:nogizaka:1782410369",
+            platform: "5ch",
+            url: rawURL,
+            title: "5ch thread",
+            content_text: "12 posts",
+            author: "5ch",
+            thumbnail_url: nil,
+            media_type: "text",
+            published_at: "2026-06-15T00:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-15T00:00:00Z"
+        )
+
+        let view = ReaderView(feedItem: item)
+        let target = view.targetUrl
+
+        XCTAssertEqual(target?.host, "itest.5ch.io")
+        XCTAssertFalse(target?.host == "translate.google.com")
+        XCTAssertFalse(target?.absoluteString.contains("translate.google.com") ?? true)
+    }
+
+    func testFiveChMirrorURLsOpenDirectlyWithoutGuessingItestServer() throws {
+        let item = FeedItem(
+            id: "2ch.sc:hayabusa3.2ch.sc:mnewsplus:1782467821",
+            platform: "5ch",
+            url: "http://hayabusa3.2ch.sc/test/read.cgi/mnewsplus/1782467821/",
+            title: "5ch mirror thread",
+            content_text: "42 posts",
+            author: "5ch",
+            thumbnail_url: nil,
+            media_type: "text",
+            published_at: "2026-06-15T00:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-15T00:00:00Z"
+        )
+
+        XCTAssertEqual(
+            ReaderView(feedItem: item).targetUrl?.absoluteString,
+            "http://hayabusa3.2ch.sc/test/read.cgi/mnewsplus/1782467821/"
+        )
+    }
+
     // MARK: - Persistence: malformed JSON file is silently ignored
     func testMalformedPersistenceFileLoadsEmpty() throws {
         // Write garbage to terms.json before creating a LocalDB from the same directory.
