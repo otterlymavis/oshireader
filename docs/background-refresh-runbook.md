@@ -5,6 +5,8 @@ This repo relies on three moving pieces for automatic feed notifications:
 - Cloudflare Worker cron checks diagnostics hourly and calls the backend poll
   endpoint only when active watch terms or pending notifications need work.
 - Render runs the backend poll and records `backend_events`.
+- The backend in-process scheduler is disabled by default; Cloudflare should be
+  the single production scheduler.
 - APNs delivery happens when a completed poll creates eligible new matches.
 
 ## Health Checks

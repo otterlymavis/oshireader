@@ -7,8 +7,14 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 
+from app.config import settings
 from app.database import get_db
-from app.main import _mark_abandoned_poll_events, database_operational_error_handler
+from app.main import (
+    _initialize_backend_services,
+    _mark_abandoned_poll_events,
+    _startup_status,
+    database_operational_error_handler,
+)
 from app.models import APNSDeviceToken, BackendEvent, Match, PendingNotification, SourceItem, WatchTerm
 
 
@@ -86,6 +92,32 @@ class TestStartupPollRecovery:
         assert started.message == "Poll interrupted by backend restart or deploy"
         assert "interrupted_at" in started.payload
         assert timeout.payload["timeout_seconds"] == 210
+
+
+class TestStartupScheduler:
+    @pytest.mark.asyncio
+    async def test_startup_leaves_internal_scheduler_disabled_by_default(self):
+        with patch("app.main.apply_startup_migrations"), \
+             patch("app.main._mark_abandoned_poll_events"), \
+             patch("app.main.start_scheduler") as mock_start_scheduler, \
+             patch.object(settings, "internal_scheduler_enabled", False):
+            await _initialize_backend_services()
+
+        assert _startup_status["schema_migration"] == "completed"
+        assert _startup_status["scheduler"] == "disabled"
+        mock_start_scheduler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_startup_can_enable_internal_scheduler(self):
+        with patch("app.main.apply_startup_migrations"), \
+             patch("app.main._mark_abandoned_poll_events"), \
+             patch("app.main.start_scheduler") as mock_start_scheduler, \
+             patch.object(settings, "internal_scheduler_enabled", True):
+            await _initialize_backend_services()
+
+        assert _startup_status["schema_migration"] == "completed"
+        assert _startup_status["scheduler"] == "running"
+        mock_start_scheduler.assert_called_once()
 
 
 class TestNotificationPreviewImage:

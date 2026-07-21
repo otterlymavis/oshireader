@@ -150,6 +150,9 @@ notifications need work. The Worker first reads backend diagnostics and skips th
 heavy poll if there is no active work or the latest poll is still fresh.
 Cloudflare stores `ADMIN_API_TOKEN` as an encrypted Worker secret. GitHub's
 manual poll workflow remains available for diagnostics and emergency triggering.
+The backend's in-process scheduler is disabled by default so production does not
+run duplicate scheduled poll loops; set `INTERNAL_SCHEDULER_ENABLED=true` only
+for a standalone backend deployment that is not driven by Cloudflare.
 
 Deploy the Worker after authenticating Wrangler:
 

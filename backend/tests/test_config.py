@@ -47,3 +47,13 @@ class TestDatabaseUrl:
     def test_sqlite_scheme_is_preserved(self):
         s = Settings(database_url="sqlite:///./otterpia.db")
         assert s.database_url == "sqlite:///./otterpia.db"
+
+
+class TestInternalScheduler:
+    def test_internal_scheduler_is_disabled_by_default(self):
+        s = Settings()
+        assert s.internal_scheduler_enabled is False
+
+    def test_internal_scheduler_can_be_enabled_by_env_style_value(self):
+        s = Settings(internal_scheduler_enabled="true")
+        assert s.internal_scheduler_enabled is True

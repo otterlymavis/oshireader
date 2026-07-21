@@ -246,8 +246,11 @@ async def _initialize_backend_services() -> None:
         await asyncio.to_thread(apply_startup_migrations, engine, run_cleanups=False)
         await asyncio.to_thread(_mark_abandoned_poll_events)
         _startup_status["schema_migration"] = "completed"
-        start_scheduler()
-        _startup_status["scheduler"] = "running"
+        if settings.internal_scheduler_enabled:
+            start_scheduler()
+            _startup_status["scheduler"] = "running"
+        else:
+            _startup_status["scheduler"] = "disabled"
     except Exception as exc:
         log.exception("Backend startup initialization failed")
         _startup_status.update({
