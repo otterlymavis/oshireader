@@ -2,8 +2,8 @@ name: Poller monitor
 
 on:
   schedule:
-    # Run between Cloudflare's hourly cron ticks so completed polls have time to land.
-    - cron: "12 * * * *"
+    # Run between Cloudflare's 3-hour cron ticks without waking the backend hourly.
+    - cron: "27 */6 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -16,18 +16,9 @@ jobs:
     timeout-minutes: 5
     env:
       WORKER_HEALTH_URL: https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
-      BACKEND_STATS_URL: https://oshireader.onrender.com/api/admin/stats
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       ALERT_CONTEXT: poller-monitor
     steps:
-      - name: Check required secret
-        run: |
-          if [ -z "$ADMIN_API_TOKEN" ]; then
-            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
-            exit 1
-          fi
-
       - name: Check poller health
         run: |
           BODY=$(mktemp)
@@ -56,60 +47,16 @@ jobs:
           diagnostics = payload.get("diagnostics") or {}
           latest_success = diagnostics.get("latest_successful_poll") or {}
           created_at = latest_success.get("created_at")
-          if status != "200" or payload.get("status") != "ok" or payload.get("healthy") is not True:
-              raise SystemExit(f"Poller health is degraded: {payload}")
-
-          if not created_at:
-              raise SystemExit(f"Missing latest_successful_poll timestamp: {payload}")
-
-          completed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-          if completed.tzinfo is None:
-              completed = completed.replace(tzinfo=timezone.utc)
-          age_minutes = (datetime.now(timezone.utc) - completed).total_seconds() / 60
-          if age_minutes > 120:
-              raise SystemExit(
-                  f"Latest successful poll is too old: {age_minutes:.1f} minutes; payload={payload}"
-              )
-
           latest_poll = diagnostics.get("latest_poll") or {}
-          print(json.dumps({
-              "healthy": True,
+          apns = diagnostics.get("apns") or {}
+          notification_health = diagnostics.get("notification_health") or {}
+          pending_notifications = diagnostics.get("pending_notifications") or []
+          summary = {
+              "healthy": payload.get("healthy"),
               "latest_successful_poll": latest_success,
               "latest_poll": latest_poll,
-              "age_minutes": round(age_minutes, 1),
               "items_total": diagnostics.get("items_total"),
               "matches_total": diagnostics.get("matches_total"),
-          }, ensure_ascii=False, indent=2))
-          PY
-
-      - name: Check backend notification health
-        run: |
-          BODY=$(mktemp)
-          STATUS=$(curl --silent --show-error \
-            --output "$BODY" \
-            --write-out "%{http_code}" \
-            --retry 2 \
-            --retry-all-errors \
-            --retry-delay 10 \
-            --max-time 30 \
-            "$BACKEND_STATS_URL" \
-            -H "Authorization: Bearer $ADMIN_API_TOKEN")
-
-          echo "HTTP status: $STATUS"
-
-          python3 - "$STATUS" "$BODY" <<'PY'
-          import json
-          import sys
-          from datetime import datetime, timezone
-
-          status = sys.argv[1]
-          with open(sys.argv[2], encoding="utf-8") as response_file:
-              payload = json.load(response_file)
-
-          apns = payload.get("apns") or {}
-          notification_health = payload.get("notification_health") or {}
-          pending_notifications = payload.get("pending_notifications") or []
-          summary = {
               "apns_configured": apns.get("configured"),
               "apns_server_environment": apns.get("server_environment"),
               "device_tokens_by_environment_and_verification": apns.get(
@@ -117,19 +64,35 @@ jobs:
               ),
               "notification_health": notification_health,
               "pending_notifications": pending_notifications,
-              "latest_relevant_apns": payload.get("latest_relevant_apns"),
+              "latest_relevant_apns": diagnostics.get("latest_relevant_apns"),
           }
-          print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
           failures = []
           if status != "200":
-              failures.append(f"stats endpoint returned HTTP {status}")
+              failures.append(f"worker health endpoint returned HTTP {status}")
+          if payload.get("status") != "ok" or payload.get("healthy") is not True:
+              failures.append(f"Poller health is degraded: {payload}")
+          if payload.get("idle") is True:
+              summary["idle"] = True
+              print("Poller is healthy and idle; no recent successful poll is required.")
+          elif not created_at:
+              failures.append(f"Missing latest_successful_poll timestamp: {payload}")
+          else:
+              completed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+              if completed.tzinfo is None:
+                  completed = completed.replace(tzinfo=timezone.utc)
+              age_minutes = (datetime.now(timezone.utc) - completed).total_seconds() / 60
+              summary["age_minutes"] = round(age_minutes, 1)
+              if age_minutes > 240:
+                  failures.append(
+                      f"Latest successful poll is too old: {age_minutes:.1f} minutes; payload={payload}"
+                  )
           if apns.get("configured") is not True:
               failures.append("APNs is not configured")
           if notification_health.get("healthy") is not True:
               failures.append(f"notification health is degraded: {notification_health}")
+          print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
           if pending_notifications:
-              latest_poll = payload.get("latest_poll") or {}
               latest_poll_created_at = latest_poll.get("created_at")
               pending_updated_at = [
                   pending.get("updated_at")
@@ -141,7 +104,7 @@ jobs:
               pending_rows_are_fresh = False
               now = datetime.now(timezone.utc)
 
-              if latest_poll.get("status") == "started" and latest_poll_created_at:
+              if latest_poll.get("status") in {"started", "running_past_request_timeout"} and latest_poll_created_at:
                   started_at = datetime.fromisoformat(
                       latest_poll_created_at.replace("Z", "+00:00")
                   )

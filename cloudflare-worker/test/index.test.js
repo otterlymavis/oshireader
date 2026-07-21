@@ -9,6 +9,8 @@ test("health endpoint does not require the admin token", async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({
     items_total: 10,
     matches_total: 12,
+    watch_terms: [],
+    pending_notifications: [],
     recent_events: [{ id: 1, kind: "poll", status: "completed", created_at: now }],
   }), { status: 200 });
   const response = await worker.fetch(
@@ -299,7 +301,7 @@ test("health reports stale polling as degraded", async (context) => {
       id: 1,
       kind: "poll",
       status: "completed",
-      created_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+      created_at: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
     }],
   }), { status: 200 });
 
@@ -312,11 +314,63 @@ test("health reports stale polling as degraded", async (context) => {
   assert.equal((await response.json()).status, "degraded");
 });
 
+test("health reports missing polling inputs as degraded", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    latest_successful_poll: {
+      id: 99,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date().toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.status, "degraded");
+  assert.match(body.reason, /missing or malformed watch_terms/);
+});
+
+test("health reports malformed watch term inputs as degraded", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko" }],
+    pending_notifications: [],
+    latest_successful_poll: {
+      id: 99,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date().toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.status, "degraded");
+  assert.match(body.reason, /missing or malformed watch_terms/);
+});
+
 test("health uses dedicated latest successful poll outside recent events", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   const now = new Date().toISOString();
   globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [],
+    pending_notifications: [],
     latest_successful_poll: {
       id: 99,
       kind: "poll",
@@ -343,6 +397,8 @@ test("health exposes latest relevant APNs separately from stale history", async 
   context.after(() => { globalThis.fetch = originalFetch; });
   const now = new Date().toISOString();
   globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [],
+    pending_notifications: [],
     latest_successful_poll: {
       id: 99,
       kind: "poll",
@@ -448,6 +504,7 @@ test("health reports active notification terms without devices as degraded", asy
         notification_verified_devices: 0,
       },
     ],
+    pending_notifications: [],
     latest_successful_poll: {
       id: 1,
       kind: "poll",
@@ -497,6 +554,7 @@ test("health trusts backend notification grace period", async (context) => {
         notification_verified_devices: 0,
       },
     ],
+    pending_notifications: [],
     latest_successful_poll: {
       id: 1,
       kind: "poll",
@@ -516,6 +574,55 @@ test("health trusts backend notification grace period", async (context) => {
   assert.equal(body.status, "ok");
   assert.equal(body.notifications.healthy, true);
   assert.equal(body.notifications.active_notify_terms, 2);
+});
+
+test("health reports missing APNs config as degraded even when backend notification health is green", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    apns: {
+      configured: false,
+      device_tokens_by_environment_and_verification: {
+        production: { verified: 1, unverified: 0 },
+      },
+    },
+    notification_health: {
+      healthy: true,
+      active_notify_terms: 1,
+      active_silent_orphan_terms: 0,
+      active_notify_terms_without_verified_devices: 0,
+      orphaned_notification_grace_minutes: 60,
+      active_silent_orphan_term_ids: [],
+      active_notify_term_ids_without_verified_devices: [],
+    },
+    watch_terms: [
+      {
+        keyword: "Aiko",
+        is_active: true,
+        notify_on_new: true,
+        notification_verified_devices: 1,
+      },
+    ],
+    pending_notifications: [],
+    latest_successful_poll: {
+      id: 1,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date().toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.status, "degraded");
+  assert.equal(body.notifications.healthy, false);
+  assert.match(body.notifications.reason, /APNs is not configured/);
 });
 
 test("manual run rejects callers without the token", async () => {
@@ -603,6 +710,84 @@ test("scheduled poll skips backend poll when no active work exists", async (cont
   assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
 });
 
+test("scheduled poll does not treat missing polling inputs as idle", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requestedURLs = [];
+  globalThis.fetch = async (url) => {
+    requestedURLs.push(String(url));
+    if (String(url).endsWith("/api/admin/poll")) {
+      return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
+    }
+    assert.equal(url, "https://backend.example/api/admin/stats");
+    return new Response(JSON.stringify({
+      latest_successful_poll: {
+        id: 1,
+        kind: "poll",
+        status: "completed",
+        created_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+      },
+      recent_events: [],
+    }), { status: 200 });
+  };
+
+  const result = await triggerBackendPoll({
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+  }, { respectDueWindow: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, undefined);
+  assert.equal(result.backend_status, "poll completed");
+  assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/admin/stats",
+    "https://backend.example/api/admin/poll",
+    "https://backend.example/api/admin/stats",
+  ]);
+});
+
+test("scheduled poll does not treat malformed watch terms as idle", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requestedURLs = [];
+  globalThis.fetch = async (url) => {
+    requestedURLs.push(String(url));
+    if (String(url).endsWith("/api/admin/poll")) {
+      return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
+    }
+    assert.equal(url, "https://backend.example/api/admin/stats");
+    return new Response(JSON.stringify({
+      watch_terms: [{ id: 1, keyword: "Aiko" }],
+      pending_notifications: [],
+      latest_successful_poll: {
+        id: 1,
+        kind: "poll",
+        status: "completed",
+        created_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+      },
+      recent_events: [],
+    }), { status: 200 });
+  };
+
+  const result = await triggerBackendPoll({
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+  }, { respectDueWindow: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, undefined);
+  assert.equal(result.backend_status, "poll completed");
+  assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/admin/stats",
+    "https://backend.example/api/admin/poll",
+    "https://backend.example/api/admin/stats",
+  ]);
+});
+
 test("scheduled poll skips backend poll when latest success is fresh", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => {
@@ -634,6 +819,40 @@ test("scheduled poll skips backend poll when latest success is fresh", async (co
   assert.equal(result.ok, true);
   assert.equal(result.skipped, true);
   assert.match(result.reason, /still fresh/);
+  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
+});
+
+test("scheduled poll skips backend poll when poll is already in progress", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requestedURLs = [];
+  globalThis.fetch = async (url) => {
+    requestedURLs.push(String(url));
+    assert.equal(url, "https://backend.example/api/admin/stats");
+    return new Response(JSON.stringify({
+      watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+      pending_notifications: [],
+      latest_poll: {
+        id: 2,
+        kind: "poll",
+        status: "started",
+        created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      },
+      recent_events: [],
+    }), { status: 200 });
+  };
+
+  const result = await triggerBackendPoll({
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+    STALE_AFTER_MINUTES: "240",
+  }, { respectDueWindow: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /already in progress/);
   assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
 });
 
@@ -678,7 +897,7 @@ test("scheduled poll notifies watchdog when diagnostics are degraded", async (co
           id: 1,
           kind: "poll",
           status: "completed",
-          created_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+          created_at: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
         },
         recent_events: [],
       }), { status: 200 });
@@ -728,6 +947,7 @@ test("scheduled poll notifies watchdog when notifications are not deliverable", 
             notification_verified_devices: 0,
           },
         ],
+        pending_notifications: [],
         latest_successful_poll: {
           id: 1,
           kind: "poll",

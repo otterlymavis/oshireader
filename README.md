@@ -97,8 +97,9 @@ Configure these in your backend `.env` file:
 | Environment Variable | Default | Description |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | `sqlite:///./otterpia.db` | SQLAlchemy connection URL (e.g. `postgresql://...` for production) |
-| `POLL_INTERVAL_MINUTES` | `15` | Default check-in frequency for automated workflows |
-| `CONNECTOR_FETCH_TIMEOUT_SECONDS` | `25.0` | Timeout per connector platform |
+| `INTERNAL_SCHEDULER_ENABLED` | `false` | Enables the backend's in-process scheduler for standalone deployments only |
+| `POLL_INTERVAL_MINUTES` | `60` | In-process scheduler interval when `INTERNAL_SCHEDULER_ENABLED=true` |
+| `CONNECTOR_FETCH_TIMEOUT_SECONDS` | `8.0` | Timeout per connector platform |
 | `ADMIN_API_TOKEN` | *None* | Authentication token for admin/write routes |
 | `ALLOW_UNAUTHENTICATED_ADMIN` | `false` | Enable only in local development to bypass auth check |
 | `CORS_ALLOW_ORIGINS` | *None* | Comma-separated browser origins allowed by CORS (Native iOS calls bypass CORS) |
@@ -145,7 +146,7 @@ The project uses target schemas to run against different environments:
 
 ### Automated Ingestion
 OshiReader uses a Cloudflare Worker Cron in `cloudflare-worker/` to call
-`POST /api/admin/poll` at most once per hour when active watch terms or pending
+`POST /api/admin/poll` at most once every three hours when active watch terms or pending
 notifications need work. The Worker first reads backend diagnostics and skips the
 heavy poll if there is no active work or the latest poll is still fresh.
 Cloudflare stores `ADMIN_API_TOKEN` as an encrypted Worker secret. GitHub's
@@ -167,9 +168,10 @@ npx wrangler deploy
 
 The deployed Worker's `/health` endpoint is public and returns HTTP 503 when no
 successful backend poll has completed within the configured stale window
-(currently 90 minutes). Point an uptime monitor at it to receive an independent
-stale-poll alert. Its manual `POST /run` endpoint requires the same bearer token
-as the backend.
+(currently 240 minutes). It reads backend diagnostics, so avoid high-frequency
+uptime checks; the GitHub `Poller monitor` workflow checks it every 6 hours, and
+any external monitor should use a similarly low cadence. Its manual `POST /run`
+endpoint requires the same bearer token as the backend.
 
 Current Worker:
 `https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev`

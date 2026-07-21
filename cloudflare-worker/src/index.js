@@ -1,8 +1,8 @@
 const POLL_TIMEOUT_MS = 4 * 60 * 1000;
 const DEFAULT_POLL_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
-const DEFAULT_STALE_AFTER_MINUTES = 90;
-const DEFAULT_MIN_POLL_INTERVAL_MINUTES = 55;
+const DEFAULT_STALE_AFTER_MINUTES = 240;
+const DEFAULT_MIN_POLL_INTERVAL_MINUTES = 170;
 const RSS_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_ITEST_UPSTREAM_ATTEMPTS = 3;
@@ -356,12 +356,12 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
     matches_total: stats.matches_total,
     apns: stats.apns || null,
     notification_health: stats.notification_health || null,
-    watch_terms: stats.watch_terms || [],
+    watch_terms: stats.watch_terms,
     latest_poll: stats.latest_poll || recentEvents.find((event) => event.kind === "poll") || null,
     latest_successful_poll: successfulPoll,
     latest_apns: stats.latest_apns || recentEvents.find((event) => event.kind === "apns") || null,
     latest_relevant_apns: stats.latest_relevant_apns || null,
-    pending_notifications: stats.pending_notifications || [],
+    pending_notifications: stats.pending_notifications,
   };
 }
 
@@ -371,6 +371,16 @@ function notificationHealth(diagnostics) {
     const activeNotifyTerms = backendHealth.active_notify_terms ?? 0;
     const atRiskTerms = backendHealth.active_notify_terms_without_verified_devices ?? 0;
     if (backendHealth.healthy) {
+      const apns = diagnostics.apns || {};
+      if (activeNotifyTerms > 0 && apns.configured !== true) {
+        return {
+          healthy: false,
+          reason: "Backend APNs is not configured",
+          active_notify_terms: activeNotifyTerms,
+          at_risk_terms: activeNotifyTerms,
+          active_silent_orphan_terms: backendHealth.active_silent_orphan_terms ?? 0,
+        };
+      }
       return {
         healthy: true,
         active_notify_terms: activeNotifyTerms,
@@ -438,6 +448,12 @@ function notificationHealth(diagnostics) {
 
 function pollHealth(diagnostics, staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES) {
   const inputs = activePollingInputs(diagnostics);
+  if (!inputs.available) {
+    return {
+      healthy: false,
+      reason: "Polling diagnostics are missing or malformed watch_terms or pending_notifications",
+    };
+  }
   if (inputs.activeTerms <= 0 && inputs.pendingNotifications <= 0) {
     return {
       healthy: true,
@@ -447,34 +463,23 @@ function pollHealth(diagnostics, staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES
   }
 
   const event = diagnostics.latest_successful_poll;
-  const latestPoll = diagnostics.latest_poll;
-  const latestPollStartedAt = latestPoll?.created_at ? Date.parse(latestPoll.created_at) : Number.NaN;
-  const latestPollAgeMinutes = Number.isFinite(latestPollStartedAt)
-    ? (Date.now() - latestPollStartedAt) / 60_000
-    : Number.NaN;
-  const latestPollIsActive = latestPoll &&
-    ["started", "running_past_request_timeout"].includes(latestPoll.status);
   const completedAt = event?.created_at ? Date.parse(event.created_at) : Number.NaN;
+  const activePollAgeMinutes = activeBackendPollAgeMinutes(diagnostics, completedAt);
   if (!Number.isFinite(completedAt)) {
-    if (latestPollIsActive && latestPollAgeMinutes <= staleAfterMinutes) {
+    if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes <= staleAfterMinutes) {
       return {
         healthy: true,
         in_progress: true,
-        age_minutes: Math.max(0, Math.floor(latestPollAgeMinutes)),
+        age_minutes: Math.max(0, Math.floor(activePollAgeMinutes)),
       };
     }
     return { healthy: false, reason: "No successful backend poll recorded" };
   }
-  if (
-    latestPollIsActive &&
-    Number.isFinite(latestPollStartedAt) &&
-    latestPollStartedAt > completedAt &&
-    latestPollAgeMinutes <= staleAfterMinutes
-  ) {
+  if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes <= staleAfterMinutes) {
     return {
       healthy: true,
       in_progress: true,
-      age_minutes: Math.max(0, Math.floor(latestPollAgeMinutes)),
+      age_minutes: Math.max(0, Math.floor(activePollAgeMinutes)),
     };
   }
   const ageMinutes = (Date.now() - completedAt) / 60_000;
@@ -533,16 +538,53 @@ function notificationWatchdogSummary(health, diagnostics = {}) {
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function activePollingInputs(diagnostics) {
-  const activeTerms = (diagnostics.watch_terms || []).filter((term) => term.is_active);
-  const pendingNotifications = diagnostics.pending_notifications || [];
+  const watchTerms = diagnostics.watch_terms;
+  const pendingNotifications = diagnostics.pending_notifications;
+  const available = Array.isArray(watchTerms) &&
+    Array.isArray(pendingNotifications) &&
+    watchTerms.every((term) => typeof term?.is_active === "boolean");
+  if (!available) {
+    return {
+      available: false,
+      activeTerms: 0,
+      pendingNotifications: 0,
+    };
+  }
+  const activeTerms = watchTerms.filter((term) => term.is_active);
   return {
+    available: true,
     activeTerms: activeTerms.length,
     pendingNotifications: pendingNotifications.length,
   };
 }
 
-function scheduledPollDecision(diagnostics, minIntervalMinutes = DEFAULT_MIN_POLL_INTERVAL_MINUTES) {
+function activeBackendPollAgeMinutes(diagnostics, completedAt = Number.NaN) {
+  const latestPoll = diagnostics.latest_poll;
+  const latestPollStartedAt = latestPoll?.created_at ? Date.parse(latestPoll.created_at) : Number.NaN;
+  const latestPollIsActive = latestPoll &&
+    ["started", "running_past_request_timeout"].includes(latestPoll.status);
+  if (!latestPollIsActive || !Number.isFinite(latestPollStartedAt)) {
+    return Number.NaN;
+  }
+  if (Number.isFinite(completedAt) && latestPollStartedAt <= completedAt) {
+    return Number.NaN;
+  }
+  return (Date.now() - latestPollStartedAt) / 60_000;
+}
+
+function scheduledPollDecision(
+  diagnostics,
+  minIntervalMinutes = DEFAULT_MIN_POLL_INTERVAL_MINUTES,
+  staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES,
+) {
   const inputs = activePollingInputs(diagnostics);
+  if (!inputs.available) {
+    return {
+      due: true,
+      reason: "polling diagnostics are missing or malformed watch_terms or pending_notifications",
+      ...inputs,
+    };
+  }
   if (inputs.activeTerms <= 0 && inputs.pendingNotifications <= 0) {
     return {
       due: false,
@@ -553,6 +595,16 @@ function scheduledPollDecision(diagnostics, minIntervalMinutes = DEFAULT_MIN_POL
 
   const event = diagnostics.latest_successful_poll;
   const completedAt = event?.created_at ? Date.parse(event.created_at) : Number.NaN;
+  const activePollAgeMinutes = activeBackendPollAgeMinutes(diagnostics, completedAt);
+  if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes <= staleAfterMinutes) {
+    return {
+      due: false,
+      reason: `backend poll is already in progress (${Math.max(0, Math.floor(activePollAgeMinutes))} minutes old)`,
+      in_progress: true,
+      age_minutes: Math.max(0, Math.floor(activePollAgeMinutes)),
+      ...inputs,
+    };
+  }
   if (!Number.isFinite(completedAt)) {
     return { due: true, reason: "no successful backend poll recorded", ...inputs };
   }
@@ -585,6 +637,7 @@ export async function triggerBackendPoll(env, options = {}) {
     const decision = scheduledPollDecision(
       diagnostics,
       Number(env.MIN_POLL_INTERVAL_MINUTES ?? DEFAULT_MIN_POLL_INTERVAL_MINUTES),
+      Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
     );
     if (!decision.due) {
       return {

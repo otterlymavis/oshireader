@@ -2,8 +2,8 @@
 
 This repo relies on three moving pieces for automatic feed notifications:
 
-- Cloudflare Worker cron checks diagnostics hourly and calls the backend poll
-  endpoint only when active watch terms or pending notifications need work.
+- Cloudflare Worker cron checks diagnostics every 3 hours and calls the backend
+  poll endpoint only when active watch terms or pending notifications need work.
 - Render runs the backend poll and records `backend_events`.
 - The backend in-process scheduler is disabled by default; Cloudflare should be
   the single production scheduler.
@@ -11,7 +11,11 @@ This repo relies on three moving pieces for automatic feed notifications:
 
 ## Health Checks
 
-Primary monitor:
+Primary scheduled monitor:
+
+- GitHub Actions `Poller monitor`, every 6 hours.
+
+Manual worker health check:
 
 ```sh
 curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
@@ -22,7 +26,12 @@ Healthy output must include:
 - `status: "ok"`
 - `healthy: true`
 - `notifications.healthy: true`
-- a recent `diagnostics.latest_successful_poll`
+- either `idle: true` when there is no active polling work, or a recent
+  `diagnostics.latest_successful_poll`
+
+The worker health endpoint reads authenticated backend diagnostics on every
+request. Avoid high-frequency external uptime checks; use the scheduled GitHub
+monitor cadence unless you are doing manual diagnostics.
 
 The backend commit currently served by Render:
 
@@ -63,8 +72,8 @@ out of budget before the full connector/term workload finished.
 
 Look for:
 
-- `latest_poll.status == "started"`
-- `latest_successful_poll.created_at` older than 120 minutes
+- `latest_poll.status == "started"` or `"running_past_request_timeout"`
+- `latest_successful_poll.created_at` older than 240 minutes
 - repeated `latest_poll.id` changes without a matching completed event
 
 The common notification failure is healthy polling with degraded notification
@@ -87,6 +96,10 @@ These are intentionally conservative for the current Render instance:
 - `CONNECTOR_FETCH_TIMEOUT_SECONDS=8`
 - `NOTIFICATION_FRESHNESS_WINDOW_MINUTES=1440`
 - `ORPHANED_NOTIFICATION_GRACE_MINUTES=60`
+- Worker `MIN_POLL_INTERVAL_MINUTES=170`
+- Worker `STALE_AFTER_MINUTES=240`
+- iOS/backend device-triggered polls are throttled to the same 170-minute
+  cadence so app background refresh cannot bypass the Worker schedule.
 
 Increase them only after the service has stayed healthy for a few days, and change
 one knob at a time. If polling starts to miss completion markers again, roll the
@@ -94,9 +107,9 @@ knob back before debugging connectors.
 
 ## Alerting
 
-The GitHub Actions workflow `Poller monitor` runs hourly and fails if the worker
-health endpoint is degraded, if the latest successful poll is older than 120
-minutes, or if authenticated backend notification health is degraded. The
+The GitHub Actions workflow `Poller monitor` runs every 6 hours and fails if the worker
+health endpoint is degraded, if the latest successful poll is older than 240
+minutes while polling work is active, or if authenticated backend notification health is degraded. The
 `Backend keep-alive` workflow is manual-only so it does not wake Render and
 trigger startup database work on a fixed schedule.
 
@@ -131,4 +144,5 @@ suffix and environment.
    `gh workflow run notification-canary.yml --ref master` and inspect the APNs
    canary event.
 6. Trigger `gh workflow run deploy-render.yml --ref master` for backend config changes.
-7. Keep polling worker health until a fresh `latest_successful_poll` appears.
+7. Check worker health after the next scheduled run, or manually trigger a poll
+   when you need immediate proof of a fresh `latest_successful_poll`.
