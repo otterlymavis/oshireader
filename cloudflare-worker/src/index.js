@@ -1,7 +1,8 @@
 const POLL_TIMEOUT_MS = 4 * 60 * 1000;
 const DEFAULT_POLL_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
-const DEFAULT_STALE_AFTER_MINUTES = 35;
+const DEFAULT_STALE_AFTER_MINUTES = 90;
+const DEFAULT_MIN_POLL_INTERVAL_MINUTES = 55;
 const RSS_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_ITEST_UPSTREAM_ATTEMPTS = 3;
@@ -436,6 +437,15 @@ function notificationHealth(diagnostics) {
 }
 
 function pollHealth(diagnostics, staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES) {
+  const inputs = activePollingInputs(diagnostics);
+  if (inputs.activeTerms <= 0 && inputs.pendingNotifications <= 0) {
+    return {
+      healthy: true,
+      idle: true,
+      reason: "no active watch terms or pending notifications",
+    };
+  }
+
   const event = diagnostics.latest_successful_poll;
   const latestPoll = diagnostics.latest_poll;
   const latestPollStartedAt = latestPoll?.created_at ? Date.parse(latestPoll.created_at) : Number.NaN;
@@ -522,10 +532,71 @@ function notificationWatchdogSummary(health, diagnostics = {}) {
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export async function triggerBackendPoll(env) {
+function activePollingInputs(diagnostics) {
+  const activeTerms = (diagnostics.watch_terms || []).filter((term) => term.is_active);
+  const pendingNotifications = diagnostics.pending_notifications || [];
+  return {
+    activeTerms: activeTerms.length,
+    pendingNotifications: pendingNotifications.length,
+  };
+}
+
+function scheduledPollDecision(diagnostics, minIntervalMinutes = DEFAULT_MIN_POLL_INTERVAL_MINUTES) {
+  const inputs = activePollingInputs(diagnostics);
+  if (inputs.activeTerms <= 0 && inputs.pendingNotifications <= 0) {
+    return {
+      due: false,
+      reason: "no active watch terms or pending notifications",
+      ...inputs,
+    };
+  }
+
+  const event = diagnostics.latest_successful_poll;
+  const completedAt = event?.created_at ? Date.parse(event.created_at) : Number.NaN;
+  if (!Number.isFinite(completedAt)) {
+    return { due: true, reason: "no successful backend poll recorded", ...inputs };
+  }
+
+  const ageMinutes = (Date.now() - completedAt) / 60_000;
+  if (ageMinutes < minIntervalMinutes) {
+    return {
+      due: false,
+      reason: `latest successful poll is still fresh (${Math.max(0, Math.floor(ageMinutes))} minutes old)`,
+      age_minutes: Math.max(0, Math.floor(ageMinutes)),
+      ...inputs,
+    };
+  }
+  return {
+    due: true,
+    reason: `latest successful poll is ${Math.max(0, Math.floor(ageMinutes))} minutes old`,
+    age_minutes: Math.max(0, Math.floor(ageMinutes)),
+    ...inputs,
+  };
+}
+
+export async function triggerBackendPoll(env, options = {}) {
   const adminToken = requireAdminToken(env);
   const backendURL = (env.BACKEND_URL || "https://oshireader.onrender.com").replace(/\/+$/, "");
   const startedAt = Date.now();
+  const respectDueWindow = options.respectDueWindow === true;
+
+  if (respectDueWindow) {
+    const diagnostics = await fetchBackendDiagnostics(backendURL, adminToken);
+    const decision = scheduledPollDecision(
+      diagnostics,
+      Number(env.MIN_POLL_INTERVAL_MINUTES ?? DEFAULT_MIN_POLL_INTERVAL_MINUTES),
+    );
+    if (!decision.due) {
+      return {
+        ok: true,
+        skipped: true,
+        backend_status: "poll skipped",
+        reason: decision.reason,
+        duration_ms: Date.now() - startedAt,
+        diagnostics,
+      };
+    }
+  }
 
   const retries = Number(env.POLL_RETRIES ?? DEFAULT_POLL_RETRIES);
   const retryDelayMs = Number(env.POLL_RETRY_DELAY_MS ?? DEFAULT_RETRY_DELAY_MS);
@@ -572,7 +643,7 @@ export async function triggerBackendPoll(env) {
 export default {
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(
-      triggerBackendPoll(env).then(
+      triggerBackendPoll(env, { respectDueWindow: true }).then(
         async (result) => {
           console.log("Scheduled feed poll completed", result);
           const health = pollHealth(

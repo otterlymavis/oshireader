@@ -224,7 +224,6 @@ async def _initialize_backend_services() -> None:
         _startup_status["schema_migration"] = "completed"
         start_scheduler()
         _startup_status["scheduler"] = "running"
-        queue_poll()
     except Exception as exc:
         log.exception("Backend startup initialization failed")
         _startup_status.update({

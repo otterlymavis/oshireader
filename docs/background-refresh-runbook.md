@@ -2,7 +2,8 @@
 
 This repo relies on three moving pieces for automatic feed notifications:
 
-- Cloudflare Worker cron calls the backend poll endpoint every 15 minutes.
+- Cloudflare Worker cron checks diagnostics hourly and calls the backend poll
+  endpoint only when active watch terms or pending notifications need work.
 - Render runs the backend poll and records `backend_events`.
 - APNs delivery happens when a completed poll creates eligible new matches.
 
@@ -61,7 +62,7 @@ out of budget before the full connector/term workload finished.
 Look for:
 
 - `latest_poll.status == "started"`
-- `latest_successful_poll.created_at` older than 45 minutes
+- `latest_successful_poll.created_at` older than 120 minutes
 - repeated `latest_poll.id` changes without a matching completed event
 
 The common notification failure is healthy polling with degraded notification
@@ -91,9 +92,11 @@ knob back before debugging connectors.
 
 ## Alerting
 
-The GitHub Actions workflow `Poller monitor` runs every 15 minutes and fails if
-the worker health endpoint is degraded, if the latest successful poll is older
-than 45 minutes, or if authenticated backend notification health is degraded.
+The GitHub Actions workflow `Poller monitor` runs hourly and fails if the worker
+health endpoint is degraded, if the latest successful poll is older than 120
+minutes, or if authenticated backend notification health is degraded. The
+`Backend keep-alive` workflow is manual-only so it does not wake Render and
+trigger startup database work on a fixed schedule.
 
 Set the GitHub Actions secret `ALERT_WEBHOOK_URL` to a Slack/Discord-compatible
 incoming webhook to receive failure alerts from `Poll feed`, `Poller monitor`,

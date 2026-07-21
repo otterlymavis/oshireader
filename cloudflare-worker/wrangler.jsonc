@@ -10,11 +10,12 @@
     "BACKEND_URL": "https://oshireader.onrender.com",
     "POLL_RETRIES": "2",
     "POLL_RETRY_DELAY_MS": "5000",
-    "STALE_AFTER_MINUTES": "35"
+    "STALE_AFTER_MINUTES": "90",
+    "MIN_POLL_INTERVAL_MINUTES": "55"
   },
   "triggers": {
     "crons": [
-      "*/15 * * * *"
+      "0 * * * *"
     ]
   }
 }

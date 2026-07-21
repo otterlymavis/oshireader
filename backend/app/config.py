@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     youtube_api_key: str = ""
     twitter_bearer_token: str = ""
     database_url: str = "sqlite:///./otterpia.db"
-    poll_interval_minutes: int = 15
+    poll_interval_minutes: int = 60
     connector_fetch_timeout_seconds: float = 8.0
     connector_concurrency: int = 1
     poll_terms_per_run: int = 1

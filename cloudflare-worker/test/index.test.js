@@ -293,11 +293,13 @@ test("health reports stale polling as degraded", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+    pending_notifications: [],
     recent_events: [{
       id: 1,
       kind: "poll",
       status: "completed",
-      created_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      created_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
     }],
   }), { status: 200 });
 
@@ -380,6 +382,8 @@ test("health treats a fresh started poll as in progress", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+    pending_notifications: [],
     latest_poll: {
       id: 3,
       kind: "poll",
@@ -405,6 +409,8 @@ test("health treats a fresh request-timeout marker as in progress", async (conte
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+    pending_notifications: [],
     latest_poll: {
       id: 4,
       kind: "poll",
@@ -563,6 +569,74 @@ test("poll sends the backend bearer token", async (context) => {
   assert.equal(result.diagnostics.latest_relevant_apns.id, 3);
 });
 
+test("scheduled poll skips backend poll when no active work exists", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requestedURLs = [];
+  globalThis.fetch = async (url) => {
+    requestedURLs.push(String(url));
+    assert.equal(url, "https://backend.example/api/admin/stats");
+    return new Response(JSON.stringify({
+      watch_terms: [],
+      pending_notifications: [],
+      latest_successful_poll: {
+        id: 1,
+        kind: "poll",
+        status: "completed",
+        created_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+      },
+      recent_events: [],
+    }), { status: 200 });
+  };
+
+  const result = await triggerBackendPoll({
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+  }, { respectDueWindow: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, true);
+  assert.equal(result.backend_status, "poll skipped");
+  assert.match(result.reason, /no active watch terms/);
+  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
+});
+
+test("scheduled poll skips backend poll when latest success is fresh", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requestedURLs = [];
+  globalThis.fetch = async (url) => {
+    requestedURLs.push(String(url));
+    assert.equal(url, "https://backend.example/api/admin/stats");
+    return new Response(JSON.stringify({
+      watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+      pending_notifications: [],
+      latest_successful_poll: {
+        id: 1,
+        kind: "poll",
+        status: "completed",
+        created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      },
+      recent_events: [],
+    }), { status: 200 });
+  };
+
+  const result = await triggerBackendPoll({
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+    MIN_POLL_INTERVAL_MINUTES: "55",
+  }, { respectDueWindow: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /still fresh/);
+  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
+});
+
 test("poll retries a transient backend failure", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
@@ -598,11 +672,13 @@ test("scheduled poll notifies watchdog when diagnostics are degraded", async (co
       return new Response(JSON.stringify({
         items_total: 10,
         matches_total: 12,
+        watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+        pending_notifications: [],
         latest_successful_poll: {
           id: 1,
           kind: "poll",
           status: "completed",
-          created_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+          created_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
         },
         recent_events: [],
       }), { status: 200 });

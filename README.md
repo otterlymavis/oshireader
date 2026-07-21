@@ -145,9 +145,11 @@ The project uses target schemas to run against different environments:
 
 ### Automated Ingestion
 OshiReader uses a Cloudflare Worker Cron in `cloudflare-worker/` to call
-`POST /api/admin/poll` every 15 minutes. Cloudflare stores `ADMIN_API_TOKEN` as
-an encrypted Worker secret. GitHub's manual poll workflow remains available for
-diagnostics and emergency triggering.
+`POST /api/admin/poll` at most once per hour when active watch terms or pending
+notifications need work. The Worker first reads backend diagnostics and skips the
+heavy poll if there is no active work or the latest poll is still fresh.
+Cloudflare stores `ADMIN_API_TOKEN` as an encrypted Worker secret. GitHub's
+manual poll workflow remains available for diagnostics and emergency triggering.
 
 Deploy the Worker after authenticating Wrangler:
 
@@ -161,9 +163,10 @@ npx wrangler deploy
 ```
 
 The deployed Worker's `/health` endpoint is public and returns HTTP 503 when no
-successful backend poll has completed within 35 minutes. Point an uptime monitor
-at it to receive an independent stale-poll alert. Its manual `POST /run`
-endpoint requires the same bearer token as the backend.
+successful backend poll has completed within the configured stale window
+(currently 90 minutes). Point an uptime monitor at it to receive an independent
+stale-poll alert. Its manual `POST /run` endpoint requires the same bearer token
+as the backend.
 
 Current Worker:
 `https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev`

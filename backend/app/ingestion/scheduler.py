@@ -1070,13 +1070,33 @@ async def _poll_once_unlocked() -> None:
         _disable_orphaned_notification_terms(db)
         _deactivate_orphaned_duplicate_terms(db)
         _deactivate_orphaned_silent_terms(db)
-        connectors = _build_connectors(db)
         all_terms = (
             db.query(WatchTerm)
             .filter(WatchTerm.is_active == True)  # noqa: E712
             .order_by(WatchTerm.id)
             .all()
         )
+        if not all_terms:
+            flushed_pending_term_ids = await _flush_pending_notifications(db)
+            record_backend_event(
+                db,
+                "poll",
+                "skipped",
+                "Scheduled/backend poll skipped because there are no active watch terms",
+                {
+                    "terms": 0,
+                    "total_terms": 0,
+                    "connectors": 0,
+                    "flushed_pending_terms": len(flushed_pending_term_ids),
+                    "term_offset": 0,
+                    "next_term_offset": 0,
+                },
+            )
+            prune_backend_events(db)
+            db.commit()
+            return
+
+        connectors = _build_connectors(db)
         terms, term_offset, next_term_offset = _poll_term_window(db, all_terms)
         processed_term_ids = {term.id for term in terms}
         total_new = 0

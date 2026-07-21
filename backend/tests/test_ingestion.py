@@ -2518,3 +2518,28 @@ class TestPollOnceLocking:
             with patch("app.ingestion.scheduler._poll_once_unlocked", new=AsyncMock()) as mock_poll:
                 await poll_once()
             mock_poll.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_poll_once_skips_connector_work_without_active_terms(self, db_engine, db_session):
+        TestSession = sessionmaker(bind=db_engine)
+        inactive = WatchTerm(keyword="Aiko", is_active=False, notify_on_new=True)
+        db_session.add(inactive)
+        db_session.commit()
+
+        with patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch("app.ingestion.scheduler._build_connectors") as mock_build_connectors, \
+             patch("app.ingestion.scheduler.revalidate_unverified_devices", new=AsyncMock()), \
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()):
+            await _poll_once_unlocked()
+
+        mock_build_connectors.assert_not_called()
+        event = (
+            db_session.query(BackendEvent)
+            .filter(BackendEvent.kind == "poll")
+            .order_by(BackendEvent.id.desc())
+            .first()
+        )
+        assert event is not None
+        assert event.status == "skipped"
+        assert event.payload["total_terms"] == 0
+        assert event.payload["connectors"] == 0
