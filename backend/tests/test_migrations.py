@@ -109,6 +109,22 @@ class TestApplyStartupMigrations:
 
         assert purge_call_count == 1
 
+    def test_can_skip_cleanup_migrations_on_serving_startup(self, fresh_engine):
+        Session = sessionmaker(bind=fresh_engine)
+        with patch("app.migrations.SessionLocal", Session), \
+             patch("app.migrations._purge_bad_date_items") as purge_bad_dates, \
+             patch("app.migrations._purge_girlschannel_googlenews_items") as purge_girlschannel, \
+             patch("app.migrations._purge_irrelevant_matches") as purge_irrelevant, \
+             patch("app.migrations._purge_legacy_5ch_items") as purge_5ch:
+            apply_startup_migrations(fresh_engine, run_cleanups=False)
+
+        assert "owner_device_secret" in _column_names(fresh_engine, "watch_terms")
+        assert "updated_at" in _column_names(fresh_engine, "platform_credentials")
+        purge_bad_dates.assert_not_called()
+        purge_girlschannel.assert_not_called()
+        purge_irrelevant.assert_not_called()
+        purge_5ch.assert_not_called()
+
     def test_relevance_migration_removes_summary_only_article_match(self, fresh_engine):
         Base.metadata.create_all(bind=fresh_engine)
         Session = sessionmaker(bind=fresh_engine)

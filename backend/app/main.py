@@ -220,7 +220,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
                 "ADMIN_API_TOKEN must be set. For local development only, set "
                 "ALLOW_UNAUTHENTICATED_ADMIN=true."
             )
-    apply_startup_migrations(engine)
+    apply_startup_migrations(engine, run_cleanups=False)
     start_scheduler()
     queue_poll()
     yield

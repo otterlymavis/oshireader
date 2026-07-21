@@ -217,7 +217,7 @@ def _repair_postgres_muted_feed_items_id_default(engine: Engine) -> None:
         """))
 
 
-def apply_startup_migrations(engine: Engine) -> None:
+def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> None:
     Base.metadata.create_all(bind=engine)
 
     _add_missing_columns(
@@ -297,6 +297,9 @@ def apply_startup_migrations(engine: Engine) -> None:
             " ON muted_feed_items (source_item_id)"
         ))
     _repair_postgres_muted_feed_items_id_default(engine)
+
+    if not run_cleanups:
+        return
 
     # One-time cleanup (guarded): remove source_items where published_at ≈ matched_at
     # (within 60 s) for platforms whose date parsers previously fell back to
