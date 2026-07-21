@@ -1,0 +1,80 @@
+name: Backend maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Maintenance action to run
+        required: true
+        type: choice
+        options:
+          - disable-notifications-without-verified-devices
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BACKEND_URL: https://oshireader.onrender.com
+      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+      ACTION: ${{ inputs.action }}
+    steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$ADMIN_API_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Disable undeliverable notifications
+        if: inputs.action == 'disable-notifications-without-verified-devices'
+        run: |
+          STATS_BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$STATS_BODY" \
+            --write-out "%{http_code}" \
+            --max-time 30 \
+            "$BACKEND_URL/api/admin/stats" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN")
+          if [ "$STATUS" != "200" ]; then
+            echo "Stats endpoint returned HTTP $STATUS"
+            cat "$STATS_BODY"
+            exit 1
+          fi
+
+          python3 - "$STATS_BODY" <<'PY' > term-ids.txt
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              stats = json.load(fh)
+          health = stats.get("notification_health") or {}
+          for term_id in health.get("active_notify_term_ids_without_verified_devices") or []:
+              print(term_id)
+          PY
+
+          if [ ! -s term-ids.txt ]; then
+            echo "No notification-enabled terms without verified devices."
+            exit 0
+          fi
+
+          echo "Disabling notifications for these term ids:"
+          cat term-ids.txt
+
+          while read -r TERM_ID; do
+            BODY=$(mktemp)
+            STATUS=$(curl --silent --show-error \
+              --output "$BODY" \
+              --write-out "%{http_code}" \
+              --request PATCH \
+              "$BACKEND_URL/api/watch-terms/$TERM_ID" \
+              -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data '{"notify_on_new":false}' \
+              --max-time 30)
+            if [ "$STATUS" != "200" ]; then
+              echo "Failed to update term $TERM_ID: HTTP $STATUS"
+              cat "$BODY"
+              exit 1
+            fi
+          done < term-ids.txt
