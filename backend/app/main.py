@@ -65,6 +65,7 @@ _GNEWS_PROBE_QUERIES = {
     "oricon": "{keyword} site:oricon.co.jp",
     "smartnews": "{keyword} site:smartnews.com",
     "sponichi": "{keyword} site:sponichi.co.jp",
+    "thetv": "{keyword} site:thetv.jp",
     "twitter": "{keyword} site:x.com OR site:twitter.com",
     "yahoonews": "{keyword} site:news.yahoo.co.jp",
 }

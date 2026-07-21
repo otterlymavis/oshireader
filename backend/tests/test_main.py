@@ -1172,6 +1172,34 @@ Wed, 24 Jun 2026 02:07:03 GMT
         assert data["jina"]["entries"] == 1
         assert data["jina"]["keyword_title_matches"] == 1
 
+    def test_source_probe_supports_thetv(self, client):
+        direct_resp = MagicMock()
+        direct_resp.status_code = 200
+        direct_resp.content = b"<rss />"
+        jina_resp = MagicMock()
+        jina_resp.status_code = 200
+        jina_resp.text = ""
+        bing_resp = MagicMock()
+        bing_resp.status_code = 200
+        bing_resp.content = b"<rss />"
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=[direct_resp, jina_resp, bing_resp])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        fake_feed = MagicMock()
+        fake_feed.entries = []
+
+        with patch("app.main.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.main.feedparser.parse", return_value=fake_feed):
+            r = client.get(
+                "/api/admin/source-probe",
+                params={"platform": "thetv", "keyword": "Aiko"},
+            )
+
+        assert r.status_code == 200
+        assert r.json()["query"] == "Aiko site:thetv.jp"
+
 
 class TestAdminTwitterProbe:
     def test_twitter_probe_reports_no_configured_bearer(self, client):

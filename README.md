@@ -60,7 +60,7 @@ OshiReader utilizes custom scraping and API connectors to aggregate content from
 | **Oricon** | RSS & Search | Parses Oricon article feeds and search results |
 | **Yahoo News** | Web Scraper | Uses mirror sites to ensure EEA-safe access |
 | **News/RSS** | RSS Feed | Aggregates curated Japanese entertainment feeds |
-| **Google News Fallbacks** | Search Scraper | Used for *SmartNews, Ameblo, AERA, Hochi, Sponichi, Livedoor, Mantan Web, BARKS, Real Sound, CinemaCafe* |
+| **Google News Fallbacks** | Search Scraper | Used for *SmartNews, Ameblo, AERA, Hochi, Sponichi, Livedoor, Mantan Web, BARKS, Real Sound, CinemaCafe, TheTV* |
 | **Twitter (X)** | API v2 / Optional | Integrated when developer keys are configured |
 
 *Watch terms also support aliases. The scheduler searches both the primary keyword and each alias, saving matches against the original watch term.*

@@ -26,6 +26,7 @@ from app.connectors.news_sites import (
     MantanWebConnector,
     RealSoundConnector,
     SponichiConnector,
+    TheTVConnector,
 )
 from app.connectors.rss import RSSConnector
 from app.connectors.smartnews import SmartNewsConnector
@@ -87,6 +88,7 @@ def _build_connectors(db) -> list[BaseConnector]:
         RealSoundConnector(),
         SmartNewsConnector(),
         SponichiConnector(),
+        TheTVConnector(),
         TogetterConnector(),
         TVERConnector(),
         YahooNewsConnector(),

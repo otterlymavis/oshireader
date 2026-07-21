@@ -27,7 +27,13 @@ from app.connectors.fivech import (
 from app.connectors.girlschannel import GirlsChannelConnector
 from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
-from app.connectors.news_sites import AmebloConnector, CinemaCafeConnector, LivedoorConnector, RealSoundConnector
+from app.connectors.news_sites import (
+    AmebloConnector,
+    CinemaCafeConnector,
+    LivedoorConnector,
+    RealSoundConnector,
+    TheTVConnector,
+)
 from app.connectors.niconico import NicoNicoConnector
 from app.connectors.note import NoteConnector
 from app.connectors.oricon import OriconConnector
@@ -1771,6 +1777,24 @@ class TestNewsSiteFetch:
              patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
             result = await LivedoorConnector().fetch("Aiko", "all_info")
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_thetv_cleans_google_news_source_suffix(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link="https://news.google.com/rss/articles/thetv1",
+                title="吉沢亮が撮影での裏話を披露 - WEBザテレビジョン",
+                item_id="thetv1",
+            )
+        ])
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await TheTVConnector().fetch("吉沢亮", "all_info")
+
+        assert len(result) == 1
+        assert result[0].platform == "thetv"
+        assert result[0].title == "吉沢亮が撮影での裏話を披露"
+        assert result[0].raw_payload["site"] == "thetv.jp"
 
 
 _TOGETTER_HTML = """
