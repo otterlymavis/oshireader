@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth import AuthContext, require_admin_or_device_auth
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll
-from app.models import APNSDeviceToken, PendingNotification, WatchTerm
+from app.models import APNSDeviceToken, Match, PendingNotification, WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
 router = APIRouter(prefix="/api/watch-terms", tags=["watch-terms"])
@@ -76,6 +76,37 @@ def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> Watch
     return None
 
 
+def _seed_matches_from_global_term(db: Session, term: WatchTerm) -> None:
+    if term.owner_device_secret is None:
+        return
+    global_term = (
+        db.query(WatchTerm)
+        .filter(
+            WatchTerm.keyword == term.keyword,
+            WatchTerm.owner_device_secret.is_(None),
+        )
+        .order_by(WatchTerm.created_at.desc(), WatchTerm.id.desc())
+        .first()
+    )
+    if global_term is None:
+        return
+
+    rows = (
+        db.query(Match)
+        .filter(Match.watch_term_id == global_term.id)
+        .all()
+    )
+    for row in rows:
+        db.add(
+            Match(
+                watch_term_id=term.id,
+                source_item_id=row.source_item_id,
+                confidence=row.confidence,
+                created_at=row.created_at,
+            )
+        )
+
+
 @router.get("/", response_model=list[WatchTermOut])
 def list_terms(
     auth: AuthContext = Depends(require_admin_or_device_auth),
@@ -115,6 +146,8 @@ async def create_term(
         return adopted
     db.add(term)
     try:
+        db.flush()
+        _seed_matches_from_global_term(db, term)
         db.commit()
     except IntegrityError:
         db.rollback()

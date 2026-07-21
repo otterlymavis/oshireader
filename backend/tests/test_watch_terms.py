@@ -4,9 +4,10 @@ from __future__ import annotations
 import hashlib
 import pytest
 from unittest.mock import patch
+from datetime import datetime, timezone
 
 from app.config import settings
-from app.models import APNSDeviceToken, PendingNotification, WatchTerm
+from app.models import APNSDeviceToken, Match, PendingNotification, SourceItem, WatchTerm
 
 
 class TestListWatchTerms:
@@ -509,6 +510,77 @@ class TestCreateWatchTerm:
             )
 
         assert resp.status_code == 201
+
+    def test_device_created_term_reuses_matching_global_term_history(self, client, db_session):
+        global_term = WatchTerm(keyword="Aiko", notify_on_new=False)
+        item = SourceItem(
+            id="news:aiko-1",
+            platform="news",
+            item_id="aiko-1",
+            url="https://example.com/aiko-1",
+            published_at=datetime.now(timezone.utc),
+            title="Aiko update",
+            media_type="article",
+        )
+        db_session.add_all([global_term, item])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=global_term.id, source_item_id=item.id, confidence=0.9))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": False},
+                headers={"X-Device-Secret": "device-secret"},
+            )
+            feed = client.get(
+                "/api/feed/",
+                headers={"X-Device-Secret": "device-secret"},
+            )
+
+        assert resp.status_code == 201
+        created_id = int(resp.json()["id"])
+        assert created_id != global_term.id
+        device_matches = db_session.query(Match).filter_by(watch_term_id=created_id).all()
+        assert len(device_matches) == 1
+        assert device_matches[0].source_item_id == item.id
+        assert device_matches[0].confidence == 0.9
+
+        assert feed.status_code == 200
+        assert [row["item"]["id"] for row in feed.json()] == [item.id]
+
+    def test_device_created_term_without_matching_global_history_has_no_seeded_matches(
+        self,
+        client,
+        db_session,
+    ):
+        global_term = WatchTerm(keyword="Haruka", notify_on_new=False)
+        item = SourceItem(
+            id="news:haruka-1",
+            platform="news",
+            item_id="haruka-1",
+            url="https://example.com/haruka-1",
+            published_at=datetime.now(timezone.utc),
+            title="Haruka update",
+            media_type="article",
+        )
+        db_session.add_all([global_term, item])
+        db_session.flush()
+        db_session.add(Match(watch_term_id=global_term.id, source_item_id=item.id))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": False},
+                headers={"X-Device-Secret": "device-secret"},
+            )
+
+        assert resp.status_code == 201
+        created_id = int(resp.json()["id"])
+        assert db_session.query(Match).filter_by(watch_term_id=created_id).count() == 0
 
 
 class TestUpdateWatchTerm:
