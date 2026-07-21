@@ -4,10 +4,11 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 
 from app.database import get_db
-from app.main import database_operational_error_handler
+from app.main import _mark_abandoned_poll_events, database_operational_error_handler
 from app.models import APNSDeviceToken, BackendEvent, Match, PendingNotification, SourceItem, WatchTerm
 
 
@@ -48,6 +49,43 @@ class TestDatabaseOperationalErrorHandler:
         body = json.loads(response.body)
         assert body["detail"] == "Database unavailable"
         assert set(body["startup"]) == {"schema_migration", "scheduler", "error"}
+
+
+class TestStartupPollRecovery:
+    def test_marks_in_progress_poll_events_as_interrupted(self, db_engine, db_session):
+        started = BackendEvent(
+            kind="poll",
+            status="started",
+            message="Scheduled/backend poll started",
+            payload={"terms": 1},
+        )
+        timeout = BackendEvent(
+            kind="poll",
+            status="running_past_request_timeout",
+            message="Scheduled/backend poll exceeded the request budget",
+            payload={"timeout_seconds": 210},
+        )
+        completed = BackendEvent(
+            kind="poll",
+            status="completed",
+            message="Scheduled/backend poll completed",
+            payload={},
+        )
+        db_session.add_all([started, timeout, completed])
+        db_session.commit()
+
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.main.SessionLocal", TestSession):
+            interrupted_count = _mark_abandoned_poll_events()
+
+        db_session.expire_all()
+        assert interrupted_count == 2
+        assert started.status == "interrupted"
+        assert timeout.status == "interrupted"
+        assert completed.status == "completed"
+        assert started.message == "Poll interrupted by backend restart or deploy"
+        assert "interrupted_at" in started.payload
+        assert timeout.payload["timeout_seconds"] == 210
 
 
 class TestNotificationPreviewImage:

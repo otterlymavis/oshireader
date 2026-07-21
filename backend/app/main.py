@@ -39,7 +39,6 @@ from app.ingestion.scheduler import (
     connector_fetch_timeout_seconds,
     create_poll_task,
     poll_once,
-    queue_poll,
     scheduler,
     start_scheduler,
 )
@@ -75,6 +74,30 @@ _GNEWS_PROBE_QUERIES = {
     "twitter": "{keyword} site:x.com OR site:twitter.com",
     "yahoonews": "{keyword} site:news.yahoo.co.jp",
 }
+
+
+def _mark_abandoned_poll_events() -> int:
+    """Close poll markers left behind when a deploy interrupts the process."""
+    db_sess = SessionLocal()
+    try:
+        events = (
+            db_sess.query(BackendEvent)
+            .filter(BackendEvent.kind == "poll")
+            .filter(BackendEvent.status.in_(["started", "running_past_request_timeout"]))
+            .all()
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        for event in events:
+            payload = dict(event.payload or {})
+            payload["interrupted_at"] = now
+            event.status = "interrupted"
+            event.message = "Poll interrupted by backend restart or deploy"
+            event.payload = payload
+        if events:
+            db_sess.commit()
+        return len(events)
+    finally:
+        db_sess.close()
 
 
 def _backend_event_payload(event: BackendEvent) -> dict:
@@ -221,6 +244,7 @@ async def _initialize_backend_services() -> None:
     })
     try:
         await asyncio.to_thread(apply_startup_migrations, engine, run_cleanups=False)
+        await asyncio.to_thread(_mark_abandoned_poll_events)
         _startup_status["schema_migration"] = "completed"
         start_scheduler()
         _startup_status["scheduler"] = "running"

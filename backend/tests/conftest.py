@@ -62,10 +62,9 @@ def client(db_session):
     settings.admin_api_token = ""
     app.dependency_overrides[get_db] = _override_db
     try:
-        # The production lifespan queues an immediate ingestion poll. API tests
-        # need deterministic control of that global poll lock and mock polling
-        # explicitly when the endpoint behavior is under test.
-        with patch("app.main.queue_poll"), TestClient(
+        # Startup maintenance uses the app's default SessionLocal; API tests
+        # use an overridden session and keep startup side effects deterministic.
+        with patch("app.main._mark_abandoned_poll_events"), TestClient(
             app,
             raise_server_exceptions=False,
         ) as c:
