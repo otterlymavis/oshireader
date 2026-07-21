@@ -50,6 +50,11 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(messa
 
 log = logging.getLogger(__name__)
 _ADMIN_POLL_TIMEOUT_SECONDS = 210.0
+_startup_status = {
+    "schema_migration": "pending",
+    "scheduler": "pending",
+    "error": None,
+}
 
 _GNEWS_PROBE_QUERIES = {
     "news": "{keyword} when:10y",
@@ -207,6 +212,28 @@ def _record_poll_request_timeout(timeout_seconds: float) -> None:
         db_sess.close()
 
 
+async def _initialize_backend_services() -> None:
+    _startup_status.update({
+        "schema_migration": "running",
+        "scheduler": "pending",
+        "error": None,
+    })
+    try:
+        await asyncio.to_thread(apply_startup_migrations, engine, run_cleanups=False)
+        _startup_status["schema_migration"] = "completed"
+        start_scheduler()
+        _startup_status["scheduler"] = "running"
+        queue_poll()
+    except Exception as exc:
+        log.exception("Backend startup initialization failed")
+        _startup_status.update({
+            "error": f"{type(exc).__name__}: {exc}",
+            "scheduler": "failed",
+        })
+        if _startup_status.get("schema_migration") == "running":
+            _startup_status["schema_migration"] = "failed"
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     if not settings.admin_api_token:
@@ -220,11 +247,11 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
                 "ADMIN_API_TOKEN must be set. For local development only, set "
                 "ALLOW_UNAUTHENTICATED_ADMIN=true."
             )
-    apply_startup_migrations(engine, run_cleanups=False)
-    start_scheduler()
-    queue_poll()
+    startup_task = asyncio.create_task(_initialize_backend_services())
     yield
-    scheduler.shutdown()
+    startup_task.cancel()
+    if _startup_status.get("scheduler") == "running":
+        scheduler.shutdown()
 
 
 app = FastAPI(title="Otterpia", lifespan=lifespan)
@@ -244,7 +271,7 @@ app.include_router(devices.router)
 
 @app.get("/api/health")
 def health() -> dict:
-    payload = {"status": "ok"}
+    payload = {"status": "ok", "startup": dict(_startup_status)}
     if commit := os.getenv("RENDER_GIT_COMMIT"):
         payload["commit"] = commit
     return payload

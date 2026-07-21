@@ -23,7 +23,9 @@ class TestHealth:
     def test_health_returns_ok(self, client):
         r = client.get("/api/health")
         assert r.status_code == 200
-        assert r.json() == {"status": "ok"}
+        data = r.json()
+        assert data["status"] == "ok"
+        assert set(data["startup"]) == {"schema_migration", "scheduler", "error"}
 
     def test_health_accepts_head_checks(self, client):
         r = client.head("/api/health")
