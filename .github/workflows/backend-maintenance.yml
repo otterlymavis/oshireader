@@ -9,6 +9,7 @@ on:
         type: choice
         options:
           - disable-notifications-without-verified-devices
+          - prune-storage
 
 jobs:
   maintenance:
@@ -78,3 +79,20 @@ jobs:
               exit 1
             fi
           done < term-ids.txt
+
+      - name: Prune storage for test quota recovery
+        if: inputs.action == 'prune-storage'
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$BACKEND_URL/api/admin/maintenance/prune-storage?match_per_term_platform_limit=100&muted_per_term_limit=500&backend_event_keep=200&include_discussion_platforms=true" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+            --max-time 60)
+          echo "Prune response HTTP $STATUS"
+          cat "$BODY"
+          if [ "$STATUS" != "200" ]; then
+            exit 1
+          fi

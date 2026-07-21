@@ -1419,12 +1419,13 @@ def _prune_old_items(db) -> None:
     _prune_old_items_with_limit(db, muted_per_term_limit=_MUTED_FEED_ITEMS_PER_TERM_LIMIT)
 
 
-def _delete_orphan_source_items(db) -> None:
-    db.execute(sa_text(
+def _delete_orphan_source_items(db) -> int:
+    result = db.execute(sa_text(
         "DELETE FROM source_items "
         "WHERE id NOT IN (SELECT source_item_id FROM matches) "
         "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
     ))
+    return result.rowcount or 0
 
 
 def _prune_old_muted_feed_items(db, per_term_limit: int) -> int:
@@ -1447,9 +1448,17 @@ def _prune_old_muted_feed_items(db, per_term_limit: int) -> int:
     return result.rowcount or 0
 
 
-def _prune_old_items_with_limit(db, muted_per_term_limit: int) -> None:
+def _prune_old_items_with_limit(
+    db,
+    muted_per_term_limit: int,
+    match_per_term_platform_limit: int = 200,
+    include_discussion_platforms: bool = False,
+) -> dict[str, int]:
     try:
-        result = db.execute(sa_text("""
+        discussion_filter = "" if include_discussion_platforms else (
+            "WHERE si.platform NOT IN ('5ch', 'girlschannel', 'togetter')"
+        )
+        result = db.execute(sa_text(f"""
             DELETE FROM matches WHERE id IN (
                 SELECT id FROM (
                     SELECT m.id,
@@ -1459,20 +1468,68 @@ def _prune_old_items_with_limit(db, muted_per_term_limit: int) -> None:
                            ) AS rn
                     FROM matches m
                     JOIN source_items si ON si.id = m.source_item_id
-                    WHERE si.platform NOT IN ('5ch', 'girlschannel', 'togetter')
+                    {discussion_filter}
                 ) ranked
-                WHERE rn > 200
+                WHERE rn > :match_per_term_platform_limit
             )
-        """))
+        """), {"match_per_term_platform_limit": match_per_term_platform_limit})
         pruned = result.rowcount or 0
         muted_pruned = _prune_old_muted_feed_items(db, muted_per_term_limit)
+        orphan_source_items_pruned = 0
         if pruned or muted_pruned:
-            _delete_orphan_source_items(db)
+            orphan_source_items_pruned = _delete_orphan_source_items(db)
             db.commit()
-            log.info("Pruned %d old match records and %d muted feed items", pruned, muted_pruned)
+            log.info(
+                "Pruned %d old match records, %d muted feed items, and %d orphan source items",
+                pruned,
+                muted_pruned,
+                orphan_source_items_pruned,
+            )
+        return {
+            "matches_pruned": pruned,
+            "muted_feed_items_pruned": muted_pruned,
+            "orphan_source_items_pruned": orphan_source_items_pruned,
+        }
     except Exception as exc:
         log.warning("Prune failed: %s", exc)
         db.rollback()
+        return {
+            "matches_pruned": 0,
+            "muted_feed_items_pruned": 0,
+            "orphan_source_items_pruned": 0,
+        }
+
+
+def prune_storage(
+    db,
+    match_per_term_platform_limit: int = 100,
+    muted_per_term_limit: int = 500,
+    include_discussion_platforms: bool = True,
+    backend_event_keep: int = 200,
+) -> dict[str, int | bool]:
+    """Run quota-oriented storage pruning for manual maintenance."""
+    match_per_term_platform_limit = max(1, match_per_term_platform_limit)
+    muted_per_term_limit = max(0, muted_per_term_limit)
+    backend_event_keep = max(1, backend_event_keep)
+
+    event_count_before = db.query(BackendEvent).count()
+    summary = _prune_old_items_with_limit(
+        db,
+        muted_per_term_limit=muted_per_term_limit,
+        match_per_term_platform_limit=match_per_term_platform_limit,
+        include_discussion_platforms=include_discussion_platforms,
+    )
+    prune_backend_events(db, keep=backend_event_keep)
+    db.commit()
+    event_count_after = db.query(BackendEvent).count()
+    summary.update({
+        "backend_events_pruned": max(0, event_count_before - event_count_after),
+        "match_per_term_platform_limit": match_per_term_platform_limit,
+        "muted_per_term_limit": muted_per_term_limit,
+        "backend_event_keep": backend_event_keep,
+        "included_discussion_platforms": include_discussion_platforms,
+    })
+    return summary
 
 
 def start_scheduler() -> None:

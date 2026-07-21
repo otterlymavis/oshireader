@@ -15,7 +15,7 @@ from app.main import (
     _startup_status,
     database_operational_error_handler,
 )
-from app.models import APNSDeviceToken, BackendEvent, Match, PendingNotification, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, Match, MutedFeedItem, PendingNotification, SourceItem, WatchTerm
 
 
 class TestGetDb:
@@ -524,6 +524,72 @@ class TestAdminStats:
             "notify_on_new": True,
             "owner_scoped": True,
         }]
+
+
+class TestAdminMaintenance:
+    def test_prune_storage_caps_matches_muted_items_and_backend_events(self, client, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.flush()
+        now = datetime.now(timezone.utc)
+
+        for platform in ["youtube", "5ch"]:
+            for index in range(3):
+                item = SourceItem(
+                    id=f"{platform}:{index}",
+                    platform=platform,
+                    item_id=str(index),
+                    url=f"https://example.com/{platform}/{index}",
+                    published_at=now - timedelta(days=index),
+                )
+                db_session.add(item)
+                db_session.flush()
+                db_session.add(Match(watch_term_id=term.id, source_item_id=item.id))
+
+        for index in range(2):
+            item = SourceItem(
+                id=f"muted:{index}",
+                platform="youtube",
+                item_id=f"muted-{index}",
+                url=f"https://example.com/muted/{index}",
+                published_at=now - timedelta(days=index),
+            )
+            db_session.add(item)
+            db_session.flush()
+            db_session.add(MutedFeedItem(watch_term_id=term.id, source_item_id=item.id))
+
+        for index in range(4):
+            db_session.add(BackendEvent(
+                kind="poll",
+                status="completed",
+                message="poll",
+                payload={"index": index},
+                created_at=now - timedelta(minutes=index),
+            ))
+        db_session.commit()
+
+        r = client.post(
+            "/api/admin/maintenance/prune-storage"
+            "?match_per_term_platform_limit=1"
+            "&muted_per_term_limit=1"
+            "&backend_event_keep=2"
+            "&include_discussion_platforms=true"
+        )
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "storage pruned"
+        assert data["matches_pruned"] == 4
+        assert data["muted_feed_items_pruned"] == 1
+        assert data["orphan_source_items_pruned"] == 5
+        assert data["backend_events_pruned"] == 2
+        assert data["included_discussion_platforms"] is True
+        remaining_matches = db_session.query(Match).all()
+        remaining_source_ids = {match.source_item_id for match in remaining_matches}
+        assert remaining_source_ids == {"youtube:0", "5ch:0"}
+        assert db_session.query(MutedFeedItem).count() == 1
+        assert db_session.query(SourceItem).count() == 3
+        assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 1
 
 
 class TestAdminPoll:

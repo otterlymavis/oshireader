@@ -39,6 +39,7 @@ from app.ingestion.scheduler import (
     connector_fetch_timeout_seconds,
     create_poll_task,
     poll_once,
+    prune_storage,
     scheduler,
     start_scheduler,
 )
@@ -434,6 +435,33 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
             status_code=500,
             detail={"status": "poll failed", "error": str(exc), "traceback": trace},
         )
+
+
+@app.post("/api/admin/maintenance/prune-storage")
+def prune_storage_maintenance(
+    match_per_term_platform_limit: int = Query(100, ge=1, le=1000),
+    muted_per_term_limit: int = Query(500, ge=0, le=10000),
+    backend_event_keep: int = Query(200, ge=1, le=5000),
+    include_discussion_platforms: bool = Query(True),
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    summary = prune_storage(
+        db,
+        match_per_term_platform_limit=match_per_term_platform_limit,
+        muted_per_term_limit=muted_per_term_limit,
+        include_discussion_platforms=include_discussion_platforms,
+        backend_event_keep=backend_event_keep,
+    )
+    record_backend_event(
+        db,
+        "maintenance",
+        "completed",
+        "Storage pruning completed",
+        summary,
+    )
+    db.commit()
+    return {"status": "storage pruned", **summary}
 
 
 @app.get("/api/admin/test-fetch")

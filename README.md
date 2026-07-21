@@ -201,6 +201,26 @@ OSHI_READER_RUN_LIVE_UI_TESTS=1 xcodebuild test \
 ### Diagnostics API
 The FastAPI backend serves diagnostics and stats at `/api/admin/stats`. This helps developers verify APNs device registration counts, recent logging events, active watch terms, and token configurations.
 
+### Test-Phase Database Quota Recovery
+Before upgrading the hosted database, keep the test backend small by limiting poll
+fan-out and pruning retained feed history:
+
+- Keep `POLL_TERMS_PER_RUN=1` and `CONNECTOR_CONCURRENCY=1` on small/free test
+  deployments.
+- Run the GitHub `Backend maintenance` workflow with the `prune-storage` action,
+  or call:
+
+```bash
+curl -X POST \
+  "$BACKEND_URL/api/admin/maintenance/prune-storage?match_per_term_platform_limit=100&muted_per_term_limit=500&backend_event_keep=200&include_discussion_platforms=true" \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
+```
+
+The prune action caps retained matches per watch term and platform, trims muted
+feed-item history, removes orphaned source rows, and keeps only recent backend
+diagnostic events. It preserves watch terms, device tokens, credentials, and the
+newest retained feed items.
+
 ---
 
 ## 📄 License & Privacy
