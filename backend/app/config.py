@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -25,6 +26,13 @@ class Settings(BaseSettings):
     source_5ch_proxy_url: str = "https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/fivech-proxy"
 
     model_config = {"env_file": ".env"}
+
+    @field_validator("database_url")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        if value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql://", 1)
+        return value
 
     @property
     def cors_origins(self) -> list[str]:

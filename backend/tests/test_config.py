@@ -1,4 +1,4 @@
-"""Tests for the Settings.cors_origins computed property."""
+"""Tests for backend settings helpers."""
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -33,3 +33,17 @@ class TestCorsOrigins:
     def test_whitespace_only_value_returns_empty_list(self):
         s = self._settings("   ")
         assert s.cors_origins == []
+
+
+class TestDatabaseUrl:
+    def test_postgres_scheme_is_normalized_for_sqlalchemy(self):
+        s = Settings(database_url="postgres://user:pass@example.com:5432/defaultdb")
+        assert s.database_url == "postgresql://user:pass@example.com:5432/defaultdb"
+
+    def test_postgresql_scheme_is_preserved(self):
+        s = Settings(database_url="postgresql://user:pass@example.com:5432/defaultdb")
+        assert s.database_url == "postgresql://user:pass@example.com:5432/defaultdb"
+
+    def test_sqlite_scheme_is_preserved(self):
+        s = Settings(database_url="sqlite:///./otterpia.db")
+        assert s.database_url == "sqlite:///./otterpia.db"
