@@ -26,6 +26,27 @@ extension NetworkManager {
         return result
     }
 
+    private func createWatchTermForAutomaticSync(_ term: WatchTerm) async throws -> WatchTerm {
+        let notifyOnNew = Self.automaticSyncNotifyOnNewCreate(localTerm: term)
+        do {
+            return try await createWatchTerm(
+                keyword: term.keyword,
+                collectionMode: term.collection_mode,
+                notifyOnNew: notifyOnNew,
+                isActive: term.is_active,
+                aliases: term.aliases
+            )
+        } catch let error as URLError where notifyOnNew && error.code == .badServerResponse {
+            return try await createWatchTerm(
+                keyword: term.keyword,
+                collectionMode: term.collection_mode,
+                notifyOnNew: false,
+                isActive: term.is_active,
+                aliases: term.aliases
+            )
+        }
+    }
+
     func fetchWatchTerms() async throws -> [WatchTerm] {
         try await apiRequest(
             URL(string: "\(apiBase)/api/watch-terms/")!,
@@ -75,13 +96,7 @@ extension NetworkManager {
                     await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
                     if needsUpdate { succeeded = false }
                 }
-            } else if let serverTerm = try? await createWatchTerm(
-                keyword: term.keyword,
-                collectionMode: term.collection_mode,
-                notifyOnNew: Self.automaticSyncNotifyOnNewCreate(localTerm: term),
-                isActive: term.is_active,
-                aliases: term.aliases
-            ) {
+            } else if let serverTerm = try? await createWatchTermForAutomaticSync(term) {
                 await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
             } else {
                 succeeded = false

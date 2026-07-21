@@ -4279,6 +4279,69 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncWatchTermsRetriesCreateMutedWhenNotificationsNeedVerifiedDevice() async throws {
+        let keyword = "Sync Create Muted \(UUID().uuidString)"
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: ["Alias"],
+            repaired_from_cache: true
+        )
+        let createdTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: false,
+            aliases: ["Alias"]
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(repairedTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let emptyBackendData = try JSONEncoder().encode([WatchTerm]())
+        let createdData = try JSONEncoder().encode(createdTerm)
+        var requestedMethodsAndPaths: [String] = []
+        var capturedNotifyValues: [Bool] = []
+        MockURLProtocol.handler = { request in
+            requestedMethodsAndPaths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (emptyBackendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "POST" {
+                if let body = request.httpBody,
+                   let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                   let notifyOnNew = parsed["notify_on_new"] as? Bool {
+                    capturedNotifyValues.append(notifyOnNew)
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
+                if capturedNotifyValues == [true] {
+                    return (Data("{\"detail\":\"Notification-enabled watch terms require a verified APNs device\"}".utf8), Self.response(status: 409))
+                }
+                return (createdData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(
+            requestedMethodsAndPaths,
+            ["GET /api/watch-terms", "POST /api/watch-terms", "POST /api/watch-terms"]
+        )
+        XCTAssertEqual(capturedNotifyValues, [true, false])
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+        XCTAssertFalse(syncedTerm?.repaired_from_cache ?? true)
+    }
+
+    @MainActor
     func testSyncWatchTermsPatchesNormalLocalTermWhenBackendDiffers() async throws {
         let keyword = "Sync Patch \(UUID().uuidString)"
         let localTerm = WatchTerm(
