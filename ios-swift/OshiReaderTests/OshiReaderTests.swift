@@ -93,6 +93,46 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(db.feedItems.isEmpty)
     }
 
+    func testDeleteTermAlsoRemovesFeedItemsMatchingBackendWatchTermID() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
+        db.addTermFromBackend(term)
+        db.feedItems = [
+            FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
+                     title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Aiko old",
+                     watch_term_id: 42, fetched_at: now),
+            FeedItem(id: "youtube:2", platform: "youtube", url: "https://u/2",
+                     title: "Haruka video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Haruka",
+                     watch_term_id: 43, fetched_at: now),
+        ]
+
+        db.deleteTerm(id: term.id)
+
+        XCTAssertEqual(db.feedItems.map(\.id), ["youtube:2"])
+    }
+
+    func testQueryFeedExcludesCachedItemsForDeletedTerms() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Haruka", collectionMode: .allInfo)
+        db.feedItems = [
+            FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
+                     title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Aiko",
+                     fetched_at: now),
+            FeedItem(id: "youtube:2", platform: "youtube", url: "https://u/2",
+                     title: "Haruka video", content_text: nil, author: nil, thumbnail_url: nil,
+                     media_type: "video", published_at: now, watch_term_keyword: "Haruka",
+                     fetched_at: now),
+        ]
+
+        let results = db.queryFeed(keyword: nil, days: 30)
+
+        XCTAssertEqual(results.map(\.watch_term_keyword), ["Haruka"])
+    }
+
     func testMergePreservesBackendWatchTermID() throws {
         let now = ISO8601DateFormatter().string(from: Date())
         db.setSubscribedPlatforms(platforms: ["youtube"])
@@ -267,6 +307,112 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(merged.content_text, "全文テキスト")
         XCTAssertEqual(merged.author, "News Corp")
         XCTAssertEqual(merged.thumbnail_url, "https://img.example.com/1.jpg")
+    }
+
+    func testMergeReplacesBackendMatchRedirectWithSourceURL() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let preview = FeedItem(
+            id: "youtube:redirected",
+            platform: "youtube",
+            url: "https://backend.example.com/api/feed/matches/99/redirect",
+            title: "Preview video",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+        let backendFeedItem = FeedItem(
+            id: "youtube:redirected",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=redirected",
+            title: "Preview video",
+            content_text: "Full description",
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+
+        _ = db.mergeItems(newItems: [preview])
+        _ = db.mergeItems(newItems: [backendFeedItem])
+
+        XCTAssertEqual(db.feedItems.first?.url, "https://youtube.com/watch?v=redirected")
+        XCTAssertEqual(db.feedItems.first?.content_text, "Full description")
+    }
+
+    func testMergeKeepsExistingSourceURLWhenIncomingURLIsBackendMatchRedirect() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let source = FeedItem(
+            id: "youtube:stable",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=stable",
+            title: "Stable video",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+        let preview = FeedItem(
+            id: "youtube:stable",
+            platform: "youtube",
+            url: "https://backend.example.com/api/feed/matches/101/redirect",
+            title: "Stable video",
+            content_text: "Preview details",
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+
+        _ = db.mergeItems(newItems: [source])
+        _ = db.mergeItems(newItems: [preview])
+
+        XCTAssertEqual(db.feedItems.first?.url, "https://youtube.com/watch?v=stable")
+        XCTAssertEqual(db.feedItems.first?.content_text, "Preview details")
+    }
+
+    func testQueryFeedExcludesBackendMatchRedirectItems() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let redirectOnly = FeedItem(
+            id: "youtube:redirect-only",
+            platform: "youtube",
+            url: "https://backend.example.com/api/feed/matches/102/redirect",
+            title: "Redirect-only video",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+        let stable = FeedItem(
+            id: "youtube:stable-visible",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=stable-visible",
+            title: "Stable video",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+
+        _ = db.mergeItems(newItems: [redirectOnly, stable])
+
+        XCTAssertEqual(db.queryFeed(keyword: nil, days: 30).map(\.id), ["youtube:stable-visible"])
     }
 
     func testMergeSearchFallbackItemsAreDropped() throws {
@@ -724,6 +870,80 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordRefreshCompleted(at: recentCompletion)
 
         XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now))
+    }
+
+    func testBackendPollTriggerUsesLongQuotaFriendlyThrottle() {
+        let now = Date(timeIntervalSince1970: 20_000)
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now, lastTriggeredAt: nil)
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(
+                now: now,
+                lastTriggeredAt: now.addingTimeInterval(-60 * 60)
+            ),
+            "App-triggered backend polls should stay throttled after one hour."
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(
+                now: now,
+                lastTriggeredAt: now.addingTimeInterval(-BackgroundRefreshPolicy.backendPollTriggerInterval)
+            )
+        )
+
+        BackgroundRefreshPolicy.recordBackendPollTriggered(at: now)
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60))
+        )
+    }
+
+    func testFeedScopeInvalidationPreservesBackendPollTriggerThrottle() {
+        let now = Date(timeIntervalSince1970: 30_000)
+
+        BackgroundRefreshPolicy.recordBackendPollTriggered(at: now)
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60)),
+            "Feed-scope changes should not allow another backend poll before the quota-friendly interval."
+        )
+    }
+
+    func testBackendPollAttemptConsumesThrottleBeforeRequestOutcome() {
+        let now = Date(timeIntervalSince1970: 40_000)
+
+        XCTAssertTrue(BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(now: now))
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60)),
+            "A failed backend request should still consume the app-side poll attempt window."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(now: now.addingTimeInterval(60 * 60))
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(
+                now: now.addingTimeInterval(BackgroundRefreshPolicy.backendPollTriggerInterval)
+            )
+        )
+    }
+
+    func testBackendPollAttemptRequiresActiveTerms() {
+        let now = Date(timeIntervalSince1970: 50_000)
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(hasActiveTerms: false, now: now)
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60)),
+            "A no-work foreground fallback must not consume the backend poll trigger window."
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(hasActiveTerms: true, now: now)
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60))
+        )
     }
 
     func testBackgroundCompletionClearsDirtyForBackendOnlyScope() {
@@ -1669,13 +1889,27 @@ final class OshiReaderTests: XCTestCase {
             title: "Evicted", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
         )
+        let redirectOnly = FeedItem(
+            id: "youtube:redirect-only",
+            platform: "youtube",
+            url: "https://backend.example.com/api/feed/matches/102/redirect",
+            title: "Redirect-only",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
 
         let candidates = BackgroundRefreshPolicy.notificationItems(
-            incoming: [existing, fresh, fresh, evicted],
+            incoming: [existing, fresh, fresh, evicted, redirectOnly],
             existingKeys: [BackgroundRefreshPolicy.itemKey(existing)],
             survivingKeys: [
                 BackgroundRefreshPolicy.itemKey(existing),
                 BackgroundRefreshPolicy.itemKey(fresh),
+                BackgroundRefreshPolicy.itemKey(redirectOnly),
             ]
         )
 
@@ -2028,6 +2262,41 @@ final class OshiReaderTests: XCTestCase {
             ),
             "2026-06-18T10:45:00Z"
         )
+    }
+
+    func testIncrementalSinceIgnoresBackendMatchRedirectItems() throws {
+        let redirectOnly = FeedItem(
+            id: "youtube:redirect-cursor",
+            platform: "youtube",
+            url: "https://backend.example.com/api/feed/matches/103/redirect",
+            title: "Redirect cursor",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: "2026-06-18T11:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-18T12:30:00Z"
+        )
+        let stable = FeedItem(
+            id: "youtube:stable-cursor",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=stable-cursor",
+            title: "Stable cursor",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: "2026-06-18T10:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-18T11:15:00Z"
+        )
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.incrementalSince(in: [redirectOnly, stable]),
+            "2026-06-18T11:00:00Z"
+        )
+        XCTAssertNil(BackgroundRefreshPolicy.incrementalSince(in: [redirectOnly]))
     }
 
     @MainActor
@@ -4019,6 +4288,17 @@ final class NetworkManagerTests: XCTestCase {
         HTTPURLResponse(url: mockURL, statusCode: status, httpVersion: nil, headerFields: nil)!
     }
 
+    func testAPIClientHTTPStatusLocalizedDescriptionIncludesDetail() {
+        XCTAssertEqual(
+            APIClientError.httpStatus(409, detail: "A watch term with this keyword already exists").localizedDescription,
+            "HTTP 409: A watch term with this keyword already exists"
+        )
+        XCTAssertEqual(
+            APIClientError.httpStatus(500, detail: "  ").localizedDescription,
+            "HTTP 500"
+        )
+    }
+
     // 200 OK with valid JSON → decodes cleanly
     func testFetchWatchTermsSuccess() async throws {
         let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
@@ -4030,15 +4310,15 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(terms.first?.keyword, "Aiko")
     }
 
-    // 4xx response → throws URLError(.badServerResponse)
+    // 4xx response -> preserves HTTP status
     func testFetchWatchTerms404Throws() async throws {
         MockURLProtocol.handler = { _ in (Data(), Self.response(status: 404)) }
 
         do {
             _ = try await NetworkManager.shared.fetchWatchTerms()
             XCTFail("Expected error not thrown")
-        } catch let error as URLError {
-            XCTAssertEqual(error.code, .badServerResponse)
+        } catch APIClientError.httpStatus(let status, _) {
+            XCTAssertEqual(status, 404)
         }
     }
 
@@ -4054,15 +4334,15 @@ final class NetworkManagerTests: XCTestCase {
         }
     }
 
-    // 5xx response → throws URLError(.badServerResponse)
+    // 5xx response -> preserves HTTP status
     func testFetchFeed500Throws() async throws {
         MockURLProtocol.handler = { _ in (Data(), Self.response(status: 500)) }
 
         do {
             _ = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
             XCTFail("Expected error not thrown")
-        } catch let error as URLError {
-            XCTAssertEqual(error.code, .badServerResponse)
+        } catch APIClientError.httpStatus(let status, _) {
+            XCTAssertEqual(status, 500)
         }
     }
 
@@ -4342,6 +4622,100 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncWatchTermsDoesNotRetryMutedAfterDuplicateConflict() async throws {
+        let keyword = "Sync Create Duplicate \(UUID().uuidString)"
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: ["Alias"],
+            repaired_from_cache: true
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(repairedTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let emptyBackendData = try JSONEncoder().encode([WatchTerm]())
+        var requestedMethodsAndPaths: [String] = []
+        var capturedNotifyValues: [Bool] = []
+        MockURLProtocol.handler = { request in
+            requestedMethodsAndPaths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (emptyBackendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "POST" {
+                if let body = request.httpBody,
+                   let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                   let notifyOnNew = parsed["notify_on_new"] as? Bool {
+                    capturedNotifyValues.append(notifyOnNew)
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
+                return (Data("{\"detail\":\"A watch term with this keyword already exists\"}".utf8), Self.response(status: 409))
+            }
+            XCTFail("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
+
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
+        XCTAssertEqual(capturedNotifyValues, [true])
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.notify_on_new, true)
+        XCTAssertTrue(syncedTerm?.repaired_from_cache ?? false)
+    }
+
+    @MainActor
+    func testSyncWatchTermsDoesNotRetryMutedAfterServerError() async throws {
+        let keyword = "Sync Create Server Error \(UUID().uuidString)"
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: ["Alias"],
+            repaired_from_cache: true
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(repairedTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let emptyBackendData = try JSONEncoder().encode([WatchTerm]())
+        var requestedMethodsAndPaths: [String] = []
+        var capturedNotifyValues: [Bool] = []
+        MockURLProtocol.handler = { request in
+            requestedMethodsAndPaths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (emptyBackendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "POST" {
+                if let body = request.httpBody,
+                   let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                   let notifyOnNew = parsed["notify_on_new"] as? Bool {
+                    capturedNotifyValues.append(notifyOnNew)
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
+                return (Data("{\"detail\":\"temporary backend failure\"}".utf8), Self.response(status: 500))
+            }
+            XCTFail("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
+
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
+        XCTAssertEqual(capturedNotifyValues, [true])
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.notify_on_new, true)
+        XCTAssertTrue(syncedTerm?.repaired_from_cache ?? false)
+    }
+
+    @MainActor
     func testSyncWatchTermsPatchesNormalLocalTermWhenBackendDiffers() async throws {
         let keyword = "Sync Patch \(UUID().uuidString)"
         let localTerm = WatchTerm(
@@ -4615,6 +4989,7 @@ final class NetworkManagerTests: XCTestCase {
         let items = try await NetworkManager.shared.fetchFeed(limit: 10, days: 7)
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items.first?.id, "youtube:test123")
+        XCTAssertEqual(items.first?.url, "https://youtu.be/test123")
         XCTAssertEqual(items.first?.watch_term_keyword, "Aiko")
         XCTAssertEqual(items.first?.watch_term_id, 2)
         XCTAssertEqual(items.first?.media_type, "video")
@@ -4820,13 +5195,35 @@ final class NetworkManagerTests: XCTestCase {
         do {
             _ = try await NetworkManager.shared.sendRemoteTestPush()
             XCTFail("Expected APIClientError not thrown")
-        } catch APIClientError.httpStatus(let status) {
+        } catch APIClientError.httpStatus(let status, _) {
             XCTAssertEqual(status, 404)
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
 
         XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceToken)
+    }
+
+    func testSendRemoteTestPushPreservesBackendErrorDetail() async throws {
+        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
+        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
+        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
+        MockURLProtocol.handler = { _ in
+            (
+                Data(#"{"detail":"APNs provider quota exceeded"}"#.utf8),
+                Self.response(status: 500)
+            )
+        }
+
+        do {
+            _ = try await NetworkManager.shared.sendRemoteTestPush()
+            XCTFail("Expected APIClientError not thrown")
+        } catch APIClientError.httpStatus(let status, let detail) {
+            XCTAssertEqual(status, 500)
+            XCTAssertEqual(detail, "APNs provider quota exceeded")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     func testSendRemoteTestPushFallsBackToDeviceScopedEndpointWithoutStoredToken() async throws {
@@ -4936,15 +5333,17 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(capturedTimeout, 90)
     }
 
-    // triggerPoll propagates server error as URLError
+    // triggerPoll preserves server HTTP status
     func testTriggerPoll500Throws() async throws {
         MockURLProtocol.handler = { _ in (Data(), Self.response(status: 500)) }
 
         do {
             try await NetworkManager.shared.triggerPoll()
-            XCTFail("Expected URLError not thrown")
+            XCTFail("Expected APIClientError not thrown")
+        } catch APIClientError.httpStatus(let status, _) {
+            XCTAssertEqual(status, 500)
         } catch {
-            XCTAssertTrue(error is URLError)
+            XCTFail("Unexpected error: \(error)")
         }
     }
 
@@ -5014,7 +5413,7 @@ final class NetworkManagerTests: XCTestCase {
         )
     }
 
-    func testTriggerBackgroundPollFallsBackToAdminPollWhenDeviceEndpointFails() async throws {
+    func testTriggerBackgroundPollDoesNotUseAdminFallbackWhenDeviceEndpointFails() async {
         NetworkManager.shared.setAdminApiToken("admin-secret")
         defer { NetworkManager.shared.setAdminApiToken(nil) }
 
@@ -5030,11 +5429,13 @@ final class NetworkManagerTests: XCTestCase {
             return (Data(), Self.response(status: 200))
         }
 
-        try await NetworkManager.shared.triggerBackgroundPoll(timeout: 12)
-
-        XCTAssertEqual(paths, ["/api/devices/background-refresh", "/api/admin/poll"])
-        XCTAssertNil(authHeaders.first ?? nil)
-        XCTAssertEqual(authHeaders.last ?? nil, "Bearer admin-secret")
+        do {
+            try await NetworkManager.shared.triggerBackgroundPoll(timeout: 12)
+            XCTFail("Expected background refresh failure")
+        } catch {
+            XCTAssertEqual(paths, ["/api/devices/background-refresh"])
+            XCTAssertNil(authHeaders.first ?? nil)
+        }
     }
 
     func testTriggerBackgroundPollDoesNotAttemptAdminFallbackWithoutCredential() async {
@@ -5050,6 +5451,26 @@ final class NetworkManagerTests: XCTestCase {
             XCTFail("Expected background refresh failure")
         } catch {
             XCTAssertEqual(paths, ["/api/devices/background-refresh"])
+        }
+    }
+
+    func testTriggerBackgroundPollPreservesBackendErrorDetail() async {
+        NetworkManager.shared.setAdminApiToken(nil)
+        MockURLProtocol.handler = { _ in
+            (
+                Data("{\"detail\":\"database quota exceeded while starting poll\"}".utf8),
+                Self.response(status: 500)
+            )
+        }
+
+        do {
+            try await NetworkManager.shared.triggerBackgroundPoll(timeout: 8)
+            XCTFail("Expected background refresh failure")
+        } catch APIClientError.httpStatus(let status, let detail) {
+            XCTAssertEqual(status, 500)
+            XCTAssertEqual(detail, "database quota exceeded while starting poll")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
         }
     }
 

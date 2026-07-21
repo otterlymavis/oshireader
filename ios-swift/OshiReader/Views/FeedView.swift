@@ -805,6 +805,7 @@ struct FeedView: View {
             fallbackPlatforms: fallbackPlatformsNeedingDevice
         ))
         guard !Task.isCancelled else { return }
+        clearRefreshErrorIfLocalFeedIsUsable(report)
         recordCompletedRefreshCheckIfNeeded(report, feedScopeRevision: feedScopeRevision)
         await sendNoResultsDiagnosticIfNeeded(report)
     }
@@ -966,15 +967,30 @@ struct FeedView: View {
     // If the backend returned nothing, also kick its scheduler for the next pull.
     private func deepFallback(triggerBackendPoll: Bool, fallbackPlatforms: Set<String>) async -> FeedRefreshReport {
         var report = FeedRefreshReport()
+        let activeTerms = db.terms.filter { $0.is_active }
         if triggerBackendPoll {
-            do {
-                try await NetworkManager.shared.triggerBackgroundPoll(timeout: 45)
-                report.record(strategy: "backend_poll", status: "ok")
-            } catch {
+            if activeTerms.isEmpty {
                 report.record(
                     strategy: "backend_poll",
-                    status: "failed",
-                    detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
+                    status: "skipped",
+                    detail: "no active terms"
+                )
+            } else if BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(hasActiveTerms: true) {
+                do {
+                    try await NetworkManager.shared.triggerBackgroundPoll(timeout: 45)
+                    report.record(strategy: "backend_poll", status: "ok")
+                } catch {
+                    report.record(
+                        strategy: "backend_poll",
+                        status: "failed",
+                        detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
+                    )
+                }
+            } else {
+                report.record(
+                    strategy: "backend_poll",
+                    status: "throttled",
+                    detail: "last app-triggered poll is still fresh"
                 )
             }
             do {
@@ -996,7 +1012,6 @@ struct FeedView: View {
                 )
             }
         }
-        let activeTerms = db.terms.filter { $0.is_active }
         guard !activeTerms.isEmpty else {
             report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no active terms")
             return report
@@ -1104,9 +1119,17 @@ struct FeedView: View {
         await NetworkManager.shared.sendClientDiagnostic(diagnostic)
     }
 
+    private func clearRefreshErrorIfLocalFeedIsUsable(_ report: FeedRefreshReport) {
+        guard refreshErrorMessage != nil else { return }
+        if report.addedCount > 0 || !cachedFilteredItems.isEmpty || !db.feedItems.isEmpty {
+            refreshErrorMessage = nil
+        }
+    }
+
     // Returns a short machine-readable category string for log triage.
     private static func refreshErrorKind(_ error: Error) -> String {
         if error is DecodingError { return "decode" }
+        if case APIClientError.httpStatus(let status, _) = error { return "http_\(status)" }
         guard let e = error as? URLError else { return "unknown" }
         switch e.code {
         case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed: return "offline"
@@ -1120,6 +1143,7 @@ struct FeedView: View {
     // Returns an i18n key for the error banner (resolved via i18n.t() at display time).
     private static func refreshErrorLabel(_ error: Error) -> String {
         if error is DecodingError { return "errorDecode" }
+        if case APIClientError.httpStatus(_, _) = error { return "errorUnavailable" }
         guard let e = error as? URLError else { return "errorRefreshFailed" }
         switch e.code {
         case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:

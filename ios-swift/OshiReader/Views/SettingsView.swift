@@ -472,18 +472,13 @@ struct SettingsView: View {
 
     private func deleteTermFromSettings(_ term: WatchTerm) {
         if addingAliasForId == term.id { addingAliasForId = nil }
+        db.markTermDeleteConfirmed(term)
+        db.deleteTerm(id: term.id)
         Task {
             do {
                 try await NetworkManager.shared.deleteWatchTermIfSynced(term)
-                await MainActor.run {
-                    db.markTermDeleteConfirmed(term)
-                    db.deleteTerm(id: term.id)
-                }
             } catch {
-                await MainActor.run {
-                    AppLogger.network.error("deleteWatchTerm(\(term.id)) failed from Settings: \(error.localizedDescription)")
-                    settingsErrorMessage = i18n.t("errorStopFollowingFailed")
-                }
+                AppLogger.network.warning("deleteWatchTerm(\(term.id)) failed after local Settings delete: \(error.localizedDescription)")
             }
         }
     }
@@ -528,7 +523,7 @@ struct SettingsView: View {
                 return
             }
         } catch {
-            if case APIClientError.httpStatus(404) = error {
+            if case APIClientError.httpStatus(404, _) = error {
                 if remoteRegistrationReady, await retryRemoteTestAfterTokenRefresh() {
                     return
                 }
@@ -547,8 +542,8 @@ struct SettingsView: View {
     }
 
     private func remoteTestDiagnostic(_ error: Error) -> String {
-        if case APIClientError.httpStatus(let status) = error {
-            return "HTTP \(status)"
+        if let apiError = error as? APIClientError {
+            return apiError.localizedDescription
         }
         return String(describing: error)
     }

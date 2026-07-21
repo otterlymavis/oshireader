@@ -70,6 +70,22 @@ final class OshiReaderUITests: XCTestCase {
         assertReaderLoadedWithoutFallbackBanner()
     }
 
+    func testOpenReaderFromFeedSkipsStaleBackendMatchRedirect() throws {
+        app.terminate()
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-redirect-feed"])
+        app.launch()
+
+        tapTab(index: 0, labels: ["Feed"])
+
+        XCTAssertFalse(app.staticTexts["UITest Oshi stale redirect headline"].waitForExistence(timeout: 2))
+        let headline = app.staticTexts["UITest Oshi stable headline"]
+        XCTAssertTrue(headline.waitForExistence(timeout: 3))
+        (firstExistingButton(containing: "UITest Oshi stable headline") ?? headline).tap()
+
+        XCTAssertNotNil(waitForButton(identifier: "reader.modeToggleButton", timeout: 10))
+        assertReaderLoadedWithoutFallbackBanner()
+    }
+
     func testStopFollowingFromFeedCard() throws {
         tapTab(index: 0, labels: ["Feed"])
 

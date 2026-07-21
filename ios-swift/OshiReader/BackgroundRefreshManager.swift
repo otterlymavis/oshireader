@@ -48,9 +48,11 @@ enum BackgroundRefreshPolicy {
     static let pollTimeout: TimeInterval = 8
     static let incrementalFetchOverlap: TimeInterval = 15 * 60
     static let foregroundRefreshStaleAfter: TimeInterval = 5 * 60
+    static let backendPollTriggerInterval: TimeInterval = 170 * 60
     static let minimumLocalRefreshWindow: TimeInterval = 3
     private static let lastForegroundCompletedRefreshAtKey = "background_refresh.foreground_completed_at"
     private static let lastBackendCompletedRefreshAtKey = "background_refresh.backend_completed_at"
+    private static let lastBackendPollTriggeredAtKey = "background_refresh.backend_poll_triggered_at"
     private static let feedScopeNeedsRefreshKey = "background_refresh.feed_scope_needs_refresh"
     private static let feedScopeRevisionKey = "background_refresh.feed_scope_revision"
 
@@ -68,6 +70,10 @@ enum BackgroundRefreshPolicy {
 
     private static var lastBackendRefreshCompletedAt: Date? {
         date(forKey: lastBackendCompletedRefreshAtKey)
+    }
+
+    private static var lastBackendPollTriggeredAt: Date? {
+        date(forKey: lastBackendPollTriggeredAtKey)
     }
 
     private static var lastAnyRefreshCompletedAt: Date? {
@@ -102,6 +108,10 @@ enum BackgroundRefreshPolicy {
 
     static func recordBackendRefreshCompleted(at date: Date = Date()) {
         UserDefaults.standard.set(date.timeIntervalSince1970, forKey: lastBackendCompletedRefreshAtKey)
+    }
+
+    static func recordBackendPollTriggered(at date: Date = Date()) {
+        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: lastBackendPollTriggeredAtKey)
     }
 
     static func recordBackgroundRefreshCompleted(
@@ -147,6 +157,7 @@ enum BackgroundRefreshPolicy {
 
     static func clearRecordedRefreshCompletionsForTesting() {
         clearRecordedRefreshCompletions()
+        UserDefaults.standard.removeObject(forKey: lastBackendPollTriggeredAtKey)
         UserDefaults.standard.removeObject(forKey: feedScopeRevisionKey)
     }
 
@@ -179,6 +190,7 @@ enum BackgroundRefreshPolicy {
     ) -> [FeedItem] {
         var itemsByKey: [String: FeedItem] = [:]
         for item in incoming {
+            if FeedURLPolicy.isBackendMatchRedirectURL(item.url) { continue }
             let key = itemKey(item)
             if !existingKeys.contains(key), survivingKeys.contains(key) {
                 itemsByKey[key] = item
@@ -202,6 +214,28 @@ enum BackgroundRefreshPolicy {
             return false
         }
         return true
+    }
+
+    static func shouldTriggerBackendPoll(
+        now: Date = Date(),
+        lastTriggeredAt: Date? = lastBackendPollTriggeredAt
+    ) -> Bool {
+        guard let lastTriggeredAt else { return true }
+        return now.timeIntervalSince(lastTriggeredAt) >= backendPollTriggerInterval
+    }
+
+    static func recordBackendPollAttemptIfDue(now: Date = Date()) -> Bool {
+        guard shouldTriggerBackendPoll(now: now) else { return false }
+        recordBackendPollTriggered(at: now)
+        return true
+    }
+
+    static func recordBackendPollAttemptIfDue(
+        hasActiveTerms: Bool,
+        now: Date = Date()
+    ) -> Bool {
+        guard hasActiveTerms else { return false }
+        return recordBackendPollAttemptIfDue(now: now)
     }
 
     static func shouldMergePreviewBeforeRefresh(forRemoteNotification userInfo: [AnyHashable: Any]) -> Bool {
@@ -232,6 +266,7 @@ enum BackgroundRefreshPolicy {
         if Platform.normalize(item.platform) == "custom" { return false }
         if item.id.contains(":gnews:") { return false }
         if item.id.hasPrefix("news:nhk:") { return false }
+        if FeedURLPolicy.isBackendMatchRedirectURL(item.url) { return false }
         return true
     }
 
@@ -872,10 +907,14 @@ final class BackgroundRefreshManager {
                 return completion
             }
 
-            do {
-                try await NetworkManager.shared.triggerBackgroundPoll(timeout: BackgroundRefreshPolicy.pollTimeout)
-            } catch {
-                AppLogger.network.warning("Background poll trigger failed: \(error.localizedDescription)")
+            if BackgroundRefreshPolicy.recordBackendPollAttemptIfDue() {
+                do {
+                    try await NetworkManager.shared.triggerBackgroundPoll(timeout: BackgroundRefreshPolicy.pollTimeout)
+                } catch {
+                    AppLogger.network.warning("Background poll trigger failed: \(error.localizedDescription)")
+                }
+            } else {
+                AppLogger.network.notice("Background poll trigger skipped because the last app-triggered poll is still fresh")
             }
         } else {
             completion.feedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
@@ -1096,6 +1135,7 @@ final class BackgroundRefreshManager {
 
     private static func refreshErrorKind(_ error: Error) -> String {
         if error is DecodingError { return "decode" }
+        if case APIClientError.httpStatus(let status, _) = error { return "http_\(status)" }
         guard let e = error as? URLError else { return "unknown" }
         switch e.code {
         case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed: return "offline"

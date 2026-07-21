@@ -1,7 +1,18 @@
 import Foundation
 
-enum APIClientError: Error {
-    case httpStatus(Int)
+enum APIClientError: LocalizedError {
+    case httpStatus(Int, detail: String?)
+
+    var errorDescription: String? {
+        switch self {
+        case .httpStatus(let status, let detail):
+            let trimmedDetail = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedDetail.isEmpty {
+                return "HTTP \(status): \(trimmedDetail)"
+            }
+            return "HTTP \(status)"
+        }
+    }
 }
 
 class NetworkManager {
@@ -172,6 +183,22 @@ class NetworkManager {
         }
     }
 
+    func backendErrorDetail(from data: Data) -> String? {
+        guard !data.isEmpty,
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = parsed["detail"]
+        else { return nil }
+        if let detailString = detail as? String {
+            return detailString
+        }
+        if JSONSerialization.isValidJSONObject(detail),
+           let detailData = try? JSONSerialization.data(withJSONObject: detail),
+           let detailJSON = String(data: detailData, encoding: .utf8) {
+            return detailJSON
+        }
+        return String(describing: detail)
+    }
+
     func apiRequest<T: Decodable>(
         _ url: URL,
         method: String = "GET",
@@ -208,7 +235,7 @@ class NetworkManager {
             http = retriedHTTP
         }
         guard acceptRange.contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+            throw APIClientError.httpStatus(http.statusCode, detail: backendErrorDetail(from: data))
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -233,7 +260,7 @@ class NetworkManager {
         if authorized { applyAdminAuthorization(to: &request) }
         if deviceAuthorized { applyDeviceAuthorization(to: &request) }
 
-        var (_, response) = try await dataWithConnectionRetry(for: request)
+        var (data, response) = try await dataWithConnectionRetry(for: request)
         guard var http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -246,14 +273,14 @@ class NetworkManager {
                deviceAuthorized: deviceAuthorized,
                statusCode: http.statusCode
            ) {
-            (_, response) = try await dataWithConnectionRetry(for: retriedRequest)
+            (data, response) = try await dataWithConnectionRetry(for: retriedRequest)
             guard let retriedHTTP = response as? HTTPURLResponse else {
                 throw URLError(.badServerResponse)
             }
             http = retriedHTTP
         }
         guard isAcceptedStatus(http.statusCode) else {
-            throw URLError(.badServerResponse)
+            throw APIClientError.httpStatus(http.statusCode, detail: backendErrorDetail(from: data))
         }
     }
 }

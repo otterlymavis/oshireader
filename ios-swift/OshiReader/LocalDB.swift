@@ -1,6 +1,21 @@
 import Foundation
 import Combine
 
+enum FeedURLPolicy {
+    static func isBackendMatchRedirectURL(_ value: String) -> Bool {
+        guard let url = URL(string: value) else { return false }
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard parts.count == 5 else { return false }
+        guard parts[0] == "api",
+              parts[1] == "feed",
+              parts[2] == "matches",
+              parts[4] == "redirect" else {
+            return false
+        }
+        return Int(parts[3]) != nil
+    }
+}
+
 @MainActor
 class LocalDB: ObservableObject {
     static let shared = LocalDB(directory: FileManager.default
@@ -312,8 +327,12 @@ class LocalDB: ObservableObject {
     func deleteTerm(id: String) {
         if let idx = terms.firstIndex(where: { $0.id == id }) {
             let keyword = terms[idx].keyword
+            let backendTermID = Int(terms[idx].id)
             terms.remove(at: idx)
-            feedItems.removeAll(where: { $0.watch_term_keyword == keyword })
+            feedItems.removeAll { item in
+                item.watch_term_keyword == keyword ||
+                    (backendTermID != nil && item.watch_term_id == backendTermID)
+            }
             saveToFile(name: "feed_items", value: feedItems)
             saveToFile(name: "terms", value: terms)
             BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
@@ -364,7 +383,7 @@ class LocalDB: ObservableObject {
                 let merged = FeedItem(
                     id: existing.id,
                     platform: existing.platform,
-                    url: existing.url,
+                    url: Self.mergedURL(existing: existing.url, incoming: item.url),
                     title: shouldReplaceTitle ? item.title : existing.title,
                     content_text: item.content_text ?? existing.content_text,
                     author: item.author ?? existing.author,
@@ -401,7 +420,10 @@ class LocalDB: ObservableObject {
         )
         if notifyOnNew, shouldScheduleLocalFallback, !addedItems.isEmpty, !wasFirstLoad {
             let survivedKeys = Set(finalItems.map { itemKey($0) })
-            let notifyItems = addedItems.filter { survivedKeys.contains(itemKey($0)) }
+            let notifyItems = addedItems.filter {
+                survivedKeys.contains(itemKey($0)) &&
+                    !FeedURLPolicy.isBackendMatchRedirectURL($0.url)
+            }
             if !notifyItems.isEmpty {
                 let terms = self.terms
                 Task {
@@ -415,6 +437,17 @@ class LocalDB: ObservableObject {
         feedItems = finalItems
         saveToFile(name: "feed_items", value: feedItems)
         return addedCount
+    }
+
+    private static func mergedURL(existing: String, incoming: String) -> String {
+        guard !incoming.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return existing
+        }
+        guard FeedURLPolicy.isBackendMatchRedirectURL(existing),
+              !FeedURLPolicy.isBackendMatchRedirectURL(incoming) else {
+            return existing
+        }
+        return incoming
     }
 
     private func mergedPublishedAt(existing: FeedItem, incoming: FeedItem) -> String {
@@ -522,6 +555,7 @@ class LocalDB: ObservableObject {
 
             // Search pages fallbacks
             if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return nil }
+            if FeedURLPolicy.isBackendMatchRedirectURL(item.url) { return nil }
 
             // Hide broken Yahoo fallback cards whose readable field is only a URL.
             // Valid Google News summaries contain an HTML anchor, so checking for any
@@ -533,6 +567,11 @@ class LocalDB: ObservableObject {
 
             let platformDef = Platform.forRawValue(item.platform)
             var parsedPublishedAt: Date?
+            let localTerm = item.watch_term_keyword.isEmpty ? nil : termsByKeyword[item.watch_term_keyword]
+
+            if !termsByKeyword.isEmpty, !item.watch_term_keyword.isEmpty, localTerm == nil {
+                return nil
+            }
 
             // Cutoff check — use proper Date comparison so timezone-offset strings sort correctly
             if let cutoff = cutoffDate, platformDef?.skipDateCutoff != true {
@@ -553,8 +592,7 @@ class LocalDB: ObservableObject {
 
             // Strict keyword matching — news-type platforms require keyword/alias to appear in content
             if platformDef?.usesStrictKeywordMatching == true, !item.watch_term_keyword.isEmpty {
-                let term = termsByKeyword[item.watch_term_keyword]
-                let keywordCandidates = [item.watch_term_keyword] + (term?.aliases ?? [])
+                let keywordCandidates = [item.watch_term_keyword] + (localTerm?.aliases ?? [])
                 if !keywordCandidates.contains(where: { matchesKeyword(item: item, kw: $0) }) {
                     return nil
                 }
@@ -901,6 +939,32 @@ class LocalDB: ObservableObject {
             watch_term_keyword: term.keyword,
             fetched_at: now
         )
+        let redirectFeedItem = FeedItem(
+            id: "ui-feed-redirect",
+            platform: "news",
+            url: "https://backend.example.com/api/feed/matches/404/redirect",
+            title: "UITest Oshi stale redirect headline",
+            content_text: "A stale backend redirect for UITest Oshi that should not be opened by the feed.",
+            author: "UI Test Desk",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: term.keyword,
+            fetched_at: now
+        )
+        let stableFeedItem = FeedItem(
+            id: "ui-feed-stable",
+            platform: "news",
+            url: "https://example.com/oshireader-stable-ui-test",
+            title: "UITest Oshi stable headline",
+            content_text: "A stable UITest Oshi article used to prove feed taps avoid stale match redirects.",
+            author: "UI Test Desk",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: term.keyword,
+            fetched_at: now
+        )
         let savedPage = SavedPage(
             id: "ui-saved-reader",
             url: "https://example.com/oshireader-saved",
@@ -924,7 +988,9 @@ class LocalDB: ObservableObject {
         )
 
         terms = [term]
-        feedItems = [feedItem]
+        feedItems = ProcessInfo.processInfo.arguments.contains("--uitesting-redirect-feed")
+            ? [redirectFeedItem, stableFeedItem]
+            : [feedItem]
         savedPages = [savedPage]
         customUrls = [customUrl]
         subscribedPlatforms = ["news", "youtube", "tver", "custom"]

@@ -6,6 +6,8 @@ struct BackendTermSyncResult {
     let changed: Bool
 }
 
+private let notificationDeviceRequiredDetail = "Notification-enabled watch terms require a verified APNs device"
+
 extension NetworkManager {
 
     // MARK: - Watch Terms
@@ -36,7 +38,7 @@ extension NetworkManager {
                 isActive: term.is_active,
                 aliases: term.aliases
             )
-        } catch let error as URLError where notifyOnNew && error.code == .badServerResponse {
+        } catch APIClientError.httpStatus(409, let detail) where notifyOnNew && detail == notificationDeviceRequiredDetail {
             return try await createWatchTerm(
                 keyword: term.keyword,
                 collectionMode: term.collection_mode,
@@ -313,7 +315,7 @@ extension NetworkManager {
             throw URLError(.badServerResponse)
         }
         guard http.statusCode == 204 || http.statusCode == 404 else {
-            throw APIClientError.httpStatus(http.statusCode)
+            throw APIClientError.httpStatus(http.statusCode, detail: nil)
         }
         clearRegisteredAPNSDeviceToken()
     }
@@ -390,7 +392,7 @@ extension NetworkManager {
             if http.statusCode == 404 {
                 clearRegisteredAPNSDeviceToken()
             }
-            throw APIClientError.httpStatus(http.statusCode)
+            throw APIClientError.httpStatus(http.statusCode, detail: backendErrorDetail(from: data))
         }
         return try JSONDecoder().decode(APNSTestPushReport.self, from: data)
     }
@@ -424,8 +426,7 @@ extension NetworkManager {
         } catch {
             guard !Task.isCancelled else { throw error }
             AppLogger.network.warning("Device-scoped background refresh failed: \(error.localizedDescription)")
-            guard adminApiToken != nil else { throw error }
-            try await triggerPoll(timeout: timeout)
+            throw error
         }
     }
 
@@ -452,8 +453,8 @@ extension NetworkManager {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         do {
             try await sendDeviceBackgroundRefresh(bodyData: bodyData, timeout: timeout)
-        } catch APIClientError.httpStatus(404) {
-            guard let storedToken else { throw APIClientError.httpStatus(404) }
+        } catch APIClientError.httpStatus(404, let detail) {
+            guard let storedToken else { throw APIClientError.httpStatus(404, detail: detail) }
             AppLogger.network.notice("Background refresh credential rejected; re-registering APNs token and retrying once")
             try await registerAPNSDeviceToken(storedToken)
             try await sendDeviceBackgroundRefresh(bodyData: bodyData, timeout: timeout)
@@ -469,21 +470,21 @@ extension NetworkManager {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         do {
-            let (_, response) = try await session.data(for: request)
-            try validateBackgroundRefreshResponse(response)
+            let (data, response) = try await session.data(for: request)
+            try validateBackgroundRefreshResponse(data: data, response: response)
         } catch let error as URLError where error.code == .networkConnectionLost {
             AppLogger.network.warning("Connection lost for background-refresh, retrying request once...")
-            let (_, response) = try await session.data(for: request)
-            try validateBackgroundRefreshResponse(response)
+            let (data, response) = try await session.data(for: request)
+            try validateBackgroundRefreshResponse(data: data, response: response)
         }
     }
 
-    private func validateBackgroundRefreshResponse(_ response: URLResponse) throws {
+    private func validateBackgroundRefreshResponse(data: Data, response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         guard (200...299).contains(http.statusCode) else {
-            throw APIClientError.httpStatus(http.statusCode)
+            throw APIClientError.httpStatus(http.statusCode, detail: backendErrorDetail(from: data))
         }
     }
 
