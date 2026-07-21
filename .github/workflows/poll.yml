@@ -137,7 +137,7 @@ jobs:
               failures.append("APNs is not configured")
           if notification_health.get("healthy") is not True:
               failures.append(f"notification_health is degraded: {notification_health}")
-          if latest_poll.get("status") == "started":
+          if latest_poll.get("status") in {"started", "running_past_request_timeout"}:
               failures.append(f"poll is still running: {latest_poll}")
           if pending_notifications:
               failures.append(f"pending notifications remain after poll: {pending_notifications}")

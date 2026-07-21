@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from app.api import devices as devices_api
-from app.models import APNSDeviceToken, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, WatchTerm
 
 _DEVICE_SECRET = "device-secret-123"
 
@@ -517,14 +517,141 @@ class TestDeviceScopedBackgroundRefresh:
         assert second.json() == {"status": "poll throttled"}
         mock_create_poll_task.assert_called_once()
 
+    def test_recent_backend_poll_throttles_all_devices(self, client, db_session):
+        token = "2" * 64
+        devices_api._background_refresh_attempts.clear()
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        db_session.add(BackendEvent(
+            kind="poll",
+            status="completed",
+            message="Scheduled/backend poll completed",
+            payload={},
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=60),
+        ))
+        db_session.commit()
+
+        with patch("app.ingestion.scheduler.create_poll_task") as mock_create_poll_task:
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll throttled"}
+        mock_create_poll_task.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["failed", "interrupted"])
+    def test_recent_non_success_poll_event_throttles_device_refresh(self, client, db_session, status):
+        token = "4" * 64
+        devices_api._background_refresh_attempts.clear()
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        db_session.add(BackendEvent(
+            kind="poll",
+            status=status,
+            message=f"Scheduled/backend poll {status}",
+            payload={},
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=60),
+        ))
+        db_session.commit()
+
+        with patch("app.ingestion.scheduler.create_poll_task") as mock_create_poll_task:
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll throttled"}
+        mock_create_poll_task.assert_not_called()
+
+    def test_recent_skipped_poll_does_not_throttle_device_refresh(self, client, db_session):
+        token = "5" * 64
+        devices_api._background_refresh_attempts.clear()
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        db_session.add_all([
+            WatchTerm(keyword="new active term", is_active=True),
+            BackendEvent(
+                kind="poll",
+                status="skipped",
+                message="Scheduled/backend poll skipped because there are no active watch terms",
+                payload={"terms": 0, "total_terms": 0},
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=60),
+            ),
+        ])
+        db_session.commit()
+
+        async def noop_poll():
+            return None
+
+        with patch(
+            "app.ingestion.scheduler.create_poll_task",
+            side_effect=lambda: asyncio.create_task(noop_poll()),
+        ) as mock_create_poll_task:
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll completed"}
+        mock_create_poll_task.assert_called_once()
+
+    def test_stale_backend_poll_does_not_throttle_device_refresh(self, client, db_session):
+        token = "3" * 64
+        devices_api._background_refresh_attempts.clear()
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+        db_session.add(BackendEvent(
+            kind="poll",
+            status="completed",
+            message="Scheduled/backend poll completed",
+            payload={},
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=171),
+        ))
+        db_session.commit()
+
+        async def noop_poll():
+            return None
+
+        with patch(
+            "app.ingestion.scheduler.create_poll_task",
+            side_effect=lambda: asyncio.create_task(noop_poll()),
+        ) as mock_create_poll_task:
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll completed"}
+        mock_create_poll_task.assert_called_once()
+
     def test_refresh_throttle_prunes_stale_attempts(self):
         now = datetime.now(timezone.utc)
         devices_api._background_refresh_attempts.clear()
-        devices_api._background_refresh_attempts["stale-token"] = now - timedelta(minutes=11)
+        devices_api._background_refresh_attempts["stale-token"] = now - timedelta(minutes=181)
 
         assert devices_api._recent_background_refresh_attempt("fresh-token", now) is False
         assert "stale-token" not in devices_api._background_refresh_attempts
         assert devices_api._background_refresh_attempts["fresh-token"] == now
+
+    def test_refresh_throttle_matches_poll_cadence(self):
+        now = datetime.now(timezone.utc)
+        devices_api._background_refresh_attempts.clear()
+        devices_api._background_refresh_attempts["same-device"] = now - timedelta(minutes=60)
+
+        assert devices_api._recent_background_refresh_attempt("same-device", now) is True
 
 
 class TestListAPNSTokens:

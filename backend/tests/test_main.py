@@ -12,6 +12,8 @@ from app.database import get_db
 from app.main import (
     _initialize_backend_services,
     _mark_abandoned_poll_events,
+    _mark_abandoned_poll_events_after_grace,
+    _schedule_poll_recovery_after_grace,
     _startup_status,
     database_operational_error_handler,
 )
@@ -58,18 +60,27 @@ class TestDatabaseOperationalErrorHandler:
 
 
 class TestStartupPollRecovery:
-    def test_marks_in_progress_poll_events_as_interrupted(self, db_engine, db_session):
+    def test_marks_stale_in_progress_poll_events_as_interrupted(self, db_engine, db_session):
+        stale_created_at = datetime.now(timezone.utc) - timedelta(minutes=15)
         started = BackendEvent(
             kind="poll",
             status="started",
             message="Scheduled/backend poll started",
             payload={"terms": 1},
+            created_at=stale_created_at,
         )
         timeout = BackendEvent(
             kind="poll",
             status="running_past_request_timeout",
             message="Scheduled/backend poll exceeded the request budget",
             payload={"timeout_seconds": 210},
+            created_at=stale_created_at,
+        )
+        fresh = BackendEvent(
+            kind="poll",
+            status="started",
+            message="Scheduled/backend poll started",
+            payload={"terms": 1},
         )
         completed = BackendEvent(
             kind="poll",
@@ -77,7 +88,7 @@ class TestStartupPollRecovery:
             message="Scheduled/backend poll completed",
             payload={},
         )
-        db_session.add_all([started, timeout, completed])
+        db_session.add_all([started, timeout, fresh, completed])
         db_session.commit()
 
         TestSession = sessionmaker(bind=db_engine)
@@ -88,10 +99,41 @@ class TestStartupPollRecovery:
         assert interrupted_count == 2
         assert started.status == "interrupted"
         assert timeout.status == "interrupted"
+        assert fresh.status == "started"
         assert completed.status == "completed"
         assert started.message == "Poll interrupted by backend restart or deploy"
         assert "interrupted_at" in started.payload
         assert timeout.payload["timeout_seconds"] == 210
+
+    @pytest.mark.asyncio
+    async def test_delayed_recovery_marks_poll_events_after_grace(self, db_engine, db_session):
+        stale_created_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+        started = BackendEvent(
+            kind="poll",
+            status="started",
+            message="Scheduled/backend poll started",
+            payload={"terms": 1},
+            created_at=stale_created_at,
+        )
+        db_session.add(started)
+        db_session.commit()
+
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.main.SessionLocal", TestSession), \
+             patch("app.main.asyncio.sleep", new=AsyncMock()):
+            await _mark_abandoned_poll_events_after_grace()
+
+        db_session.expire_all()
+        assert started.status == "interrupted"
+
+    @pytest.mark.asyncio
+    async def test_recovery_schedule_reuses_pending_task(self):
+        pending = asyncio.Future()
+        with patch("app.main._poll_recovery_task", pending), \
+             patch("app.main.asyncio.create_task") as mock_create_task:
+            _schedule_poll_recovery_after_grace()
+
+        mock_create_task.assert_not_called()
 
 
 class TestStartupScheduler:
@@ -99,24 +141,28 @@ class TestStartupScheduler:
     async def test_startup_leaves_internal_scheduler_disabled_by_default(self):
         with patch("app.main.apply_startup_migrations"), \
              patch("app.main._mark_abandoned_poll_events"), \
+             patch("app.main._schedule_poll_recovery_after_grace") as mock_schedule_recovery, \
              patch("app.main.start_scheduler") as mock_start_scheduler, \
              patch.object(settings, "internal_scheduler_enabled", False):
             await _initialize_backend_services()
 
         assert _startup_status["schema_migration"] == "completed"
         assert _startup_status["scheduler"] == "disabled"
+        mock_schedule_recovery.assert_called_once()
         mock_start_scheduler.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_startup_can_enable_internal_scheduler(self):
         with patch("app.main.apply_startup_migrations"), \
              patch("app.main._mark_abandoned_poll_events"), \
+             patch("app.main._schedule_poll_recovery_after_grace") as mock_schedule_recovery, \
              patch("app.main.start_scheduler") as mock_start_scheduler, \
              patch.object(settings, "internal_scheduler_enabled", True):
             await _initialize_backend_services()
 
         assert _startup_status["schema_migration"] == "completed"
         assert _startup_status["scheduler"] == "running"
+        mock_schedule_recovery.assert_called_once()
         mock_start_scheduler.assert_called_once()
 
 
@@ -590,6 +636,44 @@ class TestAdminMaintenance:
         assert db_session.query(MutedFeedItem).count() == 1
         assert db_session.query(SourceItem).count() == 3
         assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 1
+
+    def test_prune_storage_deletes_existing_orphan_source_items(self, client, db_session):
+        db_session.add(SourceItem(
+            id="orphan:standalone",
+            platform="youtube",
+            item_id="standalone",
+            url="https://example.com/orphan",
+            published_at=datetime.now(timezone.utc),
+        ))
+        db_session.commit()
+
+        r = client.post("/api/admin/maintenance/prune-storage")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["orphan_source_items_pruned"] == 1
+        assert db_session.query(SourceItem).count() == 0
+        assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 1
+
+    def test_prune_storage_returns_500_when_core_prune_fails(self, client, db_session):
+        with patch(
+            "app.ingestion.scheduler._prune_old_items_with_limit",
+            side_effect=RuntimeError("storage prune failed"),
+        ):
+            r = client.post("/api/admin/maintenance/prune-storage")
+
+        assert r.status_code == 500
+        assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 0
+
+    def test_prune_storage_returns_500_when_backend_event_prune_fails(self, client, db_session):
+        with patch(
+            "app.ingestion.scheduler.prune_backend_events",
+            side_effect=RuntimeError("backend event prune failed"),
+        ):
+            r = client.post("/api/admin/maintenance/prune-storage")
+
+        assert r.status_code == 500
+        assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 0
 
 
 class TestAdminPoll:

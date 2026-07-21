@@ -31,7 +31,7 @@ def record_backend_event(
         log.warning("Failed to record backend event kind=%s status=%s: %s", kind, status, exc)
 
 
-def prune_backend_events(db: Session, keep: int = 500) -> None:
+def prune_backend_events(db: Session, keep: int = 500, raise_on_error: bool = False) -> None:
     try:
         db.execute(text("""
             DELETE FROM backend_events
@@ -45,3 +45,5 @@ def prune_backend_events(db: Session, keep: int = 500) -> None:
     except Exception as exc:
         db.rollback()
         log.warning("Failed to prune backend events: %s", exc)
+        if raise_on_error:
+            raise

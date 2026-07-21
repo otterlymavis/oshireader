@@ -64,10 +64,9 @@ def client(db_session):
     try:
         # Startup maintenance uses the app's default SessionLocal; API tests
         # use an overridden session and keep startup side effects deterministic.
-        with patch("app.main._mark_abandoned_poll_events"), TestClient(
-            app,
-            raise_server_exceptions=False,
-        ) as c:
+        with patch("app.main._mark_abandoned_poll_events"), \
+             patch("app.main._schedule_poll_recovery_after_grace"), \
+             TestClient(app, raise_server_exceptions=False) as c:
             yield c
     finally:
         settings.allow_unauthenticated_admin = original_allow_unauthenticated

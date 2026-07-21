@@ -12,15 +12,23 @@ from sqlalchemy.orm import Session
 from app.auth import require_admin_auth
 from app.config import settings
 from app.database import SessionLocal, get_db
-from app.models import APNSDeviceToken, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, WatchTerm
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
-_BACKGROUND_REFRESH_MIN_INTERVAL = timedelta(seconds=60)
-_BACKGROUND_REFRESH_ATTEMPT_TTL = timedelta(minutes=10)
+_BACKGROUND_REFRESH_MIN_INTERVAL = timedelta(minutes=170)
+_BACKGROUND_REFRESH_ATTEMPT_TTL = timedelta(minutes=180)
 _BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS = 6.0
 _background_refresh_attempts: dict[str, datetime] = {}
+_RECENT_POLL_STATUSES = {
+    "started",
+    "running_past_request_timeout",
+    "completed",
+    "completed_with_errors",
+    "failed",
+    "interrupted",
+}
 
 
 def _normalize_token(token: str) -> str:
@@ -84,6 +92,21 @@ def _recent_background_refresh_attempt(token: str, now: datetime) -> bool:
         return True
     _background_refresh_attempts[token] = now
     return False
+
+
+def _recent_backend_poll_event(db: Session, now: datetime) -> bool:
+    cutoff = now - _BACKGROUND_REFRESH_MIN_INTERVAL
+    event = (
+        db.query(BackendEvent)
+        .filter(
+            BackendEvent.kind == "poll",
+            BackendEvent.status.in_(_RECENT_POLL_STATUSES),
+            BackendEvent.created_at >= cutoff,
+        )
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
+    return event is not None
 
 
 def _mark_verified(device: APNSDeviceToken) -> None:
@@ -242,6 +265,8 @@ async def request_device_background_refresh(body: APNSDeviceTestPush, db: Sessio
     if ingestion_scheduler._poll_lock.locked():
         return {"status": "poll already running"}
     now = datetime.now(timezone.utc)
+    if _recent_backend_poll_event(db, now):
+        return {"status": "poll throttled"}
     if _recent_background_refresh_attempt(stored.token, now):
         return {"status": "poll throttled"}
     poll_task = ingestion_scheduler.create_poll_task()

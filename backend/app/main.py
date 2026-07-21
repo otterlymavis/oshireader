@@ -56,6 +56,7 @@ _startup_status = {
     "scheduler": "pending",
     "error": None,
 }
+_poll_recovery_task: asyncio.Task | None = None
 
 _GNEWS_PROBE_QUERIES = {
     "news": "{keyword} when:10y",
@@ -76,15 +77,20 @@ _GNEWS_PROBE_QUERIES = {
     "yahoonews": "{keyword} site:news.yahoo.co.jp",
 }
 
+POLL_RECOVERY_GRACE_MINUTES = 10
+POLL_RECOVERY_GRACE_SECONDS = POLL_RECOVERY_GRACE_MINUTES * 60
+
 
 def _mark_abandoned_poll_events() -> int:
     """Close poll markers left behind when a deploy interrupts the process."""
     db_sess = SessionLocal()
     try:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=POLL_RECOVERY_GRACE_MINUTES)
         events = (
             db_sess.query(BackendEvent)
             .filter(BackendEvent.kind == "poll")
             .filter(BackendEvent.status.in_(["started", "running_past_request_timeout"]))
+            .filter(BackendEvent.created_at < cutoff)
             .all()
         )
         now = datetime.now(timezone.utc).isoformat()
@@ -99,6 +105,25 @@ def _mark_abandoned_poll_events() -> int:
         return len(events)
     finally:
         db_sess.close()
+
+
+async def _mark_abandoned_poll_events_after_grace() -> None:
+    try:
+        await asyncio.sleep(POLL_RECOVERY_GRACE_SECONDS)
+        marked = await asyncio.to_thread(_mark_abandoned_poll_events)
+        if marked:
+            log.warning("Marked %d abandoned poll event(s) after startup grace", marked)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("Delayed poll recovery failed")
+
+
+def _schedule_poll_recovery_after_grace() -> None:
+    global _poll_recovery_task
+    if _poll_recovery_task is not None and not _poll_recovery_task.done():
+        return
+    _poll_recovery_task = asyncio.create_task(_mark_abandoned_poll_events_after_grace())
 
 
 def _backend_event_payload(event: BackendEvent) -> dict:
@@ -246,6 +271,7 @@ async def _initialize_backend_services() -> None:
     try:
         await asyncio.to_thread(apply_startup_migrations, engine, run_cleanups=False)
         await asyncio.to_thread(_mark_abandoned_poll_events)
+        _schedule_poll_recovery_after_grace()
         _startup_status["schema_migration"] = "completed"
         if settings.internal_scheduler_enabled:
             start_scheduler()
@@ -264,6 +290,7 @@ async def _initialize_backend_services() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    global _poll_recovery_task
     if not settings.admin_api_token:
         if settings.allow_unauthenticated_admin:
             log.warning(
@@ -278,6 +305,9 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     startup_task = asyncio.create_task(_initialize_backend_services())
     yield
     startup_task.cancel()
+    if _poll_recovery_task is not None:
+        _poll_recovery_task.cancel()
+        _poll_recovery_task = None
     if _startup_status.get("scheduler") == "running":
         scheduler.shutdown()
 

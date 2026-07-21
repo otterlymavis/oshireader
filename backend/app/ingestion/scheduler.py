@@ -1453,6 +1453,7 @@ def _prune_old_items_with_limit(
     muted_per_term_limit: int,
     match_per_term_platform_limit: int = 200,
     include_discussion_platforms: bool = False,
+    raise_on_error: bool = False,
 ) -> dict[str, int]:
     try:
         discussion_filter = "" if include_discussion_platforms else (
@@ -1475,9 +1476,8 @@ def _prune_old_items_with_limit(
         """), {"match_per_term_platform_limit": match_per_term_platform_limit})
         pruned = result.rowcount or 0
         muted_pruned = _prune_old_muted_feed_items(db, muted_per_term_limit)
-        orphan_source_items_pruned = 0
-        if pruned or muted_pruned:
-            orphan_source_items_pruned = _delete_orphan_source_items(db)
+        orphan_source_items_pruned = _delete_orphan_source_items(db)
+        if pruned or muted_pruned or orphan_source_items_pruned:
             db.commit()
             log.info(
                 "Pruned %d old match records, %d muted feed items, and %d orphan source items",
@@ -1493,6 +1493,8 @@ def _prune_old_items_with_limit(
     except Exception as exc:
         log.warning("Prune failed: %s", exc)
         db.rollback()
+        if raise_on_error:
+            raise
         return {
             "matches_pruned": 0,
             "muted_feed_items_pruned": 0,
@@ -1518,8 +1520,9 @@ def prune_storage(
         muted_per_term_limit=muted_per_term_limit,
         match_per_term_platform_limit=match_per_term_platform_limit,
         include_discussion_platforms=include_discussion_platforms,
+        raise_on_error=True,
     )
-    prune_backend_events(db, keep=backend_event_keep)
+    prune_backend_events(db, keep=backend_event_keep, raise_on_error=True)
     db.commit()
     event_count_after = db.query(BackendEvent).count()
     summary.update({
