@@ -1,6 +1,11 @@
 import Foundation
 import UIKit
 
+struct BackendTermSyncResult {
+    let succeeded: Bool
+    let changed: Bool
+}
+
 extension NetworkManager {
 
     // MARK: - Watch Terms
@@ -88,8 +93,18 @@ extension NetworkManager {
     // Pulls backend watch terms absent locally (e.g. fresh install after another session registered terms).
     @discardableResult
     func syncTermsFromBackend() async -> Bool {
-        guard !isUITesting else { return false }
-        guard let backendTerms = try? await fetchWatchTerms() else { return false }
+        let result = await syncTermsFromBackendWithStatus()
+        return result.changed
+    }
+
+    @discardableResult
+    func syncTermsFromBackendWithStatus() async -> BackendTermSyncResult {
+        guard !isUITesting else {
+            return BackendTermSyncResult(succeeded: false, changed: false)
+        }
+        guard let backendTerms = try? await fetchWatchTerms() else {
+            return BackendTermSyncResult(succeeded: false, changed: false)
+        }
         let localByKeyword = await MainActor.run {
             firstTermByKeyword(LocalDB.shared.terms)
         }
@@ -109,7 +124,7 @@ extension NetworkManager {
                 changed = true
             }
         }
-        return changed
+        return BackendTermSyncResult(succeeded: true, changed: changed)
     }
 
     func createWatchTerm(keyword: String, collectionMode: CollectionMode, notifyOnNew: Bool = true, isActive: Bool = true, aliases: [String] = []) async throws -> WatchTerm {

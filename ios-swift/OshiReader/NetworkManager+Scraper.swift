@@ -29,6 +29,16 @@ struct RssItem {
     var thumbnailUrl: String? = nil
 }
 
+struct LocalFallbackScrapeResult {
+    var items: [FeedItem] = []
+    var completedPlatforms: Set<String> = []
+
+    mutating func append(_ other: LocalFallbackScrapeResult) {
+        items.append(contentsOf: other.items)
+        completedPlatforms.formUnion(other.completedPlatforms)
+    }
+}
+
 class RSSParserDelegate: NSObject, XMLParserDelegate {
     var items = [RssItem]()
     private var currentElement = ""
@@ -118,12 +128,19 @@ extension NetworkManager {
     // MARK: - RSS Fallback (NHK + Google News)
 
     func scrapeRSSFallback(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
+        await scrapeRSSFallbackWithCompletion(keyword: keyword, tagKeyword: tagKeyword).items
+    }
+
+    func scrapeRSSFallbackWithCompletion(keyword: String, tagKeyword: String? = nil) async -> LocalFallbackScrapeResult {
         var results = [FeedItem]()
+        var nhkCompleted = false
+        var googleNewsCompleted = false
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
         if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml"),
            let nhkItems = try? await parseRss(url: nhkUrl) {
+            nhkCompleted = true
             for item in nhkItems where titleMatchesKeyword(item.title, keyword: keyword) {
                 results.append(FeedItem(
                     id: "news:nhk:\(stableIdHash(item.link))",
@@ -144,6 +161,7 @@ extension NetworkManager {
         let encodedKeyword = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
         if let gnewsUrl = URL(string: "https://news.google.com/rss/search?q=\(encodedKeyword)&hl=ja&gl=JP&ceid=JP%3Aja"),
            let gnewsItems = try? await parseRss(url: gnewsUrl) {
+            googleNewsCompleted = true
             for item in gnewsItems {
                 let cleanedTitle = cleanNewsTitle(item.title)
                 guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { continue }
@@ -163,7 +181,10 @@ extension NetworkManager {
             }
         }
 
-        return results
+        return LocalFallbackScrapeResult(
+            items: results,
+            completedPlatforms: nhkCompleted && googleNewsCompleted ? ["news"] : []
+        )
     }
 
     // MARK: - Custom URL Scraping
@@ -173,7 +194,13 @@ extension NetworkManager {
         return await withTaskGroup(of: FeedItem?.self) { group in
             for entry in urls { group.addTask { await self.scrapeCustomUrl(entry) } }
             var results = [FeedItem]()
-            for await item in group { if let item { results.append(item) } }
+            for await item in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+                if let item { results.append(item) }
+            }
             return results
         }
     }
@@ -250,17 +277,29 @@ extension NetworkManager {
         tagKeyword: String? = nil,
         platformIds: Set<String>? = nil
     ) async -> [FeedItem] {
+        await scrapeLocalFallbacksWithCompletion(
+            keyword: keyword,
+            tagKeyword: tagKeyword,
+            platformIds: platformIds
+        ).items
+    }
+
+    func scrapeLocalFallbacksWithCompletion(
+        keyword: String,
+        tagKeyword: String? = nil,
+        platformIds: Set<String>? = nil
+    ) async -> LocalFallbackScrapeResult {
         let tag = tagKeyword ?? keyword
-        return await withTaskGroup(of: [FeedItem].self) { group in
+        return await withTaskGroup(of: LocalFallbackScrapeResult.self) { group in
             if Platform.usesNewsRSSFallback(for: platformIds) {
-                group.addTask { await self.scrapeRSSFallback(keyword: keyword, tagKeyword: tag) }
+                group.addTask { await self.scrapeRSSFallbackWithCompletion(keyword: keyword, tagKeyword: tag) }
             }
             if Platform.usesNiconicoRSSFallback(for: platformIds) {
-                group.addTask { await self.scrapeNiconicoRSS(keyword: keyword, tagKeyword: tag) }
+                group.addTask { await self.scrapeNiconicoRSSWithCompletion(keyword: keyword, tagKeyword: tag) }
             }
             for fallback in Platform.googleNewsFallbackSites(for: platformIds) {
                 group.addTask {
-                    await self.scrapeGoogleNewsSite(
+                    await self.scrapeGoogleNewsSiteWithCompletion(
                         keyword: keyword,
                         site: fallback.site,
                         platform: fallback.platform,
@@ -268,40 +307,69 @@ extension NetworkManager {
                     )
                 }
             }
-            var all = [FeedItem]()
-            for await items in group { all.append(contentsOf: items) }
-            return all
+            var result = LocalFallbackScrapeResult()
+            for await scrapeResult in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+                result.append(scrapeResult)
+            }
+            return result
         }
     }
 
     // MARK: - NicoNico via Google News
 
     func scrapeNiconicoRSS(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
-        await scrapeGoogleNewsSite(keyword: keyword, site: "nicovideo.jp", platform: "niconico", tagKeyword: tagKeyword)
+        await scrapeNiconicoRSSWithCompletion(keyword: keyword, tagKeyword: tagKeyword).items
+    }
+
+    func scrapeNiconicoRSSWithCompletion(keyword: String, tagKeyword: String? = nil) async -> LocalFallbackScrapeResult {
+        await scrapeGoogleNewsSiteWithCompletion(
+            keyword: keyword,
+            site: "nicovideo.jp",
+            platform: "niconico",
+            tagKeyword: tagKeyword
+        )
     }
 
     // MARK: - Google News Site Filter RSS
 
     func scrapeGoogleNewsSite(keyword: String, site: String, platform: String, tagKeyword: String? = nil) async -> [FeedItem] {
+        await scrapeGoogleNewsSiteWithCompletion(
+            keyword: keyword,
+            site: site,
+            platform: platform,
+            tagKeyword: tagKeyword
+        ).items
+    }
+
+    func scrapeGoogleNewsSiteWithCompletion(keyword: String, site: String, platform: String, tagKeyword: String? = nil) async -> LocalFallbackScrapeResult {
         let query = "\(keyword) site:\(site)"
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        guard let url = URL(string: "https://news.google.com/rss/search?q=\(encoded)&hl=ja&gl=JP&ceid=JP%3Aja") else { return [] }
+        guard let url = URL(string: "https://news.google.com/rss/search?q=\(encoded)&hl=ja&gl=JP&ceid=JP%3Aja") else {
+            return LocalFallbackScrapeResult()
+        }
 
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
-        guard let initialItems = try? await parseRss(url: url) else { return [] }
+        guard let initialItems = try? await parseRss(url: url) else {
+            return LocalFallbackScrapeResult()
+        }
         var items = initialItems
         if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
             let historicalQuery = "\(query) when:10y"
             let historicalEncoded = historicalQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? historicalQuery
-            if let historicalURL = URL(string: "https://news.google.com/rss/search?q=\(historicalEncoded)&hl=ja&gl=JP&ceid=JP%3Aja"),
-               let historicalItems = try? await parseRss(url: historicalURL) {
-                items = historicalItems
+            guard let historicalURL = URL(string: "https://news.google.com/rss/search?q=\(historicalEncoded)&hl=ja&gl=JP&ceid=JP%3Aja"),
+                  let historicalItems = try? await parseRss(url: historicalURL) else {
+                return LocalFallbackScrapeResult()
             }
+            items = historicalItems
         }
 
-        return items.compactMap { item in
+        let feedItems: [FeedItem] = items.compactMap { item in
             guard !item.link.isEmpty else { return nil }
             let cleanedTitle = cleanNewsTitle(item.title)
             guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { return nil }
@@ -319,6 +387,10 @@ extension NetworkManager {
                 fetched_at: nowString
             )
         }
+        return LocalFallbackScrapeResult(
+            items: feedItems,
+            completedPlatforms: [Platform.normalize(platform)]
+        )
     }
 
     // MARK: - Private Helpers

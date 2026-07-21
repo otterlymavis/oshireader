@@ -106,7 +106,8 @@ final class NotificationNavigationManager: ObservableObject {
         guard let itemID, let itemURL else { return nil }
 
         let now = _ISO8601Cache.withoutFractional.string(from: Date())
-        let platform = stringValue(userInfo["item_platform"]) ?? stringValue(previewItem?["platform"])
+        let explicitPlatform = stringValue(userInfo["item_platform"]) ?? stringValue(previewItem?["platform"])
+        let platform = explicitPlatform ?? Self.inferredPlatform(itemID: itemID, itemURL: itemURL)
         let mediaType = stringValue(userInfo["item_media_type"]) ?? stringValue(previewItem?["media_type"])
         let publishedAt = stringValue(userInfo["item_published_at"]) ?? stringValue(previewItem?["published_at"])
         let watchTermKeyword = stringValue(userInfo["watch_term_keyword"])
@@ -130,6 +131,19 @@ final class NotificationNavigationManager: ObservableObject {
             hasPublishedAt: publishedAt != nil,
             hasWatchTermKeyword: watchTermKeyword != nil
         )
+    }
+
+    private static func inferredPlatform(itemID: String, itemURL: String) -> String? {
+        let lowercasedID = itemID.lowercased()
+        if lowercasedID.hasPrefix("5ch:") || lowercasedID.hasPrefix("2ch.sc:") {
+            return "5ch"
+        }
+
+        guard let host = URL(string: itemURL)?.host?.lowercased() else { return nil }
+        if host == "5ch.io" || host == "5ch.net" || host == "itest.5ch.io" || host == "itest.5ch.net" || host == "2ch.sc" || host.hasSuffix(".5ch.io") || host.hasSuffix(".5ch.net") || host.hasSuffix(".2ch.sc") {
+            return "5ch"
+        }
+        return nil
     }
 
     private func stringValue(_ value: Any?) -> String? {

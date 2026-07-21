@@ -282,6 +282,17 @@ struct Platform {
             googleNewsFallbackSite: "cinemacafe.net"
         ),
         Platform(
+            id: "thetv", name: "TheTV", icon: "📺",
+            accent: Color(red: 0.02, green: 0.36, blue: 0.78),
+            bg: Color(red: 0.90, green: 0.95, blue: 1.0),
+            fg: Color(red: 0.02, green: 0.36, blue: 0.78),
+            rawPlatformValues: ["thetv"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true,
+            fetchRole: .deviceFallback,
+            googleNewsFallbackSite: "thetv.jp"
+        ),
+        Platform(
             id: "barks", name: "BARKS", icon: "🎸",
             accent: Color(red: 0.13, green: 0.13, blue: 0.13),
             bg: Color(red: 0.93, green: 0.93, blue: 0.93),
