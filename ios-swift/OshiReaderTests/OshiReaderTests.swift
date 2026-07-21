@@ -17,9 +17,11 @@ final class OshiReaderTests: XCTestCase {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         db = LocalDB(directory: tempDir)
         db.setSubscribedPlatforms(platforms: ["news", "tver", "youtube", "yahoonews", "custom"])
+        BackgroundRefreshPolicy.clearRecordedRefreshCompletionsForTesting()
     }
 
     override func tearDownWithError() throws {
+        BackgroundRefreshPolicy.clearRecordedRefreshCompletionsForTesting()
         db = nil
         try? FileManager.default.removeItem(at: tempDir)
         try super.tearDownWithError()
@@ -553,6 +555,77 @@ final class OshiReaderTests: XCTestCase {
             15
         )
         XCTAssertLessThanOrEqual(BackgroundRefreshPolicy.operationDeadline, 25)
+        XCTAssertLessThan(
+            BackgroundRefreshPolicy.minimumLocalRefreshWindow,
+            BackgroundRefreshPolicy.operationDeadline
+        )
+    }
+
+    func testBackgroundRefreshLocalFallbackOnlyStartsWithRemainingBudget() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let plentyOfTimeStartedAt = now.addingTimeInterval(
+            -BackgroundRefreshPolicy.pollTimeout
+        )
+        let almostExpiredStartedAt = now.addingTimeInterval(
+            -(BackgroundRefreshPolicy.operationDeadline - 1)
+        )
+        let expiredStartedAt = now.addingTimeInterval(
+            -BackgroundRefreshPolicy.operationDeadline
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldStartLocalBackgroundRefresh(
+                remainingTime: BackgroundRefreshPolicy.remainingOperationTime(
+                    startedAt: plentyOfTimeStartedAt,
+                    now: now
+                )
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldStartLocalBackgroundRefresh(
+                remainingTime: BackgroundRefreshPolicy.remainingOperationTime(
+                    startedAt: almostExpiredStartedAt,
+                    now: now
+                )
+            )
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.remainingOperationTime(startedAt: expiredStartedAt, now: now),
+            0
+        )
+    }
+
+    func testForegroundDeviceRefreshBypassesThrottleWhenFeedScopeIsDirty() {
+        let throttle: TimeInterval = 30 * 60
+        let recentDeviceScrapeElapsed: TimeInterval = 60
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+                cacheIsEmpty: false,
+                elapsedSinceLastDeviceScrape: recentDeviceScrapeElapsed,
+                throttle: throttle
+            ),
+            "Warm caches should still respect the device scrape throttle by default."
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+                cacheIsEmpty: true,
+                elapsedSinceLastDeviceScrape: recentDeviceScrapeElapsed,
+                throttle: throttle
+            ),
+            "Cold caches should still bypass the device scrape throttle."
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+                cacheIsEmpty: false,
+                elapsedSinceLastDeviceScrape: recentDeviceScrapeElapsed,
+                throttle: throttle
+            ),
+            "Changing terms, platforms, or custom URLs should let fallback sources refresh immediately."
+        )
     }
 
     func testForegroundRefreshPolicyRefreshesEmptyOrStaleCache() {
@@ -576,10 +649,1007 @@ final class OshiReaderTests: XCTestCase {
             watch_term_keyword: "Aiko", fetched_at: "not-a-date"
         )
 
-        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [], now: now))
-        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [recent], now: now))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [], now: now, lastRefreshAt: nil))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [recent], now: now, lastRefreshAt: nil))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now, lastRefreshAt: nil))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [invalid], now: now, lastRefreshAt: nil))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [], now: now, lastRefreshAt: nil))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [recent], now: now, lastRefreshAt: nil))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [stale], now: now, lastRefreshAt: nil))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [invalid], now: now, lastRefreshAt: nil))
+
+        let recentRefresh = now.addingTimeInterval(-60)
+        let staleRefresh = now.addingTimeInterval(-10 * 60)
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [], now: now, lastRefreshAt: recentRefresh))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now, lastRefreshAt: recentRefresh))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now, lastRefreshAt: staleRefresh))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [], now: now, lastRefreshAt: recentRefresh))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [stale], now: now, lastRefreshAt: staleRefresh))
+    }
+
+    func testBackendCompletionDoesNotSuppressForegroundRefresh() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let stale = FeedItem(
+            id: "yahoonews:stale", platform: "yahoonews", url: "https://example.com/stale",
+            title: "Stale", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:20:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:20:00Z"
+        )
+        let recentCompletion = now.addingTimeInterval(-60)
+
+        BackgroundRefreshPolicy.recordBackendRefreshCompleted(at: recentCompletion)
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now),
+            "Backend-only refreshes must not suppress the foreground device fallback pass."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [stale], now: now),
+            "A recent backend refresh should still prevent duplicate suspension refreshes."
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [WatchTerm(keyword: "Aiko", collection_mode: .allInfo)],
+                customUrls: [],
+                items: [],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Backend-only refreshes must not suppress an empty foreground device fallback pass."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["yahoonews"],
+            customRefreshed: false,
+            completedDevicePlatforms: ["yahoonews"],
+            activeTerms: [WatchTerm(keyword: "Aiko", collection_mode: .allInfo)],
+            customUrls: [],
+            subscribedPlatforms: ["yahoonews"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [WatchTerm(keyword: "Aiko", collection_mode: .allInfo)],
+                customUrls: [],
+                items: [],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Background local/device checks should suppress duplicate foreground refreshes."
+        )
+
+        BackgroundRefreshPolicy.clearRecordedRefreshCompletionsForTesting()
+        BackgroundRefreshPolicy.recordRefreshCompleted(at: recentCompletion)
+
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now))
+    }
+
+    func testBackgroundCompletionClearsDirtyForBackendOnlyScope() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recent = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube"],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "A backend-only background refresh should satisfy a backend-only feed scope."
+        )
+    }
+
+    func testStaleFeedScopeCompletionDoesNotClearNewDirtyScope() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recent = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        let staleRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube"],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube"],
+            feedScopeRevision: staleRevision,
+            at: recentCompletion
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "An older in-flight refresh must not clear a newer feed-scope change."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube"],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube"],
+            feedScopeRevision: BackgroundRefreshPolicy.currentFeedScopeRevision,
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "The matching feed-scope revision should still clear once it completes."
+        )
+    }
+
+    func testNoSourceBackgroundCompletionClearsDirtyFeedScope() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(
+                activeTerms: [],
+                customUrls: [],
+                subscribedPlatforms: [],
+                items: [],
+                now: now
+            ),
+            "A feed-scope change starts dirty even if the source was removed."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: [],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [],
+            customUrls: [],
+            subscribedPlatforms: [],
+            feedScopeRevision: BackgroundRefreshPolicy.currentFeedScopeRevision,
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(
+                activeTerms: [],
+                customUrls: [],
+                subscribedPlatforms: [],
+                items: [],
+                now: now
+            ),
+            "Once there are no refreshable sources left, the dirty marker should not cause no-op refreshes forever."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [],
+                customUrls: [],
+                subscribedPlatforms: [],
+                items: [],
+                pulledNewTerms: false,
+                now: now
+            )
+        )
+    }
+
+    func testBackgroundCompletionKeepsDirtyWhenBackendPlatformIsMissing() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recentYouTube = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let recentNote = FeedItem(
+            id: "note:recent", platform: "note", url: "https://example.com/note",
+            title: "Recent note", content_text: "Aiko", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube"],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube", "note"],
+            at: recentCompletion
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "note"],
+                items: [recentYouTube],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "A partial backend completion must keep a multi-backend feed scope dirty."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube", "note"],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube", "note"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "note"],
+                items: [recentYouTube, recentNote],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "The same feed scope should clear once every backend platform completes."
+        )
+    }
+
+    func testBackgroundCompletionKeepsDirtyForMixedPartialScope() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let customUrl = CustomUrl(
+            id: "custom:https%3A%2F%2Fexample.com%2Ffeed",
+            url: "https://example.com/feed",
+            title: "Feed",
+            added_at: "1970-01-01T00:00:00Z"
+        )
+        let recent = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube"],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [customUrl],
+            subscribedPlatforms: ["youtube", "custom"],
+            at: recentCompletion
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [customUrl],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "A mixed backend/local scope should stay pending after backend-only completion."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: [],
+            customRefreshed: true,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [customUrl],
+            subscribedPlatforms: ["youtube", "custom"],
+            at: recentCompletion
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [customUrl],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "A mixed backend/local scope should stay pending after local-only completion."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube"],
+            customRefreshed: true,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [customUrl],
+            subscribedPlatforms: ["youtube", "custom"],
+            at: recentCompletion
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [customUrl],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "A mixed backend/local scope should clear once both source classes complete."
+        )
+    }
+
+    func testBackgroundCompletionKeepsDirtyWhenDeviceFallbackIsSkippedInMixedScope() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let customUrl = CustomUrl(
+            id: "custom:https%3A%2F%2Fexample.com%2Ffeed",
+            url: "https://example.com/feed",
+            title: "Feed",
+            added_at: "1970-01-01T00:00:00Z"
+        )
+        let recent = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube", "yahoonews"],
+            customRefreshed: true,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [customUrl],
+            subscribedPlatforms: ["youtube", "yahoonews", "custom"],
+            at: recentCompletion
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [customUrl],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "A mixed backend/custom/device scope should stay pending when the device fallback was throttled or skipped."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube", "yahoonews"],
+            customRefreshed: true,
+            completedDevicePlatforms: ["yahoonews"],
+            activeTerms: [term],
+            customUrls: [customUrl],
+            subscribedPlatforms: ["youtube", "yahoonews", "custom"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [customUrl],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "The same mixed scope should clear once backend, custom, and device checks all complete."
+        )
+    }
+
+    func testBackgroundCompletionKeepsDirtyWhenDeviceFallbackPlatformIsMissing() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recent = FeedItem(
+            id: "yahoonews:recent", platform: "yahoonews", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube", "yahoonews", "niconico"],
+            customRefreshed: false,
+            completedDevicePlatforms: ["yahoonews"],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube", "yahoonews", "niconico"],
+            at: recentCompletion
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "yahoonews", "niconico"],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Completing one device-fallback platform must not clear a dirty scope that also needs another fallback platform."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["youtube", "yahoonews", "niconico"],
+            customRefreshed: false,
+            completedDevicePlatforms: ["yahoonews", "niconico"],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube", "yahoonews", "niconico"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "yahoonews", "niconico"],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "The dirty scope should clear once every subscribed device-fallback platform completes."
+        )
+    }
+
+    func testCompletedDeviceFallbackPlatformsUseScrapeCompletionMetadata() {
+        let emptyCompleted = LocalFallbackScrapeResult(
+            items: [],
+            completedPlatforms: ["yahoonews"]
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.completedDeviceFallbackPlatforms(
+                from: emptyCompleted,
+                subscribedPlatforms: ["yahoonews", "niconico"]
+            ),
+            ["yahoonews"],
+            "A fallback platform can complete even when it returns no matching items."
+        )
+
+        let itemOnly = FeedItem(
+            id: "yahoonews:recent", platform: "yahoonews", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let partialItems = LocalFallbackScrapeResult(
+            items: [itemOnly],
+            completedPlatforms: ["yahoonews"]
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.completedDeviceFallbackPlatforms(
+                from: partialItems,
+                subscribedPlatforms: ["yahoonews", "niconico"]
+            ),
+            ["yahoonews"],
+            "Returned items should not imply that every subscribed fallback platform completed."
+        )
+    }
+
+    func testCompletedDeviceFallbackPlatformsRequireEverySearchToCompletePlatform() {
+        let firstSearch = LocalFallbackScrapeResult(
+            items: [],
+            completedPlatforms: ["yahoonews", "niconico"]
+        )
+        let secondSearch = LocalFallbackScrapeResult(
+            items: [],
+            completedPlatforms: ["yahoonews"]
+        )
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForAllSearches(
+                from: [firstSearch, secondSearch],
+                subscribedPlatforms: ["yahoonews", "niconico"]
+            ),
+            ["yahoonews"],
+            "A fallback platform should complete only after every active keyword or alias has checked it."
+        )
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForAllSearches(
+                from: [firstSearch],
+                subscribedPlatforms: ["yahoonews", "niconico"]
+            ),
+            ["yahoonews", "niconico"],
+            "Empty results can still complete all fallback platforms when the scrape reports successful checks."
+        )
+    }
+
+    func testRecentBackendRowsDoNotMaskStaleDeviceFallbackRows() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recentBackend = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let staleDevice = FeedItem(
+            id: "yahoonews:stale", platform: "yahoonews", url: "https://example.com/stale",
+            title: "Stale", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:20:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:20:00Z"
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "yahoonews"],
+                items: [recentBackend, staleDevice],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: now.addingTimeInterval(-60)
+            ),
+            "Recent backend rows must not hide stale device-fallback rows in mixed scopes."
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "yahoonews"],
+                items: [recentBackend, staleDevice],
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: now.addingTimeInterval(-60)
+            ),
+            "Suspension refresh should also still run when only the device-fallback source is stale."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "yahoonews"],
+                items: [recentBackend, staleDevice],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: now.addingTimeInterval(-60),
+                lastBackendRefreshAt: now.addingTimeInterval(-60)
+            ),
+            "A recent full-source completion should still suppress duplicate foreground refreshes."
+        )
+    }
+
+    func testRecentRowsMustCoverEachSubscribedBackendPlatform() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recentYouTube = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let recentNote = FeedItem(
+            id: "note:recent", platform: "note", url: "https://example.com/note",
+            title: "Recent note", content_text: "Aiko", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "note"],
+                items: [recentYouTube],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "A recent row from one backend platform should not cover another subscribed backend platform."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "note"],
+                items: [recentYouTube, recentNote],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "Fresh rows for every subscribed backend platform should satisfy backend freshness."
+        )
+    }
+
+    func testRecentRowsMustCoverEachActiveTermForBackendPlatforms() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let aiko = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let haruka = WatchTerm(keyword: "Haruka", collection_mode: .allInfo)
+        let recentAiko = FeedItem(
+            id: "youtube:aiko", platform: "youtube", url: "https://example.com/aiko",
+            title: "Aiko recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let recentHaruka = FeedItem(
+            id: "youtube:haruka", platform: "youtube", url: "https://example.com/haruka",
+            title: "Haruka recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Haruka", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [aiko, haruka],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [recentAiko],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "A fresh row for one active term must not cover another active term on the same backend platform."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [aiko, haruka],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [recentAiko, recentHaruka],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            )
+        )
+    }
+
+    func testRecentRowsMustCoverEachSubscribedDeviceFallbackPlatform() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recentYahoo = FeedItem(
+            id: "yahoonews:recent", platform: "yahoonews", url: "https://example.com/yahoo",
+            title: "Recent Yahoo", content_text: "Aiko", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let recentFiveCh = FeedItem(
+            id: "5ch:recent", platform: "5ch", url: "https://example.com/5ch",
+            title: "Recent 5ch", content_text: "Aiko", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["yahoonews", "5ch"],
+                items: [recentYahoo],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "A recent row from one fallback platform should not cover another subscribed fallback platform."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["yahoonews", "5ch"],
+                items: [recentYahoo, recentFiveCh],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "Fresh rows for every subscribed fallback platform should satisfy device freshness."
+        )
+    }
+
+    func testRecentRowsMustCoverEachActiveTermForDeviceFallbackPlatforms() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let aiko = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let haruka = WatchTerm(keyword: "Haruka", collection_mode: .allInfo)
+        let recentAiko = FeedItem(
+            id: "yahoonews:aiko", platform: "yahoonews", url: "https://example.com/aiko",
+            title: "Aiko recent", content_text: "Aiko", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let recentHaruka = FeedItem(
+            id: "yahoonews:haruka", platform: "yahoonews", url: "https://example.com/haruka",
+            title: "Haruka recent", content_text: "Haruka", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Haruka", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [aiko, haruka],
+                customUrls: [],
+                subscribedPlatforms: ["yahoonews"],
+                items: [recentAiko],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "A fresh row for one active term must not cover another active term on the same fallback platform."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [aiko, haruka],
+                customUrls: [],
+                subscribedPlatforms: ["yahoonews"],
+                items: [recentAiko, recentHaruka],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            )
+        )
+    }
+
+    func testForegroundRefreshLaunchesForCustomOnlyScope() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let customUrl = CustomUrl(
+            id: "custom:https%3A%2F%2Fexample.com%2Ffeed",
+            url: "https://example.com/feed",
+            title: "Feed",
+            added_at: "1970-01-01T00:00:00Z"
+        )
+        let activeTerm = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let stale = FeedItem(
+            id: "custom:old", platform: "custom", url: "https://example.com/old",
+            title: "Old", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:20:00Z",
+            watch_term_keyword: "", fetched_at: "1970-01-01T00:20:00Z"
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [],
+                customUrls: [],
+                items: [],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil
+            )
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [],
+                customUrls: [customUrl],
+                items: [],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [],
+                customUrls: [customUrl],
+                items: [],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: now.addingTimeInterval(-60)
+            ),
+            "A recent completed custom-only check should not refresh again on every foreground activation."
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [activeTerm],
+                customUrls: [],
+                items: [],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil
+            )
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [],
+                customUrls: [],
+                items: [stale],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil
+            )
+        )
+    }
+
+    func testFeedScopeInvalidationForcesRefreshWithRecentCachedFeed() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recent = FeedItem(
+            id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
+            title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let activeTerm = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let recentCompletion = now.addingTimeInterval(-60)
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [activeTerm],
+                customUrls: [],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil
+            )
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [activeTerm],
+                customUrls: [],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Changing feed scope should force refresh even when existing cached rows are recent."
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [recent], now: now),
+            "Suspension refresh should also see the pending feed-scope refresh."
+        )
+
+        BackgroundRefreshPolicy.recordBackendRefreshCompleted(at: recentCompletion)
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [activeTerm],
+                customUrls: [],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Backend-only completion should not clear pending device/foreground scope refresh."
+        )
+
+        BackgroundRefreshPolicy.recordRefreshCompleted(at: recentCompletion)
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [activeTerm],
+                customUrls: [],
+                items: [recent],
+                pulledNewTerms: false,
+                now: now
+            )
+        )
+    }
+
+    func testFeedScopeChangesInvalidateRecordedRefreshCompletions() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let stale = FeedItem(
+            id: "yahoonews:stale", platform: "yahoonews", url: "https://example.com/stale",
+            title: "Stale", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:20:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:20:00Z"
+        )
+        let recentCompletion = now.addingTimeInterval(-60)
+
+        func recordRecentCompletions() {
+            BackgroundRefreshPolicy.recordRefreshCompleted(at: recentCompletion)
+            BackgroundRefreshPolicy.recordBackendRefreshCompleted(at: recentCompletion)
+            XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now))
+            XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [stale], now: now))
+        }
+
+        func assertCompletionsInvalidated(_ message: String) {
+            XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now), message)
+            XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [stale], now: now), message)
+        }
+
+        recordRecentCompletions()
+        let term = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        assertCompletionsInvalidated("Adding a watch term changes the feed scope.")
+
+        recordRecentCompletions()
+        db.updateTerm(id: term.id, aliases: ["Aiko Chan"])
+        assertCompletionsInvalidated("Changing aliases changes strict matching scope.")
+
+        recordRecentCompletions()
+        db.updateTerm(id: term.id, notifyOnNew: false)
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now),
+            "Notification-only changes should not force a feed refresh."
+        )
+
+        recordRecentCompletions()
+        db.updateTerm(id: term.id, isActive: false)
+        assertCompletionsInvalidated("Changing active state changes the feed scope.")
+
+        recordRecentCompletions()
+        db.setSubscribedPlatforms(platforms: ["news", "custom"])
+        assertCompletionsInvalidated("Changing subscribed platforms changes the feed scope.")
+
+        recordRecentCompletions()
+        db.addCustomUrl(url: "https://feed.example.com/rss", title: "Feed")
+        assertCompletionsInvalidated("Adding a custom URL changes the feed scope.")
+
+        let customId = db.customUrls.first!.id
+        recordRecentCompletions()
+        db.removeCustomUrl(id: customId)
+        assertCompletionsInvalidated("Removing a custom URL changes the feed scope.")
+
+        recordRecentCompletions()
+        db.deleteTerm(id: term.id)
+        assertCompletionsInvalidated("Deleting a watch term changes the feed scope.")
+    }
+
+    func testStartupFeedScopeRepairsInvalidateRecordedRefreshCompletions() throws {
+        let schemaVersionKey = "localdb_schema_version"
+        let originalSchemaVersion = UserDefaults.standard.object(forKey: schemaVersionKey)
+        defer {
+            if let originalSchemaVersion {
+                UserDefaults.standard.set(originalSchemaVersion, forKey: schemaVersionKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: schemaVersionKey)
+            }
+        }
+
+        UserDefaults.standard.set(3, forKey: schemaVersionKey)
+        let now = Date(timeIntervalSince1970: 1_800)
+        let stale = FeedItem(
+            id: "news:stale", platform: "news", url: "https://example.com/stale",
+            title: "Stale", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:20:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:20:00Z"
+        )
+        let startupDir = tempDir.appendingPathComponent("startup-repair")
+        try FileManager.default.createDirectory(at: startupDir, withIntermediateDirectories: true)
+        try JSONEncoder().encode([stale])
+            .write(to: startupDir.appendingPathComponent("feed_items.json"))
+
+        BackgroundRefreshPolicy.recordRefreshCompleted(at: now.addingTimeInterval(-60))
+        BackgroundRefreshPolicy.recordBackendRefreshCompleted(at: now.addingTimeInterval(-60))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now))
+        XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [stale], now: now))
+
+        _ = LocalDB(directory: startupDir)
+
         XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now))
-        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [invalid], now: now))
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(items: [stale], now: now))
     }
 
     func testBackgroundRefreshNotificationItemsAreNewSurvivingAndDeduplicated() {
@@ -662,6 +1732,82 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(manager.selectedItem?.media_type, "video")
         XCTAssertEqual(manager.selectedItem?.published_at, "2026-06-17T12:00:00Z")
         XCTAssertEqual(manager.selectedItem?.watch_term_keyword, "Aiko")
+        manager.selectedItem = nil
+    }
+
+    @MainActor
+    func testNotificationNavigationInfersFiveChWhenPayloadPlatformWasTrimmed() throws {
+        let manager = NotificationNavigationManager.shared
+        manager.selectedItem = nil
+        let itemID = "5ch:mevius:nogizaka:1782410369"
+
+        manager.openNotification(userInfo: [
+            "item_id": itemID,
+            "item_url": "https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369",
+            "item_title": "5ch push title",
+            "watch_term_keyword": "Aiko",
+        ])
+
+        XCTAssertEqual(manager.selectedItem?.id, itemID)
+        XCTAssertEqual(manager.selectedItem?.platform, "5ch")
+        XCTAssertTrue(ReaderView.usesSystemSafari(for: try XCTUnwrap(manager.selectedItem)))
+        manager.selectedItem = nil
+    }
+
+    @MainActor
+    func testNotificationNavigationInfersFiveChMirrorWhenPayloadPlatformWasTrimmed() throws {
+        let manager = NotificationNavigationManager.shared
+        manager.selectedItem = nil
+        let itemID = "2ch.sc:hayabusa3.2ch.sc:mnewsplus:1782467821"
+
+        manager.openNotification(userInfo: [
+            "item_id": itemID,
+            "item_url": "http://hayabusa3.2ch.sc/test/read.cgi/mnewsplus/1782467821/",
+            "item_title": "5ch mirror push title",
+            "watch_term_keyword": "Aiko",
+        ])
+
+        XCTAssertEqual(manager.selectedItem?.id, itemID)
+        XCTAssertEqual(manager.selectedItem?.platform, "5ch")
+        XCTAssertTrue(ReaderView.usesSystemSafari(for: try XCTUnwrap(manager.selectedItem)))
+        manager.selectedItem = nil
+    }
+
+    @MainActor
+    func testNotificationNavigationInfersFiveChRootHostWhenPayloadPlatformWasTrimmed() throws {
+        let manager = NotificationNavigationManager.shared
+        manager.selectedItem = nil
+        let itemID = "opaque-google-news-id"
+
+        manager.openNotification(userInfo: [
+            "item_id": itemID,
+            "item_url": "https://5ch.net/t1",
+            "item_title": "5ch root host push title",
+            "watch_term_keyword": "Aiko",
+        ])
+
+        XCTAssertEqual(manager.selectedItem?.id, itemID)
+        XCTAssertEqual(manager.selectedItem?.platform, "5ch")
+        XCTAssertTrue(ReaderView.usesSystemSafari(for: try XCTUnwrap(manager.selectedItem)))
+        manager.selectedItem = nil
+    }
+
+    @MainActor
+    func testNotificationNavigationInfersFiveChMirrorRootHostWhenPayloadPlatformWasTrimmed() throws {
+        let manager = NotificationNavigationManager.shared
+        manager.selectedItem = nil
+        let itemID = "opaque-google-news-id"
+
+        manager.openNotification(userInfo: [
+            "item_id": itemID,
+            "item_url": "https://2ch.sc/test/read.cgi/mnewsplus/1782467821/",
+            "item_title": "5ch mirror root push title",
+            "watch_term_keyword": "Aiko",
+        ])
+
+        XCTAssertEqual(manager.selectedItem?.id, itemID)
+        XCTAssertEqual(manager.selectedItem?.platform, "5ch")
+        XCTAssertTrue(ReaderView.usesSystemSafari(for: try XCTUnwrap(manager.selectedItem)))
         manager.selectedItem = nil
     }
 
@@ -1553,6 +2699,25 @@ final class OshiReaderTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
     }
 
+    func testSchemaV4AddsTheTVToExistingSubscriptions() throws {
+        let platforms = Platform.all
+            .filter(\.subscribedByDefault)
+            .map(\.id)
+            .filter { $0 != "thetv" && $0 != "oricon" }
+        let data = try JSONEncoder().encode(platforms)
+        try data.write(to: tempDir.appendingPathComponent("subscribed_platforms.json"))
+        UserDefaults.standard.set(3, forKey: "localdb_schema_version")
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertTrue(freshDB.subscribedPlatforms.contains("thetv"))
+        XCTAssertFalse(
+            freshDB.subscribedPlatforms.contains("oricon"),
+            "Migration must preserve sources the user previously disabled"
+        )
+        UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
+    }
+
     func testSchemaMigrationPrunesSummaryOnlyArticleMatch() throws {
         let term = WatchTerm(keyword: "吉沢亮")
         let now = ISO8601DateFormatter().string(from: Date())
@@ -1575,11 +2740,22 @@ final class OshiReaderTests: XCTestCase {
         try JSONEncoder().encode([item]).write(
             to: tempDir.appendingPathComponent("feed_items.json")
         )
+        try JSONEncoder().encode(["news", "youtube", "tver", "custom", "twitter"]).write(
+            to: tempDir.appendingPathComponent("subscribed_platforms.json")
+        )
         UserDefaults.standard.set(1, forKey: "localdb_schema_version")
+        let refreshCheckTime = Date(timeIntervalSince1970: 1_800)
+        BackgroundRefreshPolicy.recordRefreshCompleted(at: refreshCheckTime.addingTimeInterval(-60))
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [], now: refreshCheckTime)
+        )
 
         let freshDB = LocalDB(directory: tempDir)
 
         XCTAssertTrue(freshDB.feedItems.isEmpty)
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldRefreshOnForeground(items: freshDB.feedItems, now: refreshCheckTime)
+        )
         UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
     }
 
@@ -4000,6 +5176,71 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertTrue(items.isEmpty)
     }
 
+    func testScrapeGoogleNewsSiteCompletionRequiresHistoricalQueryWhenInitialHasNoMatch() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>杉野遥亮、『世にも奇妙な物語』で初主演 - Real Sound</title>
+              <link>https://news.google.com/rss/articles/realsound-summary-only</link>
+              <description>吉沢亮の関連記事も紹介</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.errorHandler = { request in
+            let decodedURL = request.url?.absoluteString.removingPercentEncoding ?? ""
+            return decodedURL.contains("when:10y") ? URLError(.notConnectedToInternet) : nil
+        }
+        MockURLProtocol.handler = { _ in (Data(xml.utf8), Self.response(status: 200)) }
+
+        let result = await NetworkManager.shared.scrapeGoogleNewsSiteWithCompletion(
+            keyword: "吉沢亮",
+            site: "realsound.jp",
+            platform: "realsound"
+        )
+
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertTrue(
+            result.completedPlatforms.isEmpty,
+            "A failed historical query must not mark the site fallback as complete."
+        )
+    }
+
+    func testScrapeGoogleNewsSiteCompletionMarksPlatformWhenHistoricalQuerySucceeds() async {
+        let initialXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>杉野遥亮、『世にも奇妙な物語』で初主演 - Real Sound</title>
+              <link>https://news.google.com/rss/articles/realsound-summary-only</link>
+              <description>吉沢亮の関連記事も紹介</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        let historicalXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        MockURLProtocol.handler = { request in
+            let decodedURL = request.url?.absoluteString.removingPercentEncoding ?? ""
+            let xml = decodedURL.contains("when:10y") ? historicalXml : initialXml
+            return (Data(xml.utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeGoogleNewsSiteWithCompletion(
+            keyword: "吉沢亮",
+            site: "realsound.jp",
+            platform: "realsound"
+        )
+
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertEqual(result.completedPlatforms, ["realsound"])
+    }
+
     func testScrapeRSSFallbackReturnsEmptyOnNetworkError() async {
         MockURLProtocol.errorHandler = { _ in URLError(.notConnectedToInternet) }
 
@@ -4028,6 +5269,63 @@ final class NetworkManagerTests: XCTestCase {
             XCTAssertEqual(items.first?.media_type, "article")
             XCTAssertEqual(items.first?.watch_term_keyword, "Aiko")
         }
+    }
+
+    func testScrapeRSSFallbackCompletionRequiresNHKAndGoogleNews() async {
+        let nhkXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko concert announcement</title>
+              <link>https://nhk.or.jp/concert</link>
+              <description>Aiko will hold a concert in Osaka.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.errorHandler = { request in
+            request.url?.host?.contains("google.com") == true
+                ? URLError(.notConnectedToInternet)
+                : nil
+        }
+        MockURLProtocol.handler = { _ in (Data(nhkXml.utf8), Self.response(status: 200)) }
+
+        let result = await NetworkManager.shared.scrapeRSSFallbackWithCompletion(keyword: "Aiko")
+
+        XCTAssertFalse(result.items.isEmpty)
+        XCTAssertTrue(
+            result.completedPlatforms.isEmpty,
+            "A partial news fallback scrape must not clear the news refresh marker."
+        )
+    }
+
+    func testScrapeRSSFallbackCompletionMarksNewsWhenBothFeedsSucceed() async {
+        let nhkXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        let gnewsXml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko new single review</title>
+              <link>https://news.google.com/rss/articles/aiko-review</link>
+              <description>Review of Aiko's latest single.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { request in
+            let isGoogleNews = request.url?.host?.contains("google.com") == true
+            return (Data((isGoogleNews ? gnewsXml : nhkXml).utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeRSSFallbackWithCompletion(keyword: "Aiko")
+
+        XCTAssertEqual(result.completedPlatforms, ["news"])
+        XCTAssertFalse(result.items.isEmpty)
     }
 
     func testScrapeCustomUrlsEmptyInputReturnsEmpty() async {

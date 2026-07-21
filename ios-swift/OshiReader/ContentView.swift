@@ -2,6 +2,10 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+extension Notification.Name {
+    static let oshiReaderForegroundRefreshRequested = Notification.Name("OshiReader.foregroundRefreshRequested")
+}
+
 enum OshiTab: String, CaseIterable, Identifiable, Hashable {
     case feed, search, saved, oshi, settings
     var id: String { rawValue }
@@ -17,6 +21,8 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: OshiTab = ProcessInfo.processInfo.arguments.contains("--uitesting-start-search") ? .search : .feed
+    @State private var offscreenForegroundRefreshTask: Task<Void, Never>? = nil
+    @State private var offscreenForegroundRefreshID: UUID? = nil
     
     init() {
         // Customize tab bar background/colors to match Otterpia aesthetics
@@ -116,7 +122,11 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 UNUserNotificationCenter.current().setBadgeCount(0)
+                requestForegroundRefreshForActiveScene()
             } else if phase == .background {
+                offscreenForegroundRefreshTask?.cancel()
+                offscreenForegroundRefreshTask = nil
+                offscreenForegroundRefreshID = nil
                 BackgroundRefreshManager.shared.schedule()
             }
         }
@@ -125,11 +135,60 @@ struct ContentView: View {
                 selectedTab = .feed
             }
         }
+        .onChange(of: selectedTab) { _, newTab in
+            guard newTab == .feed else { return }
+            offscreenForegroundRefreshTask?.cancel()
+            offscreenForegroundRefreshTask = nil
+            offscreenForegroundRefreshID = nil
+        }
         .sheet(item: $notificationNavigation.selectedItem) { item in
             NavigationStack {
                 ReaderView(feedItem: item)
             }
             .preferredColorScheme(theme.mode == .dark ? .dark : .light)
+        }
+    }
+
+    private func requestForegroundRefreshForActiveScene() {
+        if selectedTab == .feed {
+            NotificationCenter.default.post(name: .oshiReaderForegroundRefreshRequested, object: nil)
+            return
+        }
+        launchOffscreenForegroundRefreshIfNeeded()
+    }
+
+    private func launchOffscreenForegroundRefreshIfNeeded() {
+        guard offscreenForegroundRefreshTask == nil,
+              offscreenForegroundRefreshID == nil,
+              !NetworkManager.shared.isUnitTesting,
+              !NetworkManager.shared.isUITesting else { return }
+        let refreshID = UUID()
+        offscreenForegroundRefreshID = refreshID
+        offscreenForegroundRefreshTask = Task { @MainActor in
+            defer {
+                if offscreenForegroundRefreshID == refreshID {
+                    offscreenForegroundRefreshTask = nil
+                    offscreenForegroundRefreshID = nil
+                }
+            }
+            let db = LocalDB.shared
+            let pushedTerms = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+            guard !Task.isCancelled else { return }
+            let pulledTerms = await NetworkManager.shared.syncTermsFromBackendWithStatus()
+            guard !Task.isCancelled else { return }
+            let feedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
+            guard BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: db.terms.filter(\.is_active),
+                customUrls: db.customUrls,
+                subscribedPlatforms: db.subscribedPlatforms,
+                items: db.feedItems,
+                pulledNewTerms: pulledTerms.changed
+            ) else { return }
+            _ = await BackgroundRefreshManager.shared.refreshForBackground(
+                notifyOnNew: false,
+                skipTermSync: pushedTerms && pulledTerms.succeeded,
+                feedScopeRevision: feedScopeRevision
+            )
         }
     }
 

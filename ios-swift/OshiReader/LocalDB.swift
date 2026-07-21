@@ -33,15 +33,18 @@ class LocalDB: ObservableObject {
     private var termDeleteTombstones: [String: Date] = [:]
 
     // Bump this whenever a migration step is added below.
-    private static let currentSchemaVersion = 3
+    private static let currentSchemaVersion = 4
     private static let schemaVersionKey = "localdb_schema_version"
 
     init(directory: URL) {
         self.storeDirectory = directory
-        loadAll()
-        runMigrationsIfNeeded()
+        let loadChangedFeedScope = loadAll()
+        let migrationsChangedFeedScope = runMigrationsIfNeeded()
         logStartupCacheDiagnostics()
-        repairMissingTermsFromCachedFeed()
+        let repairChangedFeedScope = repairMissingTermsFromCachedFeed()
+        if loadChangedFeedScope || migrationsChangedFeedScope || repairChangedFeedScope {
+            BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        }
         pruneContentCache()
     }
 
@@ -51,7 +54,8 @@ class LocalDB: ObservableObject {
     }
 
     // MARK: - Load and Save Helpers
-    private func loadAll() {
+    @discardableResult
+    private func loadAll() -> Bool {
         self.terms = loadFromFile(name: "terms", defaultValue: [])
         self.feedItems = loadFromFile(name: "feed_items", defaultValue: [])
         self.savedPages = loadFromFile(name: "saved_pages", defaultValue: [])
@@ -66,48 +70,68 @@ class LocalDB: ObservableObject {
         self.hiddenItems = Set(hiddenArray)
         self.termDeleteTombstones = loadFromFile(name: termDeleteTombstonesFileName, defaultValue: [:])
         pruneTermDeleteTombstones()
-        applyPersistedTermDeletes()
+        return applyPersistedTermDeletes()
     }
 
     // MARK: - Schema Migrations
-    private func runMigrationsIfNeeded() {
+    @discardableResult
+    private func runMigrationsIfNeeded() -> Bool {
         let stored = UserDefaults.standard.integer(forKey: Self.schemaVersionKey)
-        guard stored < Self.currentSchemaVersion else { return }
+        guard stored < Self.currentSchemaVersion else { return false }
+        var changedFeedScope = false
         for version in (stored + 1)...Self.currentSchemaVersion {
-            migrate(to: version)
+            changedFeedScope = migrate(to: version) || changedFeedScope
         }
         UserDefaults.standard.set(Self.currentSchemaVersion, forKey: Self.schemaVersionKey)
         AppLogger.persistence.info("Schema migrated from v\(stored) → v\(Self.currentSchemaVersion)")
+        return changedFeedScope
     }
 
-    private func migrate(to version: Int) {
+    @discardableResult
+    private func migrate(to version: Int) -> Bool {
         switch version {
         case 1:
-            addMissingDefaultPlatforms()
+            return addMissingDefaultPlatforms()
         case 2:
-            pruneIrrelevantCachedArticleItems()
+            return pruneIrrelevantCachedArticleItems()
         case 3:
             // Add only the newly introduced source. Re-running the full v1 merge
             // would re-enable older sources that the user intentionally disabled.
             if !subscribedPlatforms.contains("twitter") {
                 subscribedPlatforms.append("twitter")
                 saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+                return true
             }
+            return false
+        case 4:
+            // Add only the newly introduced source. Re-running the full v1 merge
+            // would re-enable older sources that the user intentionally disabled.
+            if !subscribedPlatforms.contains("thetv") {
+                subscribedPlatforms.append("thetv")
+                saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+                return true
+            }
+            return false
         default:
             AppLogger.persistence.warning("No migration handler for schema v\(version)")
+            return false
         }
     }
 
-    private func addMissingDefaultPlatforms() {
+    @discardableResult
+    private func addMissingDefaultPlatforms() -> Bool {
         let allIds = Set(Platform.all.filter(\.subscribedByDefault).map(\.id))
         let missing = allIds.subtracting(Set(subscribedPlatforms))
         if !missing.isEmpty {
             subscribedPlatforms.append(contentsOf: missing.sorted())
             saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+            return true
         }
+        return false
     }
 
-    private func pruneIrrelevantCachedArticleItems() {
+    @discardableResult
+    private func pruneIrrelevantCachedArticleItems() -> Bool {
         let termsByKeyword = Dictionary(uniqueKeysWithValues: terms.map { ($0.keyword, $0) })
         let originalCount = self.feedItems.count
         self.feedItems.removeAll { item in
@@ -126,19 +150,23 @@ class LocalDB: ObservableObject {
             AppLogger.persistence.info(
                 "Pruned \(originalCount - self.feedItems.count) irrelevant cached feed items"
             )
+            return true
         }
+        return false
     }
 
-    private func repairMissingTermsFromCachedFeed() {
+    @discardableResult
+    private func repairMissingTermsFromCachedFeed() -> Bool {
         let existingKeywords = Set(terms.map(\.keyword))
         let cachedKeywords = Set(feedItems.map(\.watch_term_keyword).filter { !$0.isEmpty })
         let keywords = cachedKeywords.subtracting(existingKeywords).sorted()
-        guard !keywords.isEmpty else { return }
+        guard !keywords.isEmpty else { return false }
         terms.append(contentsOf: keywords.map {
             WatchTerm(keyword: $0, collection_mode: .allInfo, is_active: true, notify_on_new: true, repaired_from_cache: true)
         })
         saveToFile(name: "terms", value: terms)
         AppLogger.persistence.info("Repaired \(keywords.count) missing watch terms from cached feed items")
+        return true
     }
 
     private func logStartupCacheDiagnostics() {
@@ -194,35 +222,52 @@ class LocalDB: ObservableObject {
         let term = WatchTerm(keyword: trimmedKeyword, collection_mode: collectionMode)
         terms.insert(term, at: 0)
         saveToFile(name: "terms", value: terms)
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         return term
     }
 
     func updateTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) {
         if let idx = terms.firstIndex(where: { $0.id == id }) {
             var term = terms[idx]
+            let originalTerm = term
             if let isActive { term.is_active = isActive }
             if let collectionMode { term.collection_mode = collectionMode }
             if let notifyOnNew { term.notify_on_new = notifyOnNew }
             if let aliases { term.aliases = aliases }
             terms[idx] = term
             saveToFile(name: "terms", value: terms)
+            if Self.feedScopeFieldsChanged(from: originalTerm, to: term) {
+                BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+            }
         }
     }
 
     func addTermFromBackend(_ term: WatchTerm) {
         terms.insert(term, at: 0)
         saveToFile(name: "terms", value: terms)
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
     }
 
     func replaceTerm(localId: String, with serverTerm: WatchTerm) {
         if let idx = terms.firstIndex(where: { $0.id == localId }) {
+            let originalTerm = terms[idx]
             terms[idx] = serverTerm
             saveToFile(name: "terms", value: terms)
+            if Self.feedScopeFieldsChanged(from: originalTerm, to: serverTerm) {
+                BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+            }
         }
     }
 
     func term(matchingKeyword keyword: String) -> WatchTerm? {
         terms.first { $0.keyword == keyword }
+    }
+
+    private static func feedScopeFieldsChanged(from lhs: WatchTerm, to rhs: WatchTerm) -> Bool {
+        lhs.keyword != rhs.keyword ||
+            lhs.collection_mode != rhs.collection_mode ||
+            lhs.is_active != rhs.is_active ||
+            lhs.aliases != rhs.aliases
     }
 
     func markTermDeleteConfirmed(_ term: WatchTerm) {
@@ -249,17 +294,19 @@ class LocalDB: ObservableObject {
         saveToFile(name: termDeleteTombstonesFileName, value: termDeleteTombstones)
     }
 
-    private func applyPersistedTermDeletes() {
-        guard !termDeleteTombstones.isEmpty else { return }
+    @discardableResult
+    private func applyPersistedTermDeletes() -> Bool {
+        guard !termDeleteTombstones.isEmpty else { return false }
         let deletedKeywords = Set(termDeleteTombstones.keys)
         let originalTermCount = terms.count
         let originalFeedCount = feedItems.count
         terms.removeAll { deletedKeywords.contains($0.keyword) }
         feedItems.removeAll { deletedKeywords.contains($0.watch_term_keyword) }
-        guard terms.count != originalTermCount || feedItems.count != originalFeedCount else { return }
+        guard terms.count != originalTermCount || feedItems.count != originalFeedCount else { return false }
         saveToFile(name: "feed_items", value: feedItems)
         saveToFile(name: "terms", value: terms)
         AppLogger.persistence.info("Applied \(deletedKeywords.count) persisted watch-term delete tombstones")
+        return true
     }
 
     func deleteTerm(id: String) {
@@ -269,6 +316,7 @@ class LocalDB: ObservableObject {
             feedItems.removeAll(where: { $0.watch_term_keyword == keyword })
             saveToFile(name: "feed_items", value: feedItems)
             saveToFile(name: "terms", value: terms)
+            BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         }
     }
 
@@ -451,6 +499,12 @@ class LocalDB: ObservableObject {
         return parseISO8601Date(item.published_at) ?? .distantPast
     }
 
+    private struct FeedQueryCandidate {
+        let item: FeedItem
+        let platformKey: String
+        let sortDate: Date
+    }
+
     // MARK: - Query Feed (Filtering)
     func queryFeed(keyword: String?, days: Int) -> [FeedItem] {
         let now = Date()
@@ -462,27 +516,29 @@ class LocalDB: ObservableObject {
             result[term.keyword] = term
         }
 
-        let deduped = feedItems.filter { item in
+        let deduped = feedItems.compactMap { item -> FeedQueryCandidate? in
             let key = "\(item.id)::\(item.watch_term_keyword)"
-            if hiddenItems.contains(key) { return false }
+            if hiddenItems.contains(key) { return nil }
 
             // Search pages fallbacks
-            if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return false }
+            if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return nil }
 
             // Hide broken Yahoo fallback cards whose readable field is only a URL.
             // Valid Google News summaries contain an HTML anchor, so checking for any
             // "https://" substring incorrectly removed every Yahoo article.
             if item.platform == "yahoonews"
                 && (Self.isBareWebAddress(item.title) || Self.isBareWebAddress(item.content_text)) {
-                return false
+                return nil
             }
 
             let platformDef = Platform.forRawValue(item.platform)
+            var parsedPublishedAt: Date?
 
             // Cutoff check — use proper Date comparison so timezone-offset strings sort correctly
             if let cutoff = cutoffDate, platformDef?.skipDateCutoff != true {
-                guard let itemDate = parseISO8601Date(item.published_at), itemDate >= cutoff else {
-                    return false
+                parsedPublishedAt = parseISO8601Date(item.published_at)
+                guard let itemDate = parsedPublishedAt, itemDate >= cutoff else {
+                    return nil
                 }
             }
 
@@ -491,43 +547,48 @@ class LocalDB: ObservableObject {
                 if item.platform == "custom" {
                     // Let custom pages pass if custom matches
                 } else if item.watch_term_keyword != kw {
-                    return false
+                    return nil
                 }
             }
 
             // Strict keyword matching — news-type platforms require keyword/alias to appear in content
             if platformDef?.usesStrictKeywordMatching == true, !item.watch_term_keyword.isEmpty {
                 let term = termsByKeyword[item.watch_term_keyword]
-                let candidates = [item.watch_term_keyword] + (term?.aliases ?? [])
-                if !candidates.contains(where: { matchesKeyword(item: item, kw: $0) }) {
-                    return false
+                let keywordCandidates = [item.watch_term_keyword] + (term?.aliases ?? [])
+                if !keywordCandidates.contains(where: { matchesKeyword(item: item, kw: $0) }) {
+                    return nil
                 }
             }
 
             // Subscribed platforms
             let platformKey = Platform.normalize(item.platform)
             if !subscribedPlatformSet.contains(platformKey) {
-                return false
+                return nil
             }
-            return true
+            return FeedQueryCandidate(
+                item: item,
+                platformKey: platformKey,
+                sortDate: parsedPublishedAt ?? sortDate(for: item)
+            )
         }
         .sorted { lhs, rhs in
-            sortDate(for: lhs) > sortDate(for: rhs)
+            lhs.sortDate > rhs.sortDate
         }
-        .reduce(into: (items: [FeedItem](), urls: Set<String>(), platformTitles: Set<String>(), articleTitles: Set<String>())) { acc, item in
+        .reduce(into: (items: [FeedItem](), urls: Set<String>(), platformTitles: Set<String>(), articleTitles: Set<String>())) { acc, candidate in
             // Deduplicate the same article arriving from two paths — e.g. a backend copy
             // with a direct URL and a device-scraped Google News copy with a news.google
             // URL (different ids/URLs, same story). Canonical URLs are global duplicates
             // even when tracking params or wrapper params differ. Normalized titles still
             // catch direct-vs-redirect copies within the same canonical platform, and a
             // stricter article title key catches cross-source syndication.
+            let item = candidate.item
             let urlKey = Self.normalizedURLKey(item.url)
             guard urlKey.isEmpty || acc.urls.insert(urlKey).inserted else { return }
 
             let titleKey = Self.normalizedTitleKey(item.title)
             let platformTitleKey = titleKey.isEmpty
                 ? ""
-                : "\(Platform.normalize(item.platform))|\(titleKey)"
+                : "\(candidate.platformKey)|\(titleKey)"
             guard platformTitleKey.isEmpty || acc.platformTitles.insert(platformTitleKey).inserted else { return }
 
             let articleTitleKey = Self.normalizedArticleTitleKey(item.title)
@@ -723,8 +784,12 @@ class LocalDB: ObservableObject {
 
     // MARK: - Subscribed Platforms
     func setSubscribedPlatforms(platforms: [String]) {
+        let originalPlatforms = Set(subscribedPlatforms)
         subscribedPlatforms = platforms
         saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+        if Set(platforms) != originalPlatforms {
+            BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        }
     }
 
     // MARK: - Custom URLs
@@ -740,11 +805,16 @@ class LocalDB: ObservableObject {
         let entry = CustomUrl(id: id, url: normalized, title: trimmedTitle.isEmpty ? nil : trimmedTitle, added_at: iso8601.string(from: Date()))
         customUrls.insert(entry, at: 0)
         saveToFile(name: "custom_urls", value: customUrls)
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
     }
 
     func removeCustomUrl(id: String) {
+        let originalCount = customUrls.count
         customUrls.removeAll(where: { $0.id == id })
         saveToFile(name: "custom_urls", value: customUrls)
+        if customUrls.count != originalCount {
+            BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        }
     }
 
     // MARK: - Data Reset
@@ -783,6 +853,7 @@ class LocalDB: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "wallpaper_url")
         UserDefaults.standard.removeObject(forKey: "sources_order")
         saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
     }
 
     // MARK: - Wallpaper & Custom Order (UserDefaults)

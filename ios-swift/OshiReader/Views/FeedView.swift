@@ -6,6 +6,23 @@ private struct FeedRefreshAttempt {
     let itemCount: Int
     let addedCount: Int
     let detail: String?
+    let completedDevicePlatforms: Set<String>
+
+    init(
+        strategy: String,
+        status: String,
+        itemCount: Int = 0,
+        addedCount: Int = 0,
+        detail: String? = nil,
+        completedDevicePlatforms: Set<String> = []
+    ) {
+        self.strategy = strategy
+        self.status = status
+        self.itemCount = itemCount
+        self.addedCount = addedCount
+        self.detail = detail
+        self.completedDevicePlatforms = completedDevicePlatforms
+    }
 
     var diagnosticEvent: ClientDiagnosticEvent {
         ClientDiagnosticEvent(
@@ -22,44 +39,95 @@ private struct FeedRefreshReport {
     var attempts: [FeedRefreshAttempt] = []
     var backendReturnedItems = false
     var addedCount = 0
+    var completedBackendPlatforms = Set<String>()
+    var backendCompletedCheck = false
+    var customCompletedCheck = false
+    var completedDevicePlatforms = Set<String>()
+    var feedScopeRevision: Int?
 
     mutating func record(
         strategy: String,
         status: String,
         itemCount: Int = 0,
         addedCount: Int = 0,
-        detail: String? = nil
+        detail: String? = nil,
+        completedDevicePlatforms: Set<String> = []
     ) {
         attempts.append(FeedRefreshAttempt(
             strategy: strategy,
             status: status,
             itemCount: itemCount,
             addedCount: addedCount,
-            detail: detail
+            detail: detail,
+            completedDevicePlatforms: completedDevicePlatforms
         ))
-        if Self.isUsefulBackendAttempt(strategy: strategy, addedCount: addedCount) {
+        if Self.didBackendReturnItems(strategy: strategy, itemCount: itemCount) {
             backendReturnedItems = true
         }
+        updateCompletedChecks(
+            strategy: strategy,
+            status: status,
+            completedDevicePlatforms: completedDevicePlatforms
+        )
         self.addedCount += addedCount
     }
 
     mutating func append(_ attempt: FeedRefreshAttempt) {
         attempts.append(attempt)
-        if Self.isUsefulBackendAttempt(strategy: attempt.strategy, addedCount: attempt.addedCount) {
+        if Self.didBackendReturnItems(strategy: attempt.strategy, itemCount: attempt.itemCount) {
             backendReturnedItems = true
         }
+        updateCompletedChecks(
+            strategy: attempt.strategy,
+            status: attempt.status,
+            completedDevicePlatforms: attempt.completedDevicePlatforms
+        )
         addedCount += attempt.addedCount
     }
 
     mutating func append(_ other: FeedRefreshReport) {
         attempts.append(contentsOf: other.attempts)
         backendReturnedItems = backendReturnedItems || other.backendReturnedItems
+        completedBackendPlatforms.formUnion(other.completedBackendPlatforms)
+        backendCompletedCheck = backendCompletedCheck || other.backendCompletedCheck
+        customCompletedCheck = customCompletedCheck || other.customCompletedCheck
+        completedDevicePlatforms.formUnion(other.completedDevicePlatforms)
+        if feedScopeRevision == nil {
+            feedScopeRevision = other.feedScopeRevision
+        }
         addedCount += other.addedCount
     }
 
-    private static func isUsefulBackendAttempt(strategy: String, addedCount: Int) -> Bool {
-        guard addedCount > 0 else { return false }
+    mutating func markCompletedDevicePlatforms(_ platforms: Set<String>) {
+        completedDevicePlatforms.formUnion(platforms)
+    }
+
+    private static func didBackendReturnItems(strategy: String, itemCount: Int) -> Bool {
+        guard itemCount > 0 else { return false }
         return strategy.hasPrefix("backend_feed") || strategy.hasPrefix("backend_platform_")
+    }
+
+    private mutating func updateCompletedChecks(
+        strategy: String,
+        status: String,
+        completedDevicePlatforms: Set<String>
+    ) {
+        guard status == "items" || status == "empty" else { return }
+        if strategy.hasPrefix("backend_feed") || strategy.hasPrefix("backend_platform_") {
+            backendCompletedCheck = true
+            if let platform = Self.backendPlatformID(from: strategy) {
+                completedBackendPlatforms.insert(platform)
+            }
+        } else if strategy == "custom_urls" {
+            customCompletedCheck = true
+        } else if strategy == "device_local_scrapers" {
+            self.completedDevicePlatforms.formUnion(completedDevicePlatforms)
+        }
+    }
+
+    private static func backendPlatformID(from strategy: String) -> String? {
+        guard strategy.hasPrefix("backend_platform_") else { return nil }
+        return String(strategy.dropFirst("backend_platform_".count))
     }
 }
 
@@ -76,9 +144,12 @@ struct FeedView: View {
     @State private var isRefreshing = false
     @State private var isScrapingFallback = false
     @State private var refreshTask: Task<Void, Never>? = nil
+    @State private var foregroundRefreshTask: Task<Void, Never>? = nil
     @State private var refreshErrorMessage: String? = nil
     @State private var hasLoadedOnce = false
     @State private var displayedCount: Int = 20
+    @State private var cachedFilteredItems: [FeedItem] = []
+    @State private var cachedVisibleItems: [FeedItem] = []
     @State private var showFilterSheet = false
     @State private var showAddUrlSheet = false
     @State private var showReorderSheet = false
@@ -89,6 +160,19 @@ struct FeedView: View {
     
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedItem: FeedItem? = nil
+
+    init() {
+        let db = LocalDB.shared
+        let initialFilteredItems = Self.makeFilteredItems(
+            db: db,
+            keyword: nil,
+            platform: nil,
+            mediaFilter: .all,
+            days: 30
+        )
+        _cachedFilteredItems = State(initialValue: initialFilteredItems)
+        _cachedVisibleItems = State(initialValue: Array(initialFilteredItems.prefix(20)))
+    }
     
     private let timeRanges = [
         (label: "allTime", days: 0),
@@ -102,25 +186,42 @@ struct FeedView: View {
         Set(db.savedPages.map(\.id))
     }
 
-    // Full filtered list (all matching items)
-    var filteredItems: [FeedItem] {
-        var result = db.queryFeed(keyword: selectedKeyword, days: daysFilter)
-        if let platform = selectedPlatform {
+    private var canLoadMore: Bool {
+        displayedCount < min(cachedFilteredItems.count, 100)
+    }
+
+    private var remainingLoadMoreCount: Int {
+        max(min(cachedFilteredItems.count, 100) - displayedCount, 0)
+    }
+
+    // Full filtered list (all matching items). This is intentionally kept as the
+    // single projection used to refresh the cached list so FeedView preserves the
+    // existing LocalDB query semantics while avoiding repeated body-time work.
+    private func makeFilteredItems() -> [FeedItem] {
+        Self.makeFilteredItems(
+            db: db,
+            keyword: selectedKeyword,
+            platform: selectedPlatform,
+            mediaFilter: mediaFilter,
+            days: daysFilter
+        )
+    }
+
+    private static func makeFilteredItems(
+        db: LocalDB,
+        keyword: String?,
+        platform: String?,
+        mediaFilter: MediaFilter,
+        days: Int
+    ) -> [FeedItem] {
+        var result = db.queryFeed(keyword: keyword, days: days)
+        if let platform {
             result = result.filter { matchesPlatform($0, platformId: platform) }
         }
         if mediaFilter == .mediaOnly {
             result = result.filter { $0.media_type == "video" || $0.media_type == "image" || Platform.forRawValue($0.platform)?.isMediaPlatform == true }
         }
         return result
-    }
-
-    // Page-limited slice shown in the list
-    var visibleItems: [FeedItem] {
-        Array(filteredItems.prefix(displayedCount))
-    }
-
-    private var canLoadMore: Bool {
-        displayedCount < min(filteredItems.count, 100)
     }
     
     var orderedPlatforms: [String] {
@@ -358,16 +459,12 @@ struct FeedView: View {
                 }
 
                 // Main Feed List
-                let currentFilteredItems = filteredItems
-                let currentVisibleItems = Array(currentFilteredItems.prefix(displayedCount))
-                let currentCanLoadMore = displayedCount < min(currentFilteredItems.count, 100)
-
-                if isRefreshing && currentFilteredItems.isEmpty {
+                if isRefreshing && cachedFilteredItems.isEmpty {
                     Spacer()
                     ProgressView()
                         .tint(theme.colors.primary)
                     Spacer()
-                } else if currentFilteredItems.isEmpty {
+                } else if cachedFilteredItems.isEmpty {
                     Spacer()
                     VStack(spacing: 12) {
                         Text("≽՞•ﻌ•՞≼")
@@ -384,7 +481,7 @@ struct FeedView: View {
                     Spacer()
                 } else {
                     List {
-                        ForEach(currentVisibleItems) { item in
+                        ForEach(cachedVisibleItems) { item in
                             if horizontalSizeClass == .regular {
                                 Button(action: { selectedItem = item }) {
                                     FeedCard(item: item, isSaved: savedItemIds.contains(item.id), theme: theme)
@@ -440,13 +537,13 @@ struct FeedView: View {
                             }
                         }
 
-                        if currentCanLoadMore {
+                        if canLoadMore {
                             Button {
-                                displayedCount = min(displayedCount + 20, 100)
+                                loadMoreFeedItems()
                             } label: {
                                 HStack {
                                     Spacer()
-                                    Text(i18n.tFormat("feedLoadMoreFmt", min(currentFilteredItems.count, 100) - displayedCount))
+                                    Text(i18n.tFormat("feedLoadMoreFmt", remainingLoadMoreCount))
                                         .font(.subheadline)
                                         .foregroundColor(theme.colors.primary)
                                     Spacer()
@@ -533,32 +630,60 @@ struct FeedView: View {
             Text(i18n.t("hidePostMessage"))
         }
         .accessibilityIdentifier("feed.screen")
-        .onChange(of: selectedKeyword) { displayedCount = 20 }
-        .onChange(of: selectedPlatform) { displayedCount = 20 }
+        .onChange(of: selectedKeyword) { rebuildFeedCache(resetDisplayedCount: true) }
+        .onChange(of: selectedPlatform) { rebuildFeedCache(resetDisplayedCount: true) }
         .onChange(of: daysFilter) { _, newDays in
-            displayedCount = 20
+            rebuildFeedCache(resetDisplayedCount: true)
             if newDays == 0 { launchRefresh() }
         }
-        .onChange(of: mediaFilter) { displayedCount = 20 }
+        .onChange(of: mediaFilter) { rebuildFeedCache(resetDisplayedCount: true) }
+        .onChange(of: db.feedItems) { rebuildFeedCache() }
+        .onChange(of: db.hiddenItems) { rebuildFeedCache() }
+        .onChange(of: db.subscribedPlatforms) { rebuildFeedCache() }
+        .onChange(of: db.terms) { rebuildFeedCache() }
         .onAppear {
+            rebuildFeedCache()
             guard !hasLoadedOnce else { return }
-            hasLoadedOnce = true
-            refreshTask = Task {
-                // Push local terms to backend (handles post-DB-reset state)
-                await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
-                // Pull backend terms that aren't local yet (fresh install / multi-device)
-                let pulledNew = await NetworkManager.shared.syncTermsFromBackend()
-                let hasTerms = !db.terms.isEmpty || pulledNew
-                let needsForegroundRefresh = db.feedItems.isEmpty ||
-                    BackgroundRefreshPolicy.shouldRefreshOnForeground(items: db.feedItems)
-                let hasRecoverableCache = !db.feedItems.isEmpty
-                if (hasTerms || hasRecoverableCache), needsForegroundRefresh {
-                    await refreshFeed()
-                }
-            }
+            launchForegroundRefreshIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .oshiReaderForegroundRefreshRequested)) { _ in
+            rebuildFeedCache()
+            launchForegroundRefreshIfNeeded()
         }
         .onDisappear {
+            foregroundRefreshTask?.cancel()
             refreshTask?.cancel()
+        }
+    }
+
+    private func launchForegroundRefreshIfNeeded() {
+        guard !isRefreshing else { return }
+        foregroundRefreshTask?.cancel()
+        foregroundRefreshTask = Task {
+            defer {
+                if !Task.isCancelled {
+                    hasLoadedOnce = true
+                }
+            }
+            // Push local terms to backend (handles post-DB-reset state)
+            let pushedTerms = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+            guard !Task.isCancelled else { return }
+            // Pull backend terms that aren't local yet (fresh install / multi-device)
+            let pulledTerms = await NetworkManager.shared.syncTermsFromBackendWithStatus()
+            guard !Task.isCancelled else { return }
+            let feedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
+            if BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: db.terms.filter(\.is_active),
+                customUrls: db.customUrls,
+                subscribedPlatforms: db.subscribedPlatforms,
+                items: db.feedItems,
+                pulledNewTerms: pulledTerms.changed
+            ) {
+                await refreshFeed(
+                    skipTermSync: pushedTerms && pulledTerms.succeeded,
+                    feedScopeRevision: feedScopeRevision
+                )
+            }
         }
     }
     
@@ -566,6 +691,7 @@ struct FeedView: View {
     // Guards on isRefreshing so we never lose the handle to an already-running task.
     private func launchRefresh() {
         guard !isRefreshing else { return }
+        foregroundRefreshTask?.cancel()
         refreshTask?.cancel()
         refreshTask = Task { await refreshFeed() }
     }
@@ -577,17 +703,76 @@ struct FeedView: View {
         if mediaFilter == .mediaOnly { count += 1 }
         return count
     }
+
+    private func rebuildFeedCache(resetDisplayedCount: Bool = false) {
+        let effectiveDisplayedCount = resetDisplayedCount ? 20 : displayedCount
+        if displayedCount != effectiveDisplayedCount {
+            displayedCount = effectiveDisplayedCount
+        }
+
+        let filtered = makeFilteredItems()
+        if cachedFilteredItems != filtered {
+            cachedFilteredItems = filtered
+        }
+        updateVisibleFeedCache(displayedCount: effectiveDisplayedCount, filteredItems: filtered)
+    }
+
+    private func updateVisibleFeedCache(displayedCount: Int, filteredItems: [FeedItem]? = nil) {
+        let sourceItems = filteredItems ?? cachedFilteredItems
+        let visible = Array(sourceItems.prefix(displayedCount))
+        if cachedVisibleItems != visible {
+            cachedVisibleItems = visible
+        }
+    }
+
+    private func loadMoreFeedItems() {
+        let nextCount = min(displayedCount + 20, 100)
+        guard nextCount != displayedCount else { return }
+        displayedCount = nextCount
+        updateVisibleFeedCache(displayedCount: nextCount)
+    }
+
+    private func recordCompletedRefreshCheckIfNeeded(
+        _ report: FeedRefreshReport,
+        feedScopeRevision: Int
+    ) {
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: report.completedBackendPlatforms,
+            customRefreshed: report.customCompletedCheck,
+            completedDevicePlatforms: report.completedDevicePlatforms,
+            activeTerms: db.terms.filter(\.is_active),
+            customUrls: db.customUrls,
+            subscribedPlatforms: db.subscribedPlatforms,
+            feedScopeRevision: feedScopeRevision
+        )
+    }
+
+    private func fallbackPlatformsNeedingDevice() -> Set<String> {
+        // Backend feed responses are stored rows, not proof that a fallback source
+        // was freshly reachable from the backend, so subscribed fallback platforms
+        // stay eligible for the device-side pass.
+        BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(in: db.subscribedPlatforms)
+    }
     
-    private func refreshFeed() async {
+    private func refreshFeed(
+        skipTermSync: Bool = false,
+        feedScopeRevision: Int? = nil
+    ) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         refreshErrorMessage = nil
         defer { isRefreshing = false; isScrapingFallback = false }
 
-        var report = await quickRefresh()
+        var report = await quickRefresh(
+            skipTermSync: skipTermSync,
+            feedScopeRevision: feedScopeRevision
+        )
 
         guard !Task.isCancelled else { return }
-        guard !report.backendReturnedItems else {
+        let feedScopeRevision = report.feedScopeRevision ?? BackgroundRefreshPolicy.currentFeedScopeRevision
+        let fallbackPlatformsNeedingDevice = fallbackPlatformsNeedingDevice()
+        guard !report.backendReturnedItems || !fallbackPlatformsNeedingDevice.isEmpty else {
+            recordCompletedRefreshCheckIfNeeded(report, feedScopeRevision: feedScopeRevision)
             await sendNoResultsDiagnosticIfNeeded(report)
             return
         }
@@ -604,13 +789,23 @@ struct FeedView: View {
         let cacheIsEmpty = db.feedItems.isEmpty
 
         let elapsed = Self.lastDeviceScrapeAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
-        guard cacheIsEmpty || elapsed > Self.deviceScrapeThrottle else {
+        guard BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+            cacheIsEmpty: cacheIsEmpty,
+            elapsedSinceLastDeviceScrape: elapsed,
+            throttle: Self.deviceScrapeThrottle
+        ) else {
             report.record(strategy: "device_scrape", status: "throttled", detail: "\(Int(elapsed))s since last run")
+            recordCompletedRefreshCheckIfNeeded(report, feedScopeRevision: feedScopeRevision)
             await sendNoResultsDiagnosticIfNeeded(report)
             return
         }
         isScrapingFallback = true
-        report.append(await deepFallback(triggerBackendPoll: !report.backendReturnedItems))
+        report.append(await deepFallback(
+            triggerBackendPoll: !report.backendReturnedItems,
+            fallbackPlatforms: fallbackPlatformsNeedingDevice
+        ))
+        guard !Task.isCancelled else { return }
+        recordCompletedRefreshCheckIfNeeded(report, feedScopeRevision: feedScopeRevision)
         await sendNoResultsDiagnosticIfNeeded(report)
     }
 
@@ -632,14 +827,25 @@ struct FeedView: View {
     private static let deviceScrapeThrottle: TimeInterval = 30 * 60
 
     // Syncs terms, fetches backend feed + per-platform items, and scrapes custom URLs.
-    private func quickRefresh() async -> FeedRefreshReport {
+    private func quickRefresh(
+        skipTermSync: Bool = false,
+        feedScopeRevision: Int? = nil
+    ) async -> FeedRefreshReport {
         var report = FeedRefreshReport()
 
         // 0. Bidirectional term sync
-        await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
-        guard !Task.isCancelled else { return report }
-        await NetworkManager.shared.syncTermsFromBackend()
-        guard !Task.isCancelled else { return report }
+        let currentFeedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
+        if skipTermSync,
+           let feedScopeRevision,
+           feedScopeRevision == currentFeedScopeRevision {
+            report.feedScopeRevision = currentFeedScopeRevision
+        } else {
+            await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+            guard !Task.isCancelled else { return report }
+            await NetworkManager.shared.syncTermsFromBackend()
+            guard !Task.isCancelled else { return report }
+            report.feedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
+        }
 
         // 1. Determine fetch window.
         //    First load (empty cache): fetch 90 days of history.
@@ -735,6 +941,10 @@ struct FeedView: View {
                 }
             }
             for await attempt in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
                 report.append(attempt)
             }
         }
@@ -754,7 +964,7 @@ struct FeedView: View {
 
     // Runs local RSS/scraper fallbacks for sources blocked from the backend network.
     // If the backend returned nothing, also kick its scheduler for the next pull.
-    private func deepFallback(triggerBackendPoll: Bool) async -> FeedRefreshReport {
+    private func deepFallback(triggerBackendPoll: Bool, fallbackPlatforms: Set<String>) async -> FeedRefreshReport {
         var report = FeedRefreshReport()
         if triggerBackendPoll {
             do {
@@ -778,9 +988,6 @@ struct FeedView: View {
                     addedCount: added,
                     detail: "days=\(days)"
                 )
-                if report.backendReturnedItems {
-                    return report
-                }
             } catch {
                 report.record(
                     strategy: "backend_feed_after_poll",
@@ -794,35 +1001,53 @@ struct FeedView: View {
             report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no active terms")
             return report
         }
-        let fallbackPlatforms = Set(db.subscribedPlatforms.filter {
-            Platform.shouldRunDeviceFallback($0)
-        })
-        guard !fallbackPlatforms.isEmpty else {
+        let platformsToScrape = fallbackPlatforms
+        guard !platformsToScrape.isEmpty else {
             report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no subscribed fallback platforms")
             return report
         }
-        Self.lastDeviceScrapeAt = Date()
-        await withTaskGroup(of: [FeedItem].self) { group in
+        await withTaskGroup(of: LocalFallbackScrapeResult.self) { group in
             for term in activeTerms {
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
                     group.addTask {
-                        await NetworkManager.shared.scrapeLocalFallbacks(
+                        await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
                             keyword: searchTerm,
                             tagKeyword: term.keyword,
-                            platformIds: fallbackPlatforms
+                            platformIds: platformsToScrape
                         )
                     }
                 }
             }
-            for await items in group where !items.isEmpty {
-                guard !Task.isCancelled else { break }
-                let added = db.mergeItems(newItems: items)
-                report.record(strategy: "device_local_scrapers", status: "items", itemCount: items.count, addedCount: added)
+            var scrapeResults = [LocalFallbackScrapeResult]()
+            for await scrapeResult in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+                scrapeResults.append(scrapeResult)
+                let added = scrapeResult.items.isEmpty
+                    ? 0
+                    : db.mergeItems(newItems: scrapeResult.items)
+                report.record(
+                    strategy: "device_local_scrapers",
+                    status: scrapeResult.items.isEmpty ? "empty" : "items",
+                    itemCount: scrapeResult.items.count,
+                    addedCount: added
+                )
             }
+            report.markCompletedDevicePlatforms(
+                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForAllSearches(
+                    from: scrapeResults,
+                    subscribedPlatforms: db.subscribedPlatforms
+                )
+            )
         }
         if !report.attempts.contains(where: { $0.strategy == "device_local_scrapers" }) {
             report.record(strategy: "device_local_scrapers", status: "empty")
+        }
+        if !Task.isCancelled {
+            Self.lastDeviceScrapeAt = Date()
         }
         return report
     }
@@ -920,6 +1145,10 @@ struct FeedView: View {
     }
 
     private func matchesPlatform(_ item: FeedItem, platformId: String) -> Bool {
+        Self.matchesPlatform(item, platformId: platformId)
+    }
+
+    private static func matchesPlatform(_ item: FeedItem, platformId: String) -> Bool {
         Platform.normalize(item.platform) == platformId
     }
 

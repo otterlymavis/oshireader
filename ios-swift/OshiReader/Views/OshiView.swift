@@ -7,15 +7,13 @@ struct OshiView: View {
     
     @State private var activePage = 0
     @State private var showEditorKeyword: String? = nil
-    
-    var sortedTerms: [WatchTerm] {
-        db.terms.sorted(by: { $0.created_at < $1.created_at })
-    }
+    @State private var cachedSortedTerms: [WatchTerm]
+    @State private var cachedFeedCountsByKeyword: [String: Int]
 
-    var feedCountsByKeyword: [String: Int] {
-        db.feedItems.reduce(into: [:]) { counts, item in
-            counts[item.watch_term_keyword, default: 0] += 1
-        }
+    init() {
+        let db = LocalDB.shared
+        _cachedSortedTerms = State(initialValue: Self.sortedTerms(from: db.terms))
+        _cachedFeedCountsByKeyword = State(initialValue: Self.feedCountsByKeyword(from: db.feedItems))
     }
     
     var body: some View {
@@ -23,7 +21,7 @@ struct OshiView: View {
             ZStack {
                 theme.colors.bg.ignoresSafeArea()
                 
-                if sortedTerms.isEmpty {
+                if cachedSortedTerms.isEmpty {
                     VStack(spacing: 12) {
                         Text("(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧")
                             .font(.title)
@@ -45,7 +43,7 @@ struct OshiView: View {
                                 .fontWeight(.bold)
                                 .foregroundColor(theme.colors.text)
                             Spacer()
-                            Text(i18n.tFormat("oshiTrackingCount", sortedTerms.count))
+                            Text(i18n.tFormat("oshiTrackingCount", cachedSortedTerms.count))
                                 .font(.caption)
                                 .foregroundColor(theme.colors.textMuted)
                         }
@@ -62,9 +60,9 @@ struct OshiView: View {
                         
                         // TabView Pager for horizontal paging
                         TabView(selection: $activePage) {
-                            ForEach(0..<sortedTerms.count, id: \.self) { idx in
-                                let term = sortedTerms[idx]
-                                let count = feedCountsByKeyword[term.keyword, default: 0]
+                            ForEach(cachedSortedTerms.indices, id: \.self) { idx in
+                                let term = cachedSortedTerms[idx]
+                                let count = cachedFeedCountsByKeyword[term.keyword, default: 0]
                                 let layers = db.compositions[term.keyword] ?? []
                                 
                                 OshiPage(term: term, count: count, layers: layers, theme: theme, i18n: i18n) {
@@ -76,9 +74,9 @@ struct OshiView: View {
                         .tabViewStyle(.page(indexDisplayMode: .never))
                         
                         // Custom Page Dots
-                        if sortedTerms.count > 1 {
+                        if cachedSortedTerms.count > 1 {
                             HStack(spacing: 7) {
-                                ForEach(0..<sortedTerms.count, id: \.self) { idx in
+                                ForEach(cachedSortedTerms.indices, id: \.self) { idx in
                                     Circle()
                                         .frame(width: idx == activePage ? 14 : 6, height: 6)
                                         .foregroundColor(idx == activePage ? theme.colors.primary : theme.colors.border)
@@ -96,6 +94,41 @@ struct OshiView: View {
                 AvatarEditorView(keyword: keyword)
             }
             .accessibilityIdentifier("oshi.screen")
+            .onAppear {
+                rebuildOshiCache()
+            }
+            .onChange(of: db.terms) {
+                rebuildOshiCache()
+            }
+            .onChange(of: db.feedItems) {
+                rebuildOshiCache()
+            }
+        }
+    }
+
+    private static func sortedTerms(from terms: [WatchTerm]) -> [WatchTerm] {
+        terms.sorted(by: { $0.created_at < $1.created_at })
+    }
+
+    private static func feedCountsByKeyword(from feedItems: [FeedItem]) -> [String: Int] {
+        feedItems.reduce(into: [:]) { counts, item in
+            counts[item.watch_term_keyword, default: 0] += 1
+        }
+    }
+
+    private func rebuildOshiCache() {
+        let sortedTerms = Self.sortedTerms(from: db.terms)
+        if cachedSortedTerms != sortedTerms {
+            cachedSortedTerms = sortedTerms
+        }
+
+        let feedCounts = Self.feedCountsByKeyword(from: db.feedItems)
+        if cachedFeedCountsByKeyword != feedCounts {
+            cachedFeedCountsByKeyword = feedCounts
+        }
+
+        if activePage >= sortedTerms.count {
+            activePage = max(sortedTerms.count - 1, 0)
         }
     }
 }

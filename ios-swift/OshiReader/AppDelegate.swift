@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func applicationDidEnterBackground(_ application: UIApplication) {
         guard !NetworkManager.shared.isUnitTesting else { return }
         BackgroundRefreshManager.shared.schedule()
+        BackgroundRefreshManager.shared.refreshBeforeSuspensionIfNeeded(application: application)
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
@@ -42,7 +43,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         AppLogger.network.notice("Legacy background fetch started")
         Task { @MainActor in
-            let refreshed = await BackgroundRefreshManager.shared.refreshFromBackend()
+            let refreshed = await BackgroundRefreshManager.shared.refreshForBackground()
             AppLogger.network.notice("Legacy background fetch completed success=\(refreshed)")
             completionHandler(refreshed ? .newData : .failed)
         }
@@ -74,7 +75,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             if mergedPreview {
                 AppLogger.network.notice("Silent push merged preview payload before backend feed refresh")
             }
-            let refreshed = await BackgroundRefreshManager.shared.refreshFromBackend(triggerPoll: shouldTriggerPoll)
+            let refreshed = await BackgroundRefreshManager.shared.refreshForBackground(triggerPoll: shouldTriggerPoll)
             BackgroundRefreshLiveTestProbe.recordCompleted(success: refreshed || mergedPreview)
             AppLogger.network.notice("Silent push background refresh completed success=\(refreshed)")
             completionHandler(refreshed || mergedPreview ? .newData : .failed)
