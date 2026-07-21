@@ -1,10 +1,13 @@
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.database import get_db
+from app.main import database_operational_error_handler
 from app.models import APNSDeviceToken, BackendEvent, Match, PendingNotification, SourceItem, WatchTerm
 
 
@@ -31,6 +34,20 @@ class TestHealth:
         r = client.head("/api/health")
         assert r.status_code == 200
         assert r.content == b""
+
+
+class TestDatabaseOperationalErrorHandler:
+    def test_returns_service_unavailable_response(self):
+        request = MagicMock()
+        request.url.path = "/api/watch-terms/"
+        exc = OperationalError("SELECT 1", {}, Exception("quota exceeded"))
+
+        response = asyncio.run(database_operational_error_handler(request, exc))
+
+        assert response.status_code == 503
+        body = json.loads(response.body)
+        assert body["detail"] == "Database unavailable"
+        assert set(body["startup"]) == {"schema_migration", "scheduler", "error"}
 
 
 class TestNotificationPreviewImage:

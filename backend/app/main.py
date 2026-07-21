@@ -15,10 +15,11 @@ from functools import lru_cache
 from typing import AsyncGenerator, Optional
 from urllib.parse import quote, quote_plus
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import func
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.api import credentials, devices, feed, watch_terms
@@ -269,9 +270,22 @@ app.include_router(credentials.router)
 app.include_router(devices.router)
 
 
+@app.exception_handler(OperationalError)
+async def database_operational_error_handler(request: Request, exc: OperationalError) -> JSONResponse:
+    log.exception("Database unavailable for %s", request.url.path)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Database unavailable",
+            "startup": dict(_startup_status),
+        },
+    )
+
+
 @app.get("/api/health")
 def health() -> dict:
-    payload = {"status": "ok", "startup": dict(_startup_status)}
+    status = "degraded" if _startup_status.get("error") else "ok"
+    payload = {"status": status, "startup": dict(_startup_status)}
     if commit := os.getenv("RENDER_GIT_COMMIT"):
         payload["commit"] = commit
     return payload
