@@ -587,6 +587,12 @@ class CinemaCafeConnector(_GNewsSiteConnector):
     SITE = "cinemacafe.net"
 
 
+class TheTVConnector(_GNewsSiteConnector):
+    PLATFORM = "thetv"
+    SITE = "thetv.jp"
+    TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*WEBザテレビジョン\s*$')
+
+
 class BARKSConnector(_GNewsSiteConnector):
     PLATFORM = "barks"
     SITE = "barks.jp"
