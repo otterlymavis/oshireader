@@ -2792,6 +2792,38 @@ final class OshiReaderTests: XCTestCase {
                        "Oldest item should be evicted by the 600-item cap and not stored (and therefore not notified)")
     }
 
+    func testPreservedIncomingItemsSurviveFeedCap() {
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        let fmt = ISO8601DateFormatter()
+        let base = Date(timeIntervalSinceReferenceDate: 0)
+        let existingItems: [FeedItem] = (1...600).map { i in
+            let ts = fmt.string(from: base.addingTimeInterval(Double(i) * 60))
+            return FeedItem(
+                id: "cap:existing:\(i)", platform: "youtube", url: "https://u/\(i)",
+                title: "Existing \(i)", content_text: nil, author: nil, thumbnail_url: nil,
+                media_type: "video", published_at: ts, watch_term_keyword: "Oshi", fetched_at: ts
+            )
+        }
+        _ = db.mergeItems(newItems: existingItems)
+
+        let olderTs = fmt.string(from: base.addingTimeInterval(-60))
+        let notificationItem = FeedItem(
+            id: "cap:notification", platform: "youtube",
+            url: "https://youtube.com/watch?v=preserved",
+            title: "Preserved notification", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: olderTs, watch_term_keyword: "Oshi", fetched_at: olderTs
+        )
+
+        _ = db.mergeItems(
+            newItems: [notificationItem],
+            notifyOnNew: false,
+            preserveIncomingItems: true
+        )
+
+        XCTAssertEqual(db.feedItems.count, 600)
+        XCTAssertTrue(db.feedItems.contains { $0.id == notificationItem.id })
+    }
+
     func testCappedFeedItemsRetainMoreDiscussionPlatformItems() {
         db.setSubscribedPlatforms(platforms: ["news", "5ch"])
         let fmt = ISO8601DateFormatter()

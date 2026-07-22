@@ -39,7 +39,11 @@ final class NotificationNavigationManager: ObservableObject {
             hasPublishedAt: payload.hasPublishedAt,
             hasWatchTermKeyword: payload.hasWatchTermKeyword
         )
-        _ = LocalDB.shared.mergeItems(newItems: [notificationItem], notifyOnNew: false)
+        _ = LocalDB.shared.mergeItems(
+            newItems: [notificationItem],
+            notifyOnNew: false,
+            preserveIncomingItems: true
+        )
         return true
     }
 

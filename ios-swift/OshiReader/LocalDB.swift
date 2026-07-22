@@ -356,7 +356,11 @@ class LocalDB: ObservableObject {
     }
 
     // MARK: - Feed Items & Merging
-    func mergeItems(newItems: [FeedItem], notifyOnNew: Bool = true) -> Int {
+    func mergeItems(
+        newItems: [FeedItem],
+        notifyOnNew: Bool = true,
+        preserveIncomingItems: Bool = false
+    ) -> Int {
         // On a fresh install / cleared cache the whole first fetch is "new"; don't fire a
         // burst of notifications for content the user is seeing for the first time anyway.
         let wasFirstLoad = feedItems.isEmpty
@@ -408,6 +412,10 @@ class LocalDB: ObservableObject {
             }
         }
 
+        let preservedKeys = preserveIncomingItems
+            ? Set(filteredNew.map(itemKey))
+            : Set<String>()
+
         let sorted = currentMap.values.sorted { lhs, rhs in
             let lhsDate = parseISO8601Date(lhs.published_at) ?? .distantPast
             let rhsDate = parseISO8601Date(rhs.published_at) ?? .distantPast
@@ -421,7 +429,10 @@ class LocalDB: ObservableObject {
             if lhsKey != rhsKey { return lhsKey < rhsKey }
             return lhs.url < rhs.url
         }
-        let finalItems = cappedFeedItemsPreservingSubscribedPlatforms(sorted)
+        let finalItems = cappedFeedItemsPreservingSubscribedPlatforms(
+            sorted,
+            preservedKeys: preservedKeys
+        )
 
         // Only notify for items that survived the cap — avoids pinging for articles
         // that were immediately evicted as too old.
@@ -496,7 +507,10 @@ class LocalDB: ObservableObject {
         }
     }
 
-    private func cappedFeedItemsPreservingSubscribedPlatforms(_ sortedItems: [FeedItem]) -> [FeedItem] {
+    private func cappedFeedItemsPreservingSubscribedPlatforms(
+        _ sortedItems: [FeedItem],
+        preservedKeys: Set<String> = []
+    ) -> [FeedItem] {
         guard sortedItems.count > maxFeedItems else { return sortedItems }
 
         var selected: [FeedItem] = []
@@ -517,6 +531,13 @@ class LocalDB: ObservableObject {
                 keptForPlatform += 1
                 if keptForPlatform >= targetCount { break }
             }
+        }
+
+        for item in sortedItems {
+            let key = itemKey(item)
+            guard preservedKeys.contains(key) else { continue }
+            guard selectedKeys.insert(key).inserted else { continue }
+            selected.append(item)
         }
 
         for item in sortedItems {
