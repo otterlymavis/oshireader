@@ -282,5 +282,6 @@ class YouTubeConnector(BaseConnector):
         except Exception as e:
             log.warning("YouTube scrape fetch failed. Error: %s", e)
 
-        # Google News fallback — works from cloud IPs when direct scraping is blocked
-        return await self._fetch_gnews(keyword)
+        # Do not fall back to Google News for YouTube: those timestamps describe
+        # when Google surfaced the result, not the video's real upload/update time.
+        return []

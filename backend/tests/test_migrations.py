@@ -12,7 +12,14 @@ from datetime import datetime, timedelta, timezone
 
 from app.database import Base
 import app.migrations as _migrations_mod
-from app.migrations import _add_missing_columns, _purge_bad_date_items, apply_startup_migrations, run_youtube_bad_date_cleanup
+from app.migrations import (
+    _add_missing_columns,
+    _purge_bad_date_items,
+    _purge_youtube_google_news_items,
+    apply_startup_migrations,
+    run_youtube_bad_date_cleanup,
+    run_youtube_google_news_cleanup,
+)
 from app.models import APNSDeviceToken, Match, MigrationLog, MutedFeedItem, SourceItem, WatchTerm
 
 
@@ -113,6 +120,7 @@ class TestApplyStartupMigrations:
         Session = sessionmaker(bind=fresh_engine)
         with patch("app.migrations.SessionLocal", Session), \
              patch("app.migrations._purge_bad_date_items") as purge_bad_dates, \
+             patch("app.migrations._purge_youtube_google_news_items") as purge_youtube_gnews, \
              patch("app.migrations._purge_girlschannel_googlenews_items") as purge_girlschannel, \
              patch("app.migrations._purge_irrelevant_matches") as purge_irrelevant, \
              patch("app.migrations._purge_legacy_5ch_items") as purge_5ch:
@@ -121,6 +129,7 @@ class TestApplyStartupMigrations:
         assert "owner_device_secret" in _column_names(fresh_engine, "watch_terms")
         assert "updated_at" in _column_names(fresh_engine, "platform_credentials")
         purge_bad_dates.assert_not_called()
+        purge_youtube_gnews.assert_not_called()
         purge_girlschannel.assert_not_called()
         purge_irrelevant.assert_not_called()
         purge_5ch.assert_not_called()
@@ -146,6 +155,28 @@ class TestApplyStartupMigrations:
             assert run_youtube_bad_date_cleanup(fresh_engine) is False
 
         purge_bad_dates.assert_called_once_with(fresh_engine, platforms=("youtube",))
+
+    def test_youtube_google_news_purge_migration_recorded(self, fresh_engine):
+        Session = sessionmaker(bind=fresh_engine)
+        with patch("app.migrations.SessionLocal", Session):
+            apply_startup_migrations(fresh_engine)
+
+        db = Session()
+        try:
+            log_entry = db.get(MigrationLog, "purge_youtube_google_news_fallback_v1")
+            assert log_entry is not None
+        finally:
+            db.close()
+
+    def test_youtube_google_news_cleanup_runs_only_once(self, fresh_engine):
+        Base.metadata.create_all(bind=fresh_engine)
+        Session = sessionmaker(bind=fresh_engine)
+        with patch("app.migrations.SessionLocal", Session), \
+             patch("app.migrations._purge_youtube_google_news_items") as purge_youtube_gnews:
+            assert run_youtube_google_news_cleanup(fresh_engine) is True
+            assert run_youtube_google_news_cleanup(fresh_engine) is False
+
+        purge_youtube_gnews.assert_called_once_with(fresh_engine)
 
     def test_relevance_migration_removes_summary_only_article_match(self, fresh_engine):
         Base.metadata.create_all(bind=fresh_engine)
@@ -431,3 +462,47 @@ class TestPurgeBadDateItems:
             count = conn.execute(text("SELECT COUNT(*) FROM source_items WHERE id='news:safe'")).scalar()
         assert count == 1, "Non-targeted platform item must not be purged"
         db.close()
+
+    def test_purges_youtube_google_news_fallback_items(self, fresh_engine):
+        db = self._setup(fresh_engine)
+        term = WatchTerm(keyword="Aiko", aliases=[])
+        bad = SourceItem(
+            id="youtube:gnews",
+            platform="youtube",
+            item_id="gnews",
+            url="https://youtube.com/watch?v=gnews",
+            published_at=datetime.now(timezone.utc),
+            media_type="video",
+            title="Aiko old resurfaced video",
+            raw_payload={"source": "google_news", "date_parsed": True},
+        )
+        good = SourceItem(
+            id="youtube:scrape",
+            platform="youtube",
+            item_id="scrape",
+            url="https://youtube.com/watch?v=scrape",
+            published_at=datetime.now(timezone.utc),
+            media_type="video",
+            title="Aiko real upload",
+            raw_payload={"source": "youtube_scrape", "date_parsed": True},
+        )
+        db.add_all([term, bad, good])
+        db.flush()
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=bad.id),
+            Match(watch_term_id=term.id, source_item_id=good.id),
+        ])
+        db.commit()
+        db.close()
+
+        _purge_youtube_google_news_items(fresh_engine)
+
+        with fresh_engine.connect() as conn:
+            bad_count = conn.execute(text("SELECT COUNT(*) FROM source_items WHERE id='youtube:gnews'")).scalar()
+            bad_match_count = conn.execute(text("SELECT COUNT(*) FROM matches WHERE source_item_id='youtube:gnews'")).scalar()
+            good_count = conn.execute(text("SELECT COUNT(*) FROM source_items WHERE id='youtube:scrape'")).scalar()
+            good_match_count = conn.execute(text("SELECT COUNT(*) FROM matches WHERE source_item_id='youtube:scrape'")).scalar()
+        assert bad_count == 0
+        assert bad_match_count == 0
+        assert good_count == 1
+        assert good_match_count == 1

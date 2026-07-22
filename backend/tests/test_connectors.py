@@ -3503,28 +3503,31 @@ class TestYouTubeFetchOrchestration:
         assert result == items
 
     @pytest.mark.asyncio
-    async def test_empty_scrape_falls_to_gnews(self):
+    async def test_empty_scrape_does_not_use_gnews_fallback(self):
         items = [self._item("v4")]
         with patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=[])), \
-             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)):
+             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)) as gnews:
             result = await YouTubeConnector(api_key="").fetch("Aiko", "all_info")
-        assert result == items
+        assert result == []
+        gnews.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_scrape_exception_falls_to_gnews(self):
+    async def test_scrape_exception_does_not_use_gnews_fallback(self):
         items = [self._item("v5")]
         with patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(side_effect=Exception("scrape err"))), \
-             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)):
+             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)) as gnews:
             result = await YouTubeConnector(api_key="").fetch("Aiko", "all_info")
-        assert result == items
+        assert result == []
+        gnews.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_api_key_no_scrape_falls_to_gnews(self):
+    async def test_no_api_key_no_scrape_returns_empty(self):
         items = [self._item("v6")]
         with patch.object(YouTubeConnector, "_fetch_scrape", new=AsyncMock(return_value=[])), \
-             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)):
+             patch.object(YouTubeConnector, "_fetch_gnews", new=AsyncMock(return_value=items)) as gnews:
             result = await YouTubeConnector(api_key="").fetch("Aiko", "all_info")
-        assert result == items
+        assert result == []
+        gnews.assert_not_called()
 
 
 class TestTVERThumbnailElseBranch:

@@ -31,6 +31,7 @@ def _record_migration(slug: str) -> None:
 
 
 PURGE_YOUTUBE_BAD_DATES_SLUG = "purge_youtube_fetch_time_dates_v2"
+PURGE_YOUTUBE_GOOGLE_NEWS_SLUG = "purge_youtube_google_news_fallback_v1"
 
 
 def run_youtube_bad_date_cleanup(engine: Engine) -> bool:
@@ -39,6 +40,15 @@ def run_youtube_bad_date_cleanup(engine: Engine) -> bool:
         return False
     _purge_bad_date_items(engine, platforms=("youtube",))
     _record_migration(PURGE_YOUTUBE_BAD_DATES_SLUG)
+    return True
+
+
+def run_youtube_google_news_cleanup(engine: Engine) -> bool:
+    """Run the YouTube Google News fallback cleanup once. Returns True when it ran."""
+    if _migration_applied(PURGE_YOUTUBE_GOOGLE_NEWS_SLUG):
+        return False
+    _purge_youtube_google_news_items(engine)
+    _record_migration(PURGE_YOUTUBE_GOOGLE_NEWS_SLUG)
     return True
 
 
@@ -327,6 +337,11 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
     # up rows that were inserted after the first broad cleanup ran.
     run_youtube_bad_date_cleanup(engine)
 
+    # YouTube's Google News fallback used Google News discovery time, not the
+    # video's real upload/update time. Remove those rows so old videos stop
+    # appearing as newly updated feed items.
+    run_youtube_google_news_cleanup(engine)
+
     # One-time cleanup: remove GirlsChannel items stored via Google News (item_id starts
     # with "http").  The connector now scrapes GirlsChannel directly using numeric topic
     # IDs, so old entries have wrong URLs, wrong dates, and will never be healed.
@@ -465,6 +480,36 @@ def _purge_bad_date_items(engine: Engine, platforms: tuple[str, ...]) -> None:
                 JOIN matches m ON m.source_item_id = si.id
                 WHERE si.platform IN ({placeholders})
                 AND {epoch_diff} < 60
+            )
+        """))
+        conn.execute(text(
+            "DELETE FROM source_items "
+            "WHERE id NOT IN (SELECT source_item_id FROM matches) "
+            "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
+        ))
+
+
+def _purge_youtube_google_news_items(engine: Engine) -> None:
+    if engine.dialect.name == "postgresql":
+        source_predicate = "si.raw_payload ->> 'source' = 'google_news'"
+    else:
+        source_predicate = "json_extract(si.raw_payload, '$.source') = 'google_news'"
+
+    with engine.begin() as conn:
+        result = conn.execute(text(f"""
+            SELECT COUNT(*) FROM source_items si
+            WHERE si.platform = 'youtube'
+            AND {source_predicate}
+        """))
+        bad_count = result.scalar() or 0
+        if bad_count == 0:
+            return
+        log.info("Purging %d YouTube Google News fallback source items", bad_count)
+        conn.execute(text(f"""
+            DELETE FROM matches WHERE source_item_id IN (
+                SELECT si.id FROM source_items si
+                WHERE si.platform = 'youtube'
+                AND {source_predicate}
             )
         """))
         conn.execute(text(

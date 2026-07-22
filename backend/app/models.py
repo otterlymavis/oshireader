@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Optional
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 
@@ -44,6 +45,13 @@ class SourceItem(Base):
     thumbnail_url = Column(String)
     raw_payload = Column(JSON)
     fetched_at = Column(DateTime, default=_utcnow)
+
+    @property
+    def source(self) -> Optional[str]:
+        if not isinstance(self.raw_payload, dict):
+            return None
+        source = self.raw_payload.get("source")
+        return source if isinstance(source, str) else None
 
 
 class PlatformCredential(Base):

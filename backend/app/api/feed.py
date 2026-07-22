@@ -105,6 +105,11 @@ def get_feed(
             & (MutedFeedItem.source_item_id == Match.source_item_id),
         )
         .filter(MutedFeedItem.id.is_(None))
+        .filter(or_(
+            SourceItem.platform != "youtube",
+            SourceItem.raw_payload["source"].as_string().is_(None),
+            SourceItem.raw_payload["source"].as_string() != "google_news",
+        ))
         .order_by(_FEED_SORT_KEY.desc())
     )
     if not auth.is_admin:

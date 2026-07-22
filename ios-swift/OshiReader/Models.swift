@@ -150,6 +150,7 @@ struct SourceItem: Codable, Hashable, Identifiable {
     let content_text: String?
     let media_type: String?
     let thumbnail_url: String?
+    var source: String? = nil
 }
 
 // MARK: - Local Flat FeedItem
@@ -166,6 +167,7 @@ struct FeedItem: Codable, Hashable, Identifiable {
     let watch_term_keyword: String
     var watch_term_id: Int? = nil
     let fetched_at: String
+    var source: String? = nil
 }
 
 // MARK: - Backend Nested FeedItem
@@ -189,7 +191,8 @@ struct BackendFeedItem: Codable {
             published_at: item.published_at,
             watch_term_keyword: watch_term_keyword,
             watch_term_id: watch_term_id,
-            fetched_at: matched_at
+            fetched_at: matched_at,
+            source: item.source
         )
     }
 }

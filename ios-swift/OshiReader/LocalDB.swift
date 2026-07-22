@@ -16,6 +16,16 @@ enum FeedURLPolicy {
     }
 }
 
+enum FeedItemPolicy {
+    static func isLegacyYouTubeGoogleNewsFallback(_ item: FeedItem) -> Bool {
+        guard Platform.normalize(item.platform) == "youtube" else { return false }
+        if item.source?.lowercased() == "google_news" { return true }
+        if item.id.contains(":gnews:") { return true }
+        guard let host = URL(string: item.url)?.host?.lowercased() else { return false }
+        return host == "news.google.com" || host.hasSuffix(".news.google.com")
+    }
+}
+
 @MainActor
 class LocalDB: ObservableObject {
     static let shared = LocalDB(directory: FileManager.default
@@ -85,7 +95,8 @@ class LocalDB: ObservableObject {
         self.hiddenItems = Set(hiddenArray)
         self.termDeleteTombstones = loadFromFile(name: termDeleteTombstonesFileName, defaultValue: [:])
         pruneTermDeleteTombstones()
-        return applyPersistedTermDeletes()
+        let prunedLegacyYouTubeFallbacks = pruneLegacyYouTubeGoogleNewsFallbackItems()
+        return applyPersistedTermDeletes() || prunedLegacyYouTubeFallbacks
     }
 
     // MARK: - Schema Migrations
@@ -168,6 +179,18 @@ class LocalDB: ObservableObject {
             return true
         }
         return false
+    }
+
+    @discardableResult
+    private func pruneLegacyYouTubeGoogleNewsFallbackItems() -> Bool {
+        let originalCount = self.feedItems.count
+        self.feedItems.removeAll { FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback($0) }
+        guard self.feedItems.count != originalCount else { return false }
+        saveToFile(name: "feed_items", value: self.feedItems)
+        AppLogger.persistence.info(
+            "Pruned \(originalCount - self.feedItems.count) legacy YouTube Google News fallback feed items"
+        )
+        return true
     }
 
     @discardableResult
@@ -372,11 +395,12 @@ class LocalDB: ObservableObject {
             let key = itemKey(item)
             let isHidden = self.hiddenItems.contains(key)
             let isSearchFallback = item.id.contains("search:") || item.title?.lowercased().contains("search:") == true
-            return !isHidden && !isSearchFallback
+            return !isHidden && !isSearchFallback && !FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item)
         }
 
         var currentMap = [String: FeedItem]()
         for item in feedItems {
+            if FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item) { continue }
             currentMap[itemKey(item)] = item
         }
 
@@ -406,7 +430,8 @@ class LocalDB: ObservableObject {
                     published_at: mergedPublishedAt(existing: existing, incoming: item),
                     watch_term_keyword: existing.watch_term_keyword,
                     watch_term_id: existing.watch_term_id ?? item.watch_term_id,
-                    fetched_at: item.fetched_at
+                    fetched_at: item.fetched_at,
+                    source: item.source ?? existing.source
                 )
                 currentMap[key] = merged
             }
@@ -596,6 +621,7 @@ class LocalDB: ObservableObject {
 
             // Search pages fallbacks
             if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return nil }
+            if FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item) { return nil }
             if FeedURLPolicy.isBackendMatchRedirectURL(item.url) { return nil }
 
             // Hide broken Yahoo fallback cards whose readable field is only a URL.
@@ -609,14 +635,23 @@ class LocalDB: ObservableObject {
             let platformDef = Platform.forRawValue(item.platform)
             var parsedPublishedAt: Date?
             let localTerm = item.watch_term_keyword.isEmpty ? nil : termsByKeyword[item.watch_term_keyword]
+            let platformKey = Platform.normalize(item.platform)
 
             if !termsByKeyword.isEmpty, !item.watch_term_keyword.isEmpty, localTerm == nil {
                 return nil
             }
 
+            if platformKey == "youtube" {
+                let youtubeCutoff = Calendar.current.date(byAdding: .day, value: -31, to: now) ?? .distantFuture
+                parsedPublishedAt = parseISO8601Date(item.published_at)
+                guard let itemDate = parsedPublishedAt, itemDate >= youtubeCutoff else {
+                    return nil
+                }
+            }
+
             // Cutoff check — use proper Date comparison so timezone-offset strings sort correctly
             if let cutoff = cutoffDate, platformDef?.skipDateCutoff != true {
-                parsedPublishedAt = parseISO8601Date(item.published_at)
+                parsedPublishedAt = parsedPublishedAt ?? parseISO8601Date(item.published_at)
                 guard let itemDate = parsedPublishedAt, itemDate >= cutoff else {
                     return nil
                 }
@@ -640,7 +675,6 @@ class LocalDB: ObservableObject {
             }
 
             // Subscribed platforms
-            let platformKey = Platform.normalize(item.platform)
             if !subscribedPlatformSet.contains(platformKey) {
                 return nil
             }

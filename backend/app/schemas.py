@@ -115,8 +115,19 @@ class SourceItemOut(BaseModel):
     content_text: Optional[str]
     media_type: Optional[str]
     thumbnail_url: Optional[str]
+    source: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def extract_source(cls, v: object) -> Optional[str]:
+        if isinstance(v, str):
+            return v
+        if isinstance(v, dict):
+            source = v.get("source")
+            return source if isinstance(source, str) else None
+        return None
 
     @field_validator("published_at", mode="before")
     @classmethod

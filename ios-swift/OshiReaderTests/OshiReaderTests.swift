@@ -1057,6 +1057,67 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testLegacyYouTubeGoogleNewsFallbackDoesNotSatisfyRefreshFreshness() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recent = _ISO8601Cache.withoutFractional.string(from: now.addingTimeInterval(-60))
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let legacyFallback = FeedItem(
+            id: "youtube:https://news.google.com/rss/articles/old-video",
+            platform: "youtube",
+            url: "https://news.google.com/rss/articles/old-video?oc=5",
+            title: "Aiko old video resurfaced",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: recent,
+            watch_term_keyword: "Aiko",
+            fetched_at: recent,
+            source: "google_news"
+        )
+        let directVideo = FeedItem(
+            id: "youtube:direct-fresh",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=direct-fresh",
+            title: "Aiko direct upload",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: recent,
+            watch_term_keyword: "Aiko",
+            fetched_at: recent,
+            source: "youtube_scrape"
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [legacyFallback],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            )
+        )
+        XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [legacyFallback], now: now, lastRefreshAt: nil))
+        XCTAssertNil(BackgroundRefreshPolicy.incrementalSince(in: [legacyFallback], platformId: "youtube"))
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [directVideo],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            )
+        )
+    }
+
     func testBackendPollTriggerUsesLongQuotaFriendlyThrottle() {
         let now = Date(timeIntervalSince1970: 20_000)
 
@@ -2913,6 +2974,145 @@ final class OshiReaderTests: XCTestCase {
         let querySub = db.queryFeed(keyword: "Aiko", days: 30)
         XCTAssertEqual(querySub.count, 1) // Only TVer yesterday item remains
         XCTAssertEqual(querySub.first?.id, "tver:yesterday")
+    }
+
+    func testQueryFeedAlwaysLimitsYouTubeToRecentUploads() throws {
+        let formatter = ISO8601DateFormatter()
+        let now = Date()
+        let recent = Calendar.current.date(byAdding: .day, value: -2, to: now)!
+        let old = Calendar.current.date(byAdding: .day, value: -60, to: now)!
+        db.setSubscribedPlatforms(platforms: ["youtube", "yahoonews"])
+        _ = db.saveTerm(keyword: "Aiko")
+
+        let recentYouTube = FeedItem(
+            id: "youtube:recent-upload", platform: "youtube", url: "https://youtube.com/watch?v=recent",
+            title: "Aiko recent upload", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: formatter.string(from: recent),
+            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now)
+        )
+        let oldYouTube = FeedItem(
+            id: "youtube:old-upload", platform: "youtube", url: "https://youtube.com/watch?v=old",
+            title: "Aiko old upload", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: formatter.string(from: old),
+            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now)
+        )
+        let oldArticle = FeedItem(
+            id: "yahoonews:old", platform: "yahoonews", url: "https://news.example.com/old",
+            title: "Aiko old article", content_text: "Aiko old article", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: formatter.string(from: old),
+            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now)
+        )
+
+        _ = db.mergeItems(newItems: [recentYouTube, oldYouTube, oldArticle])
+
+        let ninetyDayIds = db.queryFeed(keyword: "Aiko", days: 90).map(\.id)
+        XCTAssertTrue(ninetyDayIds.contains(recentYouTube.id))
+        XCTAssertTrue(ninetyDayIds.contains(oldArticle.id))
+        XCTAssertFalse(ninetyDayIds.contains(oldYouTube.id))
+
+        let allTimeIds = db.queryFeed(keyword: "Aiko", days: 0).map(\.id)
+        XCTAssertTrue(allTimeIds.contains(recentYouTube.id))
+        XCTAssertTrue(allTimeIds.contains(oldArticle.id))
+        XCTAssertFalse(allTimeIds.contains(oldYouTube.id))
+    }
+
+    func testMergePrunesLegacyYouTubeGoogleNewsFallbackItems() throws {
+        let formatter = ISO8601DateFormatter()
+        let now = formatter.string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Aiko")
+
+        let legacyBySource = FeedItem(
+            id: "youtube:gnews-source",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=old-source",
+            title: "Aiko old source fallback",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "google_news"
+        )
+        let legacyByURL = FeedItem(
+            id: "youtube:https://news.google.com/rss/articles/old-url",
+            platform: "youtube",
+            url: "https://news.google.com/rss/articles/old-url?oc=5",
+            title: "Aiko old url fallback",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+        let direct = FeedItem(
+            id: "youtube:direct",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=direct",
+            title: "Aiko direct upload",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "youtube_scrape"
+        )
+
+        _ = db.mergeItems(newItems: [legacyBySource, legacyByURL, direct])
+
+        XCTAssertEqual(db.feedItems.map(\.id), [direct.id])
+        XCTAssertEqual(db.queryFeed(keyword: "Aiko", days: 0).map(\.id), [direct.id])
+    }
+
+    func testStartupPrunesLegacyYouTubeGoogleNewsFallbackItems() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let legacy = FeedItem(
+            id: "youtube:https://news.google.com/rss/articles/old-startup",
+            platform: "youtube",
+            url: "https://news.google.com/rss/articles/old-startup?oc=5",
+            title: "Aiko old startup fallback",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "google_news"
+        )
+        let direct = FeedItem(
+            id: "youtube:startup-direct",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=startup-direct",
+            title: "Aiko direct startup upload",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "youtube_scrape"
+        )
+        try JSONEncoder().encode([legacy, direct]).write(
+            to: tempDir.appendingPathComponent("feed_items.json")
+        )
+        try JSONEncoder().encode(["youtube"]).write(
+            to: tempDir.appendingPathComponent("subscribed_platforms.json")
+        )
+        UserDefaults.standard.set(4, forKey: "localdb_schema_version")
+        defer { UserDefaults.standard.removeObject(forKey: "localdb_schema_version") }
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.feedItems.map(\.id), [direct.id])
+        XCTAssertFalse(freshDB.feedItems.contains { FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback($0) })
     }
 
     func testStrictArticleSourceIgnoresSummaryOnlyKeywordMatch() throws {

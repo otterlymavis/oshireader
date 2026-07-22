@@ -386,7 +386,7 @@ extension NetworkManager {
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return ([], false)
         }
-        let cutoff = Date().addingTimeInterval(-90 * 86400)
+        let cutoff = Date().addingTimeInterval(-31 * 86400)
         var items = collectYouTubeVideoRendererItems(from: json, keyword: keyword, tagKeyword: tagKeyword, cutoff: cutoff)
         if items.count < 25 {
             items.append(contentsOf: collectMobileYouTubeItems(from: json, keyword: keyword, tagKeyword: tagKeyword, cutoff: cutoff))
@@ -415,7 +415,7 @@ extension NetworkManager {
         guard let html = String(data: data, encoding: .utf8) else {
             return ([], true)
         }
-        let cutoff = Date().addingTimeInterval(-90 * 86400)
+        let cutoff = Date().addingTimeInterval(-31 * 86400)
         guard let json = extractYouTubeInitialData(from: html) else {
             return ([], true)
         }
@@ -438,7 +438,7 @@ extension NetworkManager {
         return renderers.prefix(25).compactMap { renderer -> FeedItem? in
             guard let videoId = renderer["videoId"] as? String else { return nil }
             let relText = firstText(in: renderer["publishedTimeText"]) ?? ""
-            let published = youtubeRelativeDate(relText) ?? Date()
+            guard let published = youtubeRelativeDate(relText) else { return nil }
             if published < cutoff { return nil }
             let description = (((renderer["detailedMetadataSnippets"] as? [[String: Any]])?.first?["snippetText"] as? [String: Any]))
 
@@ -474,7 +474,7 @@ extension NetworkManager {
         for renderer in videoRenderers {
             guard let videoId = renderer["videoId"] as? String, seenIds.insert(videoId).inserted else { continue }
             let relText = firstText(in: renderer["publishedTimeText"]) ?? ""
-            let published = youtubeRelativeDate(relText) ?? Date()
+            guard let published = youtubeRelativeDate(relText) else { continue }
             if published < cutoff { continue }
             let path = nestedString(renderer, ["navigationEndpoint", "commandMetadata", "webCommandMetadata", "url"])
             let itemURL = path.flatMap {
@@ -500,7 +500,7 @@ extension NetworkManager {
                 ?? (renderer["entityId"] as? String)?.split(separator: "-").last.map(String.init)
             guard let videoId, seenIds.insert(videoId).inserted else { continue }
             let secondary = nestedString(renderer, ["belowThumbnailMetadata", "secondaryText", "content"]) ?? ""
-            let published = youtubeRelativeDate(secondary) ?? Date()
+            guard let published = youtubeRelativeDate(secondary) else { continue }
             if published < cutoff { continue }
             items.append(FeedItem(
                 id: "youtube:\(videoId)",

@@ -37,6 +37,7 @@ def _make_item(
     title=None,
     content_text=None,
     author=None,
+    raw_payload=None,
 ):
     published = datetime.now(timezone.utc) - timedelta(days=days_ago)
     item = SourceItem(
@@ -49,6 +50,7 @@ def _make_item(
         title=title,
         content_text=content_text,
         author=author,
+        raw_payload=raw_payload,
     )
     db.add(item)
     db.commit()
@@ -446,6 +448,33 @@ class TestFeedAPI:
 
         resp = client.get("/api/feed/?days=0")
         assert len(resp.json()) == 1
+
+    def test_feed_hides_youtube_google_news_fallback_items(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        google_news_youtube = _make_item(
+            db_session,
+            platform="youtube",
+            item_id="gnews",
+            media_type="video",
+            title="Aiko old video resurfaced",
+            raw_payload={"source": "google_news", "date_parsed": True},
+        )
+        direct_youtube = _make_item(
+            db_session,
+            platform="youtube",
+            item_id="direct",
+            media_type="video",
+            title="Aiko real upload",
+            raw_payload={"source": "youtube_scrape", "date_parsed": True},
+        )
+        _make_match(db_session, term, google_news_youtube)
+        _make_match(db_session, term, direct_youtube)
+
+        ids = [r["item"]["id"] for r in client.get("/api/feed/?days=0&platform=youtube").json()]
+        assert direct_youtube.id in ids
+        assert google_news_youtube.id not in ids
+        direct = next(r for r in client.get("/api/feed/?days=0&platform=youtube").json() if r["item"]["id"] == direct_youtube.id)
+        assert direct["item"]["source"] == "youtube_scrape"
 
     def test_timeless_platform_bypasses_days_only_when_filtered(self, client, db_session):
         # A 200-day-old non-5ch forum thread must NOT flood the unfiltered "all"
