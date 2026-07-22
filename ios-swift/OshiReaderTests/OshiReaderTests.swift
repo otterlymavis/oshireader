@@ -2388,6 +2388,7 @@ final class OshiReaderTests: XCTestCase {
                 "author": "Aiko Channel",
                 "media_type": "video",
                 "published_at": "2026-06-20T12:00:00Z",
+                "source": "youtube_api",
             ],
         ]
 
@@ -2395,13 +2396,46 @@ final class OshiReaderTests: XCTestCase {
         let merged = LocalDB.shared.feedItems.first {
             $0.id == itemID && $0.watch_term_keyword == keyword
         }
-        XCTAssertEqual(merged?.url, "https://youtube.com/watch?v=merged")
-        XCTAssertEqual(merged?.title, "Merged notification title")
-        XCTAssertEqual(merged?.content_text, "Merged notification description")
-        XCTAssertEqual(merged?.author, "Aiko Channel")
-        XCTAssertEqual(merged?.thumbnail_url, "https://img.example.com/merged.jpg")
-        XCTAssertEqual(merged?.media_type, "video")
-        XCTAssertEqual(merged?.published_at, "2026-06-20T12:00:00Z")
+        let unwrappedMerged = try XCTUnwrap(merged)
+        XCTAssertEqual(unwrappedMerged.url, "https://youtube.com/watch?v=merged")
+        XCTAssertEqual(unwrappedMerged.title, "Merged notification title")
+        XCTAssertEqual(unwrappedMerged.content_text, "Merged notification description")
+        XCTAssertEqual(unwrappedMerged.author, "Aiko Channel")
+        XCTAssertEqual(unwrappedMerged.thumbnail_url, "https://img.example.com/merged.jpg")
+        XCTAssertEqual(unwrappedMerged.media_type, "video")
+        XCTAssertEqual(unwrappedMerged.published_at, "2026-06-20T12:00:00Z")
+        XCTAssertEqual(unwrappedMerged.source, "youtube_api")
+        XCTAssertFalse(FeedItemPolicy.shouldPruneLegacyYouTubeItem(unwrappedMerged))
+
+        LocalDB.shared.deleteFeedItem(id: itemID, watchTermKeyword: keyword)
+    }
+
+    @MainActor
+    func testNotificationNavigationInfersYouTubeWhenPayloadPlatformWasTrimmed() throws {
+        let manager = NotificationNavigationManager.shared
+        let itemID = "youtube:\(UUID().uuidString)"
+        let keyword = "Trimmed YouTube \(UUID().uuidString)"
+
+        let userInfo: [AnyHashable: Any] = [
+            "watch_term_keyword": keyword,
+            "item_id": itemID,
+            "item_url": "https://backend.example.com/api/feed/matches/123/redirect",
+            "item_source": "youtube_api",
+            "preview_item": [
+                "id": itemID,
+                "match_id": "123",
+                "url": "https://backend.example.com/api/feed/matches/123/redirect",
+                "source": "youtube_api",
+            ],
+        ]
+
+        XCTAssertTrue(manager.mergeNotificationItem(userInfo: userInfo))
+        let merged = try XCTUnwrap(LocalDB.shared.feedItems.first {
+            $0.id == itemID && $0.watch_term_keyword == keyword
+        })
+        XCTAssertEqual(merged.platform, "youtube")
+        XCTAssertEqual(merged.source, "youtube_api")
+        XCTAssertFalse(FeedItemPolicy.shouldPruneLegacyYouTubeItem(merged))
 
         LocalDB.shared.deleteFeedItem(id: itemID, watchTermKeyword: keyword)
     }

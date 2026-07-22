@@ -28,6 +28,7 @@ _PREVIEW_FIELD_LIMITS = {
     "author": 120,
     "media_type": 40,
     "published_at": 80,
+    "source": 80,
 }
 _APNS_PAYLOAD_SOFT_LIMIT_BYTES = 3500
 _APNS_PAYLOAD_HARD_LIMIT_BYTES = 4096
@@ -149,6 +150,8 @@ def _shrink_payload(payload: dict) -> dict:
         ("preview_item", "media_type"),
         ("item_platform",),
         ("preview_item", "platform"),
+        ("item_source",),
+        ("preview_item", "source"),
         ("aps", "target-content-id"),
         ("thumbnail_url",),
         ("preview_item", "thumbnail_url"),
@@ -316,6 +319,7 @@ def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> d
                 "thumbnail_url",
                 "media_type",
                 "published_at",
+                "source",
             )
             if (value := _payload_value(preview_item, key))
         }
@@ -329,6 +333,7 @@ def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> d
             "author": "item_author",
             "media_type": "item_media_type",
             "published_at": "item_published_at",
+            "source": "item_source",
         }
         for source_key, payload_key in top_level_preview_keys.items():
             if payload["preview_item"].get(source_key):

@@ -31,6 +31,13 @@ final class NotificationNavigationManager: ObservableObject {
     @discardableResult
     func mergeNotificationItem(userInfo: [AnyHashable: Any]) -> Bool {
         guard let payload = notificationPayload(from: userInfo) else { return false }
+        let keyMatches = { (item: FeedItem) -> Bool in
+            item.id == payload.item.id &&
+                (
+                    payload.item.watch_term_keyword.isEmpty ||
+                    item.watch_term_keyword == payload.item.watch_term_keyword
+                )
+        }
         let notificationItem = Self.preferredNotificationItem(
             payload.item,
             cachedItems: LocalDB.shared.feedItems,
@@ -44,7 +51,7 @@ final class NotificationNavigationManager: ObservableObject {
             notifyOnNew: false,
             preserveIncomingItems: true
         )
-        return true
+        return LocalDB.shared.feedItems.contains(where: keyMatches)
     }
 
     @discardableResult
@@ -99,7 +106,8 @@ final class NotificationNavigationManager: ObservableObject {
             watch_term_keyword: hasWatchTermKeyword && !notificationItem.watch_term_keyword.isEmpty
                 ? notificationItem.watch_term_keyword
                 : existing.watch_term_keyword,
-            fetched_at: existing.fetched_at
+            fetched_at: existing.fetched_at,
+            source: notificationItem.source ?? existing.source
         )
     }
 
@@ -114,6 +122,7 @@ final class NotificationNavigationManager: ObservableObject {
         let platform = explicitPlatform ?? Self.inferredPlatform(itemID: itemID, itemURL: itemURL)
         let mediaType = stringValue(userInfo["item_media_type"]) ?? stringValue(previewItem?["media_type"])
         let publishedAt = stringValue(userInfo["item_published_at"]) ?? stringValue(previewItem?["published_at"])
+        let source = stringValue(userInfo["item_source"]) ?? stringValue(previewItem?["source"])
         let watchTermKeyword = stringValue(userInfo["watch_term_keyword"])
         let item = FeedItem(
             id: itemID,
@@ -126,7 +135,8 @@ final class NotificationNavigationManager: ObservableObject {
             media_type: mediaType ?? "article",
             published_at: publishedAt ?? now,
             watch_term_keyword: watchTermKeyword ?? "",
-            fetched_at: now
+            fetched_at: now,
+            source: source
         )
         return NotificationPayload(
             item: item,
@@ -139,11 +149,17 @@ final class NotificationNavigationManager: ObservableObject {
 
     private static func inferredPlatform(itemID: String, itemURL: String) -> String? {
         let lowercasedID = itemID.lowercased()
+        if lowercasedID.hasPrefix("youtube:") {
+            return "youtube"
+        }
         if lowercasedID.hasPrefix("5ch:") || lowercasedID.hasPrefix("2ch.sc:") {
             return "5ch"
         }
 
         guard let host = URL(string: itemURL)?.host?.lowercased() else { return nil }
+        if host == "youtube.com" || host == "www.youtube.com" || host == "youtu.be" || host.hasSuffix(".youtube.com") {
+            return "youtube"
+        }
         if host == "5ch.io" || host == "5ch.net" || host == "itest.5ch.io" || host == "itest.5ch.net" || host == "2ch.sc" || host.hasSuffix(".5ch.io") || host.hasSuffix(".5ch.net") || host.hasSuffix(".2ch.sc") {
             return "5ch"
         }

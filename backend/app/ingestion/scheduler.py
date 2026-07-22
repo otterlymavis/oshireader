@@ -804,6 +804,7 @@ def _preview_for_match(
         "thumbnail_url": source_item.thumbnail_url,
         "media_type": source_item.media_type,
         "published_at": source_item.published_at.isoformat(),
+        "source": source_item.source,
     }
 
 

@@ -297,6 +297,9 @@ final class NotificationManager: ObservableObject {
         userInfo["item_platform"] = item.platform
         userInfo["item_media_type"] = item.media_type
         userInfo["item_published_at"] = item.published_at
+        if let source = item.source {
+            userInfo["item_source"] = source
+        }
         var previewItem: [String: Any] = [
             "id": item.id,
             "url": item.url,
@@ -304,6 +307,9 @@ final class NotificationManager: ObservableObject {
             "media_type": item.media_type,
             "published_at": item.published_at,
         ]
+        if let source = item.source {
+            previewItem["source"] = source
+        }
         if let title = cleanDisplayText(item.title) {
             userInfo["item_title"] = title
             previewItem["title"] = title

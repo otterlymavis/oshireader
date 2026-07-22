@@ -1025,7 +1025,7 @@ class TestIngestionNotifications:
             published_at=new_item_at,
             title="Aiko fresh video",
             content_text="Aiko fresh video",
-            raw_payload={"date_parsed": True},
+            raw_payload={"date_parsed": True, "source": "youtube_api"},
         )
         mock_notify = AsyncMock()
         TestSession = sessionmaker(bind=db_engine)
@@ -1050,6 +1050,7 @@ class TestIngestionNotifications:
         assert called_term.keyword == "Aiko"
         assert called_count == 2
         assert preview_item["id"] == "youtube:fresh-video"
+        assert preview_item["source"] == "youtube_api"
 
     @pytest.mark.asyncio
     async def test_duplicate_term_existing_discussion_reply_update_is_notified(
@@ -1221,7 +1222,7 @@ class TestIngestionNotifications:
                     item_id="parsed",
                     published_at=reliable,
                     title="Aiko parsed",
-                    raw_payload={"date_parsed": True},
+                    raw_payload={"date_parsed": True, "source": "youtube_api"},
                 )
             ],
         )
@@ -1256,6 +1257,7 @@ class TestIngestionNotifications:
         _, _, called_count, preview_item = mock_notify.call_args.args
         assert called_count == 2
         assert preview_item["id"] == "youtube:parsed"
+        assert preview_item["source"] == "youtube_api"
         assert datetime.fromisoformat(preview_item["published_at"]).replace(tzinfo=timezone.utc) == reliable
 
     @pytest.mark.asyncio

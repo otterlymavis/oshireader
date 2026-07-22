@@ -70,6 +70,7 @@ class TestPayload:
                 "thumbnail_url": "https://example.com/thumb.jpg",
                 "media_type": "video",
                 "published_at": "2026-06-17T12:00:00Z",
+                "source": "youtube_api",
             },
         )
         assert payload["aps"]["mutable-content"] == 1
@@ -92,6 +93,8 @@ class TestPayload:
         assert payload["item_author"] == "Aiko Channel"
         assert payload["item_media_type"] == "video"
         assert payload["item_published_at"] == "2026-06-17T12:00:00Z"
+        assert payload["item_source"] == "youtube_api"
+        assert payload["preview_item"]["source"] == "youtube_api"
         assert payload["thumbnail_url"] == "https://example.com/thumb.jpg"
 
     def test_preview_item_metadata_is_bounded_for_apns_size(self):
@@ -126,6 +129,31 @@ class TestPayload:
         assert "thumbnail_url" not in payload["preview_item"]
         assert "thumbnail_url" not in payload
         assert _payload_size(payload) <= 3500
+
+    def test_youtube_source_survives_payload_shrinking_before_platform(self):
+        payload = _payload(
+            self._term("Aiko"),
+            1,
+            {
+                "id": "youtube:" + ("x" * 837),
+                "match_id": 123,
+                "platform": "youtube",
+                "url": "https://example.com/watch",
+                "redirect_url": "https://backend.example.com/api/feed/matches/123/redirect",
+                "title": "T" * 180,
+                "content_text": "C" * 320,
+                "author": "A" * 120,
+                "thumbnail_url": "https://example.com/thumb.jpg",
+                "media_type": "video",
+                "published_at": "2026-06-17T12:00:00Z",
+                "source": "youtube_api",
+            },
+        )
+
+        assert _payload_size(payload) <= 3500
+        assert "item_source" in payload or "source" in payload["preview_item"]
+        if "item_platform" in payload or "platform" in payload["preview_item"]:
+            assert "item_source" in payload or "source" in payload["preview_item"]
 
     def test_payload_trimming_preserves_thumbnail_before_long_text(self):
         thumbnail_url = "https://example.com/thumb.jpg"
