@@ -43,7 +43,7 @@ from app.ingestion.scheduler import (
     scheduler,
     start_scheduler,
 )
-from app.migrations import apply_startup_migrations
+from app.migrations import apply_startup_migrations, run_youtube_bad_date_cleanup
 from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PendingNotification, PlatformCredential, SourceItem, WatchTerm
 from app.schemas import ClientDiagnosticIn
 
@@ -492,6 +492,23 @@ def prune_storage_maintenance(
     )
     db.commit()
     return {"status": "storage pruned", **summary}
+
+
+@app.post("/api/admin/maintenance/purge-youtube-bad-dates")
+def purge_youtube_bad_dates_maintenance(
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    ran = run_youtube_bad_date_cleanup(engine)
+    record_backend_event(
+        db,
+        "maintenance",
+        "completed",
+        "YouTube bad-date cleanup completed",
+        {"migration": "purge_youtube_fetch_time_dates_v2", "ran": ran},
+    )
+    db.commit()
+    return {"status": "youtube bad-date cleanup completed", "ran": ran}
 
 
 @app.get("/api/admin/test-fetch")

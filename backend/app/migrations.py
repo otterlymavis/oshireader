@@ -30,6 +30,18 @@ def _record_migration(slug: str) -> None:
         db.close()
 
 
+PURGE_YOUTUBE_BAD_DATES_SLUG = "purge_youtube_fetch_time_dates_v2"
+
+
+def run_youtube_bad_date_cleanup(engine: Engine) -> bool:
+    """Run the YouTube bad-date cleanup once. Returns True when it ran."""
+    if _migration_applied(PURGE_YOUTUBE_BAD_DATES_SLUG):
+        return False
+    _purge_bad_date_items(engine, platforms=("youtube",))
+    _record_migration(PURGE_YOUTUBE_BAD_DATES_SLUG)
+    return True
+
+
 def _column_names(engine: Engine, table_name: str) -> set[str]:
     inspector = inspect(engine)
     if table_name not in inspector.get_table_names():
@@ -308,6 +320,12 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
     if not _migration_applied(PURGE_SLUG):
         _purge_bad_date_items(engine, platforms=("tver", "togetter", "youtube"))
         _record_migration(PURGE_SLUG)
+
+    # YouTube's scrape fallback used to assign datetime.now() when a search result
+    # omitted its publish time, pinning old videos to the top of the feed. Re-run
+    # the bad-date purge for YouTube under a new slug so existing deployments clean
+    # up rows that were inserted after the first broad cleanup ran.
+    run_youtube_bad_date_cleanup(engine)
 
     # One-time cleanup: remove GirlsChannel items stored via Google News (item_id starts
     # with "http").  The connector now scrapes GirlsChannel directly using numeric topic

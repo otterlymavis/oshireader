@@ -14,7 +14,6 @@ from app.connectors.base import (
     CollectionMode,
     SourceItemCreate,
     contains_keyword,
-    parse_feed_date,
     title_contains_keyword,
 )
 
@@ -51,6 +50,18 @@ def _parse_youtube_relative(text: str) -> Optional[datetime]:
     if unit in ('week', '週', '週間'): return now - timedelta(weeks=n)
     if unit in ('month', 'ヶ月', 'か月'): return now - timedelta(days=n * 30)
     return now - timedelta(days=n * 365)  # unit must be 'year' or '年' — exhaustive
+
+
+def _parse_feed_date_if_present(entry: feedparser.FeedParserDict) -> Optional[datetime]:
+    dates: list[datetime] = []
+    for attr in ("updated_parsed", "published_parsed"):
+        t = getattr(entry, attr, None)
+        if t:
+            try:
+                dates.append(datetime(*t[:6], tzinfo=timezone.utc))
+            except Exception:
+                pass
+    return max(dates) if dates else None
 
 
 class YouTubeConnector(BaseConnector):
@@ -169,7 +180,9 @@ class YouTubeConnector(BaseConnector):
                         thumb = thumbnails[0].get("url")
 
                     rel_text = vr.get("publishedTimeText", {}).get("simpleText", "")
-                    published_at = _parse_youtube_relative(rel_text) or datetime.now(timezone.utc)
+                    published_at = _parse_youtube_relative(rel_text)
+                    if published_at is None:
+                        continue
 
                     if not _is_recent(published_at):
                         continue
@@ -187,7 +200,12 @@ class YouTubeConnector(BaseConnector):
                             title=str(title) if title else None,
                             content_text=str(desc) if desc else None,
                             thumbnail_url=thumb,
-                            raw_payload=item,
+                            raw_payload={
+                                "source": "youtube_scrape",
+                                "date_parsed": True,
+                                "published_time_text": rel_text,
+                                "raw": item,
+                            },
                         )
                     )
 
@@ -225,7 +243,9 @@ class YouTubeConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
-            published = parse_feed_date(entry)
+            published = _parse_feed_date_if_present(entry)
+            if published is None:
+                continue
             if not _is_recent(published):
                 continue
             items.append(
@@ -238,7 +258,7 @@ class YouTubeConnector(BaseConnector):
                     title=title,
                     content_text=summary or None,
                     thumbnail_url=None,
-                    raw_payload={"source": "google_news", "keyword": keyword},
+                    raw_payload={"source": "google_news", "keyword": keyword, "date_parsed": True},
                 )
             )
         return items

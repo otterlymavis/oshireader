@@ -675,6 +675,25 @@ class TestAdminMaintenance:
         assert r.status_code == 500
         assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 0
 
+    def test_purge_youtube_bad_dates_invokes_youtube_cleanup(self, client, db_session):
+        with patch("app.main.run_youtube_bad_date_cleanup", return_value=True) as cleanup:
+            r = client.post("/api/admin/maintenance/purge-youtube-bad-dates")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "youtube bad-date cleanup completed", "ran": True}
+        cleanup.assert_called_once()
+        event = db_session.query(BackendEvent).filter_by(kind="maintenance").one()
+        assert event.status == "completed"
+        assert event.message == "YouTube bad-date cleanup completed"
+        assert event.payload == {"migration": "purge_youtube_fetch_time_dates_v2", "ran": True}
+
+    def test_purge_youtube_bad_dates_returns_500_when_cleanup_fails(self, client, db_session):
+        with patch("app.main.run_youtube_bad_date_cleanup", side_effect=RuntimeError("cleanup failed")):
+            r = client.post("/api/admin/maintenance/purge-youtube-bad-dates")
+
+        assert r.status_code == 500
+        assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 0
+
 
 class TestAdminPoll:
     def test_poll_runs_synchronously_and_reports_completed(self, client):

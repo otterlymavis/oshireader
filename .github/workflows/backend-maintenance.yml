@@ -8,6 +8,7 @@ on:
         required: true
         type: choice
         options:
+          - purge-youtube-bad-dates
           - disable-notifications-without-verified-devices
           - prune-storage
 
@@ -24,6 +25,23 @@ jobs:
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Purge YouTube bad-date items
+        if: inputs.action == 'purge-youtube-bad-dates'
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$BACKEND_URL/api/admin/maintenance/purge-youtube-bad-dates" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+            --max-time 120)
+          echo "YouTube bad-date cleanup response HTTP $STATUS"
+          cat "$BODY"
+          if [ "$STATUS" != "200" ]; then
             exit 1
           fi
 

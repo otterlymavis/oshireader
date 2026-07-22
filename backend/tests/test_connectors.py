@@ -336,6 +336,103 @@ class TestParseYouTubeRelative:
         assert result.tzinfo == timezone.utc
 
 
+class TestYouTubeConnector:
+    @pytest.mark.asyncio
+    async def test_scrape_skips_results_without_publish_time(self):
+        html = _json_mod.dumps({
+            "contents": {
+                "twoColumnSearchResultsRenderer": {
+                    "primaryContents": {
+                        "sectionListRenderer": {
+                            "contents": [
+                                {
+                                    "itemSectionRenderer": {
+                                        "contents": [
+                                            {
+                                                "videoRenderer": {
+                                                    "videoId": "old1",
+                                                    "title": {"runs": [{"text": "Aiko old live"}]},
+                                                    "ownerText": {"runs": [{"text": "Aiko channel"}]},
+                                                    "detailedMetadataSnippets": [
+                                                        {"snippetText": {"runs": [{"text": "Aiko performance"}]}}
+                                                    ],
+                                                    "thumbnail": {"thumbnails": [{"url": "https://i.ytimg.com/old.jpg"}]},
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        })
+        html = f"<html><script>var ytInitialData = {html};</script></html>"
+
+        with patch("app.connectors.youtube.httpx.AsyncClient", _http_mock(text=html)):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_scrape_keeps_recent_publish_time(self):
+        html = _json_mod.dumps({
+            "contents": {
+                "twoColumnSearchResultsRenderer": {
+                    "primaryContents": {
+                        "sectionListRenderer": {
+                            "contents": [
+                                {
+                                    "itemSectionRenderer": {
+                                        "contents": [
+                                            {
+                                                "videoRenderer": {
+                                                    "videoId": "new1",
+                                                    "title": {"runs": [{"text": "Aiko new live"}]},
+                                                    "ownerText": {"runs": [{"text": "Aiko channel"}]},
+                                                    "publishedTimeText": {"simpleText": "2 days ago"},
+                                                    "detailedMetadataSnippets": [
+                                                        {"snippetText": {"runs": [{"text": "Aiko performance"}]}}
+                                                    ],
+                                                    "thumbnail": {"thumbnails": [{"url": "https://i.ytimg.com/new.jpg"}]},
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        })
+        html = f"<html><script>var ytInitialData = {html};</script></html>"
+
+        with patch("app.connectors.youtube.httpx.AsyncClient", _http_mock(text=html)):
+            result = await YouTubeConnector(api_key="")._fetch_scrape("Aiko")
+
+        assert len(result) == 1
+        assert result[0].item_id == "new1"
+        assert result[0].raw_payload["date_parsed"] is True
+        assert result[0].raw_payload["source"] == "youtube_scrape"
+
+    @pytest.mark.asyncio
+    async def test_google_news_fallback_skips_undated_entries(self):
+        entry = _FeedEntry(
+            id="gnews-1",
+            link="https://news.google.com/rss/articles/1",
+            title="Aiko video - YouTube",
+            summary="Aiko",
+        )
+
+        with patch("app.connectors.youtube.httpx.AsyncClient", _http_mock(content=b"rss")), \
+             patch("app.connectors.youtube.feedparser.parse", return_value=_FakeFeed([entry])):
+            result = await YouTubeConnector(api_key="")._fetch_gnews("Aiko")
+
+        assert result == []
+
+
 class TestCleanOriconTitle:
     def test_strips_oricon_news_suffix(self):
         assert _clean_oricon_title("アイコが受賞 - ORICON NEWS") == "アイコが受賞"
@@ -3118,8 +3215,10 @@ def _yt_gnews_ctx(content=b"", is_success=True, get_exc=None):
 
 
 def _yt_api_item(vid_id="v001", title="Aiko Test MV", channel="Test Ch",
-                 published="2026-06-20T10:00:00Z",
+                 published=None,
                  thumb="https://i.ytimg.com/vi/v001/thumb.jpg"):
+    if published is None:
+        published = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
         "id": {"videoId": vid_id},
         "snippet": {
@@ -3276,6 +3375,7 @@ class TestYouTubeGnewsFetch:
             id="gnews001",
             title="Aiko YouTube",
             summary="desc",
+            published_parsed=(datetime.now(timezone.utc) - timedelta(days=2)).timetuple(),
         )
         fake_feed = _FakeFeed([entry])
         with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
@@ -3309,7 +3409,12 @@ class TestYouTubeGnewsFetch:
 
     @pytest.mark.asyncio
     async def test_dedup_prevents_duplicate_items(self):
-        entry = _FeedEntry(link="https://youtube.com/watch?v=dup", id="dup", title="Aiko Dup Video")
+        entry = _FeedEntry(
+            link="https://youtube.com/watch?v=dup",
+            id="dup",
+            title="Aiko Dup Video",
+            published_parsed=(datetime.now(timezone.utc) - timedelta(days=2)).timetuple(),
+        )
         fake_feed = _FakeFeed([entry, entry])
         with patch("app.connectors.youtube.httpx.AsyncClient", _yt_gnews_ctx(content=b"<rss/>")), \
              patch("app.connectors.youtube.feedparser.parse", return_value=fake_feed):
