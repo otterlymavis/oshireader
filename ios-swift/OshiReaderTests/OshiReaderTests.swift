@@ -2988,13 +2988,15 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent-upload", platform: "youtube", url: "https://youtube.com/watch?v=recent",
             title: "Aiko recent upload", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: formatter.string(from: recent),
-            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now)
+            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now),
+            source: "youtube_api"
         )
         let oldYouTube = FeedItem(
             id: "youtube:old-upload", platform: "youtube", url: "https://youtube.com/watch?v=old",
             title: "Aiko old upload", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: formatter.string(from: old),
-            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now)
+            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now),
+            source: "youtube_api"
         )
         let oldArticle = FeedItem(
             id: "yahoonews:old", platform: "yahoonews", url: "https://news.example.com/old",
@@ -3070,6 +3072,46 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.queryFeed(keyword: "Aiko", days: 0).map(\.id), [direct.id])
     }
 
+    func testMergePrunesLegacyUnmarkedYouTubeItems() throws {
+        let formatter = ISO8601DateFormatter()
+        let now = formatter.string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Aiko")
+
+        let legacyUnmarked = FeedItem(
+            id: "youtube:legacy-unmarked",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=legacy-unmarked",
+            title: "Aiko legacy unmarked",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+        let direct = FeedItem(
+            id: "youtube:marked",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=marked",
+            title: "Aiko marked upload",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "youtube_api"
+        )
+
+        _ = db.mergeItems(newItems: [legacyUnmarked, direct])
+
+        XCTAssertEqual(db.feedItems.map(\.id), [direct.id])
+        XCTAssertTrue(FeedItemPolicy.isLegacyUnmarkedYouTubeEstimate(legacyUnmarked))
+    }
+
     func testStartupPrunesLegacyYouTubeGoogleNewsFallbackItems() throws {
         let now = ISO8601DateFormatter().string(from: Date())
         let legacy = FeedItem(
@@ -3113,6 +3155,50 @@ final class OshiReaderTests: XCTestCase {
 
         XCTAssertEqual(freshDB.feedItems.map(\.id), [direct.id])
         XCTAssertFalse(freshDB.feedItems.contains { FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback($0) })
+    }
+
+    func testStartupPrunesLegacyUnmarkedYouTubeItems() throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let legacy = FeedItem(
+            id: "youtube:legacy-startup",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=legacy-startup",
+            title: "Aiko legacy startup",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+        let direct = FeedItem(
+            id: "youtube:marked-startup",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=marked-startup",
+            title: "Aiko marked startup upload",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "youtube_api"
+        )
+        try JSONEncoder().encode([legacy, direct]).write(
+            to: tempDir.appendingPathComponent("feed_items.json")
+        )
+        try JSONEncoder().encode(["youtube"]).write(
+            to: tempDir.appendingPathComponent("subscribed_platforms.json")
+        )
+        UserDefaults.standard.set(4, forKey: "localdb_schema_version")
+        defer { UserDefaults.standard.removeObject(forKey: "localdb_schema_version") }
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.feedItems.map(\.id), [direct.id])
+        XCTAssertFalse(freshDB.feedItems.contains { FeedItemPolicy.shouldPruneLegacyYouTubeItem($0) })
     }
 
     func testStrictArticleSourceIgnoresSummaryOnlyKeywordMatch() throws {

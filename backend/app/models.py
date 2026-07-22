@@ -51,7 +51,11 @@ class SourceItem(Base):
         if not isinstance(self.raw_payload, dict):
             return None
         source = self.raw_payload.get("source")
-        return source if isinstance(source, str) else None
+        if isinstance(source, str):
+            return source
+        if self.platform == "youtube" and isinstance(self.raw_payload.get("snippet"), dict):
+            return "youtube_api"
+        return None
 
 
 class PlatformCredential(Base):

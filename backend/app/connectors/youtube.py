@@ -107,6 +107,9 @@ class YouTubeConnector(BaseConnector):
             if not _is_recent(published):
                 continue
             thumb = snippet.get("thumbnails", {}).get("medium", {}).get("url")
+            payload = dict(raw)
+            payload["source"] = "youtube_api"
+            payload["date_parsed"] = True
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
@@ -118,7 +121,7 @@ class YouTubeConnector(BaseConnector):
                     title=snippet.get("title"),
                     content_text=snippet.get("description"),
                     thumbnail_url=thumb,
-                    raw_payload=raw,
+                    raw_payload=payload,
                 )
             )
 

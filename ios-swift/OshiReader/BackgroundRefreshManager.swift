@@ -264,7 +264,7 @@ enum BackgroundRefreshPolicy {
 
     static func isBackendCursorCandidate(_ item: FeedItem) -> Bool {
         if Platform.normalize(item.platform) == "custom" { return false }
-        if FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item) { return false }
+        if FeedItemPolicy.shouldPruneLegacyYouTubeItem(item) { return false }
         if item.id.contains(":gnews:") { return false }
         if item.id.hasPrefix("news:nhk:") { return false }
         if FeedURLPolicy.isBackendMatchRedirectURL(item.url) { return false }
@@ -620,7 +620,7 @@ enum BackgroundRefreshPolicy {
         let eligibleKeywords = Set(eligibleTerms.map { $0.0.keyword })
         let recentPairs = Set(
             items.compactMap { item -> String? in
-                guard !FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item),
+                guard !FeedItemPolicy.shouldPruneLegacyYouTubeItem(item),
                       eligibleKeywords.contains(item.watch_term_keyword),
                       let fetchedAt = parseISO8601Date(item.fetched_at),
                       now.timeIntervalSince(fetchedAt) < foregroundRefreshStaleAfter else { return nil }
@@ -648,7 +648,7 @@ enum BackgroundRefreshPolicy {
         let eligibleKeywords = Set(eligibleTerms.map { $0.0.keyword })
         let recentPairs = Set(
             items.compactMap { item -> String? in
-                guard !FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item),
+                guard !FeedItemPolicy.shouldPruneLegacyYouTubeItem(item),
                       eligibleKeywords.contains(item.watch_term_keyword),
                       let fetchedAt = parseISO8601Date(item.fetched_at),
                       now.timeIntervalSince(fetchedAt) < foregroundRefreshStaleAfter else { return nil }
@@ -688,7 +688,7 @@ enum BackgroundRefreshPolicy {
         }
         guard !items.isEmpty else { return true }
         let latestFetchedAt = items
-            .filter { !FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback($0) }
+            .filter { !FeedItemPolicy.shouldPruneLegacyYouTubeItem($0) }
             .compactMap { parseISO8601Date($0.fetched_at) }
             .max()
         guard let latestFetchedAt else { return true }

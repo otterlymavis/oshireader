@@ -453,7 +453,8 @@ extension NetworkManager {
                 media_type: "video",
                 published_at: _scraperISO8601.string(from: published),
                 watch_term_keyword: tagKeyword,
-                fetched_at: _scraperISO8601.string(from: Date())
+                fetched_at: _scraperISO8601.string(from: Date()),
+                source: "youtube_device_scrape"
             )
         }
     }
@@ -491,7 +492,8 @@ extension NetworkManager {
                 media_type: "video",
                 published_at: _scraperISO8601.string(from: published),
                 watch_term_keyword: tagKeyword,
-                fetched_at: _scraperISO8601.string(from: Date())
+                fetched_at: _scraperISO8601.string(from: Date()),
+                source: "youtube_device_scrape"
             ))
         }
 
@@ -513,7 +515,8 @@ extension NetworkManager {
                 media_type: "video",
                 published_at: _scraperISO8601.string(from: published),
                 watch_term_keyword: tagKeyword,
-                fetched_at: _scraperISO8601.string(from: Date())
+                fetched_at: _scraperISO8601.string(from: Date()),
+                source: "youtube_device_scrape"
             ))
         }
         return Array(items.prefix(25))

@@ -3262,6 +3262,8 @@ class TestYouTubeApiFetch:
         assert result[0].url == "https://www.youtube.com/watch?v=v001"
         assert result[0].author == "Test Ch"
         assert result[0].media_type == "video"
+        assert result[0].raw_payload["source"] == "youtube_api"
+        assert result[0].raw_payload["date_parsed"] is True
 
     @pytest.mark.asyncio
     async def test_skips_item_without_video_id(self):

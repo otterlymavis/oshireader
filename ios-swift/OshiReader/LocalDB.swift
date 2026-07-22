@@ -24,6 +24,18 @@ enum FeedItemPolicy {
         guard let host = URL(string: item.url)?.host?.lowercased() else { return false }
         return host == "news.google.com" || host.hasSuffix(".news.google.com")
     }
+
+    static func isLegacyUnmarkedYouTubeEstimate(_ item: FeedItem) -> Bool {
+        guard Platform.normalize(item.platform) == "youtube" else { return false }
+        guard item.source?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            return false
+        }
+        return true
+    }
+
+    static func shouldPruneLegacyYouTubeItem(_ item: FeedItem) -> Bool {
+        isLegacyYouTubeGoogleNewsFallback(item) || isLegacyUnmarkedYouTubeEstimate(item)
+    }
 }
 
 @MainActor
@@ -95,7 +107,7 @@ class LocalDB: ObservableObject {
         self.hiddenItems = Set(hiddenArray)
         self.termDeleteTombstones = loadFromFile(name: termDeleteTombstonesFileName, defaultValue: [:])
         pruneTermDeleteTombstones()
-        let prunedLegacyYouTubeFallbacks = pruneLegacyYouTubeGoogleNewsFallbackItems()
+        let prunedLegacyYouTubeFallbacks = pruneLegacyYouTubeItems()
         return applyPersistedTermDeletes() || prunedLegacyYouTubeFallbacks
     }
 
@@ -182,13 +194,13 @@ class LocalDB: ObservableObject {
     }
 
     @discardableResult
-    private func pruneLegacyYouTubeGoogleNewsFallbackItems() -> Bool {
+    private func pruneLegacyYouTubeItems() -> Bool {
         let originalCount = self.feedItems.count
-        self.feedItems.removeAll { FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback($0) }
+        self.feedItems.removeAll { FeedItemPolicy.shouldPruneLegacyYouTubeItem($0) }
         guard self.feedItems.count != originalCount else { return false }
         saveToFile(name: "feed_items", value: self.feedItems)
         AppLogger.persistence.info(
-            "Pruned \(originalCount - self.feedItems.count) legacy YouTube Google News fallback feed items"
+            "Pruned \(originalCount - self.feedItems.count) legacy YouTube feed items"
         )
         return true
     }
@@ -395,12 +407,12 @@ class LocalDB: ObservableObject {
             let key = itemKey(item)
             let isHidden = self.hiddenItems.contains(key)
             let isSearchFallback = item.id.contains("search:") || item.title?.lowercased().contains("search:") == true
-            return !isHidden && !isSearchFallback && !FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item)
+            return !isHidden && !isSearchFallback && !FeedItemPolicy.shouldPruneLegacyYouTubeItem(item)
         }
 
         var currentMap = [String: FeedItem]()
         for item in feedItems {
-            if FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item) { continue }
+            if FeedItemPolicy.shouldPruneLegacyYouTubeItem(item) { continue }
             currentMap[itemKey(item)] = item
         }
 
@@ -621,7 +633,7 @@ class LocalDB: ObservableObject {
 
             // Search pages fallbacks
             if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return nil }
-            if FeedItemPolicy.isLegacyYouTubeGoogleNewsFallback(item) { return nil }
+            if FeedItemPolicy.shouldPruneLegacyYouTubeItem(item) { return nil }
             if FeedURLPolicy.isBackendMatchRedirectURL(item.url) { return nil }
 
             // Hide broken Yahoo fallback cards whose readable field is only a URL.
