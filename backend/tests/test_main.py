@@ -694,6 +694,28 @@ class TestAdminMaintenance:
         assert r.status_code == 500
         assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 0
 
+    def test_purge_youtube_google_news_invokes_forced_cleanup(self, client, db_session):
+        with patch("app.main.force_youtube_google_news_cleanup", return_value=3) as cleanup:
+            r = client.post("/api/admin/maintenance/purge-youtube-google-news")
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "status": "youtube google-news cleanup completed",
+            "purged_count": 3,
+        }
+        cleanup.assert_called_once()
+        event = db_session.query(BackendEvent).filter_by(kind="maintenance").one()
+        assert event.status == "completed"
+        assert event.message == "YouTube Google News cleanup completed"
+        assert event.payload == {"purged_count": 3}
+
+    def test_purge_youtube_google_news_returns_500_when_cleanup_fails(self, client, db_session):
+        with patch("app.main.force_youtube_google_news_cleanup", side_effect=RuntimeError("cleanup failed")):
+            r = client.post("/api/admin/maintenance/purge-youtube-google-news")
+
+        assert r.status_code == 500
+        assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 0
+
 
 class TestAdminPoll:
     def test_poll_runs_synchronously_and_reports_completed(self, client):

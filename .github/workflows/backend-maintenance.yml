@@ -9,6 +9,7 @@ on:
         type: choice
         options:
           - purge-youtube-bad-dates
+          - purge-youtube-google-news
           - disable-notifications-without-verified-devices
           - prune-storage
 
@@ -40,6 +41,23 @@ jobs:
             -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             --max-time 120)
           echo "YouTube bad-date cleanup response HTTP $STATUS"
+          cat "$BODY"
+          if [ "$STATUS" != "200" ]; then
+            exit 1
+          fi
+
+      - name: Purge YouTube Google News fallback items
+        if: inputs.action == 'purge-youtube-google-news'
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$BACKEND_URL/api/admin/maintenance/purge-youtube-google-news" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+            --max-time 120)
+          echo "YouTube Google News cleanup response HTTP $STATUS"
           cat "$BODY"
           if [ "$STATUS" != "200" ]; then
             exit 1

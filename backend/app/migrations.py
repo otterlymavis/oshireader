@@ -52,6 +52,11 @@ def run_youtube_google_news_cleanup(engine: Engine) -> bool:
     return True
 
 
+def force_youtube_google_news_cleanup(engine: Engine) -> int:
+    """Remove YouTube Google News fallback rows even if the migration was already recorded."""
+    return _purge_youtube_google_news_items(engine)
+
+
 def _column_names(engine: Engine, table_name: str) -> set[str]:
     inspector = inspect(engine)
     if table_name not in inspector.get_table_names():
@@ -489,7 +494,7 @@ def _purge_bad_date_items(engine: Engine, platforms: tuple[str, ...]) -> None:
         ))
 
 
-def _purge_youtube_google_news_items(engine: Engine) -> None:
+def _purge_youtube_google_news_items(engine: Engine) -> int:
     if engine.dialect.name == "postgresql":
         source_predicate = "si.raw_payload ->> 'source' = 'google_news'"
     else:
@@ -503,7 +508,7 @@ def _purge_youtube_google_news_items(engine: Engine) -> None:
         """))
         bad_count = result.scalar() or 0
         if bad_count == 0:
-            return
+            return 0
         log.info("Purging %d YouTube Google News fallback source items", bad_count)
         conn.execute(text(f"""
             DELETE FROM matches WHERE source_item_id IN (
@@ -517,3 +522,4 @@ def _purge_youtube_google_news_items(engine: Engine) -> None:
             "WHERE id NOT IN (SELECT source_item_id FROM matches) "
             "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
         ))
+        return int(bad_count)

@@ -43,7 +43,11 @@ from app.ingestion.scheduler import (
     scheduler,
     start_scheduler,
 )
-from app.migrations import apply_startup_migrations, run_youtube_bad_date_cleanup
+from app.migrations import (
+    apply_startup_migrations,
+    force_youtube_google_news_cleanup,
+    run_youtube_bad_date_cleanup,
+)
 from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PendingNotification, PlatformCredential, SourceItem, WatchTerm
 from app.schemas import ClientDiagnosticIn
 
@@ -509,6 +513,26 @@ def purge_youtube_bad_dates_maintenance(
     )
     db.commit()
     return {"status": "youtube bad-date cleanup completed", "ran": ran}
+
+
+@app.post("/api/admin/maintenance/purge-youtube-google-news")
+def purge_youtube_google_news_maintenance(
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    purged_count = force_youtube_google_news_cleanup(engine)
+    record_backend_event(
+        db,
+        "maintenance",
+        "completed",
+        "YouTube Google News cleanup completed",
+        {"purged_count": purged_count},
+    )
+    db.commit()
+    return {
+        "status": "youtube google-news cleanup completed",
+        "purged_count": purged_count,
+    }
 
 
 @app.get("/api/admin/test-fetch")
