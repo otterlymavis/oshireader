@@ -121,9 +121,20 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
     }
 }
 
+private extension CharacterSet {
+    static let urlPathSegmentAllowed: CharacterSet = {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/")
+        return allowed
+    }()
+}
+
 // MARK: - Scraper Extension
 
 extension NetworkManager {
+    private var scraperBrowserUserAgent: String {
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+    }
 
     // MARK: - RSS Fallback (NHK + Google News)
 
@@ -158,8 +169,7 @@ extension NetworkManager {
             }
         }
 
-        let encodedKeyword = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
-        if let gnewsUrl = URL(string: "https://news.google.com/rss/search?q=\(encodedKeyword)&hl=ja&gl=JP&ceid=JP%3Aja"),
+        if let gnewsUrl = googleNewsSearchURL(query: keyword),
            let gnewsItems = try? await parseRss(url: gnewsUrl) {
             googleNewsCompleted = true
             for item in gnewsItems {
@@ -291,13 +301,22 @@ extension NetworkManager {
     ) async -> LocalFallbackScrapeResult {
         let tag = tagKeyword ?? keyword
         return await withTaskGroup(of: LocalFallbackScrapeResult.self) { group in
+            let sourceSpecificPlatforms = Set(["youtube", "note"])
+            let platformIdsForGenericGoogleNews = (platformIds ?? Set(Platform.googleNewsFallbackSites().map(\.platform)))
+                .subtracting(sourceSpecificPlatforms)
+            if platformIds?.contains("youtube") != false {
+                group.addTask { await self.scrapeYouTubeWithCompletion(keyword: keyword, tagKeyword: tag) }
+            }
+            if platformIds?.contains("note") != false {
+                group.addTask { await self.scrapeNoteWithCompletion(keyword: keyword, tagKeyword: tag) }
+            }
             if Platform.usesNewsRSSFallback(for: platformIds) {
                 group.addTask { await self.scrapeRSSFallbackWithCompletion(keyword: keyword, tagKeyword: tag) }
             }
             if Platform.usesNiconicoRSSFallback(for: platformIds) {
                 group.addTask { await self.scrapeNiconicoRSSWithCompletion(keyword: keyword, tagKeyword: tag) }
             }
-            for fallback in Platform.googleNewsFallbackSites(for: platformIds) {
+            for fallback in Platform.googleNewsFallbackSites(for: platformIdsForGenericGoogleNews) {
                 group.addTask {
                     await self.scrapeGoogleNewsSiteWithCompletion(
                         keyword: keyword,
@@ -317,6 +336,373 @@ extension NetworkManager {
             }
             return result
         }
+    }
+
+    // MARK: - YouTube Keyless Search
+
+    func scrapeYouTube(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
+        await scrapeYouTubeWithCompletion(keyword: keyword, tagKeyword: tagKeyword).items
+    }
+
+    func scrapeYouTubeWithCompletion(keyword: String, tagKeyword: String? = nil) async -> LocalFallbackScrapeResult {
+        let tag = tagKeyword ?? keyword
+        let innertube = await fetchYouTubeInnertube(keyword: keyword, tagKeyword: tag)
+        if innertube.completed && !innertube.items.isEmpty {
+            return LocalFallbackScrapeResult(items: innertube.items, completedPlatforms: ["youtube"])
+        }
+        let scraped = await fetchYouTubeSearchPage(keyword: keyword, tagKeyword: tag)
+        return LocalFallbackScrapeResult(
+            items: scraped.items.isEmpty ? innertube.items : scraped.items,
+            completedPlatforms: (innertube.completed || scraped.completed) ? ["youtube"] : []
+        )
+    }
+
+    private func fetchYouTubeInnertube(keyword: String, tagKeyword: String) async -> (items: [FeedItem], completed: Bool) {
+        guard let url = URL(string: "https://www.youtube.com/youtubei/v1/search?prettyPrint=false") else {
+            return ([], false)
+        }
+        let payload: [String: Any] = [
+            "context": [
+                "client": [
+                    "clientName": "WEB",
+                    "clientVersion": "2.20260617.03.00",
+                    "hl": "ja",
+                    "gl": "JP"
+                ]
+            ],
+            "query": keyword
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload),
+              let (data, _) = await httpPOST(
+                url,
+                body: body,
+                headers: [
+                    "Content-Type": "application/json",
+                    "User-Agent": scraperBrowserUserAgent,
+                    "Accept-Language": "ja,ja-JP;q=0.9,en;q=0.8"
+                ],
+                timeout: 15
+              ),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return ([], false)
+        }
+        let cutoff = Date().addingTimeInterval(-90 * 86400)
+        var items = collectYouTubeVideoRendererItems(from: json, keyword: keyword, tagKeyword: tagKeyword, cutoff: cutoff)
+        if items.count < 25 {
+            items.append(contentsOf: collectMobileYouTubeItems(from: json, keyword: keyword, tagKeyword: tagKeyword, cutoff: cutoff))
+        }
+        var seen = Set<String>()
+        let deduped = items.filter { seen.insert($0.id).inserted }
+        return (Array(deduped.prefix(25)), true)
+    }
+
+    private func fetchYouTubeSearchPage(keyword: String, tagKeyword: String) async -> (items: [FeedItem], completed: Bool) {
+        guard var components = URLComponents(string: "https://www.youtube.com/results") else {
+            return ([], false)
+        }
+        components.queryItems = [URLQueryItem(name: "search_query", value: keyword)]
+        guard let url = components.url else { return ([], false) }
+        guard let (data, _) = await httpGET(
+            url,
+            headers: [
+                "User-Agent": scraperBrowserUserAgent,
+                "Accept-Language": "ja,ja-JP;q=0.9,en;q=0.8"
+            ],
+            timeout: 15
+        ) else {
+            return ([], false)
+        }
+        guard let html = String(data: data, encoding: .utf8) else {
+            return ([], true)
+        }
+        let cutoff = Date().addingTimeInterval(-90 * 86400)
+        guard let json = extractYouTubeInitialData(from: html) else {
+            return ([], true)
+        }
+        var items = collectYouTubeVideoRendererItems(from: json, keyword: keyword, tagKeyword: tagKeyword, cutoff: cutoff)
+        if items.isEmpty {
+            items = collectMobileYouTubeItems(from: json, keyword: keyword, tagKeyword: tagKeyword, cutoff: cutoff)
+        }
+        return (items, true)
+    }
+
+    private func collectYouTubeVideoRendererItems(
+        from json: [String: Any],
+        keyword: String,
+        tagKeyword: String,
+        cutoff: Date
+    ) -> [FeedItem] {
+        var renderers = [[String: Any]]()
+        collectDictionaries(named: "videoRenderer", in: json, into: &renderers)
+
+        return renderers.prefix(25).compactMap { renderer -> FeedItem? in
+            guard let videoId = renderer["videoId"] as? String else { return nil }
+            let relText = firstText(in: renderer["publishedTimeText"]) ?? ""
+            let published = youtubeRelativeDate(relText) ?? Date()
+            if published < cutoff { return nil }
+            let description = (((renderer["detailedMetadataSnippets"] as? [[String: Any]])?.first?["snippetText"] as? [String: Any]))
+
+            return FeedItem(
+                id: "youtube:\(videoId)",
+                platform: "youtube",
+                url: "https://www.youtube.com/watch?v=\(videoId)",
+                title: firstText(in: renderer["title"]),
+                content_text: firstText(in: description),
+                author: firstText(in: renderer["ownerText"]) ?? firstText(in: renderer["shortBylineText"]),
+                thumbnail_url: firstThumbnailURL(in: renderer["thumbnail"]),
+                media_type: "video",
+                published_at: _scraperISO8601.string(from: published),
+                watch_term_keyword: tagKeyword,
+                fetched_at: _scraperISO8601.string(from: Date())
+            )
+        }
+    }
+
+    private func collectMobileYouTubeItems(
+        from json: [String: Any],
+        keyword: String,
+        tagKeyword: String,
+        cutoff: Date
+    ) -> [FeedItem] {
+        var items = [FeedItem]()
+        var seenIds = Set<String>()
+        var videoRenderers = [[String: Any]]()
+        var shortsRenderers = [[String: Any]]()
+        collectDictionaries(named: "videoWithContextRenderer", in: json, into: &videoRenderers)
+        collectDictionaries(named: "shortsLockupViewModel", in: json, into: &shortsRenderers)
+
+        for renderer in videoRenderers {
+            guard let videoId = renderer["videoId"] as? String, seenIds.insert(videoId).inserted else { continue }
+            let relText = firstText(in: renderer["publishedTimeText"]) ?? ""
+            let published = youtubeRelativeDate(relText) ?? Date()
+            if published < cutoff { continue }
+            let path = nestedString(renderer, ["navigationEndpoint", "commandMetadata", "webCommandMetadata", "url"])
+            let itemURL = path.flatMap {
+                URL(string: $0, relativeTo: URL(string: "https://www.youtube.com"))?.absoluteString
+            } ?? "https://www.youtube.com/watch?v=\(videoId)"
+            items.append(FeedItem(
+                id: "youtube:\(videoId)",
+                platform: "youtube",
+                url: itemURL,
+                title: firstText(in: renderer["headline"]),
+                content_text: nil,
+                author: firstText(in: renderer["shortBylineText"]),
+                thumbnail_url: firstThumbnailURL(in: renderer["thumbnail"]),
+                media_type: "video",
+                published_at: _scraperISO8601.string(from: published),
+                watch_term_keyword: tagKeyword,
+                fetched_at: _scraperISO8601.string(from: Date())
+            ))
+        }
+
+        for renderer in shortsRenderers {
+            let videoId = nestedString(renderer, ["onTap", "innertubeCommand", "reelWatchEndpoint", "videoId"])
+                ?? (renderer["entityId"] as? String)?.split(separator: "-").last.map(String.init)
+            guard let videoId, seenIds.insert(videoId).inserted else { continue }
+            let secondary = nestedString(renderer, ["belowThumbnailMetadata", "secondaryText", "content"]) ?? ""
+            let published = youtubeRelativeDate(secondary) ?? Date()
+            if published < cutoff { continue }
+            items.append(FeedItem(
+                id: "youtube:\(videoId)",
+                platform: "youtube",
+                url: "https://www.youtube.com/shorts/\(videoId)",
+                title: nestedString(renderer, ["overlayMetadata", "primaryText", "content"]) ?? (renderer["accessibilityText"] as? String),
+                content_text: nil,
+                author: nestedString(renderer, ["belowThumbnailMetadata", "primaryText", "content"]),
+                thumbnail_url: firstThumbnailURL(in: nestedValue(renderer, ["onTap", "innertubeCommand", "reelWatchEndpoint", "thumbnail"])),
+                media_type: "video",
+                published_at: _scraperISO8601.string(from: published),
+                watch_term_keyword: tagKeyword,
+                fetched_at: _scraperISO8601.string(from: Date())
+            ))
+        }
+        return Array(items.prefix(25))
+    }
+
+    private func extractYouTubeInitialData(from html: String) -> [String: Any]? {
+        if let regex = try? NSRegularExpression(pattern: #"ytInitialData\s*=\s*(\{.+?\});"#, options: [.dotMatchesLineSeparators]),
+           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+           let range = Range(match.range(at: 1), in: html),
+           let data = String(html[range]).data(using: .utf8),
+           let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            return json
+        }
+
+        guard let regex = try? NSRegularExpression(pattern: #"ytInitialData\s*=\s*'((?:\\'|[^'])*)';"#, options: [.dotMatchesLineSeparators]),
+              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let range = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+        let decoded = decodeJavaScriptEscapedString(String(html[range]))
+        guard let data = decoded.data(using: .utf8),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return json
+    }
+
+    private func decodeJavaScriptEscapedString(_ escaped: String) -> String {
+        let scalars = Array(escaped.unicodeScalars)
+        var output = String.UnicodeScalarView()
+        var i = 0
+
+        while i < scalars.count {
+            let scalar = scalars[i]
+            guard scalar == "\\" else {
+                output.append(scalar)
+                i += 1
+                continue
+            }
+            let nextIndex = i + 1
+            guard nextIndex < scalars.count else {
+                output.append(scalar)
+                i += 1
+                continue
+            }
+            let next = scalars[nextIndex]
+            if next == "x", i + 3 < scalars.count,
+               let hi = Int(String(scalars[i + 2]), radix: 16),
+               let lo = Int(String(scalars[i + 3]), radix: 16),
+               let decoded = UnicodeScalar((hi << 4) + lo) {
+                output.append(decoded)
+                i += 4
+            } else if next == "u", i + 5 < scalars.count {
+                let hex = String(String.UnicodeScalarView(scalars[(i + 2)...(i + 5)]))
+                if let value = Int(hex, radix: 16), let decoded = UnicodeScalar(value) {
+                    output.append(decoded)
+                    i += 6
+                } else {
+                    output.append(next)
+                    i += 2
+                }
+            } else {
+                switch next {
+                case "n": output.append("\n")
+                case "r": output.append("\r")
+                case "t": output.append("\t")
+                default: output.append(next)
+                }
+                i += 2
+            }
+        }
+        return String(output)
+    }
+
+    private func collectDictionaries(named name: String, in value: Any, into results: inout [[String: Any]]) {
+        if let dict = value as? [String: Any] {
+            if let match = dict[name] as? [String: Any] {
+                results.append(match)
+            }
+            for child in dict.values {
+                collectDictionaries(named: name, in: child, into: &results)
+            }
+        } else if let array = value as? [Any] {
+            for child in array {
+                collectDictionaries(named: name, in: child, into: &results)
+            }
+        }
+    }
+
+    private func nestedValue(_ dict: [String: Any], _ path: [String]) -> Any? {
+        var current: Any? = dict
+        for key in path {
+            current = (current as? [String: Any])?[key]
+        }
+        return current
+    }
+
+    private func nestedString(_ dict: [String: Any], _ path: [String]) -> String? {
+        nestedValue(dict, path) as? String
+    }
+
+    private func firstText(in value: Any?) -> String? {
+        guard let dict = value as? [String: Any] else { return nil }
+        if let simple = dict["simpleText"] as? String { return simple }
+        if let content = dict["content"] as? String { return content }
+        if let first = (dict["runs"] as? [[String: Any]])?.first?["text"] as? String { return first }
+        return nil
+    }
+
+    private func firstThumbnailURL(in value: Any?) -> String? {
+        guard let dict = value as? [String: Any] else { return nil }
+        return (dict["thumbnails"] as? [[String: Any]])?.first?["url"] as? String
+    }
+
+    private func youtubeRelativeDate(_ text: String) -> Date? {
+        guard !text.isEmpty,
+              let match = text.lowercased().range(
+                of: #"(\d+)\s*(second|minute|hour|day|week|month|year|秒|分|時間|日|週間|週|ヶ月|か月|年)"#,
+                options: .regularExpression
+              ) else {
+            return nil
+        }
+        let token = String(text.lowercased()[match])
+        guard let numMatch = token.range(of: #"\d+"#, options: .regularExpression),
+              let number = Int(token[numMatch]) else { return nil }
+        let day = 86400.0
+        if token.contains("second") || token.contains("秒") { return Date().addingTimeInterval(-Double(number)) }
+        if token.contains("minute") || token.contains("分") { return Date().addingTimeInterval(-Double(number) * 60) }
+        if token.contains("hour") || token.contains("時間") { return Date().addingTimeInterval(-Double(number) * 3600) }
+        if token.contains("week") || token.contains("週") { return Date().addingTimeInterval(-Double(number) * 7 * day) }
+        if token.contains("month") || token.contains("ヶ月") || token.contains("か月") { return Date().addingTimeInterval(-Double(number) * 30 * day) }
+        if token.contains("year") || token.contains("年") { return Date().addingTimeInterval(-Double(number) * 365 * day) }
+        if token.contains("day") || token.contains("日") { return Date().addingTimeInterval(-Double(number) * day) }
+        return nil
+    }
+
+    // MARK: - Note Hashtag RSS
+
+    func scrapeNote(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
+        await scrapeNoteWithCompletion(keyword: keyword, tagKeyword: tagKeyword).items
+    }
+
+    func scrapeNoteWithCompletion(keyword: String, tagKeyword: String? = nil) async -> LocalFallbackScrapeResult {
+        let tag = tagKeyword ?? keyword
+        let tags = noteRSSFallbackTags(for: keyword)
+        var completed = false
+        var entries = [RssItem]()
+        for noteTag in tags {
+            guard let encoded = noteTag.addingPercentEncoding(withAllowedCharacters: .urlPathSegmentAllowed),
+                  let url = URL(string: "https://note.com/hashtag/\(encoded)/rss") else {
+                continue
+            }
+            guard let parsed = try? await parseRss(url: url) else {
+                continue
+            }
+            completed = true
+            entries = parsed
+            if !entries.isEmpty { break }
+        }
+
+        let nowString = _scraperISO8601.string(from: Date())
+        let items = entries.prefix(25).compactMap { item -> FeedItem? in
+            guard !item.link.isEmpty else { return nil }
+            let itemId = item.link.split(separator: "/").last.map(String.init) ?? item.link
+            return FeedItem(
+                id: "note:\(itemId)",
+                platform: "note",
+                url: item.link,
+                title: item.title.isEmpty ? nil : item.title,
+                content_text: item.description.isEmpty ? nil : item.description,
+                author: nil,
+                thumbnail_url: item.thumbnailUrl,
+                media_type: "article",
+                published_at: item.pubDate ?? nowString,
+                watch_term_keyword: tag,
+                fetched_at: nowString
+            )
+        }
+        return LocalFallbackScrapeResult(
+            items: items,
+            completedPlatforms: completed ? ["note"] : []
+        )
+    }
+
+    private func noteRSSFallbackTags(for keyword: String) -> [String] {
+        let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let compacted = trimmed.components(separatedBy: .whitespacesAndNewlines).joined()
+        return compacted != trimmed && !compacted.isEmpty ? [trimmed, compacted] : [trimmed]
     }
 
     // MARK: - NicoNico via Google News
@@ -347,8 +733,7 @@ extension NetworkManager {
 
     func scrapeGoogleNewsSiteWithCompletion(keyword: String, site: String, platform: String, tagKeyword: String? = nil) async -> LocalFallbackScrapeResult {
         let query = "\(keyword) site:\(site)"
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        guard let url = URL(string: "https://news.google.com/rss/search?q=\(encoded)&hl=ja&gl=JP&ceid=JP%3Aja") else {
+        guard let url = googleNewsSearchURL(query: query) else {
             return LocalFallbackScrapeResult()
         }
 
@@ -361,8 +746,7 @@ extension NetworkManager {
         var items = initialItems
         if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
             let historicalQuery = "\(query) when:10y"
-            let historicalEncoded = historicalQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? historicalQuery
-            guard let historicalURL = URL(string: "https://news.google.com/rss/search?q=\(historicalEncoded)&hl=ja&gl=JP&ceid=JP%3Aja"),
+            guard let historicalURL = googleNewsSearchURL(query: historicalQuery),
                   let historicalItems = try? await parseRss(url: historicalURL) else {
                 return LocalFallbackScrapeResult()
             }
@@ -401,13 +785,74 @@ extension NetworkManager {
         return String(v)
     }
 
+    private func googleNewsSearchURL(query: String) -> URL? {
+        guard var components = URLComponents(string: "https://news.google.com/rss/search") else {
+            return nil
+        }
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "hl", value: "ja"),
+            URLQueryItem(name: "gl", value: "JP"),
+            URLQueryItem(name: "ceid", value: "JP:ja")
+        ]
+        return components.url
+    }
+
     private func parseRss(url: URL) async throws -> [RssItem] {
-        let (data, _) = try await session.data(from: url)
+        guard let (data, _) = await httpGET(
+            url,
+            headers: [
+                "User-Agent": scraperBrowserUserAgent,
+                "Accept-Language": "ja,en;q=0.9"
+            ],
+            timeout: 12
+        ) else {
+            throw URLError(.badServerResponse)
+        }
         let parser = XMLParser(data: data)
         let delegate = RSSParserDelegate()
         parser.delegate = delegate
         parser.parse()
         return delegate.items
+    }
+
+    private func httpGET(
+        _ url: URL,
+        headers: [String: String] = [:],
+        timeout: TimeInterval = 12
+    ) async -> (Data, HTTPURLResponse)? {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode) else {
+            return nil
+        }
+        return (data, http)
+    }
+
+    private func httpPOST(
+        _ url: URL,
+        body: Data,
+        headers: [String: String] = [:],
+        timeout: TimeInterval = 12
+    ) async -> (Data, HTTPURLResponse)? {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.timeoutInterval = timeout
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode) else {
+            return nil
+        }
+        return (data, http)
     }
 
     private func cleanNewsTitle(_ title: String) -> String {

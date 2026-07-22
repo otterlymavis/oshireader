@@ -774,6 +774,35 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testBackendConnectivityFailureSkipsForegroundBackendRetries() {
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(
+                URLError(.notConnectedToInternet)
+            )
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(
+                URLError(.timedOut)
+            )
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(
+                URLError(.cannotConnectToHost)
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(
+                APIClientError.httpStatus(500, detail: nil)
+            ),
+            "Fast backend HTTP failures can still use the normal retry path."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(
+                DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "bad json"))
+            )
+        )
+    }
+
     func testForegroundRefreshPolicyRefreshesEmptyOrStaleCache() {
         let now = Date(timeIntervalSince1970: 1_800)
         let recent = FeedItem(
@@ -872,6 +901,162 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertFalse(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [stale], now: now))
     }
 
+    func testDeviceFallbackTermsIncludeMediaOnlyTermsForMediaPlatformsOnly() {
+        let allInfo = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let mediaOnly = WatchTerm(keyword: "Haruka", collection_mode: .mediaOnly)
+        let inactive = WatchTerm(keyword: "Miku", collection_mode: .allInfo, is_active: false)
+
+        let eligible = BackgroundRefreshPolicy.termsEligibleForDeviceFallback(
+            [allInfo, mediaOnly, inactive],
+            subscribedPlatforms: ["youtube", "note"]
+        )
+
+        XCTAssertEqual(eligible.map(\.keyword), ["Aiko", "Haruka"])
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.deviceFallbackPlatforms(
+                for: mediaOnly,
+                subscribedPlatforms: ["youtube", "note"]
+            ),
+            ["youtube"]
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.termsEligibleForDeviceFallback(
+                [mediaOnly],
+                subscribedPlatforms: ["note"]
+            ).isEmpty
+        )
+    }
+
+    func testSourceScopeAllowsMediaOnlyDeviceFallbackForMediaPlatforms() {
+        let mediaOnly = WatchTerm(keyword: "Aiko", collection_mode: .mediaOnly)
+        let allInfo = WatchTerm(keyword: "Haruka", collection_mode: .allInfo)
+
+        let mediaOnlyScope = BackgroundRefreshPolicy.sourceScope(
+            activeTerms: [mediaOnly],
+            customUrls: [],
+            subscribedPlatforms: ["youtube", "note"]
+        )
+        XCTAssertTrue(mediaOnlyScope.needsBackend)
+        XCTAssertTrue(mediaOnlyScope.needsDevice)
+        XCTAssertTrue(mediaOnlyScope.needsLocal)
+        XCTAssertEqual(mediaOnlyScope.requiredBackendPlatforms, ["youtube"])
+        XCTAssertEqual(mediaOnlyScope.requiredDevicePlatforms, ["youtube"])
+
+        let mediaOnlyArticleScope = BackgroundRefreshPolicy.sourceScope(
+            activeTerms: [mediaOnly],
+            customUrls: [],
+            subscribedPlatforms: ["note"]
+        )
+        XCTAssertFalse(mediaOnlyArticleScope.needsBackend)
+        XCTAssertFalse(mediaOnlyArticleScope.needsDevice)
+        XCTAssertFalse(mediaOnlyArticleScope.needsLocal)
+        XCTAssertTrue(mediaOnlyArticleScope.requiredBackendPlatforms.isEmpty)
+
+        let allInfoScope = BackgroundRefreshPolicy.sourceScope(
+            activeTerms: [allInfo],
+            customUrls: [],
+            subscribedPlatforms: ["youtube", "note"]
+        )
+        XCTAssertTrue(allInfoScope.needsBackend)
+        XCTAssertTrue(allInfoScope.needsDevice)
+        XCTAssertTrue(allInfoScope.needsLocal)
+        XCTAssertEqual(allInfoScope.requiredBackendPlatforms, ["youtube", "note"])
+        XCTAssertEqual(allInfoScope.requiredDevicePlatforms, ["youtube", "note"])
+    }
+
+    func testMediaOnlyArticleOnlySubscriptionsDoNotForceForegroundBackendRefresh() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let mediaOnly = WatchTerm(keyword: "Aiko", collection_mode: .mediaOnly)
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [mediaOnly],
+                customUrls: [],
+                subscribedPlatforms: ["note"],
+                items: [],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "Media-only keywords should not keep retrying article-only backend sources."
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldRefreshBeforeSuspension(
+                activeTerms: [mediaOnly],
+                customUrls: [],
+                subscribedPlatforms: ["note"],
+                items: [],
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: nil
+            ),
+            "Dirty feed-scope markers should not force a no-op suspension refresh for media-only/article-only scopes."
+        )
+    }
+
+    func testDeviceFallbackFreshnessRequiresMediaOnlyMediaPlatforms() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let allInfo = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let mediaOnly = WatchTerm(keyword: "Haruka", collection_mode: .mediaOnly)
+        let recentFallback = FeedItem(
+            id: "youtube:gnews:recent",
+            platform: "youtube",
+            url: "https://example.com/recent",
+            title: "Aiko recent",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "1970-01-01T00:29:00Z"
+        )
+        let recentMediaOnlyFallback = FeedItem(
+            id: "youtube:haruka",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=haruka",
+            title: "Haruka video",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Haruka",
+            fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [allInfo, mediaOnly],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [recentFallback],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: now
+            ),
+            "Media-only keywords should keep media device fallback stale until their media platform has fresh items."
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [allInfo, mediaOnly],
+                customUrls: [],
+                subscribedPlatforms: ["youtube"],
+                items: [recentFallback, recentMediaOnlyFallback],
+                pulledNewTerms: false,
+                now: now,
+                lastRefreshAt: nil,
+                lastBackendRefreshAt: now
+            ),
+            "Media-only keywords should be fresh once their eligible media fallback platform has a fresh item."
+        )
+    }
+
     func testBackendPollTriggerUsesLongQuotaFriendlyThrottle() {
         let now = Date(timeIntervalSince1970: 20_000)
 
@@ -949,7 +1134,7 @@ final class OshiReaderTests: XCTestCase {
     func testBackgroundCompletionClearsDirtyForBackendOnlyScope() {
         let now = Date(timeIntervalSince1970: 1_800)
         let recentCompletion = now.addingTimeInterval(-60)
-        let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .mediaOnly)
         let recent = FeedItem(
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
@@ -961,7 +1146,7 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: ["youtube"],
             customRefreshed: false,
-            completedDevicePlatforms: [],
+            completedDevicePlatforms: ["youtube"],
             activeTerms: [term],
             customUrls: [],
             subscribedPlatforms: ["youtube"],
@@ -998,7 +1183,7 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: ["youtube"],
             customRefreshed: false,
-            completedDevicePlatforms: [],
+            completedDevicePlatforms: ["youtube"],
             activeTerms: [term],
             customUrls: [],
             subscribedPlatforms: ["youtube"],
@@ -1021,7 +1206,7 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: ["youtube"],
             customRefreshed: false,
-            completedDevicePlatforms: [],
+            completedDevicePlatforms: ["youtube"],
             activeTerms: [term],
             customUrls: [],
             subscribedPlatforms: ["youtube"],
@@ -1091,7 +1276,7 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
-    func testBackgroundCompletionKeepsDirtyWhenBackendPlatformIsMissing() {
+    func testBackgroundCompletionAllowsDeviceFallbackToCoverBackendMissingPlatforms() {
         let now = Date(timeIntervalSince1970: 1_800)
         let recentCompletion = now.addingTimeInterval(-60)
         let term = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
@@ -1112,29 +1297,7 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: ["youtube"],
             customRefreshed: false,
-            completedDevicePlatforms: [],
-            activeTerms: [term],
-            customUrls: [],
-            subscribedPlatforms: ["youtube", "note"],
-            at: recentCompletion
-        )
-
-        XCTAssertTrue(
-            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
-                activeTerms: [term],
-                customUrls: [],
-                subscribedPlatforms: ["youtube", "note"],
-                items: [recentYouTube],
-                pulledNewTerms: false,
-                now: now
-            ),
-            "A partial backend completion must keep a multi-backend feed scope dirty."
-        )
-
-        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
-            completedBackendPlatforms: ["youtube", "note"],
-            customRefreshed: false,
-            completedDevicePlatforms: [],
+            completedDevicePlatforms: ["youtube", "note"],
             activeTerms: [term],
             customUrls: [],
             subscribedPlatforms: ["youtube", "note"],
@@ -1150,7 +1313,87 @@ final class OshiReaderTests: XCTestCase {
                 pulledNewTerms: false,
                 now: now
             ),
-            "The same feed scope should clear once every backend platform completes."
+            "Device fallback completion should cover backend-missing device-fallback platforms when the server is down."
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: [],
+            customRefreshed: false,
+            completedDevicePlatforms: ["youtube", "note"],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["youtube", "note"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["youtube", "note"],
+                items: [recentYouTube, recentNote],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Empty backend completion should still clear once every required device fallback platform completes locally."
+        )
+    }
+
+    func testBackgroundCompletionIgnoresArticleOnlyPlatformsForMediaOnlyTerms() {
+        let now = Date(timeIntervalSince1970: 1_800)
+        let recentCompletion = now.addingTimeInterval(-60)
+        let term = WatchTerm(keyword: "Aiko", collection_mode: .mediaOnly)
+        let recentNote = FeedItem(
+            id: "note:recent", platform: "note", url: "https://example.com/note",
+            title: "Recent note", content_text: "Aiko", author: nil, thumbnail_url: nil,
+            media_type: "article", published_at: "1970-01-01T00:29:00Z",
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+        )
+
+        BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: [],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["note"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["note"],
+                items: [recentNote],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Article-only platforms should not keep media-only terms dirty."
+        )
+
+        BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
+            completedBackendPlatforms: ["note"],
+            customRefreshed: false,
+            completedDevicePlatforms: [],
+            activeTerms: [term],
+            customUrls: [],
+            subscribedPlatforms: ["note"],
+            at: recentCompletion
+        )
+
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
+                activeTerms: [term],
+                customUrls: [],
+                subscribedPlatforms: ["note"],
+                items: [recentNote],
+                pulledNewTerms: false,
+                now: now
+            ),
+            "Backend completion should clear when local device fallback is intentionally ineligible for this term."
         )
     }
 
@@ -1215,7 +1458,7 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: ["youtube"],
             customRefreshed: true,
-            completedDevicePlatforms: [],
+            completedDevicePlatforms: ["youtube"],
             activeTerms: [term],
             customUrls: [customUrl],
             subscribedPlatforms: ["youtube", "custom"],
@@ -1275,7 +1518,7 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: ["youtube", "yahoonews"],
             customRefreshed: true,
-            completedDevicePlatforms: ["yahoonews"],
+            completedDevicePlatforms: ["youtube", "yahoonews"],
             activeTerms: [term],
             customUrls: [customUrl],
             subscribedPlatforms: ["youtube", "yahoonews", "custom"],
@@ -1331,7 +1574,7 @@ final class OshiReaderTests: XCTestCase {
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: ["youtube", "yahoonews", "niconico"],
             customRefreshed: false,
-            completedDevicePlatforms: ["yahoonews", "niconico"],
+            completedDevicePlatforms: ["youtube", "yahoonews", "niconico"],
             activeTerms: [term],
             customUrls: [],
             subscribedPlatforms: ["youtube", "yahoonews", "niconico"],
@@ -1411,6 +1654,26 @@ final class OshiReaderTests: XCTestCase {
             ),
             ["yahoonews", "niconico"],
             "Empty results can still complete all fallback platforms when the scrape reports successful checks."
+        )
+    }
+
+    func testCompletedDeviceFallbackPlatformsRespectPerSearchEligibility() {
+        let allInfoSearch = LocalFallbackScrapeResult(
+            items: [],
+            completedPlatforms: ["youtube", "note"]
+        )
+        let mediaOnlySearch = LocalFallbackScrapeResult(
+            items: [],
+            completedPlatforms: ["youtube"]
+        )
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches([
+                (allInfoSearch, ["youtube", "note"]),
+                (mediaOnlySearch, ["youtube"])
+            ]),
+            ["youtube", "note"],
+            "Article fallback platforms should complete when every search eligible for that platform completed it."
         )
     }
 
@@ -2669,17 +2932,17 @@ final class OshiReaderTests: XCTestCase {
     }
 
     func testLocalGoogleNewsFallbacksCoverStrictArticleSources() throws {
-        let backendOnly = Set(["note", "girlschannel"])
         let rssFallback = Set(["news"])
         let strictArticleFallbacks = Set(
             Platform.all
                 .filter { $0.usesStrictKeywordMatching && !$0.isMediaPlatform }
                 .map(\.id)
         )
-        .subtracting(backendOnly)
         .subtracting(rssFallback)
+        let sourceSpecificFallbacks = Set(["note"])
         let supplementalFallbacks = Set(["tver", "twitter"])
         let expected = strictArticleFallbacks.union(supplementalFallbacks)
+            .subtracting(sourceSpecificFallbacks)
         let actual = Set(NetworkManager.googleNewsFallbackSites.map(\.platform))
 
         XCTAssertEqual(actual, expected)
@@ -2700,8 +2963,9 @@ final class OshiReaderTests: XCTestCase {
 
         XCTAssertTrue(Platform.shouldRunDeviceFallback("5ch"))
         XCTAssertTrue(Platform.shouldRunDeviceFallback("news"))
-        XCTAssertFalse(Platform.shouldRunDeviceFallback("girlschannel"))
-        XCTAssertFalse(Platform.shouldRunDeviceFallback("youtube"))
+        XCTAssertTrue(Platform.shouldRunDeviceFallback("girlschannel"))
+        XCTAssertTrue(Platform.shouldRunDeviceFallback("youtube"))
+        XCTAssertTrue(Platform.shouldRunDeviceFallback("note"))
         XCTAssertFalse(Platform.shouldRunDeviceFallback("custom"))
 
         XCTAssertTrue(Platform.shouldUseDateWindowRefresh("5ch"))
@@ -2712,7 +2976,7 @@ final class OshiReaderTests: XCTestCase {
 
     func testScopedGoogleNewsFallbackSitesOnlyIncludeRequestedFallbackPlatforms() throws {
         let sites = Platform.googleNewsFallbackSites(for: Set(["5ch", "girlschannel", "youtube", "custom"]))
-        XCTAssertEqual(sites.map(\.platform), ["5ch"])
+        XCTAssertEqual(sites.map(\.platform), ["girlschannel", "5ch"])
     }
     
     // MARK: - skipDateCutoff flag: forum platforms always pass date filter
@@ -2901,6 +3165,69 @@ final class OshiReaderTests: XCTestCase {
         let id = db.customUrls.first!.id
         db.removeCustomUrl(id: id)
         XCTAssertEqual(db.customUrls.count, 0)
+    }
+
+    func testRemoveCustomUrlPrunesCachedCustomFeedItem() throws {
+        db.setSubscribedPlatforms(platforms: ["custom"])
+        db.addCustomUrl(url: "https://myoshi-blog.com/feed", title: "Oshi Blog")
+        let custom = db.customUrls.first!
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: custom.id,
+            platform: "custom",
+            url: custom.url,
+            title: "Oshi Blog",
+            content_text: nil,
+            author: "myoshi-blog.com",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: "",
+            fetched_at: now
+        )
+        _ = db.mergeItems(newItems: [item])
+        XCTAssertEqual(db.queryFeed(keyword: nil, days: 0).map(\.id), [custom.id])
+
+        db.removeCustomUrl(id: custom.id)
+
+        XCTAssertTrue(db.customUrls.isEmpty)
+        XCTAssertTrue(db.feedItems.isEmpty)
+        XCTAssertTrue(db.queryFeed(keyword: nil, days: 0).isEmpty)
+    }
+
+    func testCurrentCustomFeedItemsFiltersRemovedCustomSourceResults() throws {
+        db.addCustomUrl(url: "https://myoshi-blog.com/feed", title: "Oshi Blog")
+        let custom = db.customUrls.first!
+        db.removeCustomUrl(id: custom.id)
+        let now = ISO8601DateFormatter().string(from: Date())
+        let staleCustom = FeedItem(
+            id: custom.id,
+            platform: "custom",
+            url: custom.url,
+            title: "Oshi Blog",
+            content_text: nil,
+            author: "myoshi-blog.com",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: now,
+            watch_term_keyword: "",
+            fetched_at: now
+        )
+        let regular = FeedItem(
+            id: "youtube:v1",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=v1",
+            title: "Video",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now
+        )
+
+        XCTAssertEqual(db.currentCustomFeedItems([staleCustom, regular]).map(\.id), ["youtube:v1"])
     }
 
     func testAddCustomUrlPreventsDuplicates() throws {
@@ -3880,6 +4207,32 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertFalse(target?.absoluteString.contains("translate.google.com") ?? true)
     }
 
+    func testTranslatedReaderKeepsOriginalPageUrlForImageReferer() throws {
+        let previous = UserDefaults.standard.bool(forKey: "auto_translate_reader")
+        UserDefaults.standard.set(true, forKey: "auto_translate_reader")
+        defer { UserDefaults.standard.set(previous, forKey: "auto_translate_reader") }
+
+        let rawURL = "https://thetv.jp/news/detail/123456/?utm_source=share"
+        let item = FeedItem(
+            id: "thetv:gnews:123456",
+            platform: "thetv",
+            url: rawURL,
+            title: "TheTV article",
+            content_text: nil,
+            author: "TheTV",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: "2026-06-15T00:00:00Z",
+            watch_term_keyword: "Aiko",
+            fetched_at: "2026-06-15T00:00:00Z"
+        )
+
+        let view = ReaderView(feedItem: item)
+
+        XCTAssertEqual(view.targetUrl?.host, "translate.google.com")
+        XCTAssertEqual(view.originalPageUrl?.absoluteString, "https://thetv.jp/news/detail/123456/")
+    }
+
     func testFiveChMirrorURLsOpenDirectlyWithoutGuessingItestServer() throws {
         let item = FeedItem(
             id: "2ch.sc:hayabusa3.2ch.sc:mnewsplus:1782467821",
@@ -4047,6 +4400,27 @@ final class OshiReaderTests: XCTestCase {
         db.replaceTerm(localId: "nonexistent", with: ghost)
         XCTAssertEqual(db.terms.count, 1)
         XCTAssertEqual(db.terms.first?.keyword, "Aiko")
+    }
+
+    func testGuardedReplaceTermSkipsWhenLocalTermChanged() throws {
+        let local = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        db.updateTerm(id: local.id, collectionMode: .mediaOnly)
+        let server = WatchTerm(id: "server-42", keyword: "Aiko", collection_mode: .allInfo)
+
+        XCTAssertFalse(
+            db.replaceTerm(localId: local.id, with: server, ifUnchangedFrom: local),
+            "A delayed backend create response must not overwrite a newer local edit."
+        )
+        XCTAssertEqual(db.terms.first?.id, local.id)
+        XCTAssertEqual(db.terms.first?.collection_mode, .mediaOnly)
+    }
+
+    func testGuardedReplaceTermSwapsWhenLocalTermUnchanged() throws {
+        let local = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        let server = WatchTerm(id: "server-42", keyword: "Aiko", collection_mode: .allInfo)
+
+        XCTAssertTrue(db.replaceTerm(localId: local.id, with: server, ifUnchangedFrom: local))
+        XCTAssertEqual(db.terms.first?.id, "server-42")
     }
 
     func testRemoveSavedDeletesBookmark() throws {
@@ -4781,6 +5155,64 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(syncedTerm?.aliases, ["Aiko Alias"])
     }
 
+    @MainActor
+    func testSyncWatchTermsDoesNotOverwriteNewerLocalEditAfterPatchReturns() async throws {
+        let keyword = "Sync Patch Race \(UUID().uuidString)"
+        let localTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: []
+        )
+        let backendTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            is_active: false,
+            notify_on_new: false,
+            aliases: []
+        )
+        let updatedTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: []
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(localTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        let updatedData = try JSONEncoder().encode(updatedTerm)
+
+        MockURLProtocol.handler = { request in
+            if request.url?.path == "/api/watch-terms" {
+                return (backendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms/42" {
+                let edited = DispatchSemaphore(value: 0)
+                Task { @MainActor in
+                    LocalDB.shared.updateTerm(id: localTerm.id, collectionMode: .mediaOnly)
+                    edited.signal()
+                }
+                edited.wait()
+                return (updatedData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [localTerm])
+
+        XCTAssertFalse(succeeded)
+        let currentTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(currentTerm?.id, localTerm.id)
+        XCTAssertEqual(currentTerm?.collection_mode, .mediaOnly)
+    }
+
     func testMuteFeedItemPostsSourceAndWatchTermIDs() async throws {
         var capturedBody: [String: Any] = [:]
         MockURLProtocol.handler = { request in
@@ -4968,6 +5400,65 @@ final class NetworkManagerTests: XCTestCase {
         let query = capturedURL?.query ?? ""
         XCTAssertFalse(query.contains("term_id"), "term_id must be absent when not provided")
         XCTAssertFalse(query.contains("platform"), "platform must be absent when not provided")
+    }
+
+    func testBackendFetchesUseProvidedTimeout() async throws {
+        var capturedFeedTimeout: TimeInterval?
+        MockURLProtocol.handler = { req in
+            capturedFeedTimeout = req.timeoutInterval
+            return (Data("[]".utf8), Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.fetchFeed(
+            days: 30,
+            timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+        )
+
+        XCTAssertEqual(capturedFeedTimeout, BackgroundRefreshPolicy.foregroundBackendTimeout)
+
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo)
+        let data = try JSONEncoder().encode([term])
+        var capturedTermsTimeout: TimeInterval?
+        MockURLProtocol.handler = { req in
+            capturedTermsTimeout = req.timeoutInterval
+            return (data, Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.fetchWatchTerms(
+            timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+        )
+
+        XCTAssertEqual(capturedTermsTimeout, BackgroundRefreshPolicy.foregroundBackendTimeout)
+
+        let termData = try JSONEncoder().encode(term)
+        var capturedCreateTimeout: TimeInterval?
+        MockURLProtocol.handler = { req in
+            capturedCreateTimeout = req.timeoutInterval
+            return (termData, Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.createWatchTerm(
+            keyword: "Aiko",
+            collectionMode: .allInfo,
+            notifyOnNew: false,
+            timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+        )
+
+        XCTAssertEqual(capturedCreateTimeout, BackgroundRefreshPolicy.foregroundBackendTimeout)
+
+        var capturedUpdateTimeout: TimeInterval?
+        MockURLProtocol.handler = { req in
+            capturedUpdateTimeout = req.timeoutInterval
+            return (termData, Self.response(status: 200))
+        }
+
+        _ = try await NetworkManager.shared.updateWatchTerm(
+            id: "42",
+            collectionMode: .allInfo,
+            timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+        )
+
+        XCTAssertEqual(capturedUpdateTimeout, BackgroundRefreshPolicy.foregroundBackendTimeout)
     }
 
     // fetchFeed with backend items → decoded and mapped to FeedItem
@@ -5723,6 +6214,254 @@ final class NetworkManagerTests: XCTestCase {
 
         XCTAssertTrue(result.items.isEmpty)
         XCTAssertEqual(result.completedPlatforms, ["realsound"])
+    }
+
+    func testScrapeLocalFallbackUsesSourceSpecificYouTubeSearch() async {
+        let body = """
+        {
+          "contents": {
+            "sectionListRenderer": {
+              "contents": [
+                {
+                  "itemSectionRenderer": {
+                    "contents": [
+                      {
+                        "videoRenderer": {
+                          "videoId": "abc123def45",
+                          "title": { "runs": [{ "text": "Aiko live clip" }] },
+                          "ownerText": { "runs": [{ "text": "Aiko Channel" }] },
+                          "publishedTimeText": { "simpleText": "2 days ago" },
+                          "thumbnail": { "thumbnails": [{ "url": "https://img.example/youtube.jpg" }] }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+        """
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "www.youtube.com")
+            XCTAssertEqual(request.httpMethod, "POST")
+            return (Data(body.utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+            keyword: "Aiko",
+            platformIds: ["youtube"]
+        )
+
+        XCTAssertEqual(result.completedPlatforms, ["youtube"])
+        XCTAssertEqual(result.items.first?.platform, "youtube")
+        XCTAssertEqual(result.items.first?.media_type, "video")
+        XCTAssertEqual(result.items.first?.url, "https://www.youtube.com/watch?v=abc123def45")
+    }
+
+    func testYouTubeFallbackTriesSearchPageWhenInnertubeIsEmpty() async {
+        let requestQueue = DispatchQueue(label: "test.youtube.requests")
+        var requestedMethods = [String]()
+        let emptyInnertube = #"{"contents":{}}"#
+        let html = """
+        <html><script>
+        ytInitialData = {
+          "contents": {
+            "sectionListRenderer": {
+              "contents": [
+                {
+                  "itemSectionRenderer": {
+                    "contents": [
+                      {
+                        "videoRenderer": {
+                          "videoId": "xyz987uvw65",
+                          "title": { "runs": [{ "text": "Aiko live clip" }] },
+                          "publishedTimeText": { "simpleText": "1 day ago" },
+                          "ownerText": { "runs": [{ "text": "Aiko Official" }] }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        };
+        </script></html>
+        """
+        MockURLProtocol.handler = { request in
+            requestQueue.sync {
+                requestedMethods.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
+            }
+            if request.httpMethod == "POST" {
+                return (Data(emptyInnertube.utf8), Self.response(status: 200))
+            }
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/results")
+            return (Data(html.utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+            keyword: "Aiko",
+            platformIds: ["youtube"]
+        )
+
+        let methods = requestQueue.sync { requestedMethods }
+        XCTAssertEqual(methods, ["POST /youtubei/v1/search", "GET /results"])
+        XCTAssertEqual(result.completedPlatforms, ["youtube"])
+        XCTAssertEqual(result.items.map(\.id), ["youtube:xyz987uvw65"])
+        XCTAssertEqual(result.items.first?.url, "https://www.youtube.com/watch?v=xyz987uvw65")
+        XCTAssertEqual(result.items.first?.title, "Aiko live clip")
+    }
+
+    func testYouTubeSearchPageIgnoresUnstructuredVideoIds() async {
+        let emptyInnertube = #"{"contents":{}}"#
+        let html = #"<html><script>var data={"videoId":"xyz987uvw65"};</script></html>"#
+        MockURLProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                return (Data(emptyInnertube.utf8), Self.response(status: 200))
+            }
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/results")
+            return (Data(html.utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+            keyword: "Aiko",
+            platformIds: ["youtube"]
+        )
+
+        XCTAssertEqual(result.completedPlatforms, ["youtube"])
+        XCTAssertTrue(result.items.isEmpty)
+    }
+
+    func testYouTubeSearchPageKeepsAmpersandInsideKeywordQueryValue() async {
+        let requestQueue = DispatchQueue(label: "test.youtube.query")
+        var capturedSearchQuery: String?
+        MockURLProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                return (Data(#"{"contents":{}}"#.utf8), Self.response(status: 200))
+            }
+            requestQueue.sync {
+                capturedSearchQuery = URLComponents(
+                    url: request.url!,
+                    resolvingAgainstBaseURL: false
+                )?.queryItems?.first(where: { $0.name == "search_query" })?.value
+            }
+            return (Data("<html></html>".utf8), Self.response(status: 200))
+        }
+
+        _ = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+            keyword: "A&B",
+            platformIds: ["youtube"]
+        )
+
+        XCTAssertEqual(requestQueue.sync { capturedSearchQuery }, "A&B")
+    }
+
+    func testScrapeLocalFallbackUsesNoteHashtagRSS() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko essay</title>
+              <link>https://note.com/aiko/n/note123</link>
+              <description>Aiko wrote a note.</description>
+              <pubDate>Wed, 22 Jul 2026 01:00:00 +0000</pubDate>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "note.com")
+            XCTAssertTrue(request.url?.path.contains("/hashtag/Aiko/rss") == true)
+            return (Data(xml.utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+            keyword: "Aiko",
+            tagKeyword: "Aiko",
+            platformIds: ["note"]
+        )
+
+        XCTAssertEqual(result.completedPlatforms, ["note"])
+        XCTAssertEqual(result.items.first?.id, "note:note123")
+        XCTAssertEqual(result.items.first?.platform, "note")
+        XCTAssertEqual(result.items.first?.media_type, "article")
+        XCTAssertEqual(result.items.first?.watch_term_keyword, "Aiko")
+    }
+
+    func testNoteHashtagRSSPercentEncodesSlashInKeyword() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "note.com")
+            XCTAssertTrue(request.url?.absoluteString.contains("/hashtag/A%2FB/rss") == true)
+            return (Data(xml.utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+            keyword: "A/B",
+            tagKeyword: "A/B",
+            platformIds: ["note"]
+        )
+
+        XCTAssertEqual(result.completedPlatforms, ["note"])
+        XCTAssertTrue(result.items.isEmpty)
+    }
+
+    func testScrapeLocalFallbackDefaultSkipsGenericGoogleNewsForSourceSpecificPlatforms() async {
+        let requestQueue = DispatchQueue(label: "test.requestedURLs")
+        var requestedURLs = [String]()
+        let emptyRSS = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        MockURLProtocol.handler = { request in
+            requestQueue.sync {
+                requestedURLs.append(request.url?.absoluteString.removingPercentEncoding ?? "")
+            }
+            if request.httpMethod == "POST" {
+                return (Data(#"{"contents":{}}"#.utf8), Self.response(status: 200))
+            }
+            return (Data(emptyRSS.utf8), Self.response(status: 200))
+        }
+
+        _ = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(keyword: "Aiko")
+
+        let urls = requestQueue.sync { requestedURLs }
+        XCTAssertTrue(urls.contains { $0.contains("www.youtube.com/youtubei/v1/search") })
+        XCTAssertTrue(urls.contains { $0.contains("note.com/hashtag/Aiko/rss") })
+        XCTAssertFalse(urls.contains { $0.contains("site:youtube.com") })
+        XCTAssertFalse(urls.contains { $0.contains("site:note.com") })
+    }
+
+    func testGoogleNewsFallbackKeepsAmpersandInsideKeywordQueryValue() async {
+        let requestQueue = DispatchQueue(label: "test.gnews.query")
+        var capturedQuery: String?
+        let emptyRSS = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel></channel></rss>
+        """
+        MockURLProtocol.handler = { request in
+            requestQueue.sync {
+                capturedQuery = URLComponents(
+                    url: request.url!,
+                    resolvingAgainstBaseURL: false
+                )?.queryItems?.first(where: { $0.name == "q" })?.value
+            }
+            return (Data(emptyRSS.utf8), Self.response(status: 200))
+        }
+
+        _ = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+            keyword: "A&B",
+            platformIds: ["girlschannel"]
+        )
+
+        XCTAssertEqual(requestQueue.sync { capturedQuery }, "A&B site:girlschannel.net when:10y")
     }
 
     func testScrapeRSSFallbackReturnsEmptyOnNetworkError() async {

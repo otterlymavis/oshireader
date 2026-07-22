@@ -274,6 +274,16 @@ class LocalDB: ObservableObject {
         }
     }
 
+    @discardableResult
+    func replaceTerm(localId: String, with serverTerm: WatchTerm, ifUnchangedFrom expectedTerm: WatchTerm) -> Bool {
+        guard let idx = terms.firstIndex(where: { $0.id == localId }),
+              terms[idx] == expectedTerm else {
+            return false
+        }
+        replaceTerm(localId: localId, with: serverTerm)
+        return true
+    }
+
     func term(matchingKeyword keyword: String) -> WatchTerm? {
         terms.first { $0.keyword == keyword }
     }
@@ -474,6 +484,16 @@ class LocalDB: ObservableObject {
         saveToFile(name: "hidden_items", value: Array(hiddenItems))
         feedItems.removeAll(where: { $0.id == id && $0.watch_term_keyword == watchTermKeyword })
         saveToFile(name: "feed_items", value: feedItems)
+    }
+
+    func currentCustomFeedItems(_ items: [FeedItem]) -> [FeedItem] {
+        let currentIds = Set(customUrls.map(\.id))
+        let currentUrls = Set(customUrls.map(\.url))
+        return items.filter { item in
+            item.platform != "custom" ||
+                currentIds.contains(item.id) ||
+                currentUrls.contains(item.url)
+        }
     }
 
     private func cappedFeedItemsPreservingSubscribedPlatforms(_ sortedItems: [FeedItem]) -> [FeedItem] {
@@ -847,10 +867,21 @@ class LocalDB: ObservableObject {
     }
 
     func removeCustomUrl(id: String) {
+        let removedUrls = customUrls
+            .filter { $0.id == id }
+            .map { $0.url }
         let originalCount = customUrls.count
+        let originalFeedCount = feedItems.count
         customUrls.removeAll(where: { $0.id == id })
         saveToFile(name: "custom_urls", value: customUrls)
         if customUrls.count != originalCount {
+            feedItems.removeAll { item in
+                item.platform == "custom" &&
+                    (item.id == id || removedUrls.contains(item.url))
+            }
+            if feedItems.count != originalFeedCount {
+                saveToFile(name: "feed_items", value: feedItems)
+            }
             BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         }
     }

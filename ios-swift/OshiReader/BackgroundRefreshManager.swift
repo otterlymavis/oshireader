@@ -19,6 +19,8 @@ enum BackgroundRefreshPolicy {
         let needsBackend: Bool
         let needsCustom: Bool
         let needsDevice: Bool
+        let requiredBackendPlatforms: Set<String>
+        let requiredDevicePlatforms: Set<String>
 
         var needsLocal: Bool {
             needsCustom || needsDevice
@@ -31,18 +33,17 @@ enum BackgroundRefreshPolicy {
         func isCovered(
             completedBackendPlatforms: Set<String>,
             completedDevicePlatforms: Set<String>,
-            customRefreshed: Bool,
-            subscribedPlatforms: [String]
+            customRefreshed: Bool
         ) -> Bool {
-            let backendPlatforms = BackgroundRefreshPolicy.backendPlatformsNeedingRefresh(in: subscribedPlatforms)
-            let devicePlatforms = BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(in: subscribedPlatforms)
-            return (!needsBackend || backendPlatforms.isSubset(of: completedBackendPlatforms)) &&
+            let backendOnlyPlatforms = requiredBackendPlatforms.subtracting(requiredDevicePlatforms)
+            return (!needsBackend || backendOnlyPlatforms.isSubset(of: completedBackendPlatforms)) &&
                 (!needsCustom || customRefreshed) &&
-                (!needsDevice || devicePlatforms.isSubset(of: completedDevicePlatforms))
+                (!needsDevice || requiredDevicePlatforms.isSubset(of: completedDevicePlatforms))
         }
     }
 
     static let operationDeadline: TimeInterval = 25
+    static let foregroundBackendTimeout: TimeInterval = 5
     // Leave enough of iOS's short background execution window for syncing and
     // fetching the feed after the backend has made partial polling progress.
     static let pollTimeout: TimeInterval = 8
@@ -141,8 +142,7 @@ enum BackgroundRefreshPolicy {
         guard scope.isCovered(
                 completedBackendPlatforms: completedBackendPlatforms,
                 completedDevicePlatforms: completedDevicePlatforms,
-                customRefreshed: customRefreshed,
-                subscribedPlatforms: subscribedPlatforms
+                customRefreshed: customRefreshed
               ) else {
             return
         }
@@ -297,7 +297,14 @@ enum BackgroundRefreshPolicy {
         lastRefreshAt: Date? = lastForegroundRefreshCompletedAt,
         lastBackendRefreshAt: Date? = lastBackendRefreshCompletedAt
     ) -> Bool {
-        if UserDefaults.standard.bool(forKey: feedScopeNeedsRefreshKey) { return true }
+        if UserDefaults.standard.bool(forKey: feedScopeNeedsRefreshKey),
+           hasRefreshableSources(
+            activeTerms: activeTerms,
+            customUrls: customUrls,
+            subscribedPlatforms: subscribedPlatforms
+           ) {
+            return true
+        }
         return shouldRefreshSourceScope(
             activeTerms: activeTerms,
             customUrls: customUrls,
@@ -324,7 +331,14 @@ enum BackgroundRefreshPolicy {
             !customUrls.isEmpty ||
             !items.isEmpty
         guard hasRefreshableScope else { return false }
-        if UserDefaults.standard.bool(forKey: feedScopeNeedsRefreshKey) { return true }
+        if UserDefaults.standard.bool(forKey: feedScopeNeedsRefreshKey),
+           hasRefreshableSources(
+            activeTerms: activeTerms,
+            customUrls: customUrls,
+            subscribedPlatforms: subscribedPlatforms
+           ) {
+            return true
+        }
         return shouldRefreshSourceScope(
             activeTerms: activeTerms,
             customUrls: customUrls,
@@ -357,11 +371,56 @@ enum BackgroundRefreshPolicy {
         )
     }
 
+    private static func hasRefreshableSources(
+        activeTerms: [WatchTerm],
+        customUrls: [CustomUrl],
+        subscribedPlatforms: [String]
+    ) -> Bool {
+        sourceScope(
+            activeTerms: activeTerms,
+            customUrls: customUrls,
+            subscribedPlatforms: subscribedPlatforms
+        ).hasRefreshableSources
+    }
+
     static func fallbackPlatformsNeedingDevice(in subscribedPlatforms: [String]) -> Set<String> {
         Set(subscribedPlatforms.compactMap { platformId -> String? in
             let normalized = Platform.normalize(platformId)
             return Platform.shouldRunDeviceFallback(normalized) ? normalized : nil
         })
+    }
+
+    static func deviceFallbackPlatforms(
+        for term: WatchTerm,
+        subscribedPlatforms: [String]
+    ) -> Set<String> {
+        guard term.is_active else { return [] }
+        let fallbackPlatforms = fallbackPlatformsNeedingDevice(in: subscribedPlatforms)
+        guard term.collection_mode == .mediaOnly else { return fallbackPlatforms }
+        return fallbackPlatforms.filter { platformId in
+            Platform.find(platformId)?.isMediaPlatform == true
+        }
+    }
+
+    static func backendPlatforms(
+        for term: WatchTerm,
+        subscribedPlatforms: [String]
+    ) -> Set<String> {
+        guard term.is_active else { return [] }
+        let backendPlatforms = backendPlatformsNeedingRefresh(in: subscribedPlatforms)
+        guard term.collection_mode == .mediaOnly else { return backendPlatforms }
+        return backendPlatforms.filter { platformId in
+            Platform.find(platformId)?.isMediaPlatform == true
+        }
+    }
+
+    static func termsEligibleForDeviceFallback(
+        _ activeTerms: [WatchTerm],
+        subscribedPlatforms: [String]
+    ) -> [WatchTerm] {
+        activeTerms.filter {
+            !deviceFallbackPlatforms(for: $0, subscribedPlatforms: subscribedPlatforms).isEmpty
+        }
     }
 
     static func completedDeviceFallbackPlatforms(
@@ -404,20 +463,45 @@ enum BackgroundRefreshPolicy {
         }
     }
 
+    static func completedDeviceFallbackPlatformsForEligibleSearches(
+        _ scrapeResults: [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]
+    ) -> Set<String> {
+        var expectedCounts = [String: Int]()
+        var completedCounts = [String: Int]()
+        for scrapeResult in scrapeResults {
+            let expectedPlatforms = Set(scrapeResult.expectedPlatforms.map { Platform.normalize($0) })
+            let completedPlatforms = Set(scrapeResult.result.completedPlatforms.map { Platform.normalize($0) })
+            for platform in expectedPlatforms {
+                expectedCounts[platform, default: 0] += 1
+                if completedPlatforms.contains(platform) {
+                    completedCounts[platform, default: 0] += 1
+                }
+            }
+        }
+        return Set(expectedCounts.compactMap { platform, expectedCount in
+            completedCounts[platform, default: 0] == expectedCount ? platform : nil
+        })
+    }
+
     static func sourceScope(
         activeTerms: [WatchTerm],
         customUrls: [CustomUrl],
         subscribedPlatforms: [String]
     ) -> SourceScope {
-        let hasActiveTerms = !activeTerms.isEmpty
-        let needsBackend = hasActiveTerms && subscribedPlatforms.contains {
-            Platform.shouldFetchFromBackend($0)
+        let requiredBackendPlatforms = activeTerms.reduce(into: Set<String>()) { platforms, term in
+            platforms.formUnion(backendPlatforms(for: term, subscribedPlatforms: subscribedPlatforms))
         }
-        let needsDevice = hasActiveTerms && !fallbackPlatformsNeedingDevice(in: subscribedPlatforms).isEmpty
+        let requiredDevicePlatforms = activeTerms.reduce(into: Set<String>()) { platforms, term in
+            platforms.formUnion(deviceFallbackPlatforms(for: term, subscribedPlatforms: subscribedPlatforms))
+        }
+        let needsBackend = !requiredBackendPlatforms.isEmpty
+        let needsDevice = !requiredDevicePlatforms.isEmpty
         return SourceScope(
             needsBackend: needsBackend,
             needsCustom: !customUrls.isEmpty,
-            needsDevice: needsDevice
+            needsDevice: needsDevice,
+            requiredBackendPlatforms: requiredBackendPlatforms,
+            requiredDevicePlatforms: requiredDevicePlatforms
         )
     }
 
@@ -442,6 +526,24 @@ enum BackgroundRefreshPolicy {
             elapsedSinceLastDeviceScrape > throttle
     }
 
+    static func shouldSkipBackendRetriesAfterFailure(_ error: Error) -> Bool {
+        guard let error = error as? URLError else { return false }
+        switch error.code {
+        case .notConnectedToInternet,
+             .networkConnectionLost,
+             .dataNotAllowed,
+             .timedOut,
+             .cannotConnectToHost,
+             .cannotFindHost,
+             .dnsLookupFailed,
+             .secureConnectionFailed,
+             .internationalRoamingOff:
+            return true
+        default:
+            return false
+        }
+    }
+
     private static func shouldRefreshSourceScope(
         activeTerms: [WatchTerm],
         customUrls: [CustomUrl],
@@ -461,16 +563,20 @@ enum BackgroundRefreshPolicy {
             subscribedPlatforms: subscribedPlatforms
         )
         guard scope.hasRefreshableSources else {
-            return shouldRefreshCachedFeed(items: items, now: now, lastRefreshAt: nil)
+            if activeTerms.isEmpty, customUrls.isEmpty {
+                return shouldRefreshCachedFeed(items: items, now: now, lastRefreshAt: nil)
+            }
+            if subscribedPlatforms.isEmpty {
+                return shouldRefreshCachedFeed(items: items, now: now, lastRefreshAt: nil)
+            }
+            return false
         }
 
-        let backendPlatforms = backendPlatformsNeedingRefresh(in: subscribedPlatforms)
-        let devicePlatforms = fallbackPlatformsNeedingDevice(in: subscribedPlatforms)
         if scope.needsBackend,
            !isRecent(lastBackendRefreshAt, now: now),
-           !allActiveTermsHaveRecentFetchedItems(
-                backendPlatforms,
+           !allTermsHaveRecentEligibleBackendItems(
                 activeTerms: activeTerms,
+                subscribedPlatforms: subscribedPlatforms,
                 in: items,
                 now: now
            ) {
@@ -481,9 +587,9 @@ enum BackgroundRefreshPolicy {
             return true
         }
         if scope.needsDevice,
-           !allActiveTermsHaveRecentFetchedItems(
-                devicePlatforms,
+           !allTermsHaveRecentEligibleDeviceFallbackItems(
                 activeTerms: activeTerms,
+                subscribedPlatforms: subscribedPlatforms,
                 in: items,
                 now: now
            ) {
@@ -499,28 +605,56 @@ enum BackgroundRefreshPolicy {
         })
     }
 
-    private static func allActiveTermsHaveRecentFetchedItems(
-        _ platforms: Set<String>,
+    private static func allTermsHaveRecentEligibleDeviceFallbackItems(
         activeTerms: [WatchTerm],
+        subscribedPlatforms: [String],
         in items: [FeedItem],
         now: Date
     ) -> Bool {
-        guard !platforms.isEmpty else { return true }
-        let activeKeywords = Set(activeTerms.map(\.keyword))
-        guard !activeKeywords.isEmpty else { return true }
+        let eligibleTerms = activeTerms.compactMap { term -> (WatchTerm, Set<String>)? in
+            let platforms = deviceFallbackPlatforms(for: term, subscribedPlatforms: subscribedPlatforms)
+            return platforms.isEmpty ? nil : (term, platforms)
+        }
+        guard !eligibleTerms.isEmpty else { return true }
+        let eligibleKeywords = Set(eligibleTerms.map { $0.0.keyword })
         let recentPairs = Set(
             items.compactMap { item -> String? in
-                guard activeKeywords.contains(item.watch_term_keyword),
+                guard eligibleKeywords.contains(item.watch_term_keyword),
                       let fetchedAt = parseISO8601Date(item.fetched_at),
                       now.timeIntervalSince(fetchedAt) < foregroundRefreshStaleAfter else { return nil }
-                let platform = Platform.normalize(item.platform)
-                guard platforms.contains(platform) else { return nil }
-                return "\(platform)\u{1F}\(item.watch_term_keyword)"
+                return "\(Platform.normalize(item.platform))\u{1F}\(item.watch_term_keyword)"
             }
         )
-        return platforms.allSatisfy { platform in
-            activeKeywords.allSatisfy { keyword in
-                recentPairs.contains("\(platform)\u{1F}\(keyword)")
+        return eligibleTerms.allSatisfy { term, platforms in
+            platforms.allSatisfy { platform in
+                recentPairs.contains("\(platform)\u{1F}\(term.keyword)")
+            }
+        }
+    }
+
+    private static func allTermsHaveRecentEligibleBackendItems(
+        activeTerms: [WatchTerm],
+        subscribedPlatforms: [String],
+        in items: [FeedItem],
+        now: Date
+    ) -> Bool {
+        let eligibleTerms = activeTerms.compactMap { term -> (WatchTerm, Set<String>)? in
+            let platforms = backendPlatforms(for: term, subscribedPlatforms: subscribedPlatforms)
+            return platforms.isEmpty ? nil : (term, platforms)
+        }
+        guard !eligibleTerms.isEmpty else { return true }
+        let eligibleKeywords = Set(eligibleTerms.map { $0.0.keyword })
+        let recentPairs = Set(
+            items.compactMap { item -> String? in
+                guard eligibleKeywords.contains(item.watch_term_keyword),
+                      let fetchedAt = parseISO8601Date(item.fetched_at),
+                      now.timeIntervalSince(fetchedAt) < foregroundRefreshStaleAfter else { return nil }
+                return "\(Platform.normalize(item.platform))\u{1F}\(item.watch_term_keyword)"
+            }
+        )
+        return eligibleTerms.allSatisfy { term, platforms in
+            platforms.allSatisfy { platform in
+                recentPairs.contains("\(platform)\u{1F}\(term.keyword)")
             }
         }
     }
@@ -765,7 +899,8 @@ final class BackgroundRefreshManager {
         triggerPoll: Bool = true,
         notifyOnNew: Bool = true,
         skipTermSync: Bool = false,
-        feedScopeRevision: Int? = nil
+        feedScopeRevision: Int? = nil,
+        backendTimeout: TimeInterval = 30
     ) async -> Bool {
         guard !isRefreshing else {
             AppLogger.network.notice("Background refresh skipped because another refresh is running")
@@ -785,7 +920,8 @@ final class BackgroundRefreshManager {
             triggerPoll: triggerPoll,
             notifyOnNew: notifyOnNew,
             skipTermSync: skipTermSync,
-            feedScopeRevision: feedScopeRevision
+            feedScopeRevision: feedScopeRevision,
+            backendTimeout: backendTimeout
         )
         guard !Task.isCancelled else { return backendRefresh.refreshed }
         let feedScopeRevision = backendRefresh.feedScopeRevision ?? BackgroundRefreshPolicy.currentFeedScopeRevision
@@ -844,7 +980,8 @@ final class BackgroundRefreshManager {
         triggerPoll: Bool,
         notifyOnNew: Bool = true,
         skipTermSync: Bool = false,
-        feedScopeRevision: Int? = nil
+        feedScopeRevision: Int? = nil,
+        backendTimeout: TimeInterval = 30
     ) async -> BackendSourceRefreshCompletion {
         await withTaskGroup(of: BackendSourceRefreshCompletion.self) { group in
             group.addTask { @MainActor in
@@ -852,7 +989,8 @@ final class BackgroundRefreshManager {
                     triggerPoll: triggerPoll,
                     notifyOnNew: notifyOnNew,
                     skipTermSync: skipTermSync,
-                    feedScopeRevision: feedScopeRevision
+                    feedScopeRevision: feedScopeRevision,
+                    backendTimeout: backendTimeout
                 )
             }
             group.addTask {
@@ -877,7 +1015,8 @@ final class BackgroundRefreshManager {
         triggerPoll: Bool,
         notifyOnNew: Bool = true,
         skipTermSync: Bool = false,
-        feedScopeRevision: Int? = nil
+        feedScopeRevision: Int? = nil,
+        backendTimeout: TimeInterval = 30
     ) async -> BackendSourceRefreshCompletion {
         let db = LocalDB.shared
         var completion = BackendSourceRefreshCompletion()
@@ -889,12 +1028,15 @@ final class BackgroundRefreshManager {
                feedScopeRevision == currentFeedScopeRevision {
                 completion.feedScopeRevision = currentFeedScopeRevision
             } else {
-                await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+                await NetworkManager.shared.syncWatchTermsToBackend(
+                    localTerms: db.terms,
+                    timeout: backendTimeout
+                )
                 guard !Task.isCancelled else {
                     BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "cancelled_after_push_sync")
                     return BackendSourceRefreshCompletion()
                 }
-                _ = await NetworkManager.shared.syncTermsFromBackend()
+                _ = await NetworkManager.shared.syncTermsFromBackendWithStatus(timeout: backendTimeout)
                 guard !Task.isCancelled else {
                     BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "cancelled_after_pull_sync")
                     return BackendSourceRefreshCompletion()
@@ -932,9 +1074,17 @@ final class BackgroundRefreshManager {
         do {
             let items: [FeedItem]
             if let latestSince {
-                items = try await NetworkManager.shared.fetchFeed(limit: 200, since: latestSince)
+                items = try await NetworkManager.shared.fetchFeed(
+                    limit: 200,
+                    since: latestSince,
+                    timeout: backendTimeout
+                )
             } else {
-                items = try await NetworkManager.shared.fetchFeed(limit: 120, days: 90)
+                items = try await NetworkManager.shared.fetchFeed(
+                    limit: 120,
+                    days: 90,
+                    timeout: backendTimeout
+                )
             }
             guard !Task.isCancelled else {
                 BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "cancelled_after_feed")
@@ -970,9 +1120,19 @@ final class BackgroundRefreshManager {
                         do {
                             let items: [FeedItem]
                             if let platformSince {
-                                items = try await NetworkManager.shared.fetchFeed(platform: platform, limit: 60, since: platformSince)
+                                items = try await NetworkManager.shared.fetchFeed(
+                                    platform: platform,
+                                    limit: 60,
+                                    since: platformSince,
+                                    timeout: backendTimeout
+                                )
                             } else {
-                                items = try await NetworkManager.shared.fetchFeed(platform: platform, limit: 60, days: 30)
+                                items = try await NetworkManager.shared.fetchFeed(
+                                    platform: platform,
+                                    limit: 60,
+                                    days: 30,
+                                    timeout: backendTimeout
+                                )
                             }
                             return BackendPlatformRefreshResult(platform: platform, items: items, completed: true)
                         } catch {
@@ -1061,7 +1221,9 @@ final class BackgroundRefreshManager {
         var completion = LocalSourceRefreshCompletion()
 
         if !db.customUrls.isEmpty {
-            let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
+            let customItems = db.currentCustomFeedItems(
+                await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
+            )
             guard !Task.isCancelled else { return completion }
             _ = db.mergeItems(newItems: customItems, notifyOnNew: false)
             completion.customRefreshed = true
@@ -1069,39 +1231,64 @@ final class BackgroundRefreshManager {
 
         let activeTerms = db.terms.filter(\.is_active)
         let fallbackPlatforms = BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(in: db.subscribedPlatforms)
-        guard !activeTerms.isEmpty, !fallbackPlatforms.isEmpty else {
+        let fallbackTerms = BackgroundRefreshPolicy.termsEligibleForDeviceFallback(
+            activeTerms,
+            subscribedPlatforms: db.subscribedPlatforms
+        )
+        guard !fallbackTerms.isEmpty, !fallbackPlatforms.isEmpty else {
             return completion
         }
 
-        await withTaskGroup(of: LocalFallbackScrapeResult.self) { group in
-            for term in activeTerms {
+        await withTaskGroup(
+            of: (termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
+        ) { group in
+            for term in fallbackTerms {
+                let platformsForTerm = BackgroundRefreshPolicy.deviceFallbackPlatforms(
+                    for: term,
+                    subscribedPlatforms: db.subscribedPlatforms
+                )
+                guard !platformsForTerm.isEmpty else { continue }
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
                     group.addTask {
-                        await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+                        let scrapeResult = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
                             keyword: searchTerm,
                             tagKeyword: term.keyword,
-                            platformIds: fallbackPlatforms
+                            platformIds: platformsForTerm
                         )
+                        return (term.keyword, searchTerm, scrapeResult, platformsForTerm)
                     }
                 }
             }
 
-            var scrapeResults = [LocalFallbackScrapeResult]()
-            for await scrapeResult in group {
+            var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
+            for await scrape in group {
                 if Task.isCancelled {
                     group.cancelAll()
                     break
                 }
-                scrapeResults.append(scrapeResult)
-                if !scrapeResult.items.isEmpty {
-                    _ = db.mergeItems(newItems: scrapeResult.items, notifyOnNew: false)
+                guard let currentTerm = db.term(matchingKeyword: scrape.termKeyword) else { continue }
+                let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
+                    for: currentTerm,
+                    subscribedPlatforms: db.subscribedPlatforms
+                )
+                guard !currentFallbackPlatforms.isEmpty,
+                      scrape.searchTerm == currentTerm.keyword ||
+                        currentTerm.aliases.contains(scrape.searchTerm) else {
+                    continue
+                }
+                let mergeableItems = scrape.result.items.filter { item in
+                    item.watch_term_keyword == currentTerm.keyword &&
+                        currentFallbackPlatforms.contains(Platform.normalize(item.platform))
+                }
+                scrapeResults.append((scrape.result, scrape.expectedPlatforms.intersection(currentFallbackPlatforms)))
+                if !mergeableItems.isEmpty {
+                    _ = db.mergeItems(newItems: mergeableItems, notifyOnNew: false)
                 }
             }
             completion.completedDevicePlatforms.formUnion(
-                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForAllSearches(
-                    from: scrapeResults,
-                    subscribedPlatforms: db.subscribedPlatforms
+                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
+                    scrapeResults
                 )
             )
         }

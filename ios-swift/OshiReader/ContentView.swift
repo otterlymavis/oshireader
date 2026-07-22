@@ -172,9 +172,16 @@ struct ContentView: View {
                 }
             }
             let db = LocalDB.shared
-            let pushedTerms = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+            let pushedTerms = await NetworkManager.shared.syncWatchTermsToBackend(
+                localTerms: db.terms,
+                timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+            )
             guard !Task.isCancelled else { return }
-            let pulledTerms = await NetworkManager.shared.syncTermsFromBackendWithStatus()
+            let pulledTerms = pushedTerms
+                ? await NetworkManager.shared.syncTermsFromBackendWithStatus(
+                    timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+                )
+                : BackendTermSyncResult(succeeded: false, changed: false)
             guard !Task.isCancelled else { return }
             let feedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
             guard BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
@@ -184,10 +191,13 @@ struct ContentView: View {
                 items: db.feedItems,
                 pulledNewTerms: pulledTerms.changed
             ) else { return }
+            let syncedTerms = pushedTerms && pulledTerms.succeeded
             _ = await BackgroundRefreshManager.shared.refreshForBackground(
+                triggerPoll: !syncedTerms,
                 notifyOnNew: false,
-                skipTermSync: pushedTerms && pulledTerms.succeeded,
-                feedScopeRevision: feedScopeRevision
+                skipTermSync: syncedTerms,
+                feedScopeRevision: feedScopeRevision,
+                backendTimeout: BackgroundRefreshPolicy.foregroundBackendTimeout
             )
         }
     }

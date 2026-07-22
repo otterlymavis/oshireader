@@ -41,6 +41,7 @@ private struct FeedRefreshReport {
     var addedCount = 0
     var completedBackendPlatforms = Set<String>()
     var backendCompletedCheck = false
+    var backendConnectivityFailed = false
     var customCompletedCheck = false
     var completedDevicePlatforms = Set<String>()
     var feedScopeRevision: Int?
@@ -90,6 +91,7 @@ private struct FeedRefreshReport {
         backendReturnedItems = backendReturnedItems || other.backendReturnedItems
         completedBackendPlatforms.formUnion(other.completedBackendPlatforms)
         backendCompletedCheck = backendCompletedCheck || other.backendCompletedCheck
+        backendConnectivityFailed = backendConnectivityFailed || other.backendConnectivityFailed
         customCompletedCheck = customCompletedCheck || other.customCompletedCheck
         completedDevicePlatforms.formUnion(other.completedDevicePlatforms)
         if feedScopeRevision == nil {
@@ -600,8 +602,9 @@ struct FeedView: View {
                 db.addCustomUrl(url: customUrlString, title: customUrlTitle)
                 Task {
                     let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
-                    if !customItems.isEmpty {
-                        _ = db.mergeItems(newItems: customItems)
+                    let currentItems = db.currentCustomFeedItems(customItems)
+                    if !currentItems.isEmpty {
+                        _ = db.mergeItems(newItems: currentItems)
                     }
                 }
                 customUrlString = ""
@@ -666,10 +669,17 @@ struct FeedView: View {
                 }
             }
             // Push local terms to backend (handles post-DB-reset state)
-            let pushedTerms = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+            let pushedTerms = await NetworkManager.shared.syncWatchTermsToBackend(
+                localTerms: db.terms,
+                timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+            )
             guard !Task.isCancelled else { return }
             // Pull backend terms that aren't local yet (fresh install / multi-device)
-            let pulledTerms = await NetworkManager.shared.syncTermsFromBackendWithStatus()
+            let pulledTerms = pushedTerms
+                ? await NetworkManager.shared.syncTermsFromBackendWithStatus(
+                    timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+                )
+                : BackendTermSyncResult(succeeded: false, changed: false)
             guard !Task.isCancelled else { return }
             let feedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
             if BackgroundRefreshPolicy.shouldLaunchForegroundRefresh(
@@ -801,7 +811,7 @@ struct FeedView: View {
         }
         isScrapingFallback = true
         report.append(await deepFallback(
-            triggerBackendPoll: !report.backendReturnedItems,
+            triggerBackendPoll: !report.backendReturnedItems && !report.backendConnectivityFailed,
             fallbackPlatforms: fallbackPlatformsNeedingDevice
         ))
         guard !Task.isCancelled else { return }
@@ -841,9 +851,16 @@ struct FeedView: View {
            feedScopeRevision == currentFeedScopeRevision {
             report.feedScopeRevision = currentFeedScopeRevision
         } else {
-            await NetworkManager.shared.syncWatchTermsToBackend(localTerms: db.terms)
+            let pushedTerms = await NetworkManager.shared.syncWatchTermsToBackend(
+                localTerms: db.terms,
+                timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+            )
             guard !Task.isCancelled else { return report }
-            await NetworkManager.shared.syncTermsFromBackend()
+            if pushedTerms {
+                await NetworkManager.shared.syncTermsFromBackendWithStatus(
+                    timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+                )
+            }
             guard !Task.isCancelled else { return report }
             report.feedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
         }
@@ -863,13 +880,19 @@ struct FeedView: View {
             return BackgroundRefreshPolicy.incrementalSince(in: db.feedItems)
         }()
         let fetchDays = wantsFullHistory ? 0 : (db.feedItems.isEmpty ? 90 : 30)
+        let backendTimeout = BackgroundRefreshPolicy.foregroundBackendTimeout
+        var shouldSkipBackendRetries = false
 
         // 2. Main backend feed fetch. If the incremental fetch is empty, retry with
         // broader windows before declaring "no results".
         do {
             let freshItems: [FeedItem]
             if let since = latestSince {
-                freshItems = try await NetworkManager.shared.fetchFeed(limit: 200, since: since)
+                freshItems = try await NetworkManager.shared.fetchFeed(
+                    limit: 200,
+                    since: since,
+                    timeout: backendTimeout
+                )
                 let added = db.mergeItems(newItems: freshItems)
                 report.record(
                     strategy: "backend_feed_since",
@@ -879,7 +902,11 @@ struct FeedView: View {
                     detail: since
                 )
             } else {
-                freshItems = try await NetworkManager.shared.fetchFeed(limit: 120, days: fetchDays)
+                freshItems = try await NetworkManager.shared.fetchFeed(
+                    limit: 120,
+                    days: fetchDays,
+                    timeout: backendTimeout
+                )
                 let added = db.mergeItems(newItems: freshItems)
                 report.record(
                     strategy: "backend_feed_days_\(fetchDays)",
@@ -891,6 +918,8 @@ struct FeedView: View {
         } catch {
             AppLogger.network.error("fetchFeed failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
             refreshErrorMessage = Self.refreshErrorLabel(error)
+            shouldSkipBackendRetries = BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(error)
+            report.backendConnectivityFailed = shouldSkipBackendRetries
             report.record(
                 strategy: latestSince == nil ? "backend_feed_days_\(fetchDays)" : "backend_feed_since",
                 status: "failed",
@@ -898,14 +927,18 @@ struct FeedView: View {
             )
         }
 
-        if !report.backendReturnedItems {
+        if !report.backendReturnedItems, !shouldSkipBackendRetries {
             let retryDays = [fetchDays, 90, 180, 0].reduce(into: [Int]()) { values, days in
                 if !values.contains(days) { values.append(days) }
             }
             for days in retryDays {
                 guard !Task.isCancelled, !report.backendReturnedItems else { break }
                 do {
-                    let items = try await NetworkManager.shared.fetchFeed(limit: 200, days: days)
+                    let items = try await NetworkManager.shared.fetchFeed(
+                        limit: 200,
+                        days: days,
+                        timeout: backendTimeout
+                    )
                     let added = db.mergeItems(newItems: items)
                     report.record(
                         strategy: "backend_feed_retry_days_\(days)",
@@ -925,7 +958,7 @@ struct FeedView: View {
         guard !Task.isCancelled else { return report }
 
         // 3. Per-platform fetches in parallel
-        let platformsToFetch = Array(Set(db.subscribedPlatforms.filter {
+        let platformsToFetch = shouldSkipBackendRetries ? [] : Array(Set(db.subscribedPlatforms.filter {
             Platform.shouldFetchFromBackend($0)
         }))
         await withTaskGroup(of: FeedRefreshAttempt.self) { group in
@@ -937,7 +970,8 @@ struct FeedView: View {
                     await self.fetchBackendPlatform(
                         platform,
                         since: platformSince,
-                        days: platformSince == nil ? fetchDays : 30
+                        days: platformSince == nil ? fetchDays : 30,
+                        timeout: backendTimeout
                     )
                 }
             }
@@ -952,7 +986,7 @@ struct FeedView: View {
         guard !Task.isCancelled else { return report }
 
         // 4. Custom URL cards
-        let customItems = await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
+        let customItems = db.currentCustomFeedItems(await NetworkManager.shared.scrapeCustomUrls(db.customUrls))
         if !customItems.isEmpty {
             let added = db.mergeItems(newItems: customItems)
             report.record(strategy: "custom_urls", status: "items", itemCount: customItems.count, addedCount: added)
@@ -968,6 +1002,10 @@ struct FeedView: View {
     private func deepFallback(triggerBackendPoll: Bool, fallbackPlatforms: Set<String>) async -> FeedRefreshReport {
         var report = FeedRefreshReport()
         let activeTerms = db.terms.filter { $0.is_active }
+        let fallbackTerms = BackgroundRefreshPolicy.termsEligibleForDeviceFallback(
+            activeTerms,
+            subscribedPlatforms: db.subscribedPlatforms
+        )
         if triggerBackendPoll {
             if activeTerms.isEmpty {
                 report.record(
@@ -977,7 +1015,9 @@ struct FeedView: View {
                 )
             } else if BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(hasActiveTerms: true) {
                 do {
-                    try await NetworkManager.shared.triggerBackgroundPoll(timeout: 45)
+                    try await NetworkManager.shared.triggerBackgroundPoll(
+                        timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+                    )
                     report.record(strategy: "backend_poll", status: "ok")
                 } catch {
                     report.record(
@@ -995,7 +1035,11 @@ struct FeedView: View {
             }
             do {
                 let days = daysFilter == 0 ? 0 : 90
-                let items = try await NetworkManager.shared.fetchFeed(limit: 200, days: days)
+                let items = try await NetworkManager.shared.fetchFeed(
+                    limit: 200,
+                    days: days,
+                    timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+                )
                 let added = db.mergeItems(newItems: items)
                 report.record(
                     strategy: "backend_feed_after_poll",
@@ -1012,8 +1056,8 @@ struct FeedView: View {
                 )
             }
         }
-        guard !activeTerms.isEmpty else {
-            report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no active terms")
+        guard !fallbackTerms.isEmpty else {
+            report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no eligible active terms")
             return report
         }
         let platformsToScrape = fallbackPlatforms
@@ -1021,40 +1065,63 @@ struct FeedView: View {
             report.record(strategy: "device_local_scrapers", status: "skipped", detail: "no subscribed fallback platforms")
             return report
         }
-        await withTaskGroup(of: LocalFallbackScrapeResult.self) { group in
-            for term in activeTerms {
+        await withTaskGroup(
+            of: (termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
+        ) { group in
+            for term in fallbackTerms {
+                let platformsForTerm = platformsToScrape.intersection(
+                    BackgroundRefreshPolicy.deviceFallbackPlatforms(
+                        for: term,
+                        subscribedPlatforms: db.subscribedPlatforms
+                    )
+                )
+                guard !platformsForTerm.isEmpty else { continue }
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
                     group.addTask {
-                        await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
+                        let scrapeResult = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
                             keyword: searchTerm,
                             tagKeyword: term.keyword,
-                            platformIds: platformsToScrape
+                            platformIds: platformsForTerm
                         )
+                        return (term.keyword, searchTerm, scrapeResult, platformsForTerm)
                     }
                 }
             }
-            var scrapeResults = [LocalFallbackScrapeResult]()
-            for await scrapeResult in group {
+            var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
+            for await scrape in group {
                 if Task.isCancelled {
                     group.cancelAll()
                     break
                 }
-                scrapeResults.append(scrapeResult)
-                let added = scrapeResult.items.isEmpty
+                guard let currentTerm = db.term(matchingKeyword: scrape.termKeyword) else { continue }
+                let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
+                    for: currentTerm,
+                    subscribedPlatforms: db.subscribedPlatforms
+                )
+                guard !currentFallbackPlatforms.isEmpty,
+                      scrape.searchTerm == currentTerm.keyword ||
+                        currentTerm.aliases.contains(scrape.searchTerm) else {
+                    continue
+                }
+                let mergeableItems = scrape.result.items.filter { item in
+                    item.watch_term_keyword == currentTerm.keyword &&
+                        currentFallbackPlatforms.contains(Platform.normalize(item.platform))
+                }
+                scrapeResults.append((scrape.result, scrape.expectedPlatforms.intersection(currentFallbackPlatforms)))
+                let added = mergeableItems.isEmpty
                     ? 0
-                    : db.mergeItems(newItems: scrapeResult.items)
+                    : db.mergeItems(newItems: mergeableItems)
                 report.record(
                     strategy: "device_local_scrapers",
-                    status: scrapeResult.items.isEmpty ? "empty" : "items",
-                    itemCount: scrapeResult.items.count,
+                    status: mergeableItems.isEmpty ? "empty" : "items",
+                    itemCount: mergeableItems.count,
                     addedCount: added
                 )
             }
             report.markCompletedDevicePlatforms(
-                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForAllSearches(
-                    from: scrapeResults,
-                    subscribedPlatforms: db.subscribedPlatforms
+                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
+                    scrapeResults
                 )
             )
         }
@@ -1067,13 +1134,28 @@ struct FeedView: View {
         return report
     }
 
-    private func fetchBackendPlatform(_ platformId: String, since: String? = nil, days: Int = 30) async -> FeedRefreshAttempt {
+    private func fetchBackendPlatform(
+        _ platformId: String,
+        since: String? = nil,
+        days: Int = 30,
+        timeout: TimeInterval = 30
+    ) async -> FeedRefreshAttempt {
         do {
             let items: [FeedItem]
             if let since {
-                items = try await NetworkManager.shared.fetchFeed(platform: platformId, limit: 60, since: since)
+                items = try await NetworkManager.shared.fetchFeed(
+                    platform: platformId,
+                    limit: 60,
+                    since: since,
+                    timeout: timeout
+                )
             } else {
-                items = try await NetworkManager.shared.fetchFeed(platform: platformId, limit: 60, days: days)
+                items = try await NetworkManager.shared.fetchFeed(
+                    platform: platformId,
+                    limit: 60,
+                    days: days,
+                    timeout: timeout
+                )
             }
             let added: Int
             if !items.isEmpty {
@@ -1101,6 +1183,7 @@ struct FeedView: View {
     }
 
     private func sendNoResultsDiagnosticIfNeeded(_ report: FeedRefreshReport) async {
+        guard !report.backendConnectivityFailed else { return }
         let activeTermsCount = db.terms.filter { $0.is_active }.count
         guard activeTermsCount > 0, db.feedItems.isEmpty, report.addedCount == 0 else { return }
         let info = Bundle.main.infoDictionary

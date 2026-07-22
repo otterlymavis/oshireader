@@ -28,7 +28,10 @@ extension NetworkManager {
         return result
     }
 
-    private func createWatchTermForAutomaticSync(_ term: WatchTerm) async throws -> WatchTerm {
+    private func createWatchTermForAutomaticSync(
+        _ term: WatchTerm,
+        timeout: TimeInterval = 30
+    ) async throws -> WatchTerm {
         let notifyOnNew = Self.automaticSyncNotifyOnNewCreate(localTerm: term)
         do {
             return try await createWatchTerm(
@@ -36,7 +39,8 @@ extension NetworkManager {
                 collectionMode: term.collection_mode,
                 notifyOnNew: notifyOnNew,
                 isActive: term.is_active,
-                aliases: term.aliases
+                aliases: term.aliases,
+                timeout: timeout
             )
         } catch APIClientError.httpStatus(409, let detail) where notifyOnNew && detail == notificationDeviceRequiredDetail {
             return try await createWatchTerm(
@@ -44,26 +48,31 @@ extension NetworkManager {
                 collectionMode: term.collection_mode,
                 notifyOnNew: false,
                 isActive: term.is_active,
-                aliases: term.aliases
+                aliases: term.aliases,
+                timeout: timeout
             )
         }
     }
 
-    func fetchWatchTerms() async throws -> [WatchTerm] {
+    func fetchWatchTerms(timeout: TimeInterval = 30) async throws -> [WatchTerm] {
         try await apiRequest(
             URL(string: "\(apiBase)/api/watch-terms/")!,
             authorized: true,
             deviceAuthorized: true,
-            acceptRange: 200...200
+            acceptRange: 200...200,
+            timeout: timeout
         )
     }
 
     // Pushes local watch terms missing from the backend (e.g. after a database reset).
     @discardableResult
-    func syncWatchTermsToBackend(localTerms: [WatchTerm]) async -> Bool {
+    func syncWatchTermsToBackend(
+        localTerms: [WatchTerm],
+        timeout: TimeInterval = 30
+    ) async -> Bool {
         guard !isUITesting else { return false }
         guard !localTerms.isEmpty else { return true }
-        guard let backendTerms = try? await fetchWatchTerms() else { return false }
+        guard let backendTerms = try? await fetchWatchTerms(timeout: timeout) else { return false }
         var succeeded = true
 
         let backendByKeyword = firstTermByKeyword(backendTerms)
@@ -74,7 +83,10 @@ extension NetworkManager {
             if shouldSkipAfterDelete { continue }
             if let serverTerm = backendByKeyword[term.keyword] {
                 if term.repaired_from_cache {
-                    await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
+                    let replaced = await MainActor.run {
+                        LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
+                    }
+                    if !replaced { succeeded = false }
                     continue
                 }
                 let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
@@ -91,15 +103,25 @@ extension NetworkManager {
                     isActive: term.is_active,
                     collectionMode: term.collection_mode,
                     notifyOnNew: notifyOnNewUpdate,
-                    aliases: term.aliases
+                    aliases: term.aliases,
+                    timeout: timeout
                    ) {
-                    await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm) }
+                    let replaced = await MainActor.run {
+                        LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm, ifUnchangedFrom: term)
+                    }
+                    if !replaced { succeeded = false }
                 } else {
-                    await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
+                    let replaced = await MainActor.run {
+                        LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
+                    }
                     if needsUpdate { succeeded = false }
+                    if !replaced { succeeded = false }
                 }
-            } else if let serverTerm = try? await createWatchTermForAutomaticSync(term) {
-                await MainActor.run { LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm) }
+            } else if let serverTerm = try? await createWatchTermForAutomaticSync(term, timeout: timeout) {
+                let replaced = await MainActor.run {
+                    LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
+                }
+                if !replaced { succeeded = false }
             } else {
                 succeeded = false
             }
@@ -115,11 +137,11 @@ extension NetworkManager {
     }
 
     @discardableResult
-    func syncTermsFromBackendWithStatus() async -> BackendTermSyncResult {
+    func syncTermsFromBackendWithStatus(timeout: TimeInterval = 30) async -> BackendTermSyncResult {
         guard !isUITesting else {
             return BackendTermSyncResult(succeeded: false, changed: false)
         }
-        guard let backendTerms = try? await fetchWatchTerms() else {
+        guard let backendTerms = try? await fetchWatchTerms(timeout: timeout) else {
             return BackendTermSyncResult(succeeded: false, changed: false)
         }
         let localByKeyword = await MainActor.run {
@@ -133,8 +155,10 @@ extension NetworkManager {
             if shouldSkipAfterDelete { continue }
             if let localTerm = localByKeyword[term.keyword] {
                 if localTerm != term {
-                    await MainActor.run { LocalDB.shared.replaceTerm(localId: localTerm.id, with: term) }
-                    changed = true
+                    let replaced = await MainActor.run {
+                        LocalDB.shared.replaceTerm(localId: localTerm.id, with: term, ifUnchangedFrom: localTerm)
+                    }
+                    changed = changed || replaced
                 }
             } else {
                 await MainActor.run { LocalDB.shared.addTermFromBackend(term) }
@@ -144,7 +168,14 @@ extension NetworkManager {
         return BackendTermSyncResult(succeeded: true, changed: changed)
     }
 
-    func createWatchTerm(keyword: String, collectionMode: CollectionMode, notifyOnNew: Bool = true, isActive: Bool = true, aliases: [String] = []) async throws -> WatchTerm {
+    func createWatchTerm(
+        keyword: String,
+        collectionMode: CollectionMode,
+        notifyOnNew: Bool = true,
+        isActive: Bool = true,
+        aliases: [String] = [],
+        timeout: TimeInterval = 30
+    ) async throws -> WatchTerm {
         if isUITesting {
             return WatchTerm(
                 keyword: keyword,
@@ -170,11 +201,19 @@ extension NetworkManager {
             method: "POST",
             body: bodyData,
             authorized: true,
-            deviceAuthorized: true
+            deviceAuthorized: true,
+            timeout: timeout
         )
     }
 
-    func updateWatchTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) async throws -> WatchTerm {
+    func updateWatchTerm(
+        id: String,
+        isActive: Bool? = nil,
+        collectionMode: CollectionMode? = nil,
+        notifyOnNew: Bool? = nil,
+        aliases: [String]? = nil,
+        timeout: TimeInterval = 30
+    ) async throws -> WatchTerm {
         if isUITesting { throw URLError(.cancelled) }
         if notifyOnNew == true {
             _ = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed()
@@ -190,7 +229,8 @@ extension NetworkManager {
             method: "PATCH",
             body: bodyData,
             authorized: true,
-            deviceAuthorized: true
+            deviceAuthorized: true,
+            timeout: timeout
         )
     }
 
@@ -219,7 +259,14 @@ extension NetworkManager {
 
     // MARK: - Feed
 
-    func fetchFeed(termId: Int? = nil, platform: String? = nil, limit: Int = 50, days: Int = 30, since: String? = nil) async throws -> [FeedItem] {
+    func fetchFeed(
+        termId: Int? = nil,
+        platform: String? = nil,
+        limit: Int = 50,
+        days: Int = 30,
+        since: String? = nil,
+        timeout: TimeInterval = 30
+    ) async throws -> [FeedItem] {
         if isUITesting { return [] }
         var components = URLComponents(string: "\(apiBase)/api/feed/")!
         var queryItems: [URLQueryItem] = [URLQueryItem(name: "limit", value: String(limit))]
@@ -232,7 +279,8 @@ extension NetworkManager {
             components.url!,
             authorized: true,
             deviceAuthorized: true,
-            acceptRange: 200...200
+            acceptRange: 200...200,
+            timeout: timeout
         )
         return backendItems.map { $0.toFeedItem() }
     }

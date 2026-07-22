@@ -74,7 +74,7 @@ struct Platform {
             rawPlatformValues: ["youtube"],
             usesStrictKeywordMatching: false, skipDateCutoff: false,
             isMediaPlatform: true, subscribedByDefault: true,
-            fetchRole: .backendPrimary
+            fetchRole: .deviceFallback
         ),
         Platform(
             id: "niconico", name: "NicoNico", icon: "💬",
@@ -111,7 +111,7 @@ struct Platform {
             rawPlatformValues: ["note"],
             usesStrictKeywordMatching: true, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true,
-            fetchRole: .backendPrimary
+            fetchRole: .deviceFallback
         ),
         Platform(
             id: "girlschannel", name: "GirlsChannel", icon: "👭",
@@ -119,8 +119,9 @@ struct Platform {
             rawPlatformValues: ["girlschannel"],
             usesStrictKeywordMatching: true, skipDateCutoff: true,
             isMediaPlatform: false, subscribedByDefault: true,
-            fetchRole: .backendOnly,
-            usesActivityDateWindow: true
+            fetchRole: .deviceFallback,
+            usesActivityDateWindow: true,
+            googleNewsFallbackSite: "girlschannel.net"
         ),
         Platform(
             id: "5ch", name: "5ch", icon: "💬",

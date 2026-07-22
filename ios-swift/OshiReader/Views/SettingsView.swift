@@ -418,6 +418,9 @@ struct SettingsView: View {
                             let savedTerm = db.saveTerm(keyword: trimmed, collectionMode: newCollectionMode)
 
                             Task {
+                                await refreshLocalFallbacks(for: savedTerm)
+                            }
+                            Task {
                                 if let serverTerm = try? await NetworkManager.shared.createWatchTerm(
                                     keyword: savedTerm.keyword,
                                     collectionMode: savedTerm.collection_mode,
@@ -425,7 +428,11 @@ struct SettingsView: View {
                                     isActive: savedTerm.is_active,
                                     aliases: savedTerm.aliases
                                 ) {
-                                    db.replaceTerm(localId: savedTerm.id, with: serverTerm)
+                                    _ = db.replaceTerm(
+                                        localId: savedTerm.id,
+                                        with: serverTerm,
+                                        ifUnchangedFrom: savedTerm
+                                    )
                                 }
                             }
                             
@@ -468,6 +475,62 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func refreshLocalFallbacks(for term: WatchTerm) async {
+        guard !NetworkManager.shared.isUITesting,
+              let currentTerm = currentDeviceFallbackTerm(for: term) else { return }
+        let fallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
+            for: currentTerm,
+            subscribedPlatforms: db.subscribedPlatforms
+        )
+        guard !fallbackPlatforms.isEmpty else { return }
+        let searchTerms = [currentTerm.keyword] + currentTerm.aliases
+
+        await withTaskGroup(of: (searchTerm: String, items: [FeedItem]).self) { group in
+            for searchTerm in searchTerms {
+                group.addTask {
+                    let items = await NetworkManager.shared.scrapeLocalFallbacks(
+                        keyword: searchTerm,
+                        tagKeyword: currentTerm.keyword,
+                        platformIds: fallbackPlatforms
+                    )
+                    return (searchTerm, items)
+                }
+            }
+            for await scrape in group {
+                guard let latestTerm = currentDeviceFallbackTerm(for: currentTerm) else {
+                    group.cancelAll()
+                    break
+                }
+                guard scrape.searchTerm == latestTerm.keyword ||
+                        latestTerm.aliases.contains(scrape.searchTerm) else {
+                    continue
+                }
+                let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
+                    for: latestTerm,
+                    subscribedPlatforms: db.subscribedPlatforms
+                )
+                let mergeableItems = scrape.items.filter { item in
+                    item.watch_term_keyword == latestTerm.keyword &&
+                        currentFallbackPlatforms.contains(Platform.normalize(item.platform))
+                }
+                if !mergeableItems.isEmpty {
+                    _ = db.mergeItems(newItems: mergeableItems, notifyOnNew: false)
+                }
+            }
+        }
+    }
+
+    private func currentDeviceFallbackTerm(for term: WatchTerm) -> WatchTerm? {
+        guard let currentTerm = db.term(matchingKeyword: term.keyword),
+              !BackgroundRefreshPolicy.deviceFallbackPlatforms(
+                for: currentTerm,
+                subscribedPlatforms: db.subscribedPlatforms
+              ).isEmpty else {
+            return nil
+        }
+        return currentTerm
     }
 
     private func deleteTermFromSettings(_ term: WatchTerm) {

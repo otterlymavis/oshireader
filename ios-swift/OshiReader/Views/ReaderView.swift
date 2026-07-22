@@ -57,12 +57,16 @@ struct ReaderView: View {
         feedItem.platform == "5ch"
     }
 
+    var originalPageUrl: URL? {
+        guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform) else { return nil }
+        return URL(string: normalized)
+    }
+
     var targetUrl: URL? {
         if isSigningIntoX {
             return URL(string: "https://x.com/login")
         }
-        guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform),
-              let originalUrl = URL(string: normalized) else { return nil }
+        guard let originalUrl = originalPageUrl else { return nil }
         if isTranslated, !Self.usesSystemSafari(for: feedItem) {
             let targetLang: String
             switch i18n.lang {
@@ -473,7 +477,11 @@ struct ReaderView: View {
     private func saveImage(_ url: URL) {
         Task {
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, response) = try await URLSession.shared.data(for: imageRequest(for: url))
+                if let httpResponse = response as? HTTPURLResponse,
+                   !(200...299).contains(httpResponse.statusCode) {
+                    throw URLError(.badServerResponse)
+                }
                 guard let image = UIImage(data: data) else {
                     await MainActor.run {
                         saveImageStatus = i18n.t("imageLoadError")
@@ -526,7 +534,8 @@ struct ReaderView: View {
             await withTaskGroup(of: Bool.self) { group in
                 for url in urls {
                     group.addTask {
-                        guard let (data, _) = try? await URLSession.shared.data(from: url),
+                        guard let (data, response) = try? await URLSession.shared.data(for: imageRequest(for: url)),
+                              (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? true,
                               let image = UIImage(data: data) else { return false }
                         do {
                             try await PHPhotoLibrary.shared().performChanges {
@@ -548,6 +557,16 @@ struct ReaderView: View {
                 showingSaveImageStatus = true
             }
         }
+    }
+
+    private func imageRequest(for imageURL: URL) -> URLRequest {
+        var request = URLRequest(url: imageURL)
+        request.setValue("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        if let pageURL = originalPageUrl {
+            request.setValue(pageURL.absoluteString, forHTTPHeaderField: "Referer")
+        }
+        return request
     }
 }
 
@@ -1037,6 +1056,9 @@ private func stripTrackingParams(_ rawUrl: String) -> String {
     components.queryItems = components.queryItems?.filter { item in
         let key = item.name.lowercased()
         return !blockedKeys.contains(key) && !blockedPrefixes.contains(where: { key.hasPrefix($0) })
+    }
+    if components.queryItems?.isEmpty == true {
+        components.queryItems = nil
     }
     return components.url?.absoluteString ?? rawUrl
 }
