@@ -17,6 +17,7 @@ from unittest.mock import patch
 from app.connectors import news_sites
 from app.ingestion.scheduler import (
     _build_connectors,
+    _cache_successful_fetch,
     _connector_batches,
     _deactivate_orphaned_duplicate_terms,
     _deactivate_orphaned_silent_terms,
@@ -268,6 +269,33 @@ class TestSearchTermsFor:
         term.aliases = None  # Simulate a None aliases value (e.g. from a legacy DB row)
         result = _search_terms_for(term)
         assert result == ["Miku"]
+
+
+class TestFetchCache:
+    def test_does_not_cache_failed_fetch_results(self):
+        cache = {}
+        key = ("youtube", "Aiko", "all_info")
+
+        _cache_successful_fetch(cache, key, [], fetch_succeeded=False)
+
+        assert cache == {}
+
+    def test_caches_successful_empty_fetch_results(self):
+        cache = {}
+        key = ("youtube", "Aiko", "all_info")
+
+        _cache_successful_fetch(cache, key, [], fetch_succeeded=True)
+
+        assert cache[key] == []
+
+    def test_caches_non_empty_fetch_results(self):
+        cache = {}
+        key = ("youtube", "Aiko", "all_info")
+        items = [object()]
+
+        _cache_successful_fetch(cache, key, items, fetch_succeeded=True)
+
+        assert cache[key] is items
 
 
 class TestFetchOne:

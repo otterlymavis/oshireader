@@ -1,4 +1,114 @@
+import Foundation
+import ImageIO
 import SwiftUI
+import UIKit
+
+/// Shared thumbnail loading for feed cards.
+///
+/// Feed cards only display small images, so decoding the full source image wastes
+/// memory and can cause scroll hitches. The actor also prevents concurrent access
+/// to the shared in-memory cache.
+actor FeedThumbnailLoader {
+    static let shared = FeedThumbnailLoader()
+
+    private let cache = NSCache<NSURL, UIImage>()
+    private let session: URLSession
+    private let maxPixelSize: Int
+    private var inFlight: [URL: Task<UIImage?, Never>] = [:]
+
+    init(session: URLSession = .shared, maxPixelSize: Int = 144) {
+        self.session = session
+        self.maxPixelSize = maxPixelSize
+        cache.countLimit = 100
+        cache.totalCostLimit = 24 * 1024 * 1024
+    }
+
+    func image(for url: URL) async -> UIImage? {
+        if let cached = cache.object(forKey: url as NSURL) {
+            return cached
+        }
+
+        if let existingTask = inFlight[url] {
+            return await existingTask.value
+        }
+
+        let session = session
+        let maxPixelSize = maxPixelSize
+        let task = Task { () -> UIImage? in
+            guard !Task.isCancelled,
+                  let (data, response) = try? await session.data(from: url),
+                  let httpResponse = response as? HTTPURLResponse,
+                  200..<300 ~= httpResponse.statusCode,
+                  !Task.isCancelled else {
+                return nil
+            }
+            return Self.downsample(data: data, maxPixelSize: maxPixelSize)
+        }
+        inFlight[url] = task
+        let image = await task.value
+        inFlight[url] = nil
+
+        if let image {
+            cache.setObject(image, forKey: url as NSURL, cost: imageCost(image))
+        }
+        return image
+    }
+
+    private func imageCost(_ image: UIImage) -> Int {
+        guard let cgImage = image.cgImage else { return 1 }
+        return cgImage.bytesPerRow * cgImage.height
+    }
+
+    nonisolated static func downsample(data: Data, maxPixelSize: Int) -> UIImage? {
+        guard maxPixelSize > 0,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+                ] as CFDictionary
+              ) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
+    }
+}
+
+private struct FeedThumbnailView: View {
+    let url: URL
+    let size: CGFloat
+
+    @State private var image: UIImage?
+
+    init(url: URL, size: CGFloat = 72) {
+        self.url = url
+        self.size = size
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Color.gray.opacity(0.1)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipped()
+        .cornerRadius(8)
+        .task(id: url) {
+            image = nil
+            let loadedImage = await FeedThumbnailLoader.shared.image(for: url)
+            guard !Task.isCancelled else { return }
+            image = loadedImage
+        }
+    }
+}
 
 private struct FeedRefreshAttempt {
     let strategy: String
@@ -1419,21 +1529,7 @@ struct FeedCard: View {
                 
                 // Optional Thumbnail URL
                 if let thumb = item.thumbnail_url, let url = URL(string: thumb) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 72, height: 72)
-                                .clipped()
-                                .cornerRadius(8)
-                        default:
-                            Color.gray.opacity(0.1)
-                                .frame(width: 72, height: 72)
-                                .cornerRadius(8)
-                        }
-                    }
+                    FeedThumbnailView(url: url)
                 }
             }
         }

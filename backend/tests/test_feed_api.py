@@ -200,6 +200,28 @@ class TestFeedAPI:
         resp = client.get("/api/feed/")
         assert resp.status_code == 200
         assert resp.json() == []
+        assert resp.headers["server-timing"].startswith("feed;dur=")
+
+    def test_feed_compresses_large_response_when_client_supports_gzip(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        for index in range(20):
+            item = _make_item(
+                db_session,
+                item_id=f"gzip-{index}",
+                days_ago=index,
+                title=f"Aiko item {index}",
+                content_text="Aiko " + ("long feed preview " * 20),
+            )
+            _make_match(db_session, term, item)
+
+        resp = client.get(
+            "/api/feed/?limit=20",
+            headers={"Accept-Encoding": "gzip"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-encoding"] == "gzip"
+        assert len(resp.json()) == 20
 
     def test_feed_returns_matched_item(self, client, db_session):
         term = _make_term(db_session)

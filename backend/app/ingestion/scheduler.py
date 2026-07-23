@@ -157,8 +157,12 @@ def _search_terms_for(term: WatchTerm) -> list[str]:
     return searches
 
 
-async def _fetch_one(connector: BaseConnector, search_term: str, mode: CollectionMode) -> list:
-    """Run a single connector fetch; return [] on any error."""
+async def _fetch_one_result(
+    connector: BaseConnector,
+    search_term: str,
+    mode: CollectionMode,
+) -> tuple[list, bool]:
+    """Run a connector fetch; return (items, fetch_succeeded)."""
     timeout_seconds = connector_fetch_timeout_seconds(connector)
     try:
         items = await asyncio.wait_for(
@@ -172,10 +176,10 @@ async def _fetch_one(connector: BaseConnector, search_term: str, mode: Collectio
             search_term,
             timeout_seconds,
         )
-        return []
+        return [], False
     except Exception as exc:
         log.warning("fetch error connector=%s term=%r: %s", connector.PLATFORM, search_term, exc)
-        return []
+        return [], False
     filtered = [item for item in items if primary_text_matches(search_term, item)]
     dropped = len(items) - len(filtered)
     if dropped:
@@ -186,7 +190,25 @@ async def _fetch_one(connector: BaseConnector, search_term: str, mode: Collectio
             dropped,
             len(items),
         )
-    return filtered
+    return filtered, True
+
+
+async def _fetch_one(connector: BaseConnector, search_term: str, mode: CollectionMode) -> list:
+    """Run a single connector fetch; return [] on any error."""
+    items, _ = await _fetch_one_result(connector, search_term, mode)
+    return items
+
+
+def _cache_successful_fetch(
+    fetch_cache: dict[tuple[str, str, str], list],
+    cache_key: tuple[str, str, str],
+    items: list,
+    *,
+    fetch_succeeded: bool,
+) -> None:
+    """Cache successful fetches, including legitimate empty result sets."""
+    if fetch_succeeded:
+        fetch_cache[cache_key] = items
 
 
 def connector_fetch_timeout_seconds(connector: BaseConnector) -> float:
@@ -1117,6 +1139,7 @@ async def _poll_once_unlocked() -> None:
         )
 
         flushed_pending_term_ids = await _flush_pending_notifications(db)
+        fetch_cache: dict[tuple[str, str, str], list] = {}
 
         for term in terms:
             term_had_existing_matches_before_poll = (
@@ -1130,16 +1153,32 @@ async def _poll_once_unlocked() -> None:
                 # parser tree, and result list until the slowest request finishes.
                 # Small batches materially reduce peak RSS on memory-limited hosts.
                 for connector_batch in _connector_batches(connectors):
-                    batch_results = await asyncio.gather(
-                        *[
-                            _fetch_one(
-                                connector,
-                                search_term,
-                                CollectionMode(term.collection_mode or "all_info"),
+                    mode = CollectionMode(term.collection_mode or "all_info")
+                    batch_results: list[list | None] = [None] * len(connector_batch)
+                    uncached: list[tuple[int, BaseConnector, tuple[str, str, str]]] = []
+                    for idx, connector in enumerate(connector_batch):
+                        cache_key = (connector.PLATFORM, search_term, mode.value)
+                        if cache_key in fetch_cache:
+                            batch_results[idx] = fetch_cache[cache_key]
+                        else:
+                            uncached.append((idx, connector, cache_key))
+
+                    if uncached:
+                        fetched = await asyncio.gather(
+                            *[
+                                _fetch_one_result(connector, search_term, mode)
+                                for _, connector, _ in uncached
+                            ]
+                        )
+                        for (idx, _, cache_key), (items, fetch_succeeded) in zip(uncached, fetched):
+                            _cache_successful_fetch(
+                                fetch_cache,
+                                cache_key,
+                                items,
+                                fetch_succeeded=fetch_succeeded,
                             )
-                            for connector in connector_batch
-                        ]
-                    )
+                            batch_results[idx] = items
+
                     for connector, items in zip(connector_batch, batch_results):
                         if not items:
                             continue

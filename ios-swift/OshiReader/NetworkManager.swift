@@ -208,6 +208,7 @@ class NetworkManager {
         acceptRange: ClosedRange<Int> = 200...299,
         timeout: TimeInterval = 30
     ) async throws -> T {
+        let startedAt = Date()
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = timeout
@@ -236,6 +237,13 @@ class NetworkManager {
         }
         guard acceptRange.contains(http.statusCode) else {
             throw APIClientError.httpStatus(http.statusCode, detail: backendErrorDetail(from: data))
+        }
+        if url.path == "/api/feed/" {
+            let clientDurationMs = Date().timeIntervalSince(startedAt) * 1000
+            let serverTiming = http.value(forHTTPHeaderField: "Server-Timing") ?? "unavailable"
+            AppLogger.network.debug(
+                "Feed request completed in \(clientDurationMs, privacy: .public)ms; server=\(serverTiming, privacy: .public)"
+            )
         }
         return try JSONDecoder().decode(T.self, from: data)
     }

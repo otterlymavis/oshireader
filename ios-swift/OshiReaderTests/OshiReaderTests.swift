@@ -1,11 +1,110 @@
 import XCTest
 import SwiftUI
+import UIKit
 import UserNotifications
 import BackgroundTasks
 @testable import OshiReader
 
 @MainActor
 final class OshiReaderTests: XCTestCase {
+
+    func testFeedThumbnailLoaderDownsamplesLargeImages() throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 400))
+        let data = renderer.pngData { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 800, height: 400))
+        }
+
+        let image = try XCTUnwrap(
+            FeedThumbnailLoader.downsample(data: data, maxPixelSize: 144)
+        )
+
+        XCTAssertLessThanOrEqual(max(image.size.width, image.size.height), 144)
+    }
+
+    func testFeedThumbnailLoaderCoalescesConcurrentRequests() async throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 400))
+        let data = renderer.pngData { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 800, height: 400))
+        }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let loader = FeedThumbnailLoader(session: session, maxPixelSize: 144)
+        let url = try XCTUnwrap(URL(string: "https://thumbnail.test/image.png"))
+
+        let lock = NSLock()
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            lock.lock()
+            requestCount += 1
+            lock.unlock()
+            Thread.sleep(forTimeInterval: 0.1)
+            let response = HTTPURLResponse(
+                url: request.url ?? url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (data, response)
+        }
+        defer {
+            MockURLProtocol.handler = nil
+            MockURLProtocol.errorHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        async let first = loader.image(for: url)
+        async let second = loader.image(for: url)
+        let images = await [first, second]
+
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertNotNil(images[0])
+        XCTAssertNotNil(images[1])
+    }
+
+    func testFeedThumbnailLoaderUsesMemoryCacheForSequentialRequests() async throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 400))
+        let data = renderer.pngData { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 800, height: 400))
+        }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let loader = FeedThumbnailLoader(session: session, maxPixelSize: 144)
+        let url = try XCTUnwrap(URL(string: "https://thumbnail.test/cached.png"))
+
+        let lock = NSLock()
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            lock.lock()
+            requestCount += 1
+            lock.unlock()
+            let response = HTTPURLResponse(
+                url: request.url ?? url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (data, response)
+        }
+        defer {
+            MockURLProtocol.handler = nil
+            MockURLProtocol.errorHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let first = await loader.image(for: url)
+        let second = await loader.image(for: url)
+
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertNotNil(first)
+        XCTAssertNotNil(second)
+    }
 
     private var tempDir: URL!
     private var db: LocalDB!

@@ -39,6 +39,10 @@ def _column_names(engine, table: str) -> set[str]:
     return {c["name"] for c in inspect(engine).get_columns(table)}
 
 
+def _index_names(engine, table: str) -> set[str]:
+    return {idx["name"] for idx in inspect(engine).get_indexes(table)}
+
+
 class TestApplyStartupMigrations:
     def test_creates_all_tables(self, fresh_engine):
         with patch("app.migrations.SessionLocal", sessionmaker(bind=fresh_engine)):
@@ -53,6 +57,13 @@ class TestApplyStartupMigrations:
         assert "backend_events" in tables
         assert "migration_log" in tables
         assert "device_secret" in _column_names(fresh_engine, "apns_device_tokens")
+
+    def test_creates_feed_performance_indexes(self, fresh_engine):
+        with patch("app.migrations.SessionLocal", sessionmaker(bind=fresh_engine)):
+            apply_startup_migrations(fresh_engine)
+
+        assert "ix_matches_watch_term_created_at" in _index_names(fresh_engine, "matches")
+        assert "ix_source_items_platform_published_at" in _index_names(fresh_engine, "source_items")
 
     def test_idempotent_second_call_succeeds(self, fresh_engine):
         Session = sessionmaker(bind=fresh_engine)

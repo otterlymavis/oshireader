@@ -6,6 +6,7 @@ import httpx
 import logging
 import os
 import struct
+import time
 import traceback
 import uuid
 import zlib
@@ -17,6 +18,8 @@ from urllib.parse import quote, quote_plus
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import Headers
+from starlette.middleware.gzip import GZipResponder
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
@@ -318,12 +321,51 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="Otterpia", lifespan=lifespan)
 
+
+class FeedGZipMiddleware:
+    def __init__(self, app, minimum_size: int = 1024, compresslevel: int = 6) -> None:
+        self.app = app
+        self.minimum_size = minimum_size
+        self.compresslevel = compresslevel
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("path") != "/api/feed/":
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        if "gzip" not in headers.get("Accept-Encoding", ""):
+            await self.app(scope, receive, send)
+            return
+
+        responder = GZipResponder(
+            self.app,
+            self.minimum_size,
+            compresslevel=self.compresslevel,
+        )
+        await responder(scope, receive, send)
+
+
+# Feed responses can contain many article previews and thumbnail URLs. Compress
+# the feed JSON for clients that support it without spending CPU on image assets.
+app.add_middleware(FeedGZipMiddleware, minimum_size=1024, compresslevel=6)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_feed_server_timing(request: Request, call_next):
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    if request.url.path == "/api/feed/":
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        response.headers["Server-Timing"] = f"feed;dur={duration_ms:.1f}"
+    return response
 
 app.include_router(watch_terms.router)
 app.include_router(feed.router)

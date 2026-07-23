@@ -176,6 +176,16 @@ class TestNotificationPreviewImage:
         assert r.content.startswith(b"\x89PNG\r\n\x1a\n")
         assert len(r.content) > 1_000
 
+    def test_png_is_not_gzipped(self, client):
+        r = client.get(
+            "/api/notification-preview.png",
+            headers={"Accept-Encoding": "gzip"},
+        )
+
+        assert r.status_code == 200
+        assert "content-encoding" not in r.headers
+        assert r.content.startswith(b"\x89PNG\r\n\x1a\n")
+
 
 class TestClientDiagnostics:
     def test_client_diagnostics_accepts_refresh_report(self, client, db_session, caplog):

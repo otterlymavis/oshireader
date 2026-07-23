@@ -119,6 +119,55 @@ class TestIngestionNewItems:
         assert len(matches) == 2
 
     @pytest.mark.asyncio
+    async def test_duplicate_search_terms_share_connector_fetch(self, db_engine, db_session):
+        term1 = WatchTerm(keyword="Aiko")
+        term2 = WatchTerm(keyword="Aiko")
+        db_session.add_all([term1, term2])
+        db_session.commit()
+        term_ids = {term1.id, term2.id}
+
+        connector = _mock_connector("youtube", [_make_item(item_id="shared-cache")])
+        await _run_poll(db_engine, [connector])
+
+        db_session.expire_all()
+        connector.fetch.assert_awaited_once()
+        matches = (
+            db_session.query(Match)
+            .filter(Match.source_item_id == "youtube:shared-cache")
+            .all()
+        )
+        assert {match.watch_term_id for match in matches} == term_ids
+
+    @pytest.mark.asyncio
+    async def test_duplicate_search_terms_share_empty_connector_fetch(self, db_engine, db_session):
+        term1 = WatchTerm(keyword="Aiko")
+        term2 = WatchTerm(keyword="Aiko")
+        db_session.add_all([term1, term2])
+        db_session.commit()
+
+        connector = _mock_connector("youtube", [])
+        await _run_poll(db_engine, [connector])
+
+        db_session.expire_all()
+        connector.fetch.assert_awaited_once()
+        assert db_session.query(Match).count() == 0
+
+    @pytest.mark.asyncio
+    async def test_duplicate_search_terms_retry_after_failed_fetch(self, db_engine, db_session):
+        term1 = WatchTerm(keyword="Aiko")
+        term2 = WatchTerm(keyword="Aiko")
+        db_session.add_all([term1, term2])
+        db_session.commit()
+
+        connector = _mock_connector("youtube", [])
+        connector.fetch = AsyncMock(side_effect=RuntimeError("network failed"))
+        await _run_poll(db_engine, [connector])
+
+        db_session.expire_all()
+        assert connector.fetch.await_count == 2
+        assert db_session.query(Match).count() == 0
+
+    @pytest.mark.asyncio
     async def test_item_without_search_term_is_not_ingested(self, db_engine, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)
