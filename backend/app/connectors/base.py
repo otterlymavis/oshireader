@@ -106,12 +106,32 @@ def is_recent_search_result(published_at: datetime) -> bool:
     return now - SEARCH_RESULT_MAX_AGE <= published <= now + SEARCH_RESULT_FUTURE_GRACE
 
 
-async def fetch_search_rss_via_proxy(query: str, target: str = "google") -> bytes | None:
+async def fetch_search_rss_via_proxy(
+    query: str,
+    target: str = "google",
+    *,
+    hl: str | None = None,
+    gl: str | None = None,
+    ceid: str | None = None,
+    mkt: str | None = None,
+    accept_language: str | None = None,
+) -> bytes | None:
     proxy_url = settings.source_rss_proxy_url.strip()
     token = settings.admin_api_token.strip()
     if not proxy_url or not token:
         return None
-    url = f"{proxy_url}?{urlencode({'target': target, 'query': query})}"
+    params = {"target": target, "query": query}
+    if hl:
+        params["hl"] = hl
+    if gl:
+        params["gl"] = gl
+    if ceid:
+        params["ceid"] = ceid
+    if mkt:
+        params["mkt"] = mkt
+    if accept_language:
+        params["accept_language"] = accept_language
+    url = f"{proxy_url}?{urlencode(params)}"
     try:
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
             response = await client.get(url, headers={"Authorization": f"Bearer {token}"})

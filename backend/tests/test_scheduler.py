@@ -1172,12 +1172,17 @@ class TestBuildConnectors:
             connectors = _build_connectors(db)
 
         registered = {type(connector).PLATFORM for connector in connectors}
-        expected = {
-            cls.PLATFORM
-            for _, cls in inspect.getmembers(news_sites, inspect.isclass)
+        connector_classes = {
+            cls
+            for name, cls in inspect.getmembers(news_sites, inspect.isclass)
             if issubclass(cls, news_sites._GNewsSiteConnector)
             and cls is not news_sites._GNewsSiteConnector
+            and not name.startswith("_")
         }
+        missing_platform = [cls.__name__ for cls in connector_classes if not cls.PLATFORM]
+        assert not missing_platform
+
+        expected = {cls.PLATFORM for cls in connector_classes}
         assert expected <= registered
 
     def test_uses_youtube_api_key_from_db_when_env_is_empty(self, db):

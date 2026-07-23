@@ -70,7 +70,7 @@ class LocalDB: ObservableObject {
     private var termDeleteTombstones: [String: Date] = [:]
 
     // Bump this whenever a migration step is added below.
-    private static let currentSchemaVersion = 4
+    private static let currentSchemaVersion = 5
     private static let schemaVersionKey = "localdb_schema_version"
 
     init(directory: URL) {
@@ -150,10 +150,29 @@ class LocalDB: ObservableObject {
                 return true
             }
             return false
+        case 5:
+            return addMissingNewDefaultPlatforms([
+                "allkpop",
+                "billboardjapan",
+                "kpopofficial",
+                "natalie",
+                "soompi",
+            ])
         default:
             AppLogger.persistence.warning("No migration handler for schema v\(version)")
             return false
         }
+    }
+
+    @discardableResult
+    private func addMissingNewDefaultPlatforms(_ platformIds: [String]) -> Bool {
+        let missing = platformIds.filter { !subscribedPlatforms.contains($0) }
+        if !missing.isEmpty {
+            subscribedPlatforms.append(contentsOf: missing)
+            saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+            return true
+        }
+        return false
     }
 
     @discardableResult

@@ -31,13 +31,12 @@ def _is_recent(published_at: datetime) -> bool:
     now = datetime.now(timezone.utc)
     return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
-# Curated public RSS feeds — Japanese entertainment / idol news, no login needed.
-# sponichi and hochi removed their RSS feeds; natalie/tv removed their TV section feed.
-# natalie/eiga currently returns HTTP 500, so use the healthy public feeds.
-FEEDS: list[tuple[str, str, str]] = [
-    ("news", "natalie", "https://natalie.mu/music/feed/news"),
-    ("news", "natalie", "https://natalie.mu/stage/feed/news"),
-]
+# Curated public RSS feeds for the generic News source.
+#
+# Natalie has its own dedicated connector/platform, so keep its feeds out of
+# this generic source to avoid storing and notifying duplicate copies as both
+# `news:*` and `natalie:*`.
+FEEDS: list[tuple[str, str, str]] = []
 
 
 class RSSConnector(BaseConnector):

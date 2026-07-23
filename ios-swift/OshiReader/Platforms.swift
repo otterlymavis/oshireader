@@ -7,6 +7,33 @@ enum PlatformFetchRole: String {
     case deviceOnly
 }
 
+struct GoogleNewsFallbackLocale: Equatable {
+    let hl: String
+    let gl: String
+    let ceid: String
+    let acceptLanguage: String
+
+    static let japan = GoogleNewsFallbackLocale(
+        hl: "ja",
+        gl: "JP",
+        ceid: "JP:ja",
+        acceptLanguage: "ja,en;q=0.9"
+    )
+
+    static let englishUS = GoogleNewsFallbackLocale(
+        hl: "en",
+        gl: "US",
+        ceid: "US:en",
+        acceptLanguage: "en,ko;q=0.9,ja;q=0.7"
+    )
+}
+
+struct GoogleNewsFallbackSite: Equatable {
+    let site: String
+    let platform: String
+    let locale: GoogleNewsFallbackLocale
+}
+
 // Single source of truth for all platform definitions.
 // Every behavioral flag, display attribute, and ID aliasing rule lives here.
 struct Platform {
@@ -26,6 +53,7 @@ struct Platform {
     let fetchRole: PlatformFetchRole
     let usesActivityDateWindow: Bool
     let googleNewsFallbackSite: String?
+    let googleNewsFallbackLocale: GoogleNewsFallbackLocale
     let usesNewsRSSFallback: Bool
     let usesNiconicoRSSFallback: Bool
 
@@ -44,6 +72,7 @@ struct Platform {
         fetchRole: PlatformFetchRole,
         usesActivityDateWindow: Bool = false,
         googleNewsFallbackSite: String? = nil,
+        googleNewsFallbackLocale: GoogleNewsFallbackLocale = .japan,
         usesNewsRSSFallback: Bool = false,
         usesNiconicoRSSFallback: Bool = false
     ) {
@@ -61,6 +90,7 @@ struct Platform {
         self.fetchRole = fetchRole
         self.usesActivityDateWindow = usesActivityDateWindow
         self.googleNewsFallbackSite = googleNewsFallbackSite
+        self.googleNewsFallbackLocale = googleNewsFallbackLocale
         self.usesNewsRSSFallback = usesNewsRSSFallback
         self.usesNiconicoRSSFallback = usesNiconicoRSSFallback
     }
@@ -294,6 +324,64 @@ struct Platform {
             googleNewsFallbackSite: "thetv.jp"
         ),
         Platform(
+            id: "natalie", name: "Natalie", icon: "🎵",
+            accent: Color(red: 0.86, green: 0.14, blue: 0.22),
+            bg: Color(red: 1.0, green: 0.92, blue: 0.94),
+            fg: Color(red: 0.86, green: 0.14, blue: 0.22),
+            rawPlatformValues: ["natalie"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true,
+            fetchRole: .deviceFallback,
+            googleNewsFallbackSite: "natalie.mu"
+        ),
+        Platform(
+            id: "billboardjapan", name: "Billboard Japan", icon: "📈",
+            accent: Color(red: 0.05, green: 0.38, blue: 0.72),
+            bg: Color(red: 0.90, green: 0.95, blue: 1.0),
+            fg: Color(red: 0.05, green: 0.38, blue: 0.72),
+            rawPlatformValues: ["billboardjapan"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true,
+            fetchRole: .deviceFallback,
+            googleNewsFallbackSite: "billboard-japan.com"
+        ),
+        Platform(
+            id: "soompi", name: "Soompi", icon: "🇰🇷",
+            accent: Color(red: 0.74, green: 0.16, blue: 0.30),
+            bg: Color(red: 1.0, green: 0.92, blue: 0.95),
+            fg: Color(red: 0.74, green: 0.16, blue: 0.30),
+            rawPlatformValues: ["soompi"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true,
+            fetchRole: .deviceFallback,
+            googleNewsFallbackSite: "soompi.com",
+            googleNewsFallbackLocale: .englishUS
+        ),
+        Platform(
+            id: "allkpop", name: "allkpop", icon: "🎤",
+            accent: Color(red: 0.48, green: 0.24, blue: 0.70),
+            bg: Color(red: 0.96, green: 0.92, blue: 1.0),
+            fg: Color(red: 0.48, green: 0.24, blue: 0.70),
+            rawPlatformValues: ["allkpop"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true,
+            fetchRole: .deviceFallback,
+            googleNewsFallbackSite: "allkpop.com",
+            googleNewsFallbackLocale: .englishUS
+        ),
+        Platform(
+            id: "kpopofficial", name: "KpopOfficial", icon: "🗓️",
+            accent: Color(red: 0.04, green: 0.52, blue: 0.54),
+            bg: Color(red: 0.90, green: 0.98, blue: 0.98),
+            fg: Color(red: 0.04, green: 0.52, blue: 0.54),
+            rawPlatformValues: ["kpopofficial"],
+            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            isMediaPlatform: false, subscribedByDefault: true,
+            fetchRole: .deviceFallback,
+            googleNewsFallbackSite: "kpopofficial.com",
+            googleNewsFallbackLocale: .englishUS
+        ),
+        Platform(
             id: "barks", name: "BARKS", icon: "🎸",
             accent: Color(red: 0.13, green: 0.13, blue: 0.13),
             bg: Color(red: 0.93, green: 0.93, blue: 0.93),
@@ -356,13 +444,17 @@ struct Platform {
         return platform.fetchRole == .deviceFallback
     }
 
-    static func googleNewsFallbackSites(for platformIds: Set<String>? = nil) -> [(site: String, platform: String)] {
+    static func googleNewsFallbackSites(for platformIds: Set<String>? = nil) -> [GoogleNewsFallbackSite] {
         all.compactMap { platform in
             guard shouldInclude(platform.id, in: platformIds),
                   let site = platform.googleNewsFallbackSite else {
                 return nil
             }
-            return (site: site, platform: platform.id)
+            return GoogleNewsFallbackSite(
+                site: site,
+                platform: platform.id,
+                locale: platform.googleNewsFallbackLocale
+            )
         }
     }
 

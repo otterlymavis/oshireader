@@ -57,6 +57,55 @@ test("rss proxy fetches only supported search targets", async (context) => {
   assert.match(upstreamURL, /Aiko%20site%3Aexample\.com/);
 });
 
+test("rss proxy forwards google news locale parameters", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  let upstreamHeaders = {};
+  globalThis.fetch = async (url, init) => {
+    upstreamURL = String(url);
+    upstreamHeaders = init.headers;
+    return new Response("<rss><channel /></rss>", { status: 200 });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/rss-proxy?target=google&query=BTS%20site%3Aallkpop.com&hl=en&gl=US&ceid=US%3Aen&accept_language=en%2Cko%3Bq%3D0.9%2Cja%3Bq%3D0.7", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(upstreamURL, /hl=en/);
+  assert.match(upstreamURL, /gl=US/);
+  assert.match(upstreamURL, /ceid=US%3Aen/);
+  assert.equal(upstreamHeaders["accept-language"], "en,ko;q=0.9,ja;q=0.7");
+});
+
+test("rss proxy forwards bing market parameter", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let upstreamURL = "";
+  let upstreamHeaders = {};
+  globalThis.fetch = async (url, init) => {
+    upstreamURL = String(url);
+    upstreamHeaders = init.headers;
+    return new Response("<rss><channel /></rss>", { status: 200 });
+  };
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/rss-proxy?target=bing&query=BTS%20site%3Aallkpop.com&mkt=en-US&accept_language=en%2Cko%3Bq%3D0.9%2Cja%3Bq%3D0.7", {
+      headers: { authorization: "Bearer secret" },
+    }),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(upstreamURL, /^https:\/\/www\.bing\.com\/news\/search\?/);
+  assert.match(upstreamURL, /mkt=en-US/);
+  assert.equal(upstreamHeaders["accept-language"], "en,ko;q=0.9,ja;q=0.7");
+});
+
 test("rss proxy normalizes bearer token formatting", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });

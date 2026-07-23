@@ -68,20 +68,55 @@ _poll_recovery_task: asyncio.Task | None = None
 _GNEWS_PROBE_QUERIES = {
     "news": "{keyword} when:10y",
     "aera": "{keyword} site:dot.asahi.com",
+    "allkpop": "{keyword} site:allkpop.com",
     "barks": "{keyword} site:barks.jp",
+    "billboardjapan": "{keyword} site:billboard-japan.com",
     "cinemacafe": "{keyword} site:cinemacafe.net",
     "5ch": "{keyword} site:5ch.net OR site:2ch.sc",
     "hochi": "{keyword} site:hochi.news",
+    "kpopofficial": "{keyword} site:kpopofficial.com",
     "livedoor": "{keyword} site:news.livedoor.com",
     "mantanweb": "{keyword} site:mantan-web.jp",
     "mdpr": "{keyword} site:mdpr.jp",
+    "natalie": "{keyword} site:natalie.mu",
     "niconico": "{keyword} site:nicovideo.jp",
     "oricon": "{keyword} site:oricon.co.jp",
     "smartnews": "{keyword} site:smartnews.com",
+    "soompi": "{keyword} site:soompi.com",
     "sponichi": "{keyword} site:sponichi.co.jp",
     "thetv": "{keyword} site:thetv.jp",
     "twitter": "{keyword} site:x.com OR site:twitter.com",
     "yahoonews": "{keyword} site:news.yahoo.co.jp",
+}
+_GNEWS_PROBE_DEFAULT_LOCALE = {
+    "hl": "ja",
+    "gl": "JP",
+    "ceid": "JP:ja",
+    "mkt": "ja-JP",
+    "accept_language": GOOGLE_NEWS_HEADERS["Accept-Language"],
+}
+_GNEWS_PROBE_LOCALES = {
+    "allkpop": {
+        "hl": "en",
+        "gl": "US",
+        "ceid": "US:en",
+        "mkt": "en-US",
+        "accept_language": "en,ko;q=0.9,ja;q=0.7",
+    },
+    "kpopofficial": {
+        "hl": "en",
+        "gl": "US",
+        "ceid": "US:en",
+        "mkt": "en-US",
+        "accept_language": "en,ko;q=0.9,ja;q=0.7",
+    },
+    "soompi": {
+        "hl": "en",
+        "gl": "US",
+        "ceid": "US:en",
+        "mkt": "en-US",
+        "accept_language": "en,ko;q=0.9,ja;q=0.7",
+    },
 }
 
 POLL_RECOVERY_GRACE_MINUTES = 10
@@ -652,17 +687,25 @@ async def source_probe(
     platform: str = Query(...),
     keyword: str = Query("吉沢亮"),
 ) -> dict:
-    template = _GNEWS_PROBE_QUERIES.get(platform.casefold())
+    platform_key = platform.casefold()
+    template = _GNEWS_PROBE_QUERIES.get(platform_key)
     if not template:
         raise HTTPException(status_code=404, detail="Unsupported source probe platform")
+    locale = _GNEWS_PROBE_LOCALES.get(platform_key, _GNEWS_PROBE_DEFAULT_LOCALE)
 
     query = template.format(keyword=keyword)
     encoded = quote(query)
-    url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+    url = (
+        f"https://news.google.com/rss/search?q={encoded}"
+        f"&hl={quote(locale['hl'])}"
+        f"&gl={quote(locale['gl'])}"
+        f"&ceid={quote(locale['ceid'])}"
+    )
     proxy_url = "https://r.jina.ai/http://" + url.replace("https://", "")
-    bing_url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt=ja-JP"
+    bing_url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt={quote(locale['mkt'])}"
 
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+    headers = {**GOOGLE_NEWS_HEADERS, "Accept-Language": locale["accept_language"]}
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=headers) as client:
         direct_status = None
         direct_len = 0
         direct_entries = 0
@@ -725,7 +768,15 @@ async def source_probe(
                 "error": None,
             }
             try:
-                proxy_content = await fetch_search_rss_via_proxy(query, target=target)
+                proxy_content = await fetch_search_rss_via_proxy(
+                    query,
+                    target=target,
+                    hl=locale["hl"] if target == "google" else None,
+                    gl=locale["gl"] if target == "google" else None,
+                    ceid=locale["ceid"] if target == "google" else None,
+                    mkt=locale["mkt"] if target == "bing" else None,
+                    accept_language=locale["accept_language"],
+                )
                 if proxy_content:
                     result["bytes"] = len(proxy_content)
                     proxy_feed = await asyncio.to_thread(feedparser.parse, proxy_content)

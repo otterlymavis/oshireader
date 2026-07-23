@@ -176,12 +176,21 @@ async function proxySearchRss(request, env) {
   if (!query || query.length > 200) {
     return json({ detail: "Invalid query" }, 400);
   }
+  const paramOrDefault = (name, fallback) => {
+    const value = (url.searchParams.get(name) || "").trim();
+    return value && value.length <= 80 ? value : fallback;
+  };
+  const hl = paramOrDefault("hl", "ja");
+  const gl = paramOrDefault("gl", "JP");
+  const ceid = paramOrDefault("ceid", "JP:ja");
+  const mkt = paramOrDefault("mkt", "ja-JP");
+  const acceptLanguage = paramOrDefault("accept_language", "ja,en;q=0.9");
 
   let upstream;
   if (target === "google") {
-    upstream = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP%3Aja`;
+    upstream = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}&ceid=${encodeURIComponent(ceid)}`;
   } else if (target === "bing") {
-    upstream = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=rss&mkt=ja-JP`;
+    upstream = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=rss&mkt=${encodeURIComponent(mkt)}`;
   } else {
     return json({ detail: "Unsupported target" }, 400);
   }
@@ -190,7 +199,7 @@ async function proxySearchRss(request, env) {
     headers: {
       "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
-      "accept-language": "ja,en;q=0.9",
+      "accept-language": acceptLanguage,
     },
     signal: AbortSignal.timeout(RSS_PROXY_TIMEOUT_MS),
   });

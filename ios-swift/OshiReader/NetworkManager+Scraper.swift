@@ -279,7 +279,7 @@ extension NetworkManager {
 
     // MARK: - Consolidated Local Fallback
 
-    static let googleNewsFallbackSites: [(site: String, platform: String)] =
+    static let googleNewsFallbackSites: [GoogleNewsFallbackSite] =
         Platform.googleNewsFallbackSites()
 
     func scrapeLocalFallbacks(
@@ -322,7 +322,8 @@ extension NetworkManager {
                         keyword: keyword,
                         site: fallback.site,
                         platform: fallback.platform,
-                        tagKeyword: tag
+                        tagKeyword: tag,
+                        locale: fallback.locale
                     )
                 }
             }
@@ -725,32 +726,48 @@ extension NetworkManager {
 
     // MARK: - Google News Site Filter RSS
 
-    func scrapeGoogleNewsSite(keyword: String, site: String, platform: String, tagKeyword: String? = nil) async -> [FeedItem] {
+    func scrapeGoogleNewsSite(
+        keyword: String,
+        site: String,
+        platform: String,
+        tagKeyword: String? = nil,
+        locale: GoogleNewsFallbackLocale = .japan
+    ) async -> [FeedItem] {
         await scrapeGoogleNewsSiteWithCompletion(
             keyword: keyword,
             site: site,
             platform: platform,
-            tagKeyword: tagKeyword
+            tagKeyword: tagKeyword,
+            locale: locale
         ).items
     }
 
-    func scrapeGoogleNewsSiteWithCompletion(keyword: String, site: String, platform: String, tagKeyword: String? = nil) async -> LocalFallbackScrapeResult {
+    func scrapeGoogleNewsSiteWithCompletion(
+        keyword: String,
+        site: String,
+        platform: String,
+        tagKeyword: String? = nil,
+        locale: GoogleNewsFallbackLocale = .japan
+    ) async -> LocalFallbackScrapeResult {
         let query = "\(keyword) site:\(site)"
-        guard let url = googleNewsSearchURL(query: query) else {
+        guard let url = googleNewsSearchURL(query: query, locale: locale) else {
             return LocalFallbackScrapeResult()
         }
 
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
-        guard let initialItems = try? await parseRss(url: url) else {
+        guard let initialItems = try? await parseRss(url: url, acceptLanguage: locale.acceptLanguage) else {
             return LocalFallbackScrapeResult()
         }
         var items = initialItems
         if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
             let historicalQuery = "\(query) when:10y"
-            guard let historicalURL = googleNewsSearchURL(query: historicalQuery),
-                  let historicalItems = try? await parseRss(url: historicalURL) else {
+            guard let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale),
+                  let historicalItems = try? await parseRss(
+                    url: historicalURL,
+                    acceptLanguage: locale.acceptLanguage
+                  ) else {
                 return LocalFallbackScrapeResult()
             }
             items = historicalItems
@@ -788,25 +805,28 @@ extension NetworkManager {
         return String(v)
     }
 
-    private func googleNewsSearchURL(query: String) -> URL? {
+    private func googleNewsSearchURL(query: String, locale: GoogleNewsFallbackLocale = .japan) -> URL? {
         guard var components = URLComponents(string: "https://news.google.com/rss/search") else {
             return nil
         }
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "hl", value: "ja"),
-            URLQueryItem(name: "gl", value: "JP"),
-            URLQueryItem(name: "ceid", value: "JP:ja")
+            URLQueryItem(name: "hl", value: locale.hl),
+            URLQueryItem(name: "gl", value: locale.gl),
+            URLQueryItem(name: "ceid", value: locale.ceid)
         ]
         return components.url
     }
 
-    private func parseRss(url: URL) async throws -> [RssItem] {
+    private func parseRss(
+        url: URL,
+        acceptLanguage: String = GoogleNewsFallbackLocale.japan.acceptLanguage
+    ) async throws -> [RssItem] {
         guard let (data, _) = await httpGET(
             url,
             headers: [
                 "User-Agent": scraperBrowserUserAgent,
-                "Accept-Language": "ja,en;q=0.9"
+                "Accept-Language": acceptLanguage
             ],
             timeout: 12
         ) else {

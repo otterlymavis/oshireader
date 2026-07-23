@@ -3406,6 +3406,18 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(missing.isEmpty, "Missing platform definitions: \(missing)")
     }
 
+    func testKpopGoogleNewsFallbacksUseEnglishLocale() throws {
+        let sitesByPlatform = Dictionary(
+            uniqueKeysWithValues: Platform.googleNewsFallbackSites().map { ($0.platform, $0) }
+        )
+
+        for platform in ["soompi", "allkpop", "kpopofficial"] {
+            XCTAssertEqual(sitesByPlatform[platform]?.locale, .englishUS)
+        }
+        XCTAssertEqual(sitesByPlatform["natalie"]?.locale, .japan)
+        XCTAssertEqual(sitesByPlatform["billboardjapan"]?.locale, .japan)
+    }
+
     func testPlatformFetchCapabilitiesDriveRefreshDecisions() throws {
         XCTAssertTrue(Platform.shouldFetchFromBackend("youtube"))
         XCTAssertTrue(Platform.shouldFetchFromBackend("5ch"))
@@ -3758,6 +3770,34 @@ final class OshiReaderTests: XCTestCase {
         let freshDB = LocalDB(directory: tempDir)
 
         XCTAssertTrue(freshDB.subscribedPlatforms.contains("thetv"))
+        XCTAssertFalse(
+            freshDB.subscribedPlatforms.contains("oricon"),
+            "Migration must preserve sources the user previously disabled"
+        )
+        UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
+    }
+
+    func testSchemaV5AddsArtistTrackingSourcesToExistingSubscriptions() throws {
+        let newSources = Set([
+            "allkpop",
+            "billboardjapan",
+            "kpopofficial",
+            "natalie",
+            "soompi",
+        ])
+        let platforms = Platform.all
+            .filter(\.subscribedByDefault)
+            .map(\.id)
+            .filter { !newSources.contains($0) && $0 != "oricon" }
+        let data = try JSONEncoder().encode(platforms)
+        try data.write(to: tempDir.appendingPathComponent("subscribed_platforms.json"))
+        UserDefaults.standard.set(4, forKey: "localdb_schema_version")
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        for source in newSources {
+            XCTAssertTrue(freshDB.subscribedPlatforms.contains(source))
+        }
         XCTAssertFalse(
             freshDB.subscribedPlatforms.contains("oricon"),
             "Migration must preserve sources the user previously disabled"
@@ -4607,6 +4647,19 @@ final class OshiReaderTests: XCTestCase {
         )
         XCTAssertFalse(ReaderView.initialReaderMode(for: customSearchItem),
                        "Custom URLs opened from Search should also use web mode")
+    }
+
+    func testDedicatedSearchLinksUseDedicatedPlatformIds() throws {
+        let linksById = Dictionary(uniqueKeysWithValues: staticSearchLinks.map { ($0.id, $0) })
+
+        XCTAssertEqual(linksById["modelpress"]?.platform, "mdpr")
+        XCTAssertEqual(linksById["natalie"]?.platform, "natalie")
+        XCTAssertEqual(linksById["tver"]?.platform, "tver")
+        XCTAssertEqual(linksById["youtube"]?.platform, "youtube")
+        XCTAssertEqual(linksById["niconico"]?.platform, "niconico")
+        XCTAssertEqual(linksById["x"]?.platform, "twitter")
+        XCTAssertEqual(linksById["girlschannel"]?.platform, "girlschannel")
+        XCTAssertEqual(linksById["togetter"]?.platform, "togetter")
     }
 
     func testFiveChFeedItemsOpenInWebMode() throws {

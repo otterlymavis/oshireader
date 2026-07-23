@@ -14,6 +14,7 @@ from app.connectors import fivech as fivech_module
 from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
+    fetch_search_rss_via_proxy,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -29,8 +30,11 @@ from app.connectors.mdpr import ModelPressConnector
 from app.connectors.mdpr import _clean_title as _clean_mdpr_title
 from app.connectors.news_sites import (
     AmebloConnector,
+    AllkpopConnector,
     CinemaCafeConnector,
+    SoompiConnector,
     LivedoorConnector,
+    NatalieConnector,
     RealSoundConnector,
     TheTVConnector,
 )
@@ -153,6 +157,33 @@ Wed, 24 Jun 2026 02:07:03 GMT
             "url": "https://news.google.com/rss/articles/abc123",
             "published_at": datetime(2026, 6, 24, 2, 7, 3, tzinfo=timezone.utc),
         }]
+
+
+class TestSearchRssProxy:
+    @pytest.mark.asyncio
+    async def test_forwards_locale_parameters(self):
+        with patch("app.connectors.base.settings.source_rss_proxy_url", "https://worker.example/rss-proxy"), \
+             patch("app.connectors.base.settings.admin_api_token", "secret"), \
+             patch("app.connectors.base.httpx.AsyncClient", _http_mock(content=b"<rss/>")) as client_cls:
+            result = await fetch_search_rss_via_proxy(
+                "BTS site:allkpop.com",
+                target="google",
+                hl="en",
+                gl="US",
+                ceid="US:en",
+                accept_language="en,ko;q=0.9,ja;q=0.7",
+            )
+
+        assert result == b"<rss/>"
+        client = client_cls.return_value.__aenter__.return_value
+        request_url = client.get.await_args.args[0]
+        assert "target=google" in request_url
+        assert "query=BTS+site%3Aallkpop.com" in request_url
+        assert "hl=en" in request_url
+        assert "gl=US" in request_url
+        assert "ceid=US%3Aen" in request_url
+        assert "accept_language=en%2Cko%3Bq%3D0.9%2Cja%3Bq%3D0.7" in request_url
+        assert client.get.await_args.kwargs["headers"]["Authorization"] == "Bearer secret"
 
 
 class TestSourceItemCreateCompositeId:
@@ -1639,30 +1670,35 @@ class TestOriconFetch:
 
 
 class TestRSSConnectorFetch:
+    GENERIC_TEST_FEEDS = [("news", "fixture", "https://feeds.example.com/news.xml")]
+
     @pytest.mark.asyncio
     async def test_returns_keyword_matching_items(self):
-        matching = _rss_entry(link="https://natalie.mu/1", title="Aiko 最新情報")
-        non_matching = _rss_entry(link="https://natalie.mu/2", title="他のニュース")
+        matching = _rss_entry(link="https://news.example.com/1", title="Aiko 最新情報")
+        non_matching = _rss_entry(link="https://news.example.com/2", title="他のニュース")
         fake_feed = _FakeFeed([matching, non_matching])
-        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.rss.FEEDS", self.GENERIC_TEST_FEEDS), \
+             patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
             result = await RSSConnector().fetch("aiko", "all_info")
         urls = [r.url for r in result]
-        assert all("natalie.mu/1" in u for u in urls)
-        assert not any("natalie.mu/2" in u for u in urls)
+        assert all("news.example.com/1" in u for u in urls)
+        assert not any("news.example.com/2" in u for u in urls)
 
     @pytest.mark.asyncio
     async def test_skips_entry_without_link(self):
         no_link = _FeedEntry(id="x", link="", title="Aiko news", summary="aiko content")
         fake_feed = _FakeFeed([no_link])
-        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.rss.FEEDS", self.GENERIC_TEST_FEEDS), \
+             patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
             result = await RSSConnector().fetch("aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
     async def test_all_feeds_return_empty_on_http_error(self):
-        with patch("app.connectors.rss.httpx.AsyncClient",
+        with patch("app.connectors.rss.FEEDS", self.GENERIC_TEST_FEEDS), \
+             patch("app.connectors.rss.httpx.AsyncClient",
                    _http_mock(status_code=500, is_success=False)):
             result = await RSSConnector().fetch("Aiko", "all_info")
         assert result == []
@@ -1670,19 +1706,21 @@ class TestRSSConnectorFetch:
     @pytest.mark.asyncio
     async def test_extracts_image_enclosure_as_thumbnail(self):
         entry = _FeedEntry(
-            id="id1", link="https://natalie.mu/1",
+            id="id1", link="https://news.example.com/1",
             title="Aiko event", summary="aiko concert info",
             enclosures=[{"type": "image/jpeg", "href": "https://example.com/t.jpg"}],
         )
         fake_feed = _FakeFeed([entry])
-        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.rss.FEEDS", self.GENERIC_TEST_FEEDS), \
+             patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
             result = await RSSConnector().fetch("aiko", "all_info")
         assert any(r.thumbnail_url == "https://example.com/t.jpg" for r in result)
 
     @pytest.mark.asyncio
     async def test_feedparser_exception_is_caught(self):
-        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.rss.FEEDS", self.GENERIC_TEST_FEEDS), \
+             patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.rss.feedparser.parse", side_effect=ValueError("bad feed")):
             result = await RSSConnector().fetch("aiko", "all_info")
         assert result == []
@@ -1690,12 +1728,13 @@ class TestRSSConnectorFetch:
     @pytest.mark.asyncio
     async def test_filters_items_when_keyword_only_appears_in_summary(self):
         entry = _rss_entry(
-            link="https://natalie.mu/1",
+            link="https://news.example.com/1",
             title="unrelated entertainment story",
             summary="Aiko appears in the feed summary",
         )
         fake_feed = _FakeFeed([entry])
-        with patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.rss.FEEDS", self.GENERIC_TEST_FEEDS), \
+             patch("app.connectors.rss.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.rss.feedparser.parse", return_value=fake_feed):
             result = await RSSConnector().fetch("aiko", "all_info")
         assert result == []
@@ -1903,6 +1942,152 @@ class TestNewsSiteFetch:
         assert result[0].platform == "thetv"
         assert result[0].title == "吉沢亮が撮影での裏話を披露"
         assert result[0].raw_payload["site"] == "thetv.jp"
+
+    @pytest.mark.asyncio
+    async def test_rss_first_site_uses_direct_feed_before_google_news(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link="https://www.soompi.com/article/1",
+                title="BTS Announces New Release",
+                summary="The group shared details.",
+                item_id="soompi-1",
+            )
+        ])
+        connector = SoompiConnector()
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed), \
+             patch.object(connector, "_fetch_gnews", new=AsyncMock()) as gnews:
+            result = await connector.fetch("BTS", "all_info")
+
+        assert len(result) == 1
+        assert result[0].platform == "soompi"
+        assert result[0].title == "BTS Announces New Release"
+        assert result[0].raw_payload["source"] == "direct_rss"
+        gnews.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_english_sites_use_english_google_news_locale(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link="https://www.allkpop.com/article/1",
+                title="BLACKPINK Announces New Concert",
+                item_id="allkpop-1",
+            )
+        ])
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(content=b"<rss/>")) as client_cls, \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await AllkpopConnector().fetch("BLACKPINK", "all_info")
+
+        assert len(result) == 1
+        request_url = client_cls.return_value.__aenter__.return_value.get.await_args.args[0]
+        assert "hl=en" in request_url
+        assert "gl=US" in request_url
+        assert "ceid=US%3Aen" in request_url
+
+    @pytest.mark.asyncio
+    async def test_english_sites_pass_locale_to_google_news_proxy(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link="https://www.allkpop.com/article/1",
+                title="BLACKPINK Announces New Concert",
+                item_id="allkpop-1",
+            )
+        ])
+        with patch("app.connectors.news_sites.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")) as proxy, \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await AllkpopConnector()._fetch_proxy_google_news("BLACKPINK", None)
+
+        assert len(result) == 1
+        assert proxy.await_args.kwargs["hl"] == "en"
+        assert proxy.await_args.kwargs["gl"] == "US"
+        assert proxy.await_args.kwargs["ceid"] == "US:en"
+        assert proxy.await_args.kwargs["accept_language"] == "en,ko;q=0.9,ja;q=0.7"
+
+    @pytest.mark.asyncio
+    async def test_english_sites_pass_market_to_bing_news_proxy(self):
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link="https://www.allkpop.com/article/1",
+                title="BLACKPINK Announces New Concert",
+                item_id="allkpop-1",
+            )
+        ])
+        with patch("app.connectors.news_sites.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")) as proxy, \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await AllkpopConnector()._fetch_bing_news("BLACKPINK", None)
+
+        assert len(result) == 1
+        assert proxy.await_args.kwargs["mkt"] == "en-US"
+        assert proxy.await_args.kwargs["accept_language"] == "en,ko;q=0.9,ja;q=0.7"
+
+    @pytest.mark.asyncio
+    async def test_bing_news_fallback_unwraps_article_url(self):
+        bing_url = (
+            "https://www.bing.com/news/apiclick.aspx?"
+            "url=https%3A%2F%2Fnatalie.mu%2Fmusic%2Fnews%2F1&mkt=ja-jp"
+        )
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link=bing_url,
+                title="BTS appears in Natalie music news",
+                item_id=bing_url,
+            )
+        ])
+        connector = NatalieConnector()
+        with patch("app.connectors.news_sites.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.news_sites.httpx.AsyncClient"), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await connector._fetch_bing_news("BTS", None)
+
+        assert len(result) == 1
+        assert result[0].url == "https://natalie.mu/music/news/1"
+        assert result[0].item_id == "https://natalie.mu/music/news/1"
+
+    @pytest.mark.asyncio
+    async def test_bing_news_fallback_rejects_unsafe_unwrap_target(self):
+        bing_url = (
+            "https://www.bing.com/news/apiclick.aspx?"
+            "url=javascript%3Aalert%281%29&mkt=ja-jp"
+        )
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link=bing_url,
+                title="BTS appears in Natalie music news",
+                item_id=bing_url,
+            )
+        ])
+        connector = NatalieConnector()
+        with patch("app.connectors.news_sites.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.news_sites.httpx.AsyncClient"), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await connector._fetch_bing_news("BTS", None)
+
+        assert len(result) == 1
+        assert result[0].url == bing_url
+        assert result[0].item_id == bing_url
+
+    @pytest.mark.asyncio
+    async def test_bing_news_fallback_does_not_unwrap_lookalike_host(self):
+        lookalike_url = (
+            "https://notbing.com/news/apiclick.aspx?"
+            "url=https%3A%2F%2Fnatalie.mu%2Fmusic%2Fnews%2F1&mkt=ja-jp"
+        )
+        fake_feed = _FakeFeed([
+            _rss_entry(
+                link=lookalike_url,
+                title="BTS appears in Natalie music news",
+                item_id=lookalike_url,
+            )
+        ])
+        connector = NatalieConnector()
+        with patch("app.connectors.news_sites.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.news_sites.httpx.AsyncClient"), \
+             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+            result = await connector._fetch_bing_news("BTS", None)
+
+        assert len(result) == 1
+        assert result[0].url == lookalike_url
+        assert result[0].item_id == lookalike_url
 
 
 _TOGETTER_HTML = """

@@ -1490,6 +1490,100 @@ Wed, 24 Jun 2026 02:07:03 GMT
         assert r.status_code == 200
         assert r.json()["query"] == "Aiko site:thetv.jp"
 
+    @pytest.mark.parametrize(
+        ("platform", "expected_query"),
+        [
+            ("natalie", "Aiko site:natalie.mu"),
+            ("billboardjapan", "Aiko site:billboard-japan.com"),
+            ("soompi", "Aiko site:soompi.com"),
+            ("allkpop", "Aiko site:allkpop.com"),
+            ("kpopofficial", "Aiko site:kpopofficial.com"),
+        ],
+    )
+    def test_source_probe_supports_added_artist_sources(self, client, platform, expected_query):
+        direct_resp = MagicMock()
+        direct_resp.status_code = 200
+        direct_resp.content = b"<rss />"
+        jina_resp = MagicMock()
+        jina_resp.status_code = 200
+        jina_resp.text = ""
+        bing_resp = MagicMock()
+        bing_resp.status_code = 200
+        bing_resp.content = b"<rss />"
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=[direct_resp, jina_resp, bing_resp])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        fake_feed = MagicMock()
+        fake_feed.entries = []
+
+        with patch("app.main.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch("app.main.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)), \
+             patch("app.main.feedparser.parse", return_value=fake_feed):
+            r = client.get(
+                "/api/admin/source-probe",
+                params={"platform": platform, "keyword": "Aiko"},
+            )
+
+        assert r.status_code == 200
+        assert r.json()["query"] == expected_query
+
+    def test_source_probe_uses_english_locale_for_kpop_sources(self, client):
+        direct_resp = MagicMock()
+        direct_resp.status_code = 200
+        direct_resp.content = b"<rss />"
+        jina_resp = MagicMock()
+        jina_resp.status_code = 200
+        jina_resp.text = ""
+        bing_resp = MagicMock()
+        bing_resp.status_code = 200
+        bing_resp.content = b"<rss />"
+        client_mock = AsyncMock()
+        client_mock.get = AsyncMock(side_effect=[direct_resp, jina_resp, bing_resp])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        fake_feed = MagicMock()
+        fake_feed.entries = []
+        proxy_fetch = AsyncMock(return_value=None)
+        async_client_cls = MagicMock(return_value=ctx)
+
+        with patch("app.main.httpx.AsyncClient", async_client_cls), \
+             patch("app.main.fetch_search_rss_via_proxy", new=proxy_fetch), \
+             patch("app.main.feedparser.parse", return_value=fake_feed):
+            r = client.get(
+                "/api/admin/source-probe",
+                params={"platform": "soompi", "keyword": "BTS"},
+            )
+
+        assert r.status_code == 200
+        assert async_client_cls.call_args.kwargs["headers"]["Accept-Language"] == "en,ko;q=0.9,ja;q=0.7"
+        direct_url = client_mock.get.await_args_list[0].args[0]
+        bing_url = client_mock.get.await_args_list[2].args[0]
+        assert "hl=en" in direct_url
+        assert "gl=US" in direct_url
+        assert "ceid=US%3Aen" in direct_url
+        assert "mkt=en-US" in bing_url
+        proxy_fetch.assert_any_await(
+            "BTS site:soompi.com",
+            target="google",
+            hl="en",
+            gl="US",
+            ceid="US:en",
+            mkt=None,
+            accept_language="en,ko;q=0.9,ja;q=0.7",
+        )
+        proxy_fetch.assert_any_await(
+            "BTS site:soompi.com",
+            target="bing",
+            hl=None,
+            gl=None,
+            ceid=None,
+            mkt="en-US",
+            accept_language="en,ko;q=0.9,ja;q=0.7",
+        )
+
 
 class TestAdminTwitterProbe:
     def test_twitter_probe_reports_no_configured_bearer(self, client):

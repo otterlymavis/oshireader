@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, quote_plus, urljoin
+from urllib.parse import parse_qs, quote, quote_plus, urljoin, urlparse
 
 import feedparser
 import httpx
@@ -32,6 +32,25 @@ from app.connectors.base import (
 log = logging.getLogger(__name__)
 
 _WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _unwrap_bing_news_url(link: str) -> str:
+    parsed = urlparse(link)
+    if _is_bing_news_redirect(link):
+        target = parse_qs(parsed.query).get("url", [""])[0].strip()
+        target_parsed = urlparse(target)
+        if target_parsed.scheme in {"http", "https"} and target_parsed.netloc:
+            return target
+    return link
+
+
+def _is_bing_news_redirect(link: str) -> bool:
+    parsed = urlparse(link)
+    host = parsed.netloc.lower()
+    return (
+        (host == "bing.com" or host.endswith(".bing.com"))
+        and parsed.path.endswith("/news/apiclick.aspx")
+    )
 
 
 def _clean_html_fragment(value: str | None) -> str | None:
@@ -101,6 +120,14 @@ class _GNewsSiteConnector(BaseConnector):
     SITE: str = ""
     TITLE_SUFFIX_RE: re.Pattern | None = None
     SUPPORTS_MEDIA_FILTER = False
+    GNEWS_HL = "ja"
+    GNEWS_GL = "JP"
+    GNEWS_CEID = "JP:ja"
+    BING_MKT = "ja-JP"
+    ACCEPT_LANGUAGE = GOOGLE_NEWS_HEADERS["Accept-Language"]
+
+    def _headers(self) -> dict[str, str]:
+        return {**GOOGLE_NEWS_HEADERS, "Accept-Language": self.ACCEPT_LANGUAGE}
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
@@ -113,10 +140,15 @@ class _GNewsSiteConnector(BaseConnector):
     async def _fetch_gnews(self, keyword: str, history_years: int | None = None) -> list[SourceItemCreate]:
         history = f" when:{history_years}y" if history_years else ""
         encoded = quote(f"{keyword} site:{self.SITE}{history}")
-        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
+        url = (
+            f"https://news.google.com/rss/search?q={encoded}"
+            f"&hl={quote(self.GNEWS_HL)}"
+            f"&gl={quote(self.GNEWS_GL)}"
+            f"&ceid={quote(self.GNEWS_CEID)}"
+        )
         feed = None
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=self._headers()) as client:
                 resp = await client.get(url)
                 if not resp.is_success:
                     log.warning("%s Google News returned %d", self.PLATFORM, resp.status_code)
@@ -182,7 +214,7 @@ class _GNewsSiteConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=self._headers()) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)
@@ -226,7 +258,14 @@ class _GNewsSiteConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         history = f" when:{history_years}y" if history_years else ""
         query = f"{keyword} site:{self.SITE}{history}"
-        content = await fetch_search_rss_via_proxy(query, target="google")
+        content = await fetch_search_rss_via_proxy(
+            query,
+            target="google",
+            hl=self.GNEWS_HL,
+            gl=self.GNEWS_GL,
+            ceid=self.GNEWS_CEID,
+            accept_language=self.ACCEPT_LANGUAGE,
+        )
         if not content:
             return []
         feed = await asyncio.to_thread(feedparser.parse, content)
@@ -273,13 +312,18 @@ class _GNewsSiteConnector(BaseConnector):
         history_years: int | None,
     ) -> list[SourceItemCreate]:
         query = f"{keyword} site:{self.SITE}"
-        url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt=ja-JP"
+        url = f"https://www.bing.com/news/search?q={quote_plus(query)}&format=rss&mkt={quote(self.BING_MKT)}"
         source = "bing_news_proxy"
-        content = await fetch_search_rss_via_proxy(query, target="bing")
+        content = await fetch_search_rss_via_proxy(
+            query,
+            target="bing",
+            mkt=self.BING_MKT,
+            accept_language=self.ACCEPT_LANGUAGE,
+        )
         try:
             if not content:
                 source = "bing_news"
-                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=self._headers()) as client:
                     resp = await client.get(url)
                     if not resp.is_success:
                         log.warning("%s Bing News fallback returned %d", self.PLATFORM, resp.status_code)
@@ -294,8 +338,9 @@ class _GNewsSiteConnector(BaseConnector):
         seen: set[str] = set()
         for entry in feed.entries[:25]:
             title = (entry.get("title") or "").strip()
-            link = entry.get("link", "")
-            item_id = entry.get("id") or link
+            raw_link = entry.get("link", "")
+            link = _unwrap_bing_news_url(raw_link)
+            item_id = link if _is_bing_news_redirect(raw_link) else (entry.get("id") or link)
             if self.TITLE_SUFFIX_RE:
                 title = self.TITLE_SUFFIX_RE.sub("", title).strip()
             if not link or not title or item_id in seen:
@@ -326,6 +371,7 @@ class _GNewsSiteConnector(BaseConnector):
                 )
             )
         return items
+
 
     async def _fetch_direct_rss(self, rss_url: str, keyword: str) -> list[SourceItemCreate]:
         """Fetch a direct RSS feed and keyword-filter the entries."""
@@ -376,6 +422,21 @@ class _GNewsSiteConnector(BaseConnector):
                 )
             )
         return items
+
+
+class _RSSFirstGNewsSiteConnector(_GNewsSiteConnector):
+    """Try direct site RSS feeds before the filtered news-search fallback."""
+
+    RSS_URLS: tuple[str, ...] = ()
+
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
+        if mode == CollectionMode.MEDIA_ONLY:
+            return []
+        for rss_url in self.RSS_URLS:
+            items = await self._fetch_direct_rss(rss_url, keyword)
+            if items:
+                return items
+        return await super().fetch(keyword, mode)
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +663,54 @@ class TheTVConnector(_GNewsSiteConnector):
     PLATFORM = "thetv"
     SITE = "thetv.jp"
     TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*WEBザテレビジョン\s*$')
+
+
+class NatalieConnector(_GNewsSiteConnector):
+    PLATFORM = "natalie"
+    SITE = "natalie.mu"
+    TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*音楽ナタリー\s*$')
+
+
+class BillboardJapanConnector(_RSSFirstGNewsSiteConnector):
+    PLATFORM = "billboardjapan"
+    SITE = "billboard-japan.com"
+    RSS_URLS = ("https://www.billboard-japan.com/d_news/doc.xml",)
+    TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*Billboard\s*JAPAN\s*$', re.I)
+
+
+class SoompiConnector(_RSSFirstGNewsSiteConnector):
+    PLATFORM = "soompi"
+    SITE = "soompi.com"
+    RSS_URLS = ("https://www.soompi.com/feed",)
+    GNEWS_HL = "en"
+    GNEWS_GL = "US"
+    GNEWS_CEID = "US:en"
+    BING_MKT = "en-US"
+    ACCEPT_LANGUAGE = "en,ko;q=0.9,ja;q=0.7"
+    TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*Soompi\s*$', re.I)
+
+
+class AllkpopConnector(_GNewsSiteConnector):
+    PLATFORM = "allkpop"
+    SITE = "allkpop.com"
+    GNEWS_HL = "en"
+    GNEWS_GL = "US"
+    GNEWS_CEID = "US:en"
+    BING_MKT = "en-US"
+    ACCEPT_LANGUAGE = "en,ko;q=0.9,ja;q=0.7"
+    TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*allkpop\s*$', re.I)
+
+
+class KpopOfficialConnector(_RSSFirstGNewsSiteConnector):
+    PLATFORM = "kpopofficial"
+    SITE = "kpopofficial.com"
+    RSS_URLS = ("https://kpopofficial.com/feed/",)
+    GNEWS_HL = "en"
+    GNEWS_GL = "US"
+    GNEWS_CEID = "US:en"
+    BING_MKT = "en-US"
+    ACCEPT_LANGUAGE = "en,ko;q=0.9,ja;q=0.7"
+    TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*Kpop Official\s*$', re.I)
 
 
 class BARKSConnector(_GNewsSiteConnector):

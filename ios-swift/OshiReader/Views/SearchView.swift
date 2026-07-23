@@ -436,7 +436,7 @@ let staticSearchLinks: [SearchLink] = [
     SearchLink(id: "modelpress", group: "Entertainment", label: "Modelpress", domain: "mdpr.jp", platform: "mdpr") {
         "https://mdpr.jp/search?keyword=\($0.urlQueryEscaped)"
     },
-    SearchLink(id: "natalie", group: "Entertainment", label: "Natalie", domain: "natalie.mu", platform: "news") {
+    SearchLink(id: "natalie", group: "Entertainment", label: "Natalie", domain: "natalie.mu", platform: "natalie") {
         "https://natalie.mu/search?query=\($0.urlQueryEscaped)"
     },
     SearchLink(id: "oricon", group: "Entertainment", label: "Oricon News", domain: "oricon.co.jp", platform: "news") {
