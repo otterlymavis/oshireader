@@ -86,6 +86,8 @@ class OriconConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not is_recent_search_result(published):
                 continue
             seen.add(item_id)

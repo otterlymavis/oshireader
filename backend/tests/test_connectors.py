@@ -1233,6 +1233,17 @@ class TestFiveChFetch:
         assert result[0].published_at == datetime.fromtimestamp(1717200000, tz=timezone.utc)
         assert result[0].raw_payload["date_parsed"] is False
 
+    def test_itest_fetch_time_fallback_is_not_marked_as_parsed(self):
+        text = (
+            "* [2026年99月99日 99時99分 話題度:1 1レス Aiko thread]"
+            "(https://itest.5ch.io/server/test/read.cgi/board/999999999999999999999999)"
+        )
+
+        result = FiveChConnector()._parse_itest_board(text, "board", "Aiko")
+
+        assert len(result) == 1
+        assert result[0].raw_payload["date_parsed"] is False
+
     @pytest.mark.asyncio
     async def test_fetch_keeps_subject_fallbacks_when_latest_post_dates_are_sparse(self):
         connector = FiveChConnector()
@@ -2574,6 +2585,7 @@ class TestNoteFetch:
         assert result[0].raw_payload == {
             "feed_url": "https://note.com/hashtag/Aiko/rss",
             "matched_hashtag": "Aiko",
+            "date_parsed": False,
         }
 
 

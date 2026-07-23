@@ -295,7 +295,7 @@ def _thread_url(hit: _ThreadHit) -> str:
 def _thread_created_at(thread_id: str) -> datetime:
     try:
         return datetime.fromtimestamp(int(thread_id), tz=timezone.utc)
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError, OSError, OverflowError):
         return datetime.now(timezone.utc)
 
 
@@ -499,7 +499,10 @@ class FiveChConnector(BaseConnector):
             server = match.group("server")
             board = match.group("board")
             thread_id = match.group("thread_id")
-            subback_at = _parse_itest_datetime(match.group("date")) or _thread_created_at(thread_id)
+            subback_at = _parse_itest_datetime(match.group("date"))
+            date_parsed = subback_at is not None
+            if subback_at is None:
+                subback_at = _thread_created_at(thread_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
@@ -520,7 +523,7 @@ class FiveChConnector(BaseConnector):
                         "momentum": int(match.group("momentum")),
                         "subback_published_at": subback_at.isoformat(),
                         "date_source": "subback",
-                        "date_parsed": True,
+                        "date_parsed": date_parsed,
                     },
                 )
             )
@@ -943,6 +946,8 @@ class FiveChConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not _is_recent_index_result(published):
                 continue
             items.append(
@@ -1018,6 +1023,8 @@ class FiveChConnector(BaseConnector):
                 if not title_contains_keyword(keyword, title):
                     continue
                 published = parse_feed_date(entry)
+                if published is None:
+                    continue
                 if not _is_recent_index_result(published):
                     continue
                 seen.add(item_id)

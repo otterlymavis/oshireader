@@ -23,6 +23,7 @@ from app.connectors.base import (
     contains_keyword,
     fetch_search_rss_via_proxy,
     is_recent_search_result,
+    mark_date_provenance,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -71,13 +72,15 @@ def _parse_optional_ameba_timestamp(value: object) -> datetime | None:
 def _parse_ameba_timestamp(value: object) -> datetime:
     parsed = _parse_optional_ameba_timestamp(value)
     if parsed:
-        return parsed
-    return datetime.now(timezone.utc)
+        return mark_date_provenance(parsed, date_parsed=True)
+    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
 
 
 def _parse_ameba_activity_timestamp(*values: object) -> datetime:
     dates = [parsed for value in values if (parsed := _parse_optional_ameba_timestamp(value))]
-    return max(dates) if dates else datetime.now(timezone.utc)
+    if dates:
+        return mark_date_provenance(max(dates), date_parsed=True)
+    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
 
 
 def _parse_jst_datetime(value: str | None) -> datetime:
@@ -86,10 +89,10 @@ def _parse_jst_datetime(value: str | None) -> datetime:
             parsed = datetime.fromisoformat(value)
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone(timedelta(hours=9)))
-            return parsed.astimezone(timezone.utc)
+            return mark_date_provenance(parsed.astimezone(timezone.utc), date_parsed=True)
         except ValueError:
             pass
-    return datetime.now(timezone.utc)
+    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
 
 
 class _GNewsSiteConnector(BaseConnector):
@@ -141,6 +144,8 @@ class _GNewsSiteConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not is_recent_search_result(published):
                 continue
             items.append(
@@ -239,6 +244,8 @@ class _GNewsSiteConnector(BaseConnector):
                 continue
             seen.add(item_id)
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not is_recent_search_result(published):
                 continue
             items.append(
@@ -297,6 +304,8 @@ class _GNewsSiteConnector(BaseConnector):
                 continue
             seen.add(item_id)
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not is_recent_search_result(published):
                 continue
             items.append(
@@ -350,6 +359,8 @@ class _GNewsSiteConnector(BaseConnector):
             if not title:
                 continue
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not is_recent_search_result(published):
                 continue
             items.append(

@@ -59,7 +59,6 @@ _queued_task: asyncio.Task | None = None
 # post date. We update published_at whenever we see a more recent date from the connector.
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "togetter"})
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
-_ESTIMATED_DATE_NOTIFICATION_WARMUP = timedelta(hours=2)
 _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
 _CATCHUP_NOTIFICATION_MIN_MATCH_AGE = timedelta(minutes=10)
@@ -412,6 +411,8 @@ def _published_at_is_estimated(raw, observed_at: datetime) -> bool:
     marker = (raw.raw_payload or {}).get("date_parsed")
     if marker is not None:
         return not bool(marker)
+    # Older connector payloads predate the marker. Preserve their existing
+    # notification behavior; explicit fetch-time placeholders remain blocked.
     return False
 
 
@@ -420,7 +421,6 @@ def _is_notification_eligible(
     term: WatchTerm,
     source_item: SourceItem,
     observed_at: datetime,
-    term_had_existing_matches: bool = True,
 ) -> bool:
     """Keep historical matches in the feed without notifying as if they were new."""
     term_created_at = term.created_at or observed_at
@@ -428,12 +428,10 @@ def _is_notification_eligible(
         term_created_at = term_created_at.replace(tzinfo=timezone.utc)
 
     if _published_at_is_estimated(source_item, observed_at):
-        # Some sources only expose discovery time. Suppress those during the
-        # first/backfill pass, then allow future discoveries to behave like
-        # Twitter-style new-post alerts for established follows.
-        return term_had_existing_matches or (
-            observed_at - term_created_at >= _ESTIMATED_DATE_NOTIFICATION_WARMUP
-        )
+        # A fetch-time placeholder cannot establish that the post is new. It
+        # is safe to retain the match in the feed, but never use it for a push
+        # or an established-follow catch-up notification.
+        return False
 
     published_at = source_item.published_at
     if published_at.tzinfo is None:
@@ -647,7 +645,6 @@ def _queue_recent_unnotified_match_notifications(
             term=term,
             source_item=source_item,
             observed_at=observed_at,
-            term_had_existing_matches=True,
         ):
             continue
         candidates.append(_newest_notification_candidate(
@@ -767,15 +764,11 @@ def _pending_preview_is_notification_eligible(
     )
     source_item_id = preview_item.get("id")
     if not isinstance(source_item_id, str) or not source_item_id:
-        if is_reply_update:
-            return False
-        return _fallback_pending_preview_is_fresh(term, preview_item, observed_at)
+        return False
 
     source_item = db.get(SourceItem, source_item_id)
     if source_item is None:
-        if is_reply_update:
-            return False
-        return _fallback_pending_preview_is_fresh(term, preview_item, observed_at)
+        return False
 
     if is_reply_update:
         if _published_at_is_estimated(source_item, observed_at):
@@ -784,14 +777,12 @@ def _pending_preview_is_notification_eligible(
             term=term,
             source_item=source_item,
             observed_at=observed_at,
-            term_had_existing_matches=True,
         )
 
     return _is_notification_eligible(
         term=term,
         source_item=source_item,
         observed_at=observed_at,
-        term_had_existing_matches=True,
     )
 
 
@@ -896,13 +887,6 @@ def _queue_duplicate_term_notifications(
             )
             .all()
         }
-        term_had_existing_matches = (
-            db.query(Match.id)
-            .filter(Match.watch_term_id == duplicate_term.id)
-            .first()
-            is not None
-        )
-
         new_matches: list[tuple[Match, SourceItem]] = []
         for source_item_id in source_item_ids:
             if source_item_id in muted_source_ids:
@@ -948,7 +932,6 @@ def _queue_duplicate_term_notifications(
                 term=duplicate_term,
                 source_item=source_item,
                 observed_at=observed_at,
-                term_had_existing_matches=term_had_existing_matches,
             ):
                 continue
             notification_candidates.append(_newest_notification_candidate(
@@ -1081,8 +1064,12 @@ async def _flush_pending_notifications(
             db.delete(pending)
             db.commit()
             continue
-        flushed_term_ids.add(term.id)
         await _deliver_pending_notification(db, term)
+        # Exclude only rows that remain queued after this attempt. If delivery
+        # succeeded or an unverifiable legacy row was discarded, new items
+        # queued later in this poll still need to be delivered.
+        if db.get(PendingNotification, term.id) is not None:
+            flushed_term_ids.add(term.id)
     return flushed_term_ids
 
 
@@ -1142,12 +1129,6 @@ async def _poll_once_unlocked() -> None:
         fetch_cache: dict[tuple[str, str, str], list] = {}
 
         for term in terms:
-            term_had_existing_matches_before_poll = (
-                db.query(Match.id)
-                .filter(Match.watch_term_id == term.id)
-                .first()
-                is not None
-            )
             for search_term in _search_terms_for(term):
                 # Keep I/O parallel without retaining every connector's response,
                 # parser tree, and result list until the slowest request finishes.
@@ -1337,7 +1318,6 @@ async def _poll_once_unlocked() -> None:
                                     term=term,
                                     source_item=source_item,
                                     observed_at=now,
-                                    term_had_existing_matches=term_had_existing_matches_before_poll,
                                 ):
                                     continue
                                 notification_candidates.append(_newest_notification_candidate(

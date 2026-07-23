@@ -134,12 +134,15 @@ class TwitterConnector(BaseConnector):
                 continue
             if mode == CollectionMode.MEDIA_ONLY:
                 continue
+            published = parse_feed_date(entry)
+            if published is None:
+                continue
             seen.add(item_id)
             items.append(SourceItemCreate(
                 platform=self.PLATFORM,
                 item_id=item_id,
                 url=link,
-                published_at=parse_feed_date(entry),
+                published_at=published,
                 media_type="text",
                 title=title,
                 content_text=entry.get("summary") or None,
@@ -212,12 +215,15 @@ class TwitterConnector(BaseConnector):
                 item_id = entry.get("id") or link
                 if not link or not contains_keyword(keyword, title) or item_id in seen:
                     continue
+                published = parse_feed_date(entry)
+                if published is None:
+                    continue
                 seen.add(item_id)
                 items.append(SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="text",
                     title=title,
                     content_text=entry.get("summary") or None,

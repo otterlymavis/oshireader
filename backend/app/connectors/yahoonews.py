@@ -108,7 +108,7 @@ class YahooNewsConnector(BaseConnector):
                     published_at=datetime.now(timezone.utc),
                     media_type="article",
                     title=title,
-                    raw_payload={"keyword": keyword, "source": "direct_search"},
+                    raw_payload={"keyword": keyword, "source": "direct_search", "date_parsed": False},
                 )
             )
             if len(items) >= 25:
@@ -148,7 +148,7 @@ class YahooNewsConnector(BaseConnector):
                     published_at=datetime.now(timezone.utc),
                     media_type="article",
                     title=title,
-                    raw_payload={"keyword": keyword, "source": "jina"},
+                    raw_payload={"keyword": keyword, "source": "jina", "date_parsed": False},
                 )
             )
             if len(items) >= 25:
@@ -186,12 +186,15 @@ class YahooNewsConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if published is None:
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=summary,
@@ -225,12 +228,15 @@ class YahooNewsConnector(BaseConnector):
             title = entry["title"]
             if not title_contains_keyword(keyword, title):
                 continue
+            published = entry.get("published_at")
+            if published is None:
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=entry["url"],
                     url=entry["url"],
-                    published_at=entry["published_at"],
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=None,
@@ -254,13 +260,16 @@ class YahooNewsConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if published is None:
+                continue
             seen.add(item_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=entry.get("summary") or None,
@@ -297,13 +306,16 @@ class YahooNewsConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if published is None:
+                continue
             seen.add(item_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=entry.get("summary") or None,

@@ -85,12 +85,15 @@ class ModelPressConnector(BaseConnector):
                 continue
             if not title_contains_keyword(keyword, title):
                 continue
+            published = parse_feed_date(entry)
+            if published is None:
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     title=title,
                     content_text=summary or None,

@@ -223,6 +223,8 @@ class GirlsChannelConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not _is_recent(published):
                 continue
             seen.add(item_id)

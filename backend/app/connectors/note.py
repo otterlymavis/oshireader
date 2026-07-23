@@ -51,6 +51,9 @@ class NoteConnector(BaseConnector):
             link = entry.get("link", "")
             if not link:
                 continue
+            published = parse_feed_date(entry)
+            if published is None:
+                continue
             title = entry.get("title")
             summary = entry.get("summary") or ""
             author = entry.get("author")
@@ -68,7 +71,7 @@ class NoteConnector(BaseConnector):
                     platform=self.PLATFORM,
                     item_id=str(item_id),
                     url=link,
-                    published_at=parse_feed_date(entry),
+                    published_at=published,
                     media_type="article",
                     author=author,
                     title=title,

@@ -34,8 +34,30 @@ _GNEWS_MD_ITEM_RE = re.compile(
 )
 
 
+class _FeedDate(datetime):
+    def __new__(cls, value: datetime, *, date_parsed: bool):
+        result = datetime.__new__(
+            cls,
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+            tzinfo=value.tzinfo,
+            fold=value.fold,
+        )
+        result.date_parsed = date_parsed
+        return result
+
+
+def mark_date_provenance(value: datetime, *, date_parsed: bool) -> datetime:
+    return _FeedDate(value, date_parsed=date_parsed)
+
+
 def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
-    """Return the newest feed activity date, falling back to now."""
+    """Return the newest feed activity date, marking fetch-time fallback dates."""
     dates: list[datetime] = []
     for attr in ("updated_parsed", "published_parsed"):
         t = getattr(entry, attr, None)
@@ -45,8 +67,8 @@ def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
             except Exception:
                 pass
     if dates:
-        return max(dates)
-    return datetime.now(timezone.utc)
+        return mark_date_provenance(max(dates), date_parsed=True)
+    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
 
 
 def parse_google_news_markdown(text: str) -> list[dict]:
@@ -62,12 +84,14 @@ def parse_google_news_markdown(text: str) -> list[dict]:
         seen.add(url)
         try:
             published = parsedate_to_datetime(match.group("date")).astimezone(timezone.utc)
+            date_parsed = True
         except (TypeError, ValueError, IndexError, AttributeError):
             published = datetime.now(timezone.utc)
+            date_parsed = False
         items.append({
             "title": match.group("title").strip(),
             "url": url,
-            "published_at": published,
+            "published_at": mark_date_provenance(published, date_parsed=date_parsed),
         })
     return items
 
@@ -126,6 +150,12 @@ class SourceItemCreate:
     content_text: Optional[str] = None
     thumbnail_url: Optional[str] = None
     raw_payload: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if "date_parsed" not in self.raw_payload:
+            marker = getattr(self.published_at, "date_parsed", None)
+            if marker is not None:
+                self.raw_payload = {**self.raw_payload, "date_parsed": marker}
 
     @property
     def composite_id(self) -> str:

@@ -304,6 +304,8 @@ class TVERConnector(BaseConnector):
             if not link or not contains_keyword(keyword, title) or item_id in seen:
                 continue
             published = parse_feed_date(entry)
+            if published is None:
+                continue
             if not _is_recent(published):
                 continue
             seen.add(item_id)
