@@ -17,7 +17,7 @@ services:
       - key: CONNECTOR_CONCURRENCY
         value: "1"
       - key: POLL_TERMS_PER_RUN
-        value: "4"
+        value: "2"
       - key: NOTIFICATION_FRESHNESS_WINDOW_MINUTES
         value: "1440"
       - key: ORPHANED_NOTIFICATION_GRACE_MINUTES
