@@ -8,7 +8,7 @@
   },
   "vars": {
     "BACKEND_URL": "https://oshireader.onrender.com",
-    "POLL_RETRIES": "2",
+    "POLL_RETRIES": "1",
     "POLL_RETRY_DELAY_MS": "5000",
     "STALE_AFTER_MINUTES": "240",
     "MIN_POLL_INTERVAL_MINUTES": "170"
