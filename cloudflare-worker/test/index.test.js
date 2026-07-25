@@ -696,7 +696,7 @@ test("poll sends the backend bearer token", async (context) => {
         status: 200,
       });
     }
-    assert.equal(url, "https://backend.example/api/admin/stats");
+    assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       items_total: 10,
       matches_total: 12,
@@ -733,7 +733,7 @@ test("scheduled poll skips backend poll when no active work exists", async (cont
   const requestedURLs = [];
   globalThis.fetch = async (url) => {
     requestedURLs.push(String(url));
-    assert.equal(url, "https://backend.example/api/admin/stats");
+    assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       watch_terms: [],
       pending_notifications: [],
@@ -756,7 +756,7 @@ test("scheduled poll skips backend poll when no active work exists", async (cont
   assert.equal(result.skipped, true);
   assert.equal(result.backend_status, "poll skipped");
   assert.match(result.reason, /no active watch terms/);
-  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
+  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/poller-health"]);
 });
 
 test("scheduled poll does not treat missing polling inputs as idle", async (context) => {
@@ -770,7 +770,7 @@ test("scheduled poll does not treat missing polling inputs as idle", async (cont
     if (String(url).endsWith("/api/admin/poll")) {
       return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
     }
-    assert.equal(url, "https://backend.example/api/admin/stats");
+    assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       latest_successful_poll: {
         id: 1,
@@ -791,9 +791,9 @@ test("scheduled poll does not treat missing polling inputs as idle", async (cont
   assert.equal(result.skipped, undefined);
   assert.equal(result.backend_status, "poll completed");
   assert.deepEqual(requestedURLs, [
-    "https://backend.example/api/admin/stats",
+    "https://backend.example/api/admin/poller-health",
     "https://backend.example/api/admin/poll",
-    "https://backend.example/api/admin/stats",
+    "https://backend.example/api/admin/poller-health",
   ]);
 });
 
@@ -808,7 +808,7 @@ test("scheduled poll does not treat malformed watch terms as idle", async (conte
     if (String(url).endsWith("/api/admin/poll")) {
       return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
     }
-    assert.equal(url, "https://backend.example/api/admin/stats");
+    assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       watch_terms: [{ id: 1, keyword: "Aiko" }],
       pending_notifications: [],
@@ -831,9 +831,9 @@ test("scheduled poll does not treat malformed watch terms as idle", async (conte
   assert.equal(result.skipped, undefined);
   assert.equal(result.backend_status, "poll completed");
   assert.deepEqual(requestedURLs, [
-    "https://backend.example/api/admin/stats",
+    "https://backend.example/api/admin/poller-health",
     "https://backend.example/api/admin/poll",
-    "https://backend.example/api/admin/stats",
+    "https://backend.example/api/admin/poller-health",
   ]);
 });
 
@@ -845,7 +845,7 @@ test("scheduled poll skips backend poll when latest success is fresh", async (co
   const requestedURLs = [];
   globalThis.fetch = async (url) => {
     requestedURLs.push(String(url));
-    assert.equal(url, "https://backend.example/api/admin/stats");
+    assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
       pending_notifications: [],
@@ -868,7 +868,7 @@ test("scheduled poll skips backend poll when latest success is fresh", async (co
   assert.equal(result.ok, true);
   assert.equal(result.skipped, true);
   assert.match(result.reason, /still fresh/);
-  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
+  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/poller-health"]);
 });
 
 test("scheduled poll skips backend poll when poll is already in progress", async (context) => {
@@ -879,7 +879,7 @@ test("scheduled poll skips backend poll when poll is already in progress", async
   const requestedURLs = [];
   globalThis.fetch = async (url) => {
     requestedURLs.push(String(url));
-    assert.equal(url, "https://backend.example/api/admin/stats");
+    assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
       pending_notifications: [],
@@ -902,7 +902,7 @@ test("scheduled poll skips backend poll when poll is already in progress", async
   assert.equal(result.ok, true);
   assert.equal(result.skipped, true);
   assert.match(result.reason, /already in progress/);
-  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/stats"]);
+  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/poller-health"]);
 });
 
 test("poll retries a transient backend failure", async (context) => {
@@ -936,7 +936,7 @@ test("scheduled poll notifies watchdog when diagnostics are degraded", async (co
     if (url.endsWith("/api/admin/poll")) {
       return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
     }
-    if (url.endsWith("/api/admin/stats")) {
+    if (url.endsWith("/api/admin/poller-health")) {
       return new Response(JSON.stringify({
         items_total: 10,
         matches_total: 12,
@@ -980,7 +980,7 @@ test("scheduled poll notifies watchdog when notifications are not deliverable", 
     if (url.endsWith("/api/admin/poll")) {
       return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
     }
-    if (url.endsWith("/api/admin/stats")) {
+    if (url.endsWith("/api/admin/poller-health")) {
       return new Response(JSON.stringify({
         apns: {
           configured: true,

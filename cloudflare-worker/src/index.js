@@ -343,7 +343,7 @@ async function proxyFiveCh(request, env) {
 }
 
 async function fetchBackendDiagnostics(backendURL, adminToken) {
-  const response = await fetch(`${backendURL}/api/admin/stats`, {
+  const response = await fetch(`${backendURL}/api/admin/poller-health`, {
     headers: {
       authorization: `Bearer ${adminToken}`,
       "user-agent": "oshireader-cloudflare-poller/1.0",

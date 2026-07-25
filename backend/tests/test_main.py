@@ -243,6 +243,18 @@ class TestAdminStats:
         assert data["latest_relevant_apns"] is None
         assert data["recent_events"] == []
 
+    def test_poller_health_uses_compact_diagnostics_contract(self, client):
+        r = client.get("/api/admin/poller-health")
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["watch_terms"] == []
+        assert data["latest_poll"] is None
+        assert data["latest_successful_poll"] is None
+        assert data["pending_notifications"] == []
+        assert data["notification_health"]["healthy"] is True
+        assert data["apns"]["configured"] is False
+
     def test_stats_counts_reflect_db_content(self, client, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)

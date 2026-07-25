@@ -1163,3 +1163,157 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             for event in recent_events
         ],
     }
+
+
+@app.get("/api/admin/poller-health")
+def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)) -> dict:
+    """Return only the diagnostics required by the external poll watchdog.
+
+    Keep this separate from the admin dashboard stats endpoint: the dashboard
+    aggregates all stored matches, while the watchdog must remain responsive
+    during a large or busy poll.
+    """
+    from app.apns import apns_configured
+
+    terms = db.query(WatchTerm).filter(WatchTerm.is_active == True).all()  # noqa: E712
+    device_tokens = db.query(APNSDeviceToken.environment, func.count(APNSDeviceToken.token)).group_by(
+        APNSDeviceToken.environment
+    ).all()
+    verified_device_tokens = (
+        db.query(APNSDeviceToken.environment, APNSDeviceToken.is_verified, func.count(APNSDeviceToken.token))
+        .group_by(APNSDeviceToken.environment, APNSDeviceToken.is_verified)
+        .all()
+    )
+    latest_poll = (
+        db.query(BackendEvent)
+        .filter(BackendEvent.kind == "poll")
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
+    latest_successful_poll = (
+        db.query(BackendEvent)
+        .filter(
+            BackendEvent.kind == "poll",
+            BackendEvent.status.in_(["completed", "completed_with_errors"]),
+        )
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
+    latest_apns = (
+        db.query(BackendEvent)
+        .filter(BackendEvent.kind == "apns")
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .first()
+    )
+    latest_relevant_apns = _latest_relevant_apns_event(db)
+    pending_notifications = (
+        db.query(PendingNotification, WatchTerm)
+        .join(WatchTerm, PendingNotification.watch_term_id == WatchTerm.id)
+        .order_by(PendingNotification.updated_at.desc())
+        .limit(20)
+        .all()
+    )
+
+    def notification_device_counts(term: WatchTerm) -> dict:
+        query = db.query(APNSDeviceToken)
+        if term.owner_device_secret:
+            query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+        total = query.count()
+        verified = query.filter(APNSDeviceToken.is_verified == True).count()  # noqa: E712
+        return {
+            "owner_scoped": bool(term.owner_device_secret),
+            "notification_devices": total,
+            "notification_verified_devices": verified,
+        }
+
+    watch_term_rows: list[dict] = []
+    active_silent_orphans: list[dict] = []
+    active_notify_without_verified_devices: list[dict] = []
+    active_notify_terms = 0
+    orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
+    orphaned_cutoff = datetime.now(timezone.utc) - timedelta(minutes=orphaned_grace_minutes)
+
+    for term in terms:
+        device_counts = notification_device_counts(term)
+        row = {
+            "id": term.id,
+            "keyword": term.keyword,
+            "is_active": term.is_active,
+            "notify_on_new": term.notify_on_new,
+            **device_counts,
+        }
+        watch_term_rows.append(row)
+        if term.notify_on_new:
+            active_notify_terms += 1
+            if device_counts["notification_verified_devices"] == 0 and (
+                not term.owner_device_secret
+                or not term.created_at
+                or (
+                    term.created_at.replace(tzinfo=timezone.utc)
+                    if term.created_at.tzinfo is None else term.created_at
+                ) <= orphaned_cutoff
+            ):
+                active_notify_without_verified_devices.append(row)
+        elif term.owner_device_secret and device_counts["notification_devices"] == 0 and (
+            not term.created_at
+            or (
+                term.created_at.replace(tzinfo=timezone.utc)
+                if term.created_at.tzinfo is None else term.created_at
+            ) <= orphaned_cutoff
+        ):
+            active_silent_orphans.append(row)
+
+    return {
+        "watch_terms": watch_term_rows,
+        "notification_health": {
+            "healthy": not active_silent_orphans and not active_notify_without_verified_devices,
+            "active_notify_terms": active_notify_terms,
+            "active_silent_orphan_terms": len(active_silent_orphans),
+            "active_notify_terms_without_verified_devices": len(active_notify_without_verified_devices),
+            "orphaned_notification_grace_minutes": orphaned_grace_minutes,
+            "active_silent_orphan_term_ids": [term["id"] for term in active_silent_orphans[:20]],
+            "active_notify_term_ids_without_verified_devices": [
+                term["id"] for term in active_notify_without_verified_devices[:20]
+            ],
+        },
+        "apns": {
+            "configured": apns_configured(),
+            "server_environment": "sandbox" if settings.apns_use_sandbox else "production",
+            "backend_public_url": settings.backend_public_url,
+            "device_tokens_by_environment": {env: count for env, count in device_tokens},
+            "device_tokens_by_environment_and_verification": {
+                env: {
+                    "verified": sum(
+                        count for row_env, is_verified, count in verified_device_tokens
+                        if row_env == env and is_verified is True
+                    ),
+                    "unverified": sum(
+                        count for row_env, is_verified, count in verified_device_tokens
+                        if row_env == env and is_verified is not True
+                    ),
+                }
+                for env, _ in device_tokens
+            },
+        },
+        "latest_poll": _backend_event_payload(latest_poll) if latest_poll else None,
+        "latest_successful_poll": (
+            _backend_event_payload(latest_successful_poll)
+            if latest_successful_poll else None
+        ),
+        "latest_apns": _backend_event_payload(latest_apns) if latest_apns else None,
+        "latest_relevant_apns": (
+            _backend_event_payload(latest_relevant_apns)
+            if latest_relevant_apns else None
+        ),
+        "pending_notifications": [
+            {
+                "watch_term_id": pending.watch_term_id,
+                "keyword": term.keyword,
+                "new_count": pending.new_count,
+                "updated_at": pending.updated_at,
+                "notify_on_new": term.notify_on_new,
+                "owner_scoped": bool(term.owner_device_secret),
+            }
+            for pending, term in pending_notifications
+        ],
+    }
