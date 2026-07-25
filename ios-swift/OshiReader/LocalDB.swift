@@ -1103,14 +1103,56 @@ class LocalDB: ObservableObject {
             scale: 1.0,
             zIndex: 1
         )
+        let platformFixtureID: String? = {
+            let args = ProcessInfo.processInfo.arguments
+            guard let index = args.firstIndex(of: "--uitesting-single-platform-feed"),
+                  args.indices.contains(index + 1) else {
+                return nil
+            }
+            return args[index + 1]
+        }()
+        let usesAllPlatformSortFixture = ProcessInfo.processInfo.arguments.contains("--uitesting-all-platform-sort-feed")
+        let allPlatformFeedItems = Platform.all.enumerated().map { index, platform in
+            let publishedAt = usesAllPlatformSortFixture
+                ? iso8601.string(from: Date().addingTimeInterval(TimeInterval(-index * 60)))
+                : now
+            return FeedItem(
+                id: platform.id == "youtube" ? "youtube:ui-platform-youtube" : "ui-platform-\(platform.id)",
+                platform: platform.id,
+                url: platform.id == "youtube"
+                    ? "https://www.youtube.com/watch?v=oshireaderui1"
+                    : "https://example.com/oshireader-ui-test/\(platform.id)",
+                title: "UITest Oshi \(platform.name) item",
+                content_text: "A seeded \(platform.name) item for UITest Oshi used by OshiReader UI tests.",
+                author: "UI Test Desk",
+                thumbnail_url: nil,
+                media_type: platform.isMediaPlatform ? "video" : "article",
+                published_at: publishedAt,
+                watch_term_keyword: term.keyword,
+                fetched_at: now,
+                source: platform.id == "youtube" ? "youtube_device_scrape" : nil
+            )
+        }
 
         terms = [term]
-        feedItems = ProcessInfo.processInfo.arguments.contains("--uitesting-redirect-feed")
-            ? [redirectFeedItem, stableFeedItem]
-            : [feedItem]
+        if let platformFixtureID {
+            feedItems = allPlatformFeedItems.filter { Platform.normalize($0.platform) == platformFixtureID }
+        } else if usesAllPlatformSortFixture {
+            feedItems = Array(allPlatformFeedItems.reversed())
+        } else if ProcessInfo.processInfo.arguments.contains("--uitesting-redirect-feed") {
+            feedItems = [redirectFeedItem, stableFeedItem]
+        } else {
+            feedItems = [feedItem]
+        }
         savedPages = [savedPage]
         customUrls = [customUrl]
-        subscribedPlatforms = ["news", "youtube", "tver", "custom"]
+        if let platformFixtureID {
+            subscribedPlatforms = [platformFixtureID]
+        } else if usesAllPlatformSortFixture {
+            subscribedPlatforms = Platform.all.map(\.id)
+        } else {
+            subscribedPlatforms = ["news", "youtube", "tver", "custom"]
+        }
         wallpaper = nil
         sourcesOrder = nil
         oshiAvatars = [:]

@@ -28,6 +28,7 @@ from app.relevance import primary_text_matches  # noqa: E402
 
 
 DEFAULT_KEYWORDS = ["吉沢亮", "乃木坂46"]
+KOREAN_ARTIST_KEYWORDS = ["BTS", "BLACKPINK", "IU", "NewJeans", "SEVENTEEN"]
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -176,6 +177,7 @@ async def _check_page(client: httpx.AsyncClient, url: str) -> PageCheck:
 async def _check_connector(connector: Any, keywords: list[str], mode: CollectionMode, page_limit: int) -> SourceCheck:
     started = time.perf_counter()
     last_error: str | None = None
+    fetch_failed = False
     last_items: list[Any] = []
     used_keyword: str | None = None
 
@@ -185,6 +187,7 @@ async def _check_connector(connector: Any, keywords: list[str], mode: Collection
             items = await connector.fetch(keyword, mode)
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {exc}"
+            fetch_failed = True
             continue
         last_items = list(items)
         if last_items:
@@ -201,7 +204,10 @@ async def _check_connector(connector: Any, keywords: list[str], mode: Collection
         ) as client:
             page_checks = await asyncio.gather(*[_check_page(client, url) for url in urls])
 
-    if last_items:
+    if fetch_failed:
+        ok = False
+        status = "fetch_failed"
+    elif last_items:
         failed_pages = [page for page in page_checks if not page.ok]
         keyword_mismatches = [
             sample for sample in samples if not sample.get("primary_text_match")
@@ -344,6 +350,11 @@ def parse_args() -> argparse.Namespace:
         help="Keyword to test. Can be repeated. Defaults to a small JP entertainment set.",
     )
     parser.add_argument(
+        "--korean-artists",
+        action="store_true",
+        help="Test a representative Korean artist set: BTS, BLACKPINK, IU, NewJeans, SEVENTEEN.",
+    )
+    parser.add_argument(
         "--platform",
         action="append",
         default=[],
@@ -386,12 +397,37 @@ def parse_args() -> argparse.Namespace:
 
 async def _main() -> int:
     args = parse_args()
-    keywords = args.keywords or DEFAULT_KEYWORDS
+    keywords = args.keywords or (KOREAN_ARTIST_KEYWORDS if args.korean_artists else DEFAULT_KEYWORDS)
     mode = CollectionMode.MEDIA_ONLY if args.media_only else CollectionMode.ALL_INFO
     platforms = set(args.platform)
 
     if args.simple:
-        results = await run_smoke(keywords[0], platforms, max(args.samples, 0))
+        sample_limit = max(args.samples, 0)
+        per_keyword = []
+        for keyword in keywords:
+            per_keyword.append(await run_smoke(keyword, platforms, sample_limit))
+        merged: dict[str, SourceSmokeResult] = {}
+        for keyword_results in per_keyword:
+            for result in keyword_results:
+                current = merged.setdefault(
+                    result.platform,
+                    SourceSmokeResult(
+                        platform=result.platform,
+                        fetched=0,
+                        kept=0,
+                        dropped=0,
+                        samples=[],
+                    ),
+                )
+                current.fetched += result.fetched
+                current.kept += result.kept
+                current.dropped += result.dropped
+                remaining_samples = sample_limit - len(current.samples)
+                if remaining_samples > 0:
+                    current.samples.extend(result.samples[:remaining_samples])
+                if result.error:
+                    current.error = result.error
+        results = list(merged.values())
         return _print_simple_report(results)
 
     connectors = _build_filtered_connectors(platforms)

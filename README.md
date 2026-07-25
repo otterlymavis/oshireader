@@ -190,6 +190,12 @@ python3 backend/scripts/smoke_sources.py --keyword '吉沢亮' --platform livedo
 ```
 This prints matching items along with their match evaluation status (`KEEP`, `DROP` for relevance failures, or `ERROR` for connection issues).
 
+To check every registered connector against a representative Korean artist set, use:
+```bash
+python3 backend/scripts/smoke_sources.py --korean-artists --page-limit 0
+```
+The command tries BTS, BLACKPINK, IU, NewJeans, and SEVENTEEN for each source and fails if a source returns no results for all five or raises a fetch error.
+
 ### Running Live Integration Tests
 To test live data endpoints or notification configurations within the iOS application, run:
 ```bash

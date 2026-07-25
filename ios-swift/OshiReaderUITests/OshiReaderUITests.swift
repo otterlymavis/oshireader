@@ -86,6 +86,105 @@ final class OshiReaderUITests: XCTestCase {
         assertReaderLoadedWithoutFallbackBanner()
     }
 
+    func testAllRegisteredPlatformFeedItemsDisplayAndOpen() throws {
+        let platforms = [
+            ("youtube", "YouTube"),
+            ("niconico", "NicoNico"),
+            ("tver", "TVer"),
+            ("twitter", "X"),
+            ("note", "Note"),
+            ("girlschannel", "GirlsChannel"),
+            ("5ch", "5ch"),
+            ("togetter", "Togetter"),
+            ("news", "News"),
+            ("yahoonews", "YahooNews"),
+            ("mdpr", "ModelPress"),
+            ("oricon", "Oricon"),
+            ("smartnews", "SmartNews"),
+            ("ameblo", "Ameblo"),
+            ("aera", "AERA dot."),
+            ("hochi", "Hochi"),
+            ("sponichi", "Sponichi"),
+            ("livedoor", "Livedoor"),
+            ("mantanweb", "Mantan Web"),
+            ("realsound", "Real Sound"),
+            ("cinemacafe", "CinemaCafe"),
+            ("thetv", "TheTV"),
+            ("natalie", "Natalie"),
+            ("billboardjapan", "Billboard Japan"),
+            ("soompi", "Soompi"),
+            ("allkpop", "allkpop"),
+            ("kpopofficial", "KpopOfficial"),
+            ("barks", "BARKS"),
+            ("custom", "Custom Feeds"),
+        ]
+
+        for (platformId, platformName) in platforms {
+            app.terminate()
+            app.launchArguments = uiTestingLaunchArguments(["--uitesting-single-platform-feed", platformId])
+            app.launch()
+
+            let title = "UITest Oshi \(platformName) item"
+            let cardTitle = app.staticTexts[title]
+            XCTAssertTrue(cardTitle.waitForExistence(timeout: 3), "Missing feed card for \(platformId)")
+
+            guard let card = firstExistingButton(containing: title) else {
+                XCTFail("Missing tappable feed card for \(platformId)")
+                continue
+            }
+            card.tap()
+
+            XCTAssertTrue(
+                app.buttons["reader.bookmarkButton"].waitForExistence(timeout: 5),
+                "Reader did not open for \(platformId)"
+            )
+            assertReaderLoadedWithoutFallbackBanner()
+
+            tapReaderBackButton(platformId: platformId)
+        }
+    }
+
+    func testAllRegisteredPlatformFeedItemsAreSortedNewestToOldest() throws {
+        app.terminate()
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-all-platform-sort-feed"])
+        app.launch()
+
+        let expectedTitles = [
+            "UITest Oshi YouTube item",
+            "UITest Oshi NicoNico item",
+            "UITest Oshi TVer item",
+            "UITest Oshi X item",
+            "UITest Oshi Note item",
+            "UITest Oshi GirlsChannel item",
+            "UITest Oshi 5ch item",
+            "UITest Oshi Togetter item",
+            "UITest Oshi News item",
+            "UITest Oshi YahooNews item",
+            "UITest Oshi ModelPress item",
+            "UITest Oshi Oricon item",
+            "UITest Oshi SmartNews item",
+            "UITest Oshi Ameblo item",
+            "UITest Oshi AERA dot. item",
+            "UITest Oshi Hochi item",
+            "UITest Oshi Sponichi item",
+            "UITest Oshi Livedoor item",
+            "UITest Oshi Mantan Web item",
+            "UITest Oshi Real Sound item",
+            "UITest Oshi CinemaCafe item",
+            "UITest Oshi TheTV item",
+            "UITest Oshi Natalie item",
+            "UITest Oshi Billboard Japan item",
+            "UITest Oshi Soompi item",
+            "UITest Oshi allkpop item",
+            "UITest Oshi KpopOfficial item",
+            "UITest Oshi BARKS item",
+            "UITest Oshi Custom Feeds item",
+        ]
+
+        XCTAssertTrue(app.staticTexts[expectedTitles[0]].waitForExistence(timeout: 3))
+        assertFeedTitlesAppearInOrder(expectedTitles)
+    }
+
     func testStopFollowingFromFeedCard() throws {
         tapTab(index: 0, labels: ["Feed"])
 
@@ -558,6 +657,65 @@ final class OshiReaderUITests: XCTestCase {
             }
         }
         return element
+    }
+
+    private func assertFeedTitlesAppearInOrder(_ expectedTitles: [String], file: StaticString = #filePath, line: UInt = #line) {
+        var nextExpectedIndex = 0
+        let expectedSet = Set(expectedTitles)
+
+        for attempt in 0..<20 {
+            let visibleTitles = app.staticTexts.allElementsBoundByIndex
+                .filter { expectedSet.contains($0.label) && $0.exists && $0.frame.minY > 0 }
+                .sorted { lhs, rhs in
+                    if lhs.frame.minY != rhs.frame.minY { return lhs.frame.minY < rhs.frame.minY }
+                    return lhs.frame.minX < rhs.frame.minX
+                }
+
+            for titleElement in visibleTitles {
+                guard let actualIndex = expectedTitles.firstIndex(of: titleElement.label) else { continue }
+                if actualIndex < nextExpectedIndex { continue }
+
+                XCTAssertEqual(
+                    actualIndex,
+                    nextExpectedIndex,
+                    "Expected \(expectedTitles[nextExpectedIndex]) before \(titleElement.label)",
+                    file: file,
+                    line: line
+                )
+                nextExpectedIndex += 1
+
+                if nextExpectedIndex == expectedTitles.count {
+                    return
+                }
+            }
+
+            if attempt < 19 {
+                app.swipeUp()
+            }
+        }
+
+        XCTFail(
+            "Only verified \(nextExpectedIndex) of \(expectedTitles.count) feed titles in newest-to-oldest order",
+            file: file,
+            line: line
+        )
+    }
+
+    private func tapReaderBackButton(platformId: String, file: StaticString = #filePath, line: UInt = #line) {
+        let navigationButtons = app.navigationBars.buttons
+        let firstButton = navigationButtons.element(boundBy: 0)
+        if firstButton.waitForExistence(timeout: 3), firstButton.isHittable {
+            firstButton.tap()
+            return
+        }
+
+        let fallback = waitForAnyButton(containing: ["Back", "OshiReader", "戻る", "返回"], timeout: 2)
+        if let fallback, fallback.isHittable {
+            fallback.tap()
+            return
+        }
+
+        XCTFail("Could not return from Reader for \(platformId)", file: file, line: line)
     }
 
     private func assertReaderLoadedWithoutFallbackBanner(file: StaticString = #filePath, line: UInt = #line) {

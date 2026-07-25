@@ -6,7 +6,12 @@ import pytest
 
 from app.connectors.base import SourceItemCreate
 from app.models import CollectionMode
-from scripts.smoke_sources import _check_connector, check_connector
+from scripts.smoke_sources import KOREAN_ARTIST_KEYWORDS, _check_connector, check_connector
+
+
+def test_korean_artist_smoke_preset_is_representative_and_unique():
+    assert KOREAN_ARTIST_KEYWORDS == ["BTS", "BLACKPINK", "IU", "NewJeans", "SEVENTEEN"]
+    assert len(KOREAN_ARTIST_KEYWORDS) == len(set(KOREAN_ARTIST_KEYWORDS))
 
 
 class FakeConnector:
@@ -20,6 +25,19 @@ class FakeConnector:
         if self.error:
             raise self.error
         return self.items
+
+
+class ErrorThenItemsConnector:
+    PLATFORM = "fake"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def fetch(self, keyword: str, mode: CollectionMode):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("first keyword failed")
+        return [_item("Aiko result")]
 
 
 def _item(
@@ -111,6 +129,20 @@ async def test_rich_check_connector_accepts_keyword_matching_items():
     assert result.ok is True
     assert result.status == "ok"
     assert result.samples[0]["keyword_match"] is True
+
+
+@pytest.mark.asyncio
+async def test_rich_check_connector_reports_any_fetch_error_across_keywords():
+    result = await _check_connector(
+        ErrorThenItemsConnector(),
+        ["Aiko", "IU"],
+        CollectionMode.ALL_INFO,
+        page_limit=0,
+    )
+
+    assert result.ok is False
+    assert result.status == "fetch_failed"
+    assert result.error == "RuntimeError: first keyword failed"
 
 
 @pytest.mark.asyncio

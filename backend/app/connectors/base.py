@@ -172,6 +172,7 @@ class SourceItemCreate:
     raw_payload: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        self.raw_payload = dict(self.raw_payload or {})
         if "date_parsed" not in self.raw_payload:
             marker = getattr(self.published_at, "date_parsed", None)
             if marker is not None:
