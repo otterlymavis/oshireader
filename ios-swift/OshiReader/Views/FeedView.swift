@@ -715,6 +715,7 @@ struct FeedView: View {
                     let currentItems = db.currentCustomFeedItems(customItems)
                     if !currentItems.isEmpty {
                         _ = db.mergeItems(newItems: currentItems)
+                        db.flushPendingFeedItemsSave()
                     }
                 }
                 customUrlString = ""
@@ -881,7 +882,11 @@ struct FeedView: View {
         guard !isRefreshing else { return }
         isRefreshing = true
         refreshErrorMessage = nil
-        defer { isRefreshing = false; isScrapingFallback = false }
+        defer {
+            db.flushPendingFeedItemsSave()
+            isRefreshing = false
+            isScrapingFallback = false
+        }
 
         var report = await quickRefresh(
             skipTermSync: skipTermSync,

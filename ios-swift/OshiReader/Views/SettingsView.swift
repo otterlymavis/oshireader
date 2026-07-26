@@ -486,6 +486,7 @@ struct SettingsView: View {
         )
         guard !fallbackPlatforms.isEmpty else { return }
         let searchTerms = [currentTerm.keyword] + currentTerm.aliases
+        var mergedAnyItems = false
 
         await withTaskGroup(of: (searchTerm: String, items: [FeedItem]).self) { group in
             for searchTerm in searchTerms {
@@ -517,8 +518,12 @@ struct SettingsView: View {
                 }
                 if !mergeableItems.isEmpty {
                     _ = db.mergeItems(newItems: mergeableItems, notifyOnNew: false)
+                    mergedAnyItems = true
                 }
             }
+        }
+        if mergedAnyItems {
+            db.flushPendingFeedItemsSave()
         }
     }
 

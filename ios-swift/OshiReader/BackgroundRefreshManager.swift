@@ -882,6 +882,7 @@ final class BackgroundRefreshManager {
         AppLogger.network.notice("Background refresh started")
         isRefreshing = true
         defer {
+            LocalDB.shared.flushPendingFeedItemsSave()
             isRefreshing = false
             schedule()
             AppLogger.network.notice("Background refresh finished")
@@ -914,6 +915,7 @@ final class BackgroundRefreshManager {
         AppLogger.network.notice("Background refresh started")
         isRefreshing = true
         defer {
+            LocalDB.shared.flushPendingFeedItemsSave()
             isRefreshing = false
             schedule()
             AppLogger.network.notice("Background refresh finished")

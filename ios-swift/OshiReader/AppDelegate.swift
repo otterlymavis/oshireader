@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         guard !NetworkManager.shared.isUnitTesting else { return }
+        LocalDB.shared.flushPendingFeedItemsSave()
         BackgroundRefreshManager.shared.schedule()
         BackgroundRefreshManager.shared.refreshBeforeSuspensionIfNeeded(application: application)
     }
@@ -76,6 +77,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 AppLogger.network.notice("Silent push merged preview payload before backend feed refresh")
             }
             let refreshed = await BackgroundRefreshManager.shared.refreshForBackground(triggerPoll: shouldTriggerPoll)
+            LocalDB.shared.flushPendingFeedItemsSave()
             BackgroundRefreshLiveTestProbe.recordCompleted(success: refreshed || mergedPreview)
             AppLogger.network.notice("Silent push background refresh completed success=\(refreshed)")
             completionHandler(refreshed || mergedPreview ? .newData : .failed)

@@ -40,6 +40,38 @@ enum FeedItemPolicy {
 
 @MainActor
 class LocalDB: ObservableObject {
+    private final class PendingFeedItemsSave: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        private var completed = false
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            lock.unlock()
+        }
+
+        func complete() {
+            lock.lock()
+            completed = true
+            lock.unlock()
+        }
+
+        var isCancelled: Bool {
+            lock.lock()
+            let value = cancelled
+            lock.unlock()
+            return value
+        }
+
+        var isPending: Bool {
+            lock.lock()
+            let value = !cancelled && !completed
+            lock.unlock()
+            return value
+        }
+    }
+
     static let shared = LocalDB(directory: FileManager.default
         .urls(for: .documentDirectory, in: .userDomainMask)[0])
 
@@ -67,14 +99,17 @@ class LocalDB: ObservableObject {
     private let discussionActivityPlatforms: Set<String> = ["5ch", "girlschannel", "togetter"]
     private let termDeleteTombstonesFileName = "term_delete_tombstones"
     private let termDeleteTombstoneLifetime: TimeInterval = 10 * 60
+    private let feedItemsSaveCoalescingDelay: DispatchTimeInterval
     private var termDeleteTombstones: [String: Date] = [:]
+    private var pendingFeedItemsSave: PendingFeedItemsSave?
 
     // Bump this whenever a migration step is added below.
     private static let currentSchemaVersion = 5
     private static let schemaVersionKey = "localdb_schema_version"
 
-    init(directory: URL) {
+    init(directory: URL, feedItemsSaveCoalescingDelay: DispatchTimeInterval = .milliseconds(250)) {
         self.storeDirectory = directory
+        self.feedItemsSaveCoalescingDelay = feedItemsSaveCoalescingDelay
         let loadChangedFeedScope = loadAll()
         let migrationsChangedFeedScope = runMigrationsIfNeeded()
         logStartupCacheDiagnostics()
@@ -203,7 +238,7 @@ class LocalDB: ObservableObject {
             return !candidates.contains(where: { self.matchesKeyword(item: item, kw: $0) })
         }
         if self.feedItems.count != originalCount {
-            saveToFile(name: "feed_items", value: self.feedItems)
+            saveFeedItemsImmediately()
             AppLogger.persistence.info(
                 "Pruned \(originalCount - self.feedItems.count) irrelevant cached feed items"
             )
@@ -217,7 +252,7 @@ class LocalDB: ObservableObject {
         let originalCount = self.feedItems.count
         self.feedItems.removeAll { FeedItemPolicy.shouldPruneLegacyYouTubeItem($0) }
         guard self.feedItems.count != originalCount else { return false }
-        saveToFile(name: "feed_items", value: self.feedItems)
+        saveFeedItemsImmediately()
         AppLogger.persistence.info(
             "Pruned \(originalCount - self.feedItems.count) legacy YouTube feed items"
         )
@@ -262,24 +297,65 @@ class LocalDB: ObservableObject {
         }
     }
 
+    nonisolated private func performSaveToFile<T: Encodable>(name: String, value: T, url: URL) {
+        guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) else { return }
+        do {
+            let data = try JSONEncoder().encode(value)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain,
+               nsError.code == CocoaError.Code.fileNoSuchFile.rawValue {
+                return
+            }
+            guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) else { return }
+            AppLogger.persistence.error("Failed to save \(name): \(error.localizedDescription)")
+        }
+    }
+
     private func saveToFile<T: Encodable>(name: String, value: T) {
         let url = fileURL(for: name)
         queue.async { [weak self] in
-            guard self != nil else { return }
-            guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) else { return }
-            do {
-                let data = try JSONEncoder().encode(value)
-                try data.write(to: url, options: [.atomic])
-            } catch {
-                let nsError = error as NSError
-                if nsError.domain == NSCocoaErrorDomain,
-                   nsError.code == CocoaError.Code.fileNoSuchFile.rawValue {
-                    return
-                }
-                guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) else { return }
-                AppLogger.persistence.error("Failed to save \(name): \(error.localizedDescription)")
+            self?.performSaveToFile(name: name, value: value, url: url)
+        }
+    }
+
+    private func saveFeedItemsSoon() {
+        pendingFeedItemsSave?.cancel()
+        let url = fileURL(for: "feed_items")
+        let snapshot = feedItems
+        let pendingSave = PendingFeedItemsSave()
+        pendingFeedItemsSave = pendingSave
+        queue.asyncAfter(deadline: .now() + feedItemsSaveCoalescingDelay) { [weak self, weak pendingSave] in
+            guard let pendingSave, pendingSave.isPending else { return }
+            self?.performSaveToFile(name: "feed_items", value: snapshot, url: url)
+            pendingSave.complete()
+            Task { @MainActor [weak self, weak pendingSave] in
+                guard let self, let pendingSave, self.pendingFeedItemsSave === pendingSave else { return }
+                self.pendingFeedItemsSave = nil
             }
         }
+    }
+
+    private func saveFeedItemsImmediately() {
+        pendingFeedItemsSave?.cancel()
+        pendingFeedItemsSave = nil
+        saveToFile(name: "feed_items", value: feedItems)
+    }
+
+    func flushPendingFeedItemsSave() {
+        guard let pendingSave = pendingFeedItemsSave else {
+            queue.sync {}
+            return
+        }
+        if pendingSave.isPending {
+            pendingSave.cancel()
+            self.pendingFeedItemsSave = nil
+            saveToFile(name: "feed_items", value: feedItems)
+        } else {
+            self.pendingFeedItemsSave = nil
+        }
+        queue.sync {}
     }
 
     // MARK: - Watch Terms
@@ -382,7 +458,7 @@ class LocalDB: ObservableObject {
         terms.removeAll { deletedKeywords.contains($0.keyword) }
         feedItems.removeAll { deletedKeywords.contains($0.watch_term_keyword) }
         guard terms.count != originalTermCount || feedItems.count != originalFeedCount else { return false }
-        saveToFile(name: "feed_items", value: feedItems)
+        saveFeedItemsImmediately()
         saveToFile(name: "terms", value: terms)
         AppLogger.persistence.info("Applied \(deletedKeywords.count) persisted watch-term delete tombstones")
         return true
@@ -397,7 +473,7 @@ class LocalDB: ObservableObject {
                 item.watch_term_keyword == keyword ||
                     (backendTermID != nil && item.watch_term_id == backendTermID)
             }
-            saveToFile(name: "feed_items", value: feedItems)
+            saveFeedItemsImmediately()
             saveToFile(name: "terms", value: terms)
             BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         }
@@ -512,7 +588,7 @@ class LocalDB: ObservableObject {
         guard finalItems != feedItems else { return addedCount }
 
         feedItems = finalItems
-        saveToFile(name: "feed_items", value: feedItems)
+        saveFeedItemsSoon()
         return addedCount
     }
 
@@ -550,7 +626,7 @@ class LocalDB: ObservableObject {
         hiddenItems.insert(key)
         saveToFile(name: "hidden_items", value: Array(hiddenItems))
         feedItems.removeAll(where: { $0.id == id && $0.watch_term_keyword == watchTermKeyword })
-        saveToFile(name: "feed_items", value: feedItems)
+        saveFeedItemsImmediately()
     }
 
     func currentCustomFeedItems(_ items: [FeedItem]) -> [FeedItem] {
@@ -966,7 +1042,7 @@ class LocalDB: ObservableObject {
                     (item.id == id || removedUrls.contains(item.url))
             }
             if feedItems.count != originalFeedCount {
-                saveToFile(name: "feed_items", value: feedItems)
+                saveFeedItemsImmediately()
             }
             BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         }
@@ -974,6 +1050,9 @@ class LocalDB: ObservableObject {
 
     // MARK: - Data Reset
     func clearAllData() {
+        pendingFeedItemsSave?.cancel()
+        pendingFeedItemsSave = nil
+        queue.sync {}
         let fileNames = [
             "terms", "feed_items", "saved_pages", "custom_urls",
             "subscribed_platforms", "oshi_avatars", "oshi_compositions", "hidden_items",

@@ -3706,6 +3706,191 @@ final class OshiReaderTests: XCTestCase {
     }
 
     // MARK: - Persistence round-trip
+    func testMergeItemsCoalescesFeedPersistenceUntilFlush() throws {
+        db = LocalDB(directory: tempDir, feedItemsSaveCoalescingDelay: .seconds(60))
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "youtube:coalesce-1",
+                platform: "youtube",
+                url: "https://youtube.com/watch?v=coalesce-1",
+                title: "First",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "video",
+                published_at: now,
+                watch_term_keyword: "Aiko",
+                fetched_at: now,
+                source: "youtube"
+            ),
+        ])
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "youtube:coalesce-2",
+                platform: "youtube",
+                url: "https://youtube.com/watch?v=coalesce-2",
+                title: "Second",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "video",
+                published_at: now,
+                watch_term_keyword: "Aiko",
+                fetched_at: now,
+                source: "youtube"
+            ),
+        ])
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("feed_items.json").path),
+            "Merge persistence should be delayed so refresh bursts can coalesce into one feed write"
+        )
+
+        db.flushPendingFeedItemsSave()
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(
+            Set(freshDB.feedItems.map(\.id)),
+            ["youtube:coalesce-1", "youtube:coalesce-2"]
+        )
+    }
+
+    func testFlushAfterDelayedFeedSaveDoesNotRewriteFile() throws {
+        db = LocalDB(directory: tempDir, feedItemsSaveCoalescingDelay: .milliseconds(10))
+        let now = ISO8601DateFormatter().string(from: Date())
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        _ = db.mergeItems(newItems: [
+            FeedItem(
+                id: "youtube:coalesce-finished",
+                platform: "youtube",
+                url: "https://youtube.com/watch?v=coalesce-finished",
+                title: "Finished",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "video",
+                published_at: now,
+                watch_term_keyword: "Aiko",
+                fetched_at: now,
+                source: "youtube"
+            ),
+        ])
+
+        let expectation = XCTestExpectation(description: "delayed feed write")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { expectation.fulfill() }
+        wait(for: [expectation], timeout: 1.0)
+
+        let feedURL = tempDir.appendingPathComponent("feed_items.json")
+        let writtenDate = try XCTUnwrap(
+            feedURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        )
+
+        db.flushPendingFeedItemsSave()
+
+        let dateAfterFlush = try XCTUnwrap(
+            feedURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        )
+        XCTAssertEqual(dateAfterFlush, writtenDate)
+    }
+
+    func testDeleteFeedItemCancelsPendingMergePersistence() throws {
+        db = LocalDB(directory: tempDir, feedItemsSaveCoalescingDelay: .seconds(60))
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "youtube:pending-delete",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=pending-delete",
+            title: "Pending delete",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "youtube"
+        )
+
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        _ = db.mergeItems(newItems: [item])
+        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
+        db.flushPendingFeedItemsSave()
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertTrue(freshDB.feedItems.isEmpty)
+        XCTAssertTrue(freshDB.hiddenItems.contains("youtube:pending-delete::Aiko"))
+    }
+
+    func testFlushWaitsForImmediateFeedSaveAfterDelete() throws {
+        db = LocalDB(directory: tempDir, feedItemsSaveCoalescingDelay: .milliseconds(1))
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = FeedItem(
+            id: "youtube:immediate-delete",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=immediate-delete",
+            title: "Immediate delete",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: now,
+            watch_term_keyword: "Aiko",
+            fetched_at: now,
+            source: "youtube"
+        )
+
+        db.setSubscribedPlatforms(platforms: ["youtube"])
+        _ = db.saveTerm(keyword: "Aiko", collectionMode: .allInfo)
+        _ = db.mergeItems(newItems: [item])
+        db.flushPendingFeedItemsSave()
+
+        var freshDB = LocalDB(directory: tempDir)
+        XCTAssertEqual(freshDB.feedItems.map(\.id), ["youtube:immediate-delete"])
+
+        db.deleteFeedItem(id: item.id, watchTermKeyword: item.watch_term_keyword)
+        db.flushPendingFeedItemsSave()
+
+        freshDB = LocalDB(directory: tempDir)
+        XCTAssertTrue(freshDB.feedItems.isEmpty)
+    }
+
+    func testPreviewMergePersistsAfterExplicitFlush() throws {
+        db = LocalDB(directory: tempDir, feedItemsSaveCoalescingDelay: .seconds(60))
+        let itemID = "youtube:notification-flush"
+        let item = FeedItem(
+            id: itemID,
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=notification-flush",
+            title: "Notification flush",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: "2026-06-20T12:00:00Z",
+            watch_term_keyword: "Notification Flush",
+            fetched_at: "2026-06-20T12:00:00Z",
+            source: "youtube_api"
+        )
+
+        XCTAssertEqual(db.mergeItems(newItems: [item], notifyOnNew: false, preserveIncomingItems: true), 1)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("feed_items.json").path),
+            "Preview-style merges use delayed feed persistence until an explicit lifecycle/background flush"
+        )
+
+        db.flushPendingFeedItemsSave()
+
+        let freshDB = LocalDB(directory: tempDir)
+        XCTAssertEqual(freshDB.feedItems.map(\.id), [itemID])
+    }
+
     func testPersistenceRoundTrip() throws {
         _ = db.saveTerm(keyword: "Persisted Oshi", collectionMode: .allInfo)
         XCTAssertEqual(db.terms.count, 1)
@@ -4235,7 +4420,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:clear-test", platform: "youtube",
             url: "https://youtube.com/watch?v=clear-test",
             title: "Clear test", content_text: nil, author: nil, thumbnail_url: nil,
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube"
         )
         _ = db.mergeItems(newItems: [item])
         _ = db.toggleSaved(item: item)
@@ -4257,6 +4443,13 @@ final class OshiReaderTests: XCTestCase {
 
         // Default subscribed platforms are restored after clear
         XCTAssertFalse(db.subscribedPlatforms.isEmpty)
+
+        db.flushPendingFeedItemsSave()
+        let freshDB = LocalDB(directory: tempDir)
+        XCTAssertTrue(freshDB.terms.isEmpty)
+        XCTAssertTrue(freshDB.feedItems.isEmpty)
+        XCTAssertTrue(freshDB.savedPages.isEmpty)
+        XCTAssertTrue(freshDB.customUrls.isEmpty)
     }
 
     // MARK: - Date cutoff uses proper Date comparison (not string sort)
