@@ -173,6 +173,10 @@ uptime checks; the GitHub `Poller monitor` workflow checks it every 6 hours, and
 any external monitor should use a similarly low cadence. Its manual `POST /run`
 endpoint requires the same bearer token as the backend.
 
+For external uptime monitoring, use the fast liveness endpoint instead:
+`https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/liveness`.
+It checks Worker availability without waiting on Render diagnostics.
+
 Current Worker:
 `https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev`
 

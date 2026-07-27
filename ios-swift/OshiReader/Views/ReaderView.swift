@@ -33,8 +33,12 @@ struct ReaderView: View {
     @State private var imageAction: ReaderImageAction?
     @State private var saveImageStatus = ""
     @State private var showingSaveImageStatus = false
-    @State private var saveAllImagesCounter = 0
-    @State private var isSavingAllImages = false
+    @State private var selectImagesCounter = 0
+    @State private var imageSelectionActionCounter = 0
+    @State private var imageSelectionAction = ""
+    @State private var isSelectingImages = false
+    @State private var selectedImageCount = 0
+    @State private var isSavingSelectedImages = false
     @State private var webLoadState: ReaderWebLoadState = .loading
     @State private var showSignInBanner = false
     @State private var isSigningIntoX = false
@@ -107,16 +111,34 @@ struct ReaderView: View {
                             fontSize: fontSize,
                             fontFamilyCSS: appearance.readerFontFamilyCSS,
                             readerMode: readerMode,
-                            saveAllImagesCounter: saveAllImagesCounter,
+                            selectImagesCounter: selectImagesCounter,
+                            imageSelectionActionCounter: imageSelectionActionCounter,
+                            imageSelectionAction: imageSelectionAction,
                             onLoadStateChange: { state in
                                 webLoadState = state
                                 if state == .loading {
+                                    isSelectingImages = false
+                                    isSavingSelectedImages = false
+                                    selectedImageCount = 0
                                     showSignInBanner = false
                                     showOpenInBrowserBanner = false
                                 }
                             },
                             onImageAction: { imageAction = $0 },
-                            onSaveAllImages: { urls in saveAllImages(urls) },
+                            onImageSelectionState: { selectedImageCount = $0 },
+                            onImageSelectionUnavailable: {
+                                isSelectingImages = false
+                                isSavingSelectedImages = false
+                                selectedImageCount = 0
+                            },
+                            onImageSelectionFailure: {
+                                isSelectingImages = false
+                                isSavingSelectedImages = false
+                                selectedImageCount = 0
+                                saveImageStatus = i18n.t("imageSelectionError")
+                                showingSaveImageStatus = true
+                            },
+                            onSelectedImages: { urls in saveSelectedImages(urls) },
                             onContentBlocked: {
                                 if feedItem.platform == "twitter" {
                                     if !isSigningIntoX { showSignInBanner = true }
@@ -179,19 +201,39 @@ struct ReaderView: View {
                 .accessibilityIdentifier("reader.bookmarkButton")
             }
 
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if !Self.usesSystemSafari(for: feedItem) {
-                    if isSavingAllImages {
+                    if isSavingSelectedImages {
                         ProgressView().tint(theme.colors.primary)
-                    } else {
+                    } else if isSelectingImages {
+                        Button(i18n.t("cancel")) {
+                            imageSelectionAction = "cancel"
+                            imageSelectionActionCounter += 1
+                            isSelectingImages = false
+                            selectedImageCount = 0
+                        }
+                        .accessibilityIdentifier("reader.cancelImageSelectionButton")
                         Button {
-                            isSavingAllImages = true
-                            saveAllImagesCounter += 1
+                            imageSelectionAction = "finish"
+                            imageSelectionActionCounter += 1
+                            isSavingSelectedImages = true
                         } label: {
-                            Image(systemName: "photo.on.rectangle.angled")
+                            Image(systemName: "square.and.arrow.down")
                                 .foregroundColor(theme.colors.primary)
                         }
-                        .accessibilityIdentifier("reader.saveAllImagesButton")
+                        .accessibilityLabel(i18n.tFormat("saveSelectedImages", selectedImageCount))
+                        .disabled(selectedImageCount == 0)
+                        .accessibilityIdentifier("reader.saveSelectedImagesButton")
+                    } else {
+                        Button {
+                            isSelectingImages = true
+                            selectedImageCount = 0
+                            selectImagesCounter += 1
+                        } label: {
+                            Image(systemName: "checklist")
+                                .foregroundColor(theme.colors.primary)
+                        }
+                        .accessibilityIdentifier("reader.selectImagesButton")
                     }
                 }
             }
@@ -513,10 +555,12 @@ struct ReaderView: View {
         }
     }
 
-    private func saveAllImages(_ urls: [URL]) {
+    private func saveSelectedImages(_ urls: [URL]) {
         guard !urls.isEmpty else {
-            isSavingAllImages = false
-            saveImageStatus = i18n.t("imageNoLargeImages")
+            isSelectingImages = false
+            isSavingSelectedImages = false
+            selectedImageCount = 0
+            saveImageStatus = i18n.t("imageNoSelectedImages")
             showingSaveImageStatus = true
             return
         }
@@ -524,7 +568,9 @@ struct ReaderView: View {
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
                 await MainActor.run {
-                    isSavingAllImages = false
+                    isSelectingImages = false
+                    isSavingSelectedImages = false
+                    selectedImageCount = 0
                     saveImageStatus = i18n.t("photosAccessRequired")
                     showingSaveImageStatus = true
                 }
@@ -550,7 +596,9 @@ struct ReaderView: View {
                 for await ok in group where ok { saved += 1 }
             }
             await MainActor.run {
-                isSavingAllImages = false
+                isSelectingImages = false
+                isSavingSelectedImages = false
+                selectedImageCount = 0
                 saveImageStatus = saved > 0
                     ? i18n.tFormat("savedImagesToPhotos", saved)
                     : i18n.t("imageNoneSaved")
@@ -578,11 +626,28 @@ struct WebViewHelper: UIViewRepresentable {
     let fontSize: CGFloat
     let fontFamilyCSS: String
     let readerMode: Bool
-    let saveAllImagesCounter: Int
+    let selectImagesCounter: Int
+    let imageSelectionActionCounter: Int
+    let imageSelectionAction: String
     let onLoadStateChange: (ReaderWebLoadState) -> Void
     let onImageAction: (ReaderImageAction) -> Void
-    let onSaveAllImages: (([URL]) -> Void)?
+    let onImageSelectionState: (Int) -> Void
+    let onImageSelectionUnavailable: () -> Void
+    let onImageSelectionFailure: () -> Void
+    let onSelectedImages: ([URL]) -> Void
     let onContentBlocked: () -> Void
+
+    private static let uiTestImageFixtureHTML = """
+    <!doctype html>
+    <html><head><title>UITest image fixture</title></head>
+    <body><article>
+    <div class="oshi-uitest-image-row">
+    <button class="oshi-uitest-image-button" aria-label="fixture image one"><img class="oshi-uitest-image" src="https://example.com/fixture-image-one.jpg" alt="fixture image one" width="400" height="300"></button>
+    <button class="oshi-uitest-image-button" aria-label="fixture image two"><img class="oshi-uitest-image" src="https://example.com/fixture-image-two.jpg" alt="fixture image two" width="400" height="300"></button>
+    </div>
+    <p>This cached article contains deterministic image-selection fixtures.</p>
+    </article></body></html>
+    """
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -615,17 +680,32 @@ struct WebViewHelper: UIViewRepresentable {
             context.coordinator.currentRequestURL = requestURL
             context.coordinator.beginNewRequest()
             onLoadStateChange(.loading)
-            uiView.load(URLRequest(url: url))
+            if ProcessInfo.processInfo.arguments.contains("--uitesting-reader-images") {
+                uiView.loadHTMLString(Self.uiTestImageFixtureHTML, baseURL: url)
+            } else {
+                uiView.load(URLRequest(url: url))
+            }
         } else {
             uiView.evaluateJavaScript(styleInjectionJS(), completionHandler: nil)
         }
-        if saveAllImagesCounter != context.coordinator.lastSaveAllCounter {
-            context.coordinator.lastSaveAllCounter = saveAllImagesCounter
-            let callback = onSaveAllImages
-            uiView.evaluateJavaScript("(function(){ if(!window.__oshiCollectImages) return false; window.__oshiCollectImages(); return true; })()") { result, _ in
-                // If the function wasn't injected yet (page still loading), reset the spinner
-                if let ran = result as? Bool, !ran {
-                    DispatchQueue.main.async { callback?([]) }
+        if selectImagesCounter != context.coordinator.lastSelectImagesCounter {
+            context.coordinator.lastSelectImagesCounter = selectImagesCounter
+            uiView.evaluateJavaScript("(function(){ if(!window.__oshiBeginImageSelection) return false; window.__oshiBeginImageSelection(); return true; })()") { result, _ in
+                guard (result as? Bool) == true else {
+                    DispatchQueue.main.async { onImageSelectionUnavailable() }
+                    return
+                }
+            }
+        }
+        if imageSelectionActionCounter != context.coordinator.lastImageSelectionActionCounter {
+            context.coordinator.lastImageSelectionActionCounter = imageSelectionActionCounter
+            let functionName = imageSelectionAction == "finish"
+                ? "__oshiFinishImageSelection"
+                : "__oshiCancelImageSelection"
+            uiView.evaluateJavaScript("(function(){ if(!window.\(functionName)) return false; window.\(functionName)(); return true; })()") { result, _ in
+                guard (result as? Bool) == true else {
+                    DispatchQueue.main.async { onImageSelectionFailure() }
+                    return
                 }
             }
         }
@@ -635,6 +715,13 @@ struct WebViewHelper: UIViewRepresentable {
         let bgColorHex: String
         let textColorHex: String
         let linkHex: String
+        let uiTestFixtureCSS = ProcessInfo.processInfo.arguments.contains("--uitesting-reader-images")
+            ? """
+            .oshi-uitest-image-row { display: flex !important; gap: 8px !important; }
+            button.oshi-uitest-image-button { display: block !important; width: 48% !important; height: 280px !important; padding: 0 !important; border: 0 !important; background: #d8d8dc !important; }
+            img.oshi-uitest-image { width: 100% !important; height: 280px !important; background: #d8d8dc !important; }
+            """
+            : ""
 
         switch themeMode {
         case .light:
@@ -678,6 +765,7 @@ struct WebViewHelper: UIViewRepresentable {
                 overflow: hidden !important;
             }
             img, video { max-width: 100% !important; height: auto !important; border-radius: 8px !important; }
+            (uiTestFixtureCSS)
             pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
             a { color: \(linkHex) !important; }
             [data-oshireader-reader-root="true"] {
@@ -774,7 +862,8 @@ struct WebViewHelper: UIViewRepresentable {
 
     class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: WebViewHelper
-        var lastSaveAllCounter = 0
+        var lastSelectImagesCounter = 0
+        var lastImageSelectionActionCounter = 0
         var currentRequestURL: String?
         private var hasCommittedPage = false
         private var pendingFailure: DispatchWorkItem?
@@ -790,6 +879,7 @@ struct WebViewHelper: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             pendingFailure?.cancel()
+            DispatchQueue.main.async { self.parent.onImageSelectionUnavailable() }
             if !hasCommittedPage {
                 DispatchQueue.main.async { self.parent.onLoadStateChange(.loading) }
             }
@@ -965,10 +1055,13 @@ struct WebViewHelper: UIViewRepresentable {
                let rawUrl = body["url"] as? String,
                let url = URL(string: rawUrl) {
                 parent.onImageAction(ReaderImageAction(url: url, alt: body["alt"] as? String))
-            } else if type == "all-images",
+            } else if type == "image-selection-state",
+                      let count = body["count"] as? Int {
+                DispatchQueue.main.async { self.parent.onImageSelectionState(count) }
+            } else if type == "selected-images",
                       let rawUrls = body["urls"] as? [String] {
                 let urls = rawUrls.compactMap { URL(string: $0) }
-                DispatchQueue.main.async { self.parent.onSaveAllImages?(urls) }
+                DispatchQueue.main.async { self.parent.onSelectedImages(urls) }
             }
         }
     }
@@ -1101,6 +1194,7 @@ private let readerInjectedJS = """
 (function () {
   if (window.__OSHIREADER_IMAGE_ACTIONS__) return true;
   window.__OSHIREADER_IMAGE_ACTIONS__ = true;
+  if (window.top !== window) return true;
 
   function absoluteUrl(value) {
     if (!value) return '';
@@ -1143,39 +1237,120 @@ private let readerInjectedJS = """
     return true;
   }
 
-  window.__oshiCollectImages = function() {
-    var seen = new Set();
-    var urls = [];
-    var imgs = document.querySelectorAll('img');
-    imgs.forEach(function(img) {
-      var url = img.currentSrc || img.src || img.getAttribute('data-src') ||
-                img.getAttribute('data-original') || img.getAttribute('data-lazy-src') ||
-                srcFromSrcset(img.getAttribute('srcset') || img.getAttribute('data-srcset') || '');
-      url = absoluteUrl(url);
-      if (!url || !/^https?:\\/\\//i.test(url)) return;
-      if (seen.has(url)) return;
+  var imageSelectionMode = false;
+  var selectedImageUrls = new Set();
+  var imageSelectionStyle = null;
 
-      // Exclude images that are too small to be article photos
-      var w = img.naturalWidth || img.width || 0;
-      var h = img.naturalHeight || img.height || 0;
-      if (w > 0 && h > 0 && (w < 300 || h < 200)) return;
+  function selectableImageUrl(img) {
+    var placeholderPattern = /\\/(thumb(nail)?s?|icon|avatar|profile|logo|favicon|placeholder|sprite|emoji|badge|sticker|banner|ad)[_\\-./#]|[_\\-](thumb|icon|avatar|logo|small|xs|sm|tiny|mini)[._]|\\b1x1\\b|\\/1\\/1\\.|pixel|beacon/i;
+    var currentUrl = absoluteUrl(img.currentSrc || '');
+    var sourceUrl = absoluteUrl(img.src || img.getAttribute('src') || '');
+    var naturalWidth = img.naturalWidth || 0;
+    var naturalHeight = img.naturalHeight || 0;
+    var hasSmallNaturalImage = naturalWidth > 0 && naturalHeight > 0 && (naturalWidth < 300 || naturalHeight < 200);
+    var isUsableCandidate = function(candidate) {
+      if (!/^https?:\\/\\//i.test(candidate) || placeholderPattern.test(candidate)) return false;
+      if (hasSmallNaturalImage && (candidate === currentUrl || candidate === sourceUrl)) return false;
+      return true;
+    };
+    var primaryCandidates = [
+      currentUrl,
+      sourceUrl,
+      srcFromSrcset(img.getAttribute('srcset') || '')
+    ].map(absoluteUrl).filter(Boolean);
+    var lazyCandidates = [
+      img.getAttribute('data-src'),
+      img.getAttribute('data-original'),
+      img.getAttribute('data-lazy-src'),
+      srcFromSrcset(img.getAttribute('data-srcset') || '')
+    ].map(absoluteUrl).filter(Boolean);
+    var url = primaryCandidates.concat(lazyCandidates).find(isUsableCandidate) || '';
+    if (!url || !/^https?:\\/\\//i.test(url)) return '';
+    var w = naturalWidth || img.width || 0;
+    var h = naturalHeight || img.height || 0;
+    if (hasSmallNaturalImage && url !== currentUrl && url !== sourceUrl) {
+      w = img.width || 0;
+      h = img.height || 0;
+    }
+    if (placeholderPattern.test(img.currentSrc || img.src || '') && img.getBoundingClientRect) {
+      var rect = img.getBoundingClientRect();
+      w = Math.max(w, rect.width || 0);
+      h = Math.max(h, rect.height || 0);
+    }
+    if (w > 0 && h > 0 && (w < 300 || h < 200)) return '';
+    var lower = url.toLowerCase().replace(/\\?.*$/, '');
+    if (placeholderPattern.test(lower)) return '';
+    return url;
+  }
 
-      // Exclude by URL pattern: thumbnails, icons, avatars, logos, tracking pixels
-      var lower = url.toLowerCase().replace(/\\?.*$/, '');
-      if (/\\/(thumb(nail)?s?|icon|avatar|profile|logo|favicon|placeholder|sprite|emoji|badge|sticker|banner|ad)[_\\-./#]|[_\\-](thumb|icon|avatar|logo|small|xs|sm|tiny|mini)[._]|\\b1x1\\b|\\/1\\/1\\.|pixel|beacon/.test(lower)) return;
+  function postSelectionState() {
+    window.webkit.messageHandlers.oshireader.postMessage({ type: 'image-selection-state', count: selectedImageUrls.size });
+  }
 
-      seen.add(url);
-      urls.push(url);
-    });
-    window.webkit.messageHandlers.oshireader.postMessage({ type: 'all-images', urls: urls });
+  function updateSelectionStyle(img, selected) {
+    img.setAttribute('data-oshireader-selected', selected ? 'true' : 'false');
+  }
+
+  function toggleImageSelection(img) {
+    var url = selectableImageUrl(img);
+    if (!url) return false;
+    if (selectedImageUrls.has(url)) {
+      selectedImageUrls.delete(url);
+      document.querySelectorAll('img[data-oshireader-selected="true"]').forEach(function(candidate) {
+        if (selectableImageUrl(candidate) === url) updateSelectionStyle(candidate, false);
+      });
+    } else {
+      selectedImageUrls.add(url);
+      updateSelectionStyle(img, true);
+    }
+    postSelectionState();
+    return true;
+  }
+
+  window.__oshiBeginImageSelection = function() {
+    imageSelectionMode = true;
+    selectedImageUrls = new Set();
+    if (!imageSelectionStyle) {
+      imageSelectionStyle = document.createElement('style');
+      imageSelectionStyle.id = 'oshireader-image-selection-style';
+      imageSelectionStyle.textContent = 'img[data-oshireader-selected="true"] { outline: 4px solid #7C3AED !important; outline-offset: 3px !important; opacity: .78 !important; }';
+      document.head.appendChild(imageSelectionStyle);
+    }
+    postSelectionState();
+  };
+
+  window.__oshiCancelImageSelection = function() {
+    imageSelectionMode = false;
+    selectedImageUrls = new Set();
+    document.querySelectorAll('img[data-oshireader-selected="true"]').forEach(function(img) { updateSelectionStyle(img, false); });
+    postSelectionState();
+  };
+
+  window.__oshiFinishImageSelection = function() {
+    var urls = Array.from(selectedImageUrls);
+    imageSelectionMode = false;
+    selectedImageUrls = new Set();
+    document.querySelectorAll('img[data-oshireader-selected="true"]').forEach(function(img) { updateSelectionStyle(img, false); });
+    window.webkit.messageHandlers.oshireader.postMessage({ type: 'selected-images', urls: urls });
   };
 
   document.addEventListener('click', function(event) {
     var el = event.target;
     var depth = 0;
     while (el && el.nodeType === 1 && depth < 6) {
-      if ((el.tagName || '').toUpperCase() === 'IMG') {
-        if (postImage(el)) {
+      var image = (el.tagName || '').toUpperCase() === 'IMG' ? el : null;
+      if (!image && el.closest) {
+        var control = el.closest('a,button,[role="button"]');
+        image = control && control.querySelector ? control.querySelector('img') : null;
+      }
+      if (image) {
+        if (imageSelectionMode) {
+          toggleImageSelection(image);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (postImage(image)) {
           event.preventDefault();
           event.stopPropagation();
         }
@@ -1187,6 +1362,13 @@ private let readerInjectedJS = """
   }, true);
 
   document.addEventListener('contextmenu', function(event) {
+    if (imageSelectionMode) {
+      if (event.target && (event.target.tagName || '').toUpperCase() === 'IMG') {
+        toggleImageSelection(event.target);
+      }
+      event.preventDefault();
+      return;
+    }
     if (postImage(event.target)) event.preventDefault();
   }, true);
   return true;

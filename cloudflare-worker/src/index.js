@@ -738,6 +738,9 @@ export default {
 
   async fetch(request, env) {
     const url = new URL(request.url);
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/liveness") {
+      return json({ status: "ok", service: "oshireader-feed-poller" }, 200);
+    }
     if (request.method === "GET" && url.pathname === "/health") {
       try {
         const backendURL = (env.BACKEND_URL || "https://oshireader.onrender.com").replace(/\/+$/, "");

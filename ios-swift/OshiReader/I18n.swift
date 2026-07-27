@@ -417,6 +417,24 @@ class I18nManager: ObservableObject {
             "zh-TW": "已儲存 %d 張圖片到相簿。",
             "zh-CN": "已保存 %d 张图片到照片。"
         ],
+        "saveSelectedImages": [
+            "en": "Save (%d)",
+            "ja": "保存（%d）",
+            "zh-TW": "儲存（%d）",
+            "zh-CN": "保存（%d）"
+        ],
+        "imageNoSelectedImages": [
+            "en": "No images selected.",
+            "ja": "画像が選択されていません。",
+            "zh-TW": "未選取圖片。",
+            "zh-CN": "未选择图片。"
+        ],
+        "imageSelectionError": [
+            "en": "Image selection is unavailable. Please try again.",
+            "ja": "画像選択を利用できません。もう一度お試しください。",
+            "zh-TW": "無法使用圖片選取功能，請再試一次。",
+            "zh-CN": "无法使用图片选择功能，请重试。"
+        ],
         "imageNoneSaved": [
             "en": "No images could be saved.",
             "ja": "画像を保存できませんでした。",

@@ -11,6 +11,11 @@ This repo relies on three moving pieces for automatic feed notifications:
 
 ## Health Checks
 
+External uptime monitor:
+
+- UptimeRobot should monitor `https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/liveness`.
+- `/liveness` is a fast Worker availability check and does not call Render.
+
 Primary scheduled monitor:
 
 - GitHub Actions `Poller monitor`, every 6 hours.

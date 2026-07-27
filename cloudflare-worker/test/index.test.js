@@ -3,6 +3,27 @@ import test from "node:test";
 
 import worker, { triggerBackendPoll } from "../src/index.js";
 
+test("liveness endpoint is fast and does not call the backend", async () => {
+  const originalFetch = globalThis.fetch;
+  let backendCalled = false;
+  globalThis.fetch = async () => {
+    backendCalled = true;
+    throw new Error("backend should not be queried");
+  };
+  const response = await worker.fetch(
+    new Request("https://worker.example/liveness"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+  globalThis.fetch = originalFetch;
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    status: "ok",
+    service: "oshireader-feed-poller",
+  });
+  assert.equal(backendCalled, false);
+});
+
 test("health endpoint does not require the admin token", async () => {
   const originalFetch = globalThis.fetch;
   const now = new Date().toISOString();

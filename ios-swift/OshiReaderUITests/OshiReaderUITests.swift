@@ -57,6 +57,9 @@ final class OshiReaderUITests: XCTestCase {
     }
 
     func testOpenReaderFromFeedAndSave() throws {
+        app.terminate()
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-reader-images"])
+        app.launch()
         tapTab(index: 0, labels: ["Feed"])
 
         let headline = app.staticTexts["UITest Oshi headline"]
@@ -66,6 +69,33 @@ final class OshiReaderUITests: XCTestCase {
         let readerModeButton = waitForButton(identifier: "reader.modeToggleButton", timeout: 10)
         XCTAssertNotNil(readerModeButton)
         assertReaderLoadedWithoutFallbackBanner()
+
+        let selectImagesButton = app.buttons["reader.selectImagesButton"]
+        XCTAssertTrue(selectImagesButton.waitForExistence(timeout: 3))
+        selectImagesButton.tap()
+        let cancelSelectionButton = app.buttons["reader.cancelImageSelectionButton"]
+        let saveSelectedImagesButton = app.buttons["reader.saveSelectedImagesButton"]
+        XCTAssertTrue(cancelSelectionButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(saveSelectedImagesButton.waitForExistence(timeout: 3))
+        XCTAssertFalse(saveSelectedImagesButton.isEnabled)
+
+        let firstImage = app.buttons["fixture image one"]
+        let secondImage = app.buttons["fixture image two"]
+        XCTAssertTrue(firstImage.waitForExistence(timeout: 3))
+        XCTAssertTrue(secondImage.waitForExistence(timeout: 3))
+        firstImage.tap()
+        XCTAssertTrue(saveSelectedImagesButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(saveSelectedImagesButton.isEnabled)
+        XCTAssertTrue(saveSelectedImagesButton.label.contains("1"))
+        secondImage.tap()
+        let twoSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "2"),
+            object: saveSelectedImagesButton
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [twoSelected], timeout: 3), .completed)
+        saveSelectedImagesButton.tap()
+        XCTAssertTrue(selectImagesButton.waitForExistence(timeout: 10))
+
         readerModeButton?.tap()
         assertReaderLoadedWithoutFallbackBanner()
     }
