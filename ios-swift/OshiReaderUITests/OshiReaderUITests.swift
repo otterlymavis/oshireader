@@ -94,6 +94,11 @@ final class OshiReaderUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter().wait(for: [twoSelected], timeout: 3), .completed)
         saveSelectedImagesButton.tap()
+        let saveStatusAlert = app.alerts.firstMatch
+        XCTAssertTrue(saveStatusAlert.waitForExistence(timeout: 10))
+        let saveStatusMessage = saveStatusAlert.staticTexts.element(boundBy: 1)
+        XCTAssertTrue(saveStatusMessage.exists)
+        XCTAssertFalse(saveStatusMessage.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         XCTAssertTrue(selectImagesButton.waitForExistence(timeout: 10))
 
         readerModeButton?.tap()

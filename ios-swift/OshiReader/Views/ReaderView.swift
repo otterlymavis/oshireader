@@ -765,7 +765,7 @@ struct WebViewHelper: UIViewRepresentable {
                 overflow: hidden !important;
             }
             img, video { max-width: 100% !important; height: auto !important; border-radius: 8px !important; }
-            (uiTestFixtureCSS)
+            \(uiTestFixtureCSS)
             pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
             a { color: \(linkHex) !important; }
             [data-oshireader-reader-root="true"] {
