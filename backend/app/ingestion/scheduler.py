@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import text as sa_text
+from sqlalchemy import or_, text as sa_text
 
 from app.apns import revalidate_unverified_devices, send_new_match_notifications
 from app.config import settings
@@ -71,6 +71,10 @@ _PREVIEW_SOURCE_NEW_MATCH = "new_match"
 _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
 _PENDING_NOTIFICATION_COUNT_KEY = "_notification_count"
 _NotificationCandidate = tuple[bool, datetime, dict]
+
+
+def _past_orphaned_owner_grace_filter(cutoff: datetime):
+    return or_(WatchTerm.created_at.is_(None), WatchTerm.created_at <= cutoff)
 
 
 def _build_connectors(db) -> list[BaseConnector]:
@@ -273,7 +277,14 @@ def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int,
     return terms[offset:] + terms[:next_offset], offset, next_offset
 
 
-def _disable_orphaned_notification_terms(db) -> int:
+def _report_orphaned_notification_terms(db) -> set[int]:
+    """Report owner-scoped terms without devices without changing preferences.
+
+    APNs registration can be temporarily absent or unverified while an app is
+    launching, reinstalling, or switching APNs environments. Disabling
+    ``notify_on_new`` here permanently overwrote the user's setting and made a
+    transient registration problem look like an intentional opt-out.
+    """
     grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=grace_minutes)
     terms = (
@@ -281,39 +292,39 @@ def _disable_orphaned_notification_terms(db) -> int:
         .filter(WatchTerm.is_active == True)  # noqa: E712
         .filter(WatchTerm.notify_on_new == True)  # noqa: E712
         .filter(WatchTerm.owner_device_secret.isnot(None))
-        .filter(WatchTerm.created_at <= cutoff)
+        .filter(_past_orphaned_owner_grace_filter(cutoff))
         .all()
     )
-    disabled = 0
-    disabled_keywords: list[str] = []
+    orphaned_ids: set[int] = set()
+    orphaned_keywords: list[str] = []
     for term in terms:
         has_device = (
             db.query(APNSDeviceToken.token)
             .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+            .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
             .first()
             is not None
         )
         if has_device:
             continue
-        term.notify_on_new = False
-        disabled += 1
-        if len(disabled_keywords) < 10:
-            disabled_keywords.append(term.keyword)
+        orphaned_ids.add(term.id)
+        if len(orphaned_keywords) < 10:
+            orphaned_keywords.append(term.keyword)
 
-    if disabled:
+    if orphaned_ids:
         record_backend_event(
             db,
             "notification_maintenance",
-            "disabled_orphaned_terms",
-            "Disabled push alerts for owner-scoped terms with no APNs device",
+            "orphaned_terms_detected",
+            "Detected owner-scoped terms without a verified APNs device; preserved preferences for retry",
             {
-                "disabled_count": disabled,
+                "orphaned_count": len(orphaned_ids),
                 "grace_minutes": grace_minutes,
-                "keywords": disabled_keywords,
+                "keywords": orphaned_keywords,
             },
         )
         db.commit()
-    return disabled
+    return orphaned_ids
 
 
 def _term_has_verified_device(db, term: WatchTerm) -> bool:
@@ -323,7 +334,8 @@ def _term_has_verified_device(db, term: WatchTerm) -> bool:
     return query.first() is not None
 
 
-def _deactivate_orphaned_duplicate_terms(db) -> int:
+def _report_orphaned_duplicate_terms(db) -> set[int]:
+    """Report duplicate owner terms without deactivating the user's keyword."""
     grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=grace_minutes)
     candidates = (
@@ -331,15 +343,16 @@ def _deactivate_orphaned_duplicate_terms(db) -> int:
         .filter(WatchTerm.is_active == True)  # noqa: E712
         .filter(WatchTerm.notify_on_new == False)  # noqa: E712
         .filter(WatchTerm.owner_device_secret.isnot(None))
-        .filter(WatchTerm.created_at <= cutoff)
+        .filter(_past_orphaned_owner_grace_filter(cutoff))
         .all()
     )
-    deactivated = 0
-    deactivated_keywords: list[str] = []
+    orphaned_ids: set[int] = set()
+    orphaned_keywords: list[str] = []
     for term in candidates:
         has_any_owner_device = (
             db.query(APNSDeviceToken.token)
             .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+            .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
             .first()
             is not None
         )
@@ -357,28 +370,28 @@ def _deactivate_orphaned_duplicate_terms(db) -> int:
         if not any(_term_has_verified_device(db, replacement) for replacement in replacements):
             continue
 
-        term.is_active = False
-        deactivated += 1
-        if len(deactivated_keywords) < 10:
-            deactivated_keywords.append(term.keyword)
+        orphaned_ids.add(term.id)
+        if len(orphaned_keywords) < 10:
+            orphaned_keywords.append(term.keyword)
 
-    if deactivated:
+    if orphaned_ids:
         record_backend_event(
             db,
             "notification_maintenance",
-            "deactivated_orphaned_duplicates",
-            "Deactivated stale duplicate owner-scoped terms with no APNs device",
+            "orphaned_duplicates_detected",
+            "Detected stale duplicate owner-scoped terms; preserved keyword state",
             {
-                "deactivated_count": deactivated,
+                "detected_count": len(orphaned_ids),
                 "grace_minutes": grace_minutes,
-                "keywords": deactivated_keywords,
+                "keywords": orphaned_keywords,
             },
         )
         db.commit()
-    return deactivated
+    return orphaned_ids
 
 
-def _deactivate_orphaned_silent_terms(db) -> int:
+def _report_orphaned_silent_terms(db) -> set[int]:
+    """Report silent owner terms without deactivating the user's keyword."""
     grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=grace_minutes)
     candidates = (
@@ -386,40 +399,40 @@ def _deactivate_orphaned_silent_terms(db) -> int:
         .filter(WatchTerm.is_active == True)  # noqa: E712
         .filter(WatchTerm.notify_on_new == False)  # noqa: E712
         .filter(WatchTerm.owner_device_secret.isnot(None))
-        .filter(WatchTerm.created_at <= cutoff)
+        .filter(_past_orphaned_owner_grace_filter(cutoff))
         .all()
     )
-    deactivated = 0
-    deactivated_keywords: list[str] = []
+    orphaned_ids: set[int] = set()
+    orphaned_keywords: list[str] = []
     for term in candidates:
         has_any_owner_device = (
             db.query(APNSDeviceToken.token)
             .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+            .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
             .first()
             is not None
         )
         if has_any_owner_device:
             continue
 
-        term.is_active = False
-        deactivated += 1
-        if len(deactivated_keywords) < 10:
-            deactivated_keywords.append(term.keyword)
+        orphaned_ids.add(term.id)
+        if len(orphaned_keywords) < 10:
+            orphaned_keywords.append(term.keyword)
 
-    if deactivated:
+    if orphaned_ids:
         record_backend_event(
             db,
             "notification_maintenance",
-            "deactivated_orphaned_silent_terms",
-            "Deactivated stale non-notifying owner-scoped terms with no APNs device",
+            "orphaned_silent_terms_detected",
+            "Detected stale non-notifying owner-scoped terms; preserved keyword state",
             {
-                "deactivated_count": deactivated,
+                "detected_count": len(orphaned_ids),
                 "grace_minutes": grace_minutes,
-                "keywords": deactivated_keywords,
+                "keywords": orphaned_keywords,
             },
         )
         db.commit()
-    return deactivated
+    return orphaned_ids
 
 
 def _published_at_is_estimated(raw, observed_at: datetime) -> bool:
@@ -1092,17 +1105,23 @@ async def _poll_once_unlocked() -> None:
     db = SessionLocal()
     try:
         await revalidate_unverified_devices(db)
-        _disable_orphaned_notification_terms(db)
-        _deactivate_orphaned_duplicate_terms(db)
-        _deactivate_orphaned_silent_terms(db)
+        orphaned_term_ids = (
+            _report_orphaned_notification_terms(db)
+            | _report_orphaned_duplicate_terms(db)
+            | _report_orphaned_silent_terms(db)
+        )
         all_terms = (
             db.query(WatchTerm)
             .filter(WatchTerm.is_active == True)  # noqa: E712
             .order_by(WatchTerm.id)
             .all()
         )
+        # Preserve the user's active setting, but do not fetch an owner-scoped
+        # term while its device is absent. Device registration makes the term
+        # eligible again on the next poll.
+        all_terms = [term for term in all_terms if term.id not in orphaned_term_ids]
         if not all_terms:
-            flushed_pending_term_ids = await _flush_pending_notifications(db)
+            flushed_pending_term_ids = await _flush_pending_notifications(db, exclude_term_ids=orphaned_term_ids)
             record_backend_event(
                 db,
                 "poll",
@@ -1140,7 +1159,7 @@ async def _poll_once_unlocked() -> None:
             },
         )
 
-        flushed_pending_term_ids = await _flush_pending_notifications(db)
+        flushed_pending_term_ids = await _flush_pending_notifications(db, exclude_term_ids=orphaned_term_ids)
         fetch_cache: dict[tuple[str, str, str], list] = {}
 
         for term in terms:
@@ -1397,7 +1416,7 @@ async def _poll_once_unlocked() -> None:
             if term.id not in flushed_pending_term_ids:
                 await _deliver_pending_notification(db, term)
 
-        await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids)
+        await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids | orphaned_term_ids)
 
         _prune_irrelevant_matches(db, terms)
 
