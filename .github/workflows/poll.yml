@@ -78,11 +78,11 @@ jobs:
           for attempt in $(seq 1 24); do
             BODY=$(mktemp)
             STATUS=$(curl -sS -o "$BODY" -w "%{http_code}" \
-              "$BACKEND_URL/api/admin/stats" \
+              "$BACKEND_URL/api/admin/poller-health" \
               -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-              --max-time 30)
+              --max-time 30 || true)
             if [ "$STATUS" != "200" ]; then
-              echo "Stats attempt $attempt failed with status $STATUS"
+              echo "Poller health attempt $attempt failed with status ${STATUS:-curl_failed}"
               echo "Response body: $(cat "$BODY")"
               rm -f "$BODY"
               if [ "$attempt" -eq 24 ]; then
