@@ -406,6 +406,35 @@ class TestAdminStats:
         assert poller_health["healthy"] is False
         assert poller_health["active_silent_orphan_term_ids"] == [terms["Silent"]["id"]]
 
+    def test_poller_health_ignores_inactive_notification_terms(self, client, db_session):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        db_session.add_all([
+            WatchTerm(
+                keyword="Inactive notify",
+                is_active=False,
+                notify_on_new=True,
+                owner_device_secret="inactive-notify",
+                created_at=old,
+            ),
+            WatchTerm(
+                keyword="Inactive silent",
+                is_active=False,
+                notify_on_new=False,
+                owner_device_secret="inactive-silent",
+                created_at=old,
+            ),
+        ])
+        db_session.commit()
+
+        health = client.get("/api/admin/poller-health").json()["notification_health"]
+
+        assert health["healthy"] is True
+        assert health["active_notify_terms"] == 0
+        assert health["active_silent_orphan_terms"] == 0
+        assert health["active_notify_terms_without_verified_devices"] == 0
+        assert health["active_silent_orphan_term_ids"] == []
+        assert health["active_notify_term_ids_without_verified_devices"] == []
+
     def test_stats_keeps_recent_owner_scoped_terms_in_grace_period(self, client, db_session):
         db_session.add_all([
             WatchTerm(

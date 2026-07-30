@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 import inspect
@@ -948,6 +948,27 @@ class TestReportOrphanedNotificationTerms:
         assert orphaned == {term.id}
         assert term.notify_on_new is True
 
+    def test_reports_term_with_missing_created_at(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="missing-secret",
+            created_at=None,
+        )
+        db.add(term)
+        db.commit()
+        db.execute(text("UPDATE watch_terms SET created_at = NULL WHERE id = :id"), {"id": term.id})
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            orphaned = _report_orphaned_notification_terms(db)
+
+        db.refresh(term)
+        assert orphaned == {term.id}
+        assert term.notify_on_new is True
+
 
 class TestReportOrphanedDuplicateTerms:
     def test_preserves_stale_duplicate_without_device_when_replacement_can_notify(self, db):
@@ -1151,6 +1172,27 @@ class TestReportOrphanedSilentTerms:
         assert orphaned == {term.id}
         assert term.is_active is True
 
+    def test_reports_silent_term_with_missing_created_at(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=None,
+        )
+        db.add(term)
+        db.commit()
+        db.execute(text("UPDATE watch_terms SET created_at = NULL WHERE id = :id"), {"id": term.id})
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            orphaned = _report_orphaned_silent_terms(db)
+
+        db.refresh(term)
+        assert orphaned == {term.id}
+        assert term.is_active is True
+
     def test_poll_skips_silent_term_with_unverified_owner_device(self, db, monkeypatch):
         old = datetime.now(timezone.utc) - timedelta(hours=2)
         term = WatchTerm(
@@ -1169,6 +1211,145 @@ class TestReportOrphanedSilentTerms:
                 is_verified=False,
             ),
         ])
+        db.commit()
+        term_id = term.id
+
+        async def _noop_revalidate(_db):
+            return None
+
+        def _unexpected_build_connectors(_db):
+            raise AssertionError("orphaned term should be filtered before connector fetch")
+
+        monkeypatch.setattr(scheduler, "SessionLocal", lambda: db)
+        monkeypatch.setattr(scheduler, "revalidate_unverified_devices", _noop_revalidate)
+        monkeypatch.setattr(scheduler, "_build_connectors", _unexpected_build_connectors)
+        monkeypatch.setattr(scheduler.settings, "orphaned_notification_grace_minutes", 60)
+
+        asyncio.run(scheduler._poll_once_unlocked())
+
+        reloaded = db.get(WatchTerm, term_id)
+        assert reloaded.is_active is True
+        event = db.query(BackendEvent).filter_by(kind="poll", status="skipped").one()
+        assert event.payload["terms"] == 0
+
+    def test_poll_does_not_flush_pending_for_orphaned_term(self, db, monkeypatch):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        db.add_all([
+            term,
+            APNSDeviceToken(
+                token="u" * 64,
+                environment="production",
+                device_secret="old-secret",
+                is_verified=False,
+            ),
+        ])
+        db.commit()
+        db.add(PendingNotification(
+            watch_term_id=term.id,
+            new_count=1,
+            preview_item={"id": "news:1", "title": "Aiko"},
+        ))
+        db.commit()
+        term_id = term.id
+
+        async def _noop_revalidate(_db):
+            return None
+
+        async def _unexpected_send(*_args, **_kwargs):
+            raise AssertionError("orphaned pending notification should not be flushed")
+
+        monkeypatch.setattr(scheduler, "SessionLocal", lambda: db)
+        monkeypatch.setattr(scheduler, "revalidate_unverified_devices", _noop_revalidate)
+        monkeypatch.setattr(scheduler, "_build_connectors", lambda _db: [])
+        monkeypatch.setattr(scheduler, "send_new_match_notifications", _unexpected_send)
+        monkeypatch.setattr(scheduler.settings, "orphaned_notification_grace_minutes", 60)
+
+        asyncio.run(scheduler._poll_once_unlocked())
+
+        assert db.get(PendingNotification, term_id) is not None
+        event = db.query(BackendEvent).filter_by(kind="poll", status="skipped").one()
+        assert event.payload["flushed_pending_terms"] == 0
+
+    def test_normal_poll_does_not_final_flush_pending_for_orphaned_term(self, db, monkeypatch):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        orphaned = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        active = WatchTerm(
+            keyword="Miku",
+            notify_on_new=False,
+            is_active=True,
+            created_at=old,
+        )
+        source_item = SourceItem(
+            id="news:1",
+            platform="news",
+            item_id="1",
+            url="https://example.com/1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="Aiko update",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([
+            orphaned,
+            active,
+            source_item,
+            APNSDeviceToken(
+                token="u" * 64,
+                environment="production",
+                device_secret="old-secret",
+                is_verified=False,
+            ),
+        ])
+        db.commit()
+        db.add(PendingNotification(
+            watch_term_id=orphaned.id,
+            new_count=1,
+            preview_item={"id": source_item.id, "title": source_item.title},
+        ))
+        db.commit()
+        orphaned_id = orphaned.id
+        send = AsyncMock(return_value=True)
+
+        async def _noop_revalidate(_db):
+            return None
+
+        monkeypatch.setattr(scheduler, "SessionLocal", lambda: db)
+        monkeypatch.setattr(scheduler, "revalidate_unverified_devices", _noop_revalidate)
+        monkeypatch.setattr(scheduler, "_build_connectors", lambda _db: [])
+        monkeypatch.setattr(scheduler, "send_new_match_notifications", send)
+        monkeypatch.setattr(scheduler.settings, "orphaned_notification_grace_minutes", 60)
+
+        asyncio.run(scheduler._poll_once_unlocked())
+
+        assert db.get(PendingNotification, orphaned_id) is not None
+        send.assert_not_awaited()
+        event = db.query(BackendEvent).filter_by(kind="poll", status="completed").one()
+        assert event.payload["terms"] == 1
+
+    def test_poll_skips_silent_term_with_missing_created_at(self, db, monkeypatch):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=None,
+        )
+        db.add(term)
+        db.commit()
+        db.execute(text("UPDATE watch_terms SET created_at = NULL WHERE id = :id"), {"id": term.id})
         db.commit()
         term_id = term.id
 

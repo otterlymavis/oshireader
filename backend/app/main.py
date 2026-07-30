@@ -1243,6 +1243,8 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
             **device_counts,
         }
         watch_term_rows.append(row)
+        if not term.is_active:
+            continue
         if term.notify_on_new:
             active_notify_terms += 1
             if device_counts["notification_verified_devices"] == 0 and (

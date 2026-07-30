@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import text as sa_text
+from sqlalchemy import or_, text as sa_text
 
 from app.apns import revalidate_unverified_devices, send_new_match_notifications
 from app.config import settings
@@ -71,6 +71,10 @@ _PREVIEW_SOURCE_NEW_MATCH = "new_match"
 _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
 _PENDING_NOTIFICATION_COUNT_KEY = "_notification_count"
 _NotificationCandidate = tuple[bool, datetime, dict]
+
+
+def _past_orphaned_owner_grace_filter(cutoff: datetime):
+    return or_(WatchTerm.created_at.is_(None), WatchTerm.created_at <= cutoff)
 
 
 def _build_connectors(db) -> list[BaseConnector]:
@@ -288,7 +292,7 @@ def _report_orphaned_notification_terms(db) -> set[int]:
         .filter(WatchTerm.is_active == True)  # noqa: E712
         .filter(WatchTerm.notify_on_new == True)  # noqa: E712
         .filter(WatchTerm.owner_device_secret.isnot(None))
-        .filter(WatchTerm.created_at <= cutoff)
+        .filter(_past_orphaned_owner_grace_filter(cutoff))
         .all()
     )
     orphaned_ids: set[int] = set()
@@ -339,7 +343,7 @@ def _report_orphaned_duplicate_terms(db) -> set[int]:
         .filter(WatchTerm.is_active == True)  # noqa: E712
         .filter(WatchTerm.notify_on_new == False)  # noqa: E712
         .filter(WatchTerm.owner_device_secret.isnot(None))
-        .filter(WatchTerm.created_at <= cutoff)
+        .filter(_past_orphaned_owner_grace_filter(cutoff))
         .all()
     )
     orphaned_ids: set[int] = set()
@@ -395,7 +399,7 @@ def _report_orphaned_silent_terms(db) -> set[int]:
         .filter(WatchTerm.is_active == True)  # noqa: E712
         .filter(WatchTerm.notify_on_new == False)  # noqa: E712
         .filter(WatchTerm.owner_device_secret.isnot(None))
-        .filter(WatchTerm.created_at <= cutoff)
+        .filter(_past_orphaned_owner_grace_filter(cutoff))
         .all()
     )
     orphaned_ids: set[int] = set()
@@ -1117,7 +1121,7 @@ async def _poll_once_unlocked() -> None:
         # eligible again on the next poll.
         all_terms = [term for term in all_terms if term.id not in orphaned_term_ids]
         if not all_terms:
-            flushed_pending_term_ids = await _flush_pending_notifications(db)
+            flushed_pending_term_ids = await _flush_pending_notifications(db, exclude_term_ids=orphaned_term_ids)
             record_backend_event(
                 db,
                 "poll",
@@ -1155,7 +1159,7 @@ async def _poll_once_unlocked() -> None:
             },
         )
 
-        flushed_pending_term_ids = await _flush_pending_notifications(db)
+        flushed_pending_term_ids = await _flush_pending_notifications(db, exclude_term_ids=orphaned_term_ids)
         fetch_cache: dict[tuple[str, str, str], list] = {}
 
         for term in terms:
@@ -1412,7 +1416,7 @@ async def _poll_once_unlocked() -> None:
             if term.id not in flushed_pending_term_ids:
                 await _deliver_pending_notification(db, term)
 
-        await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids)
+        await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids | orphaned_term_ids)
 
         _prune_irrelevant_matches(db, terms)
 
