@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,20 @@ import httpx as _httpx_mod
 import json as _json_mod
 import pytest
 
+from app.connectors import base as base_module
 from app.connectors import fivech as fivech_module
+from app.connectors import girlschannel as girlschannel_module
+from app.connectors import mdpr as mdpr_module
+from app.connectors import news_sites as news_sites_module
+from app.connectors import niconico as niconico_module
+from app.connectors import note as note_module
+from app.connectors import oricon as oricon_module
+from app.connectors import rss as rss_module
+from app.connectors import togetter as togetter_module
+from app.connectors import tver as tver_module
+from app.connectors import twitter as twitter_module
+from app.connectors import yahoonews as yahoonews_module
+from app.connectors import youtube as youtube_module
 from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
@@ -49,6 +63,68 @@ from app.connectors.twitter import TwitterConnector
 from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.yahoonews import _clean_html_summary, _clean_markdown_title
 from app.connectors.youtube import YouTubeConnector, _parse_youtube_relative
+
+
+_CONNECTOR_TEST_NOW = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class _FrozenDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        value = _CONNECTOR_TEST_NOW
+        if tz is not None:
+            value = value.astimezone(tz)
+        else:
+            value = value.replace(tzinfo=None)
+        return cls(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+            tzinfo=value.tzinfo,
+            fold=value.fold,
+        )
+
+    @classmethod
+    def utcnow(cls):
+        value = _CONNECTOR_TEST_NOW.astimezone(timezone.utc).replace(tzinfo=None)
+        return cls(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _freeze_connector_test_now(monkeypatch):
+    """Keep freshness-window fixtures stable as real calendar time moves on."""
+    modules = [
+        sys.modules[__name__],
+        base_module,
+        fivech_module,
+        girlschannel_module,
+        mdpr_module,
+        news_sites_module,
+        niconico_module,
+        note_module,
+        oricon_module,
+        rss_module,
+        togetter_module,
+        tver_module,
+        twitter_module,
+        yahoonews_module,
+        youtube_module,
+    ]
+    for module in modules:
+        if hasattr(module, "datetime"):
+            monkeypatch.setattr(module, "datetime", _FrozenDateTime)
 
 
 def _entry(**kwargs) -> SimpleNamespace:
