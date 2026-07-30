@@ -1079,7 +1079,7 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
-            and device_counts["notification_devices"] == 0
+            and device_counts["notification_verified_devices"] == 0
             and is_past_owner_grace(term)
         ):
             active_silent_orphans.append(row)
@@ -1254,7 +1254,7 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
                 ) <= orphaned_cutoff
             ):
                 active_notify_without_verified_devices.append(row)
-        elif term.owner_device_secret and device_counts["notification_devices"] == 0 and (
+        elif term.owner_device_secret and device_counts["notification_verified_devices"] == 0 and (
             not term.created_at
             or (
                 term.created_at.replace(tzinfo=timezone.utc)
