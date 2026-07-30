@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,20 @@ import httpx as _httpx_mod
 import json as _json_mod
 import pytest
 
+from app.connectors import base as base_module
 from app.connectors import fivech as fivech_module
+from app.connectors import girlschannel as girlschannel_module
+from app.connectors import mdpr as mdpr_module
+from app.connectors import news_sites as news_sites_module
+from app.connectors import niconico as niconico_module
+from app.connectors import note as note_module
+from app.connectors import oricon as oricon_module
+from app.connectors import rss as rss_module
+from app.connectors import togetter as togetter_module
+from app.connectors import tver as tver_module
+from app.connectors import twitter as twitter_module
+from app.connectors import yahoonews as yahoonews_module
+from app.connectors import youtube as youtube_module
 from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
@@ -51,6 +65,68 @@ from app.connectors.yahoonews import _clean_html_summary, _clean_markdown_title
 from app.connectors.youtube import YouTubeConnector, _parse_youtube_relative
 
 
+_CONNECTOR_TEST_NOW = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class _FrozenDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        value = _CONNECTOR_TEST_NOW
+        if tz is not None:
+            value = value.astimezone(tz)
+        else:
+            value = value.replace(tzinfo=None)
+        return cls(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+            tzinfo=value.tzinfo,
+            fold=value.fold,
+        )
+
+    @classmethod
+    def utcnow(cls):
+        value = _CONNECTOR_TEST_NOW.astimezone(timezone.utc).replace(tzinfo=None)
+        return cls(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _freeze_connector_test_now(monkeypatch):
+    """Keep freshness-window fixtures stable as real calendar time moves on."""
+    modules = [
+        sys.modules[__name__],
+        base_module,
+        fivech_module,
+        girlschannel_module,
+        mdpr_module,
+        news_sites_module,
+        niconico_module,
+        note_module,
+        oricon_module,
+        rss_module,
+        togetter_module,
+        tver_module,
+        twitter_module,
+        yahoonews_module,
+        youtube_module,
+    ]
+    for module in modules:
+        if hasattr(module, "datetime"):
+            monkeypatch.setattr(module, "datetime", _FrozenDateTime)
+
+
 def _entry(**kwargs) -> SimpleNamespace:
     """Build a minimal feedparser-like entry using attribute access (as parse_feed_date uses getattr)."""
     return SimpleNamespace(**kwargs)
@@ -74,7 +150,7 @@ def _rss_entry(link="https://example.com/1", title="Title", summary="", item_id=
         link=link,
         title=title,
         summary=summary,
-        published_parsed=(2026, 6, 24, 10, 0, 0, 2, 175, 0),
+        published_parsed=(2026, 7, 24, 10, 0, 0, 4, 205, 0),
     )
 
 
@@ -149,13 +225,13 @@ class TestParseFeedDate:
 
 [Aiko fresh article](https://news.google.com/rss/articles/abc123)
 
-Wed, 24 Jun 2026 02:07:03 GMT
+Wed, 24 Jul 2026 02:07:03 GMT
 """
         result = parse_google_news_markdown(text)
         assert result == [{
             "title": "Aiko fresh article - Example",
             "url": "https://news.google.com/rss/articles/abc123",
-            "published_at": datetime(2026, 6, 24, 2, 7, 3, tzinfo=timezone.utc),
+            "published_at": datetime(2026, 7, 24, 2, 7, 3, tzinfo=timezone.utc),
         }]
 
 
@@ -623,7 +699,7 @@ class TestTwitterConnectorNoToken:
 
 [Aiko indexed X post](https://news.google.com/rss/articles/x1)
 
-Wed, 24 Jun 2026 02:07:03 GMT
+Wed, 24 Jul 2026 02:07:03 GMT
 """
         with patch("app.connectors.twitter.httpx.AsyncClient", _http_mock(text=markdown)):
             result = await TwitterConnector(bearer_token="")._fetch_public_index_jina(
@@ -644,9 +720,9 @@ class TestFiveChFetch:
     @pytest.mark.asyncio
     async def test_prefers_real_itest_threads_over_2ch_mirror(self):
         markdown = """
-*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+*   [2026年7月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
-        dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
+        dat = "name<>sage<>2026/07/25(木) 17:59:29.00 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             if str(url).startswith("https://r.jina.ai/http://https://itest.5ch.io/subback/nogizaka"):
@@ -663,16 +739,16 @@ class TestFiveChFetch:
         assert len(result) == 1
         assert result[0].item_id == "5ch:mevius:nogizaka:1782410369"
         assert result[0].url == "https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369"
-        assert result[0].published_at == datetime(2026, 6, 25, 8, 59, 29, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 7, 25, 8, 59, 29, tzinfo=timezone.utc)
         assert result[0].raw_payload["source"] == "5ch_itest"
         assert result[0].raw_payload["date_source"] == "dat_latest_post"
 
     @pytest.mark.asyncio
     async def test_real_itest_retries_jina_subback_throttling(self):
         markdown = """
-*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+*   [2026年7月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
-        dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
+        dat = "name<>sage<>2026/07/25(木) 17:59:29.00 ID:last<> latest <>\n"
         attempts = 0
 
         async def _side(url, **_kw):
@@ -701,7 +777,7 @@ class TestFiveChFetch:
     @pytest.mark.asyncio
     async def test_real_itest_drops_threads_without_latest_dat_date(self):
         markdown = """
-*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+*   [2026年7月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
 
         async def _side(url, **_kw):
@@ -725,9 +801,9 @@ class TestFiveChFetch:
         from urllib.parse import parse_qs, urlparse
 
         markdown = """
-*   [2026年6月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+*   [2026年7月25日 17時59分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
-        dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
+        dat = "name<>sage<>2026/07/25(木) 17:59:29.00 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -758,8 +834,8 @@ class TestFiveChFetch:
 *   [2026年5月10日 10時00分 話題度:43 13レス 【乃木坂46】池田瑛紗応援スレ★104【てれぱん】](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
         dat = (
-            "name<>sage<>2026/06/24(水) 20:18:37.20 ID:first<> first <>\n"
-            "name<>sage<>2026/06/26(金) 20:00:21.58 ID:last<> latest <>\n"
+            "name<>sage<>2026/07/24(水) 20:18:37.20 ID:first<> first <>\n"
+            "name<>sage<>2026/07/26(金) 20:00:21.58 ID:last<> latest <>\n"
         )
         dat_attempts = 0
 
@@ -784,21 +860,21 @@ class TestFiveChFetch:
         sleep.assert_awaited_once()
         assert dat_attempts == 2
         assert len(result) == 1
-        assert result[0].published_at == datetime(2026, 6, 26, 11, 0, 21, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 7, 26, 11, 0, 21, tzinfo=timezone.utc)
         assert result[0].raw_payload["subback_published_at"] == "2026-05-10T01:00:00+00:00"
-        assert result[0].raw_payload["last_post_at"] == "2026-06-26T11:00:21+00:00"
+        assert result[0].raw_payload["last_post_at"] == "2026-07-26T11:00:21+00:00"
         assert result[0].raw_payload["date_source"] == "dat_latest_post"
 
     @pytest.mark.asyncio
     async def test_real_itest_scans_all_board_batches_and_sorts_by_latest_reply(self):
         early_board = """
-*   [2026年6月20日 10時00分 話題度:12 31レス 【乃木坂46】older thread](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1781900000)
+*   [2026年7月20日 10時00分 話題度:12 31レス 【乃木坂46】older thread](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1781900000)
 """
         later_board = """
-*   [2026年6月19日 09時00分 話題度:8 12レス 【乃木坂46】new reply thread](https://itest.5ch.io/krsw/test/read.cgi/akbsaloon/1781800000)
+*   [2026年7月19日 09時00分 話題度:8 12レス 【乃木坂46】new reply thread](https://itest.5ch.io/krsw/test/read.cgi/akbsaloon/1781800000)
 """
-        old_dat = "name<>sage<>2026/06/25(木) 10:00:00.00 ID:last<> old latest <>\n"
-        new_dat = "name<>sage<>2026/06/26(金) 21:30:00.00 ID:last<> new latest <>\n"
+        old_dat = "name<>sage<>2026/07/25(木) 10:00:00.00 ID:last<> old latest <>\n"
+        new_dat = "name<>sage<>2026/07/26(金) 21:30:00.00 ID:last<> new latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -819,8 +895,8 @@ class TestFiveChFetch:
         parse.assert_not_called()
         assert [item.raw_payload["board"] for item in result] == ["akbsaloon", "nogizaka"]
         assert [item.published_at for item in result] == [
-            datetime(2026, 6, 26, 12, 30, tzinfo=timezone.utc),
-            datetime(2026, 6, 25, 1, 0, tzinfo=timezone.utc),
+            datetime(2026, 7, 26, 12, 30, tzinfo=timezone.utc),
+            datetime(2026, 7, 25, 1, 0, tzinfo=timezone.utc),
         ]
         assert all(item.raw_payload["date_source"] == "dat_latest_post" for item in result)
 
@@ -830,7 +906,7 @@ class TestFiveChFetch:
             "1778433981.dat<>【元乃木坂４６】相楽伊織応援スレ★16【いおり】 (64)\n"
             "1717200000.dat<>【乃木坂46】stale thread without dat (12)\n"
         )
-        dat = "君の名は<><>2026/06/25(木) 11:26:55.28 ID:last<> latest <>\n"
+        dat = "君の名は<><>2026/07/25(木) 11:26:55.28 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -851,7 +927,7 @@ class TestFiveChFetch:
         parse.assert_not_called()
         assert len(result) == 2
         assert result[0].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1778433981"
-        assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 7, 25, 2, 26, 55, tzinfo=timezone.utc)
         assert result[0].raw_payload["source"] == "2ch.sc_subject"
         assert result[0].raw_payload["date_parsed"] is True
         assert result[1].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1717200000"
@@ -860,13 +936,13 @@ class TestFiveChFetch:
     @pytest.mark.asyncio
     async def test_fetch_merges_partial_itest_with_recent_2ch_latest_reply_items(self):
         itest_markdown = """
-*   [2026年6月25日 17時59分 話題度:43 13レス 吉沢亮 itest thread](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
+*   [2026年7月25日 17時59分 話題度:43 13レス 吉沢亮 itest thread](https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369)
 """
         actor_subject = "1779315692.dat<>吉沢亮48 (485)\n"
         cinema_subject = "1780890135.dat<>【李相日】国宝【吉沢亮/横浜流星/渡辺謙】★28幕目 (398)\n"
-        itest_dat = "name<>sage<>2026/06/25(木) 17:59:29.00 ID:last<> latest <>\n"
-        actor_dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
-        cinema_dat = "name<>sage<>2026/06/27(土) 00:07:43.00 ID:last<> latest <>\n"
+        itest_dat = "name<>sage<>2026/07/25(木) 17:59:29.00 ID:last<> latest <>\n"
+        actor_dat = "name<>sage<>2026/07/27(土) 03:06:01.00 ID:last<> latest <>\n"
+        cinema_dat = "name<>sage<>2026/07/27(土) 00:07:43.00 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -895,9 +971,9 @@ class TestFiveChFetch:
             "5ch_itest",
         ]
         assert [item.published_at for item in result[:3]] == [
-            datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc),
-            datetime(2026, 6, 26, 15, 7, 43, tzinfo=timezone.utc),
-            datetime(2026, 6, 25, 8, 59, 29, tzinfo=timezone.utc),
+            datetime(2026, 7, 26, 18, 6, 1, tzinfo=timezone.utc),
+            datetime(2026, 7, 26, 15, 7, 43, tzinfo=timezone.utc),
+            datetime(2026, 7, 25, 8, 59, 29, tzinfo=timezone.utc),
         ]
 
     def test_merge_latest_reply_items_dedupes_mirrored_threads_by_board_and_id(self):
@@ -906,7 +982,7 @@ class TestFiveChFetch:
             platform="5ch",
             item_id="5ch:itest:mnewsplus:1782467821",
             url="https://itest.5ch.io/hayabusa9/test/read.cgi/mnewsplus/1782467821",
-            published_at=datetime(2026, 6, 26, 10, 4, 39, tzinfo=timezone.utc),
+            published_at=datetime(2026, 7, 26, 10, 4, 39, tzinfo=timezone.utc),
             media_type="article",
             title="吉沢亮 itest mirror",
             raw_payload={"board": "mnewsplus", "thread_id": "1782467821", "source": "5ch_itest"},
@@ -915,7 +991,7 @@ class TestFiveChFetch:
             platform="5ch",
             item_id="2ch.sc:hayabusa3.2ch.sc:mnewsplus:1782467821",
             url="http://hayabusa3.2ch.sc/test/read.cgi/mnewsplus/1782467821/",
-            published_at=datetime(2026, 6, 26, 21, 53, 42, tzinfo=timezone.utc),
+            published_at=datetime(2026, 7, 26, 21, 53, 42, tzinfo=timezone.utc),
             media_type="article",
             title="吉沢亮 2ch.sc mirror",
             raw_payload={"board": "mnewsplus", "thread_id": "1782467821", "source": "2ch.sc_subject"},
@@ -1034,8 +1110,8 @@ class TestFiveChFetch:
     async def test_direct_scan_returns_thread_with_latest_post_date(self):
         subject = "1778433981.dat<>【元乃木坂４６】相楽伊織応援スレ★16【いおり】 (64)\n"
         dat = (
-            "君の名は<><>2026/06/24(水) 20:18:37.20 ID:first<> first <>title\n"
-            "君の名は<><>2026/06/25(木) 11:26:55.28 ID:last<> latest <>\n"
+            "君の名は<><>2026/07/24(水) 20:18:37.20 ID:first<> first <>title\n"
+            "君の名は<><>2026/07/25(木) 11:26:55.28 ID:last<> latest <>\n"
         )
 
         async def _side(url, **_kw):
@@ -1057,7 +1133,7 @@ class TestFiveChFetch:
         assert result[0].platform == "5ch"
         assert result[0].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1778433981"
         assert result[0].url == "http://toro.2ch.sc/test/read.cgi/nogizaka/1778433981/"
-        assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 7, 25, 2, 26, 55, tzinfo=timezone.utc)
         assert result[0].raw_payload["source"] == "2ch.sc_subject"
         assert result[0].raw_payload["date_parsed"] is True
 
@@ -1067,7 +1143,7 @@ class TestFiveChFetch:
 <A HREF=http://dynamic.2ch.sc/rareboard/>rare board</A>
 """
         subject = "1778433981.dat<>吉沢亮 rare dynamic board thread (64)\n"
-        dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
+        dat = "name<>sage<>2026/07/27(土) 03:06:01.00 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -1087,7 +1163,7 @@ class TestFiveChFetch:
         assert any(item.raw_payload["board"] == "rareboard" for item in result)
         rare = next(item for item in result if item.raw_payload["board"] == "rareboard")
         assert rare.item_id == "2ch.sc:dynamic.2ch.sc:rareboard:1778433981"
-        assert rare.published_at == datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc)
+        assert rare.published_at == datetime(2026, 7, 26, 18, 6, 1, tzinfo=timezone.utc)
 
     @pytest.mark.asyncio
     async def test_direct_scan_expands_bbsmenu_even_with_enough_priority_results(self):
@@ -1099,7 +1175,7 @@ class TestFiveChFetch:
             for i in range(5)
         )
         extra_subject = "1778433999.dat<>吉沢亮 rare dynamic board thread (64)\n"
-        dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
+        dat = "name<>sage<>2026/07/27(土) 03:06:01.00 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -1127,7 +1203,7 @@ class TestFiveChFetch:
             platform="5ch",
             item_id="2ch.sc:anago.2ch.sc:actor:1779315692",
             url="http://anago.2ch.sc/test/read.cgi/actor/1779315692/",
-            published_at=datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc),
+            published_at=datetime(2026, 7, 26, 18, 6, 1, tzinfo=timezone.utc),
             media_type="text",
             title="吉沢亮48",
             raw_payload={"source": "2ch.sc_subject", "board": "actor", "thread_id": "1779315692", "date_parsed": True},
@@ -1211,9 +1287,9 @@ class TestFiveChFetch:
         actor_subject = "1779315692.dat<>吉沢亮48 (485)\n"
         cinema_subject = "1780890135.dat<>【李相日】国宝【吉沢亮/横浜流星/渡辺謙】★28幕目 (398)\n"
         cm_subject = "1765167675.dat<>中居と吉沢亮と国分のせいでフジ日テレやCM窮地★2 (386)\n"
-        actor_dat = "name<>sage<>2026/06/27(土) 03:06:01.00 ID:last<> latest <>\n"
-        cinema_dat = "name<>sage<>2026/06/27(土) 00:07:43.00 ID:last<> latest <>\n"
-        cm_dat = "name<>sage<>2026/06/26(金) 18:34:35.00 ID:last<> latest <>\n"
+        actor_dat = "name<>sage<>2026/07/27(土) 03:06:01.00 ID:last<> latest <>\n"
+        cinema_dat = "name<>sage<>2026/07/27(土) 00:07:43.00 ID:last<> latest <>\n"
+        cm_dat = "name<>sage<>2026/07/26(金) 18:34:35.00 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -1238,9 +1314,9 @@ class TestFiveChFetch:
         parse.assert_not_called()
         assert [item.raw_payload["board"] for item in result[:3]] == ["actor", "cinema", "cm"]
         assert [item.published_at for item in result[:3]] == [
-            datetime(2026, 6, 26, 18, 6, 1, tzinfo=timezone.utc),
-            datetime(2026, 6, 26, 15, 7, 43, tzinfo=timezone.utc),
-            datetime(2026, 6, 26, 9, 34, 35, tzinfo=timezone.utc),
+            datetime(2026, 7, 26, 18, 6, 1, tzinfo=timezone.utc),
+            datetime(2026, 7, 26, 15, 7, 43, tzinfo=timezone.utc),
+            datetime(2026, 7, 26, 9, 34, 35, tzinfo=timezone.utc),
         ]
 
     @pytest.mark.asyncio
@@ -1282,7 +1358,7 @@ class TestFiveChFetch:
             platform="5ch",
             item_id="2ch.sc:hayabusa3.2ch.sc:mnewsplus:1782467821",
             url="http://hayabusa3.2ch.sc/test/read.cgi/mnewsplus/1782467821/",
-            published_at=datetime(2026, 6, 27, 3, 3, 55, tzinfo=timezone.utc),
+            published_at=datetime(2026, 7, 27, 3, 3, 55, tzinfo=timezone.utc),
             media_type="text",
             title="吉沢亮 fresh parsed",
             raw_payload={"source": "2ch.sc_subject", "date_parsed": True},
@@ -1291,7 +1367,7 @@ class TestFiveChFetch:
             platform="5ch",
             item_id="2ch.sc:awabi.2ch.sc:tvd:1712752146",
             url="http://awabi.2ch.sc/test/read.cgi/tvd/1712752146/",
-            published_at=datetime(2026, 6, 7, 3, 18, 19, tzinfo=timezone.utc),
+            published_at=datetime(2026, 7, 7, 3, 18, 19, tzinfo=timezone.utc),
             media_type="text",
             title="吉沢亮 older parsed",
             raw_payload={"source": "2ch.sc_subject", "date_parsed": True},
@@ -1322,7 +1398,7 @@ class TestFiveChFetch:
         from urllib.parse import parse_qs, urlparse
 
         subject = "1778433981.dat<>【元乃木坂46】Aiko proxy thread (64)\n"
-        dat = "君の名は<><>2026/06/25(木) 11:26:55.28 ID:last<> latest <>\n"
+        dat = "君の名は<><>2026/07/25(木) 11:26:55.28 ID:last<> latest <>\n"
 
         async def _side(url, **_kw):
             url_text = str(url)
@@ -1346,7 +1422,7 @@ class TestFiveChFetch:
 
         parse.assert_not_called()
         assert len(result) == 1
-        assert result[0].published_at == datetime(2026, 6, 25, 2, 26, 55, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 7, 25, 2, 26, 55, tzinfo=timezone.utc)
         assert result[0].raw_payload["date_parsed"] is True
 
     @pytest.mark.asyncio
@@ -1417,7 +1493,7 @@ class TestGirlsChannelFetch:
     <html><body>
       <li>
         <h3><a href="/topics/12345/">Thread Title アイコ</a></h3>
-        <time datetime="2026-06-24T10:30:00+09:00">2026年6月24日</time>
+        <time datetime="2026-07-24T10:30:00+09:00">2026年7月24日</time>
       </li>
       <li>
         <h3><a href="/topics/99999/">Another アイコ thread</a></h3>
@@ -1871,9 +1947,9 @@ class TestNewsSiteFetch:
     async def test_realsound_uses_direct_search_results(self):
         html = """
         <article class="entry-summary">
-          <time datetime="2026-06-25T05:30"></time>
+          <time datetime="2026-07-25T05:30"></time>
           <h3 class="entry-title">
-            <a href="/2026/06/post-1364043.html">吉沢亮がゲスト出演</a>
+            <a href="/2026/07/post-1364043.html">吉沢亮がゲスト出演</a>
           </h3>
           <p class="entry-excerpt">番組の出演者が発表された。</p>
           <div class="entry-author">リアルサウンド編集部</div>
@@ -1887,10 +1963,10 @@ class TestNewsSiteFetch:
 
         assert len(result) == 1
         assert result[0].title == "吉沢亮がゲスト出演"
-        assert result[0].url == "https://realsound.jp/2026/06/post-1364043.html"
+        assert result[0].url == "https://realsound.jp/2026/07/post-1364043.html"
         assert result[0].thumbnail_url == "https://realsound.jp/wp-content/uploads/example.jpg"
         assert result[0].author == "リアルサウンド編集部"
-        assert result[0].published_at == datetime(2026, 6, 24, 20, 30, tzinfo=timezone.utc)
+        assert result[0].published_at == datetime(2026, 7, 24, 20, 30, tzinfo=timezone.utc)
         gnews.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1898,7 +1974,7 @@ class TestNewsSiteFetch:
         html = """
         <article class="entry-summary">
           <h3 class="entry-title">
-            <a href="/2026/06/post-1.html">杉野遥亮がドラマ初主演</a>
+            <a href="/2026/07/post-1.html">杉野遥亮がドラマ初主演</a>
           </h3>
           <p class="entry-excerpt">吉沢亮の関連記事。</p>
         </article>
@@ -2095,7 +2171,7 @@ _TOGETTER_HTML = """
   <li>
     <h3>Aikoの人気まとめ</h3>
     <a href="https://togetter.com/li/1234567">Aikoのまとめ</a>
-    <time datetime="2026-06-24T12:00:00+00:00">Jun 24</time>
+    <time datetime="2026-07-24T12:00:00+00:00">Jul 24</time>
     <img src="https://i.togetter.com/t.jpg" />
   </li>
 </ul></body></html>
@@ -3044,7 +3120,7 @@ def _tver_client_ctx(token_resp, search_resp=None, token_exc=None, search_exc=No
 
 
 def _tver_ep(ep_id="ep001", title="Aiko Drama", ep_type="episode",
-             published_at_unix=1781913600, thumb=None, author="NHK"):
+             published_at_unix=1784851200, thumb=None, author="NHK"):
     content = {
         "id": ep_id,
         "title": title,
@@ -3134,7 +3210,7 @@ class TestTVERFetch:
         ep = _tver_ep(ep_id="epdetail", title="Aiko Detail", published_at_unix=None)
         sr = _tver_search_resp(episodes=[ep])
         detail = MagicMock(is_success=True, status_code=200)
-        detail.json.return_value = {"viewStatus": {"startAt": 1782302400, "endAt": 1782831599}}
+        detail.json.return_value = {"viewStatus": {"startAt": 1784894400, "endAt": 1785455999}}
         client_mock = AsyncMock()
         client_mock.post = AsyncMock(return_value=tr)
         client_mock.get = AsyncMock(side_effect=[sr, detail])
@@ -3146,7 +3222,7 @@ class TestTVERFetch:
             result = await TVERConnector().fetch("Aiko", "all_info")
 
         assert len(result) == 1
-        assert result[0].published_at == datetime.fromtimestamp(1782302400, tz=timezone.utc)
+        assert result[0].published_at == datetime.fromtimestamp(1784894400, tz=timezone.utc)
         assert result[0].raw_payload["date_source"] == "episode_detail"
 
     @pytest.mark.asyncio
