@@ -172,6 +172,11 @@ async def _fetch_one_result(
     mode: CollectionMode,
 ) -> tuple[list, bool]:
     """Run a connector fetch; return (items, fetch_succeeded)."""
+    # Connectors that do not support media filtering already return no items
+    # for MEDIA_ONLY terms. Avoid opening the network request at all while
+    # preserving the successful-empty-result semantics used by the poller.
+    if mode == CollectionMode.MEDIA_ONLY and not connector.SUPPORTS_MEDIA_FILTER:
+        return [], True
     timeout_seconds = connector_fetch_timeout_seconds(connector)
     try:
         items = await asyncio.wait_for(
