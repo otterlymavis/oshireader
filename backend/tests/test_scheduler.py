@@ -302,6 +302,7 @@ class TestFetchOne:
     def _connector(self, side_effect=None, return_value=None):
         c = MagicMock()
         c.PLATFORM = "mock"
+        c.SUPPORTS_MEDIA_FILTER = True
         if side_effect is not None:
             c.fetch = AsyncMock(side_effect=side_effect)
         else:
@@ -462,6 +463,16 @@ class TestFetchOne:
         connector = self._connector(return_value=[])
         await _fetch_one(connector, "Test", CollectionMode.MEDIA_ONLY)
         connector.fetch.assert_awaited_once_with("Test", CollectionMode.MEDIA_ONLY)
+
+    @pytest.mark.asyncio
+    async def test_skips_network_for_connector_without_media_filter_support(self):
+        connector = self._connector(return_value=[])
+        connector.SUPPORTS_MEDIA_FILTER = False
+
+        result = await _fetch_one(connector, "Test", CollectionMode.MEDIA_ONLY)
+
+        assert result == []
+        connector.fetch.assert_not_awaited()
 
 
 class TestConnectorBatches:
