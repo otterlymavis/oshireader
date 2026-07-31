@@ -5662,7 +5662,7 @@ final class NetworkManagerTests: XCTestCase {
 
     @MainActor
     func testSyncWatchTermsPreservesRepairedMutedPreference() async throws {
-        let keyword = "Sync Repaired Muted (UUID().uuidString)"
+        let keyword = "Sync Repaired Muted \(UUID().uuidString)"
         let repairedTerm = WatchTerm(
             id: UUID().uuidString,
             keyword: keyword,
