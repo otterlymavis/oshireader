@@ -158,10 +158,10 @@ final class OshiReaderTests: XCTestCase {
         _ = db.mergeItems(newItems: [
             FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
                      title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
-                     media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+                     media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now, source: "youtube_api"),
             FeedItem(id: "youtube:2", platform: "youtube", url: "https://u/2",
                      title: "Haruka video", content_text: nil, author: nil, thumbnail_url: nil,
-                     media_type: "video", published_at: now, watch_term_keyword: "Haruka", fetched_at: now),
+                     media_type: "video", published_at: now, watch_term_keyword: "Haruka", fetched_at: now, source: "youtube_api"),
         ])
         XCTAssertEqual(db.feedItems.count, 2)
 
@@ -182,7 +182,7 @@ final class OshiReaderTests: XCTestCase {
         _ = db.mergeItems(newItems: [
             FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
                      title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
-                     media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now)
+                     media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now, source: "youtube_api")
         ])
 
         let deleted = db.deleteTerm(keyword: "Aiko")
@@ -200,11 +200,11 @@ final class OshiReaderTests: XCTestCase {
             FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
                      title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
                      media_type: "video", published_at: now, watch_term_keyword: "Aiko old",
-                     watch_term_id: 42, fetched_at: now),
+                     watch_term_id: 42, fetched_at: now, source: "youtube_api"),
             FeedItem(id: "youtube:2", platform: "youtube", url: "https://u/2",
                      title: "Haruka video", content_text: nil, author: nil, thumbnail_url: nil,
                      media_type: "video", published_at: now, watch_term_keyword: "Haruka",
-                     watch_term_id: 43, fetched_at: now),
+                     watch_term_id: 43, fetched_at: now, source: "youtube_api"),
         ]
 
         db.deleteTerm(id: term.id)
@@ -220,11 +220,11 @@ final class OshiReaderTests: XCTestCase {
             FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
                      title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
                      media_type: "video", published_at: now, watch_term_keyword: "Aiko",
-                     fetched_at: now),
+                     fetched_at: now, source: "youtube_api"),
             FeedItem(id: "youtube:2", platform: "youtube", url: "https://u/2",
                      title: "Haruka video", content_text: nil, author: nil, thumbnail_url: nil,
                      media_type: "video", published_at: now, watch_term_keyword: "Haruka",
-                     fetched_at: now),
+                     fetched_at: now, source: "youtube_api"),
         ]
 
         let results = db.queryFeed(keyword: nil, days: 30)
@@ -240,13 +240,13 @@ final class OshiReaderTests: XCTestCase {
             FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
                      title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
                      media_type: "video", published_at: now, watch_term_keyword: "Aiko",
-                     watch_term_id: 42, fetched_at: now)
+                     watch_term_id: 42, fetched_at: now, source: "youtube_api")
         ])
         _ = db.mergeItems(newItems: [
             FeedItem(id: "youtube:1", platform: "youtube", url: "https://u/1",
                      title: "Aiko video extended title", content_text: "more", author: nil,
                      thumbnail_url: nil, media_type: "video", published_at: now,
-                     watch_term_keyword: "Aiko", fetched_at: now)
+                     watch_term_keyword: "Aiko", fetched_at: now, source: "youtube_api")
         ])
 
         XCTAssertEqual(db.feedItems.first?.watch_term_id, 42)
@@ -331,7 +331,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: nowString,
             watch_term_keyword: "Oshi",
-            fetched_at: nowString
+            fetched_at: nowString,
+            source: "youtube_api"
         )
         
         // Duplicate item with shorter title
@@ -346,7 +347,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: nowString,
             watch_term_keyword: "Oshi",
-            fetched_at: nowString
+            fetched_at: nowString,
+            source: "youtube_api"
         )
         
         let item2 = FeedItem(
@@ -421,7 +423,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
         let backendFeedItem = FeedItem(
             id: "youtube:redirected",
@@ -434,7 +437,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
 
         _ = db.mergeItems(newItems: [preview])
@@ -457,7 +461,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
         let preview = FeedItem(
             id: "youtube:stable",
@@ -470,7 +475,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
 
         _ = db.mergeItems(newItems: [source])
@@ -493,7 +499,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
         let stable = FeedItem(
             id: "youtube:stable-visible",
@@ -506,7 +513,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
 
         _ = db.mergeItems(newItems: [redirectOnly, stable])
@@ -538,14 +546,16 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:fill-test", platform: "youtube",
             url: "https://youtube.com/1",
             title: "Video", content_text: nil, author: nil, thumbnail_url: nil,
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         let enriched = FeedItem(
             id: "youtube:fill-test", platform: "youtube",
             url: "https://youtube.com/1",
             title: "Video", content_text: "Description text", author: "Creator",
             thumbnail_url: "https://i.ytimg.com/thumb.jpg",
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         _ = db.mergeItems(newItems: [base])
         _ = db.mergeItems(newItems: [enriched])
@@ -565,13 +575,15 @@ final class OshiReaderTests: XCTestCase {
             url: "https://youtube.com/2",
             title: "Video", content_text: "Original description", author: nil,
             thumbnail_url: "https://i.ytimg.com/original.jpg",
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         let noContent = FeedItem(
             id: "youtube:keep-test", platform: "youtube",
             url: "https://youtube.com/2",
             title: "Video", content_text: nil, author: nil, thumbnail_url: nil,
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         _ = db.mergeItems(newItems: [withContent])
         _ = db.mergeItems(newItems: [noContent])
@@ -908,19 +920,22 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:26:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:26:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:26:00Z",
+            source: "youtube_api"
         )
         let stale = FeedItem(
             id: "youtube:stale", platform: "youtube", url: "https://example.com/stale",
             title: "Stale", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:20:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:20:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:20:00Z",
+            source: "youtube_api"
         )
         let invalid = FeedItem(
             id: "youtube:invalid", platform: "youtube", url: "https://example.com/invalid",
             title: "Invalid", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "not-a-date",
-            watch_term_keyword: "Aiko", fetched_at: "not-a-date"
+            watch_term_keyword: "Aiko", fetched_at: "not-a-date",
+            source: "youtube_api"
         )
 
         XCTAssertTrue(BackgroundRefreshPolicy.shouldRefreshOnForeground(items: [], now: now, lastRefreshAt: nil))
@@ -1101,7 +1116,7 @@ final class OshiReaderTests: XCTestCase {
         let allInfo = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
         let mediaOnly = WatchTerm(keyword: "Haruka", collection_mode: .mediaOnly)
         let recentFallback = FeedItem(
-            id: "youtube:gnews:recent",
+            id: "youtube:recent",
             platform: "youtube",
             url: "https://example.com/recent",
             title: "Aiko recent",
@@ -1111,7 +1126,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "article",
             published_at: "1970-01-01T00:29:00Z",
             watch_term_keyword: "Aiko",
-            fetched_at: "1970-01-01T00:29:00Z"
+            fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
         let recentMediaOnlyFallback = FeedItem(
             id: "youtube:haruka",
@@ -1124,7 +1140,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: "1970-01-01T00:29:00Z",
             watch_term_keyword: "Haruka",
-            fetched_at: "1970-01-01T00:29:00Z"
+            fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
 
         XCTAssertTrue(
@@ -1299,7 +1316,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
 
         BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
@@ -1333,7 +1351,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
 
         BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
@@ -1444,7 +1463,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
         let recentNote = FeedItem(
             id: "note:recent", platform: "note", url: "https://example.com/note",
@@ -1571,7 +1591,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
 
         BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
@@ -1650,7 +1671,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
 
         BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
@@ -1844,7 +1866,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
         let staleDevice = FeedItem(
             id: "yahoonews:stale", platform: "yahoonews", url: "https://example.com/stale",
@@ -1900,7 +1923,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
         let recentNote = FeedItem(
             id: "note:recent", platform: "note", url: "https://example.com/note",
@@ -1945,13 +1969,15 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:aiko", platform: "youtube", url: "https://example.com/aiko",
             title: "Aiko recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
         let recentHaruka = FeedItem(
             id: "youtube:haruka", platform: "youtube", url: "https://example.com/haruka",
             title: "Haruka recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Haruka", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Haruka", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
 
         XCTAssertTrue(
@@ -2144,7 +2170,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:recent", platform: "youtube", url: "https://example.com/recent",
             title: "Recent", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: "1970-01-01T00:29:00Z",
-            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z"
+            watch_term_keyword: "Aiko", fetched_at: "1970-01-01T00:29:00Z",
+            source: "youtube_api"
         )
         let activeTerm = WatchTerm(keyword: "Aiko", collection_mode: .allInfo)
         let recentCompletion = now.addingTimeInterval(-60)
@@ -2300,17 +2327,20 @@ final class OshiReaderTests: XCTestCase {
         let existing = FeedItem(
             id: "youtube:existing", platform: "youtube", url: "https://example.com/existing",
             title: "Existing", content_text: nil, author: nil, thumbnail_url: nil,
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         let fresh = FeedItem(
             id: "youtube:fresh", platform: "youtube", url: "https://example.com/fresh",
             title: "Fresh", content_text: nil, author: nil, thumbnail_url: nil,
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         let evicted = FeedItem(
             id: "youtube:evicted", platform: "youtube", url: "https://example.com/evicted",
             title: "Evicted", content_text: nil, author: nil, thumbnail_url: nil,
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         let redirectOnly = FeedItem(
             id: "youtube:redirect-only",
@@ -2323,7 +2353,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
 
         let candidates = BackgroundRefreshPolicy.notificationItems(
@@ -2349,7 +2380,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:background", platform: "youtube", url: "https://example.com/item",
             title: "Background item", content_text: nil, author: nil,
             thumbnail_url: "https://example.invalid/never-downloaded.jpg",
-            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
 
         await manager.notifyForNewItems([item], terms: [term], includeAttachments: false)
@@ -2551,7 +2583,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: "2026-06-01T12:00:00Z",
             watch_term_keyword: "Aiko",
-            fetched_at: "2026-06-01T12:05:00Z"
+            fetched_at: "2026-06-01T12:05:00Z",
+            source: "youtube_api"
         )
         let notification = FeedItem(
             id: "youtube:shared",
@@ -2564,7 +2597,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: "2026-06-18T12:00:00Z",
             watch_term_keyword: "Aiko",
-            fetched_at: "2026-06-18T12:01:00Z"
+            fetched_at: "2026-06-18T12:01:00Z",
+            source: "youtube_api"
         )
 
         let resolved = NotificationNavigationManager.preferredNotificationItem(
@@ -2591,7 +2625,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: "2026-06-01T12:00:00Z",
             watch_term_keyword: "Aiko",
-            fetched_at: "2026-06-01T12:05:00Z"
+            fetched_at: "2026-06-01T12:05:00Z",
+            source: "youtube_api"
         )
         let payloadDefaults = FeedItem(
             id: cached.id,
@@ -2637,7 +2672,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: latest,
             watch_term_keyword: "Aiko",
-            fetched_at: latest
+            fetched_at: latest,
+            source: "youtube_api"
         )
 
         XCTAssertEqual(
@@ -2671,7 +2707,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: "2026-06-18T11:00:00Z",
             watch_term_keyword: "Aiko",
-            fetched_at: "2026-06-18T11:00:00Z"
+            fetched_at: "2026-06-18T11:00:00Z",
+            source: "youtube_api"
         )
         let localCustomItem = FeedItem(
             id: "custom:local",
@@ -2733,7 +2770,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: "2026-06-18T11:00:00Z",
             watch_term_keyword: "Aiko",
-            fetched_at: "2026-06-18T12:30:00Z"
+            fetched_at: "2026-06-18T12:30:00Z",
+            source: "youtube_api"
         )
         let stable = FeedItem(
             id: "youtube:stable-cursor",
@@ -2746,7 +2784,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: "2026-06-18T10:00:00Z",
             watch_term_keyword: "Aiko",
-            fetched_at: "2026-06-18T11:15:00Z"
+            fetched_at: "2026-06-18T11:15:00Z",
+            source: "youtube_api"
         )
 
         XCTAssertEqual(
@@ -2823,7 +2862,8 @@ final class OshiReaderTests: XCTestCase {
                 author: "Source label that must stay hidden",
                 thumbnail_url: "https://img.example.com/preview.jpg",
                 media_type: "video", published_at: nowString, watch_term_keyword: enabledTerm.keyword,
-                fetched_at: nowString
+                fetched_at: nowString,
+                source: "youtube_api"
             ),
             FeedItem(
                 id: "note:enabled-2", platform: "note", url: "https://note.com/2",
@@ -2883,7 +2923,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: nowString,
             watch_term_keyword: "Notify Oshi",
-            fetched_at: nowString
+            fetched_at: nowString,
+            source: "youtube_api"
         )
 
         XCTAssertEqual(db.mergeItems(newItems: [item]), 1)
@@ -2907,7 +2948,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:denied-test", platform: "youtube", url: "https://youtube.com/1",
             title: "Video", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: nowString,
-            watch_term_keyword: "Oshi", fetched_at: nowString
+            watch_term_keyword: "Oshi", fetched_at: nowString,
+            source: "youtube_api"
         )
         await manager.notifyForNewItems([item], terms: [term])
         XCTAssertEqual(center.requests.count, 0)
@@ -2923,10 +2965,10 @@ final class OshiReaderTests: XCTestCase {
         let items = [
             FeedItem(id: "1", platform: "youtube", url: "https://u/1", title: "A1",
                      content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
-                     published_at: nowString, watch_term_keyword: "Oshi A", fetched_at: nowString),
+                     published_at: nowString, watch_term_keyword: "Oshi A", fetched_at: nowString, source: "youtube_api"),
             FeedItem(id: "2", platform: "youtube", url: "https://u/2", title: "A2",
                      content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
-                     published_at: nowString, watch_term_keyword: "Oshi A", fetched_at: nowString),
+                     published_at: nowString, watch_term_keyword: "Oshi A", fetched_at: nowString, source: "youtube_api"),
             FeedItem(id: "3", platform: "note", url: "https://u/3", title: "B1",
                      content_text: nil, author: nil, thumbnail_url: nil, media_type: "article",
                      published_at: nowString, watch_term_keyword: "Oshi B", fetched_at: nowString),
@@ -2951,7 +2993,8 @@ final class OshiReaderTests: XCTestCase {
             title: "Orphan video", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: nowString,
             watch_term_keyword: "Completely Different Oshi",
-            fetched_at: nowString
+            fetched_at: nowString,
+            source: "youtube_api"
         )
         await manager.notifyForNewItems([item], terms: [term])
         XCTAssertEqual(center.requests.count, 0)
@@ -2969,14 +3012,16 @@ final class OshiReaderTests: XCTestCase {
             return FeedItem(
                 id: "cap:\(i)", platform: "youtube", url: "https://u/\(i)", title: "Item \(i)",
                 content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
-                published_at: ts, watch_term_keyword: "Oshi", fetched_at: ts
+                published_at: ts, watch_term_keyword: "Oshi", fetched_at: ts,
+                source: "youtube_api"
             )
         }
         let evictedTs = fmt.string(from: base)
         items.append(FeedItem(
             id: "cap:evicted", platform: "youtube", url: "https://u/evicted", title: "Evicted",
             content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
-            published_at: evictedTs, watch_term_keyword: "Oshi", fetched_at: evictedTs
+            published_at: evictedTs, watch_term_keyword: "Oshi", fetched_at: evictedTs,
+            source: "youtube_api"
         ))
 
         _ = db.mergeItems(newItems: items)
@@ -2995,7 +3040,8 @@ final class OshiReaderTests: XCTestCase {
             return FeedItem(
                 id: "cap:existing:\(i)", platform: "youtube", url: "https://u/\(i)",
                 title: "Existing \(i)", content_text: nil, author: nil, thumbnail_url: nil,
-                media_type: "video", published_at: ts, watch_term_keyword: "Oshi", fetched_at: ts
+                media_type: "video", published_at: ts, watch_term_keyword: "Oshi", fetched_at: ts,
+                source: "youtube_api"
             )
         }
         _ = db.mergeItems(newItems: existingItems)
@@ -3005,7 +3051,8 @@ final class OshiReaderTests: XCTestCase {
             id: "cap:notification", platform: "youtube",
             url: "https://youtube.com/watch?v=preserved",
             title: "Preserved notification", content_text: nil, author: nil, thumbnail_url: nil,
-            media_type: "video", published_at: olderTs, watch_term_keyword: "Oshi", fetched_at: olderTs
+            media_type: "video", published_at: olderTs, watch_term_keyword: "Oshi", fetched_at: olderTs,
+            source: "youtube_api"
         )
 
         _ = db.mergeItems(
@@ -3058,7 +3105,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:now", platform: "youtube", url: "https://u",
             title: "Aiko now news video", content_text: "Aiko is active", author: "Aiko",
             thumbnail_url: nil, media_type: "video", published_at: formatter.string(from: now),
-            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now)
+            watch_term_keyword: "Aiko", fetched_at: formatter.string(from: now),
+            source: "youtube_api"
         )
         
         let itemYesterday = FeedItem(
@@ -3511,7 +3559,8 @@ final class OshiReaderTests: XCTestCase {
                 id: id, platform: platform, url: "https://example.com/\(id)",
                 title: title, content_text: nil, author: nil, thumbnail_url: nil,
                 media_type: platform == "tver" ? "video" : "article",
-                published_at: published, watch_term_keyword: "Aiko", fetched_at: published
+                published_at: published, watch_term_keyword: "Aiko", fetched_at: published,
+                source: platform == "youtube" ? "youtube_api" : nil
             )
         }
 
@@ -3538,7 +3587,8 @@ final class OshiReaderTests: XCTestCase {
                 id: id, platform: platform, url: "https://example.com/\(id)",
                 title: title, content_text: nil, author: nil, thumbnail_url: nil,
                 media_type: "video",
-                published_at: published, watch_term_keyword: "Aiko", fetched_at: published
+                published_at: published, watch_term_keyword: "Aiko", fetched_at: published,
+                source: platform == "youtube" ? "youtube_api" : nil
             )
         }
 
@@ -3568,7 +3618,8 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:v1", platform: "youtube", url: "https://yt/v1",
             title: "Aiko video", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: now,
-            watch_term_keyword: "Aiko", fetched_at: now
+            watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         db.setSubscribedPlatforms(platforms: ["youtube", "custom"])
         _ = db.mergeItems(newItems: [customItem, regularItem])
@@ -3687,7 +3738,8 @@ final class OshiReaderTests: XCTestCase {
             media_type: "video",
             published_at: now,
             watch_term_keyword: "Aiko",
-            fetched_at: now
+            fetched_at: now,
+            source: "youtube_api"
         )
 
         XCTAssertEqual(db.currentCustomFeedItems([staleCustom, regular]).map(\.id), ["youtube:v1"])
@@ -4070,7 +4122,8 @@ final class OshiReaderTests: XCTestCase {
             url: "https://youtube.com/watch?v=hidden-test",
             title: "Hidden item", content_text: nil, author: nil, thumbnail_url: nil,
             media_type: "video", published_at: now,
-            watch_term_keyword: "Aiko", fetched_at: now
+            watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
         )
         db.setSubscribedPlatforms(platforms: ["youtube"])
         _ = db.mergeItems(newItems: [item])
@@ -4096,7 +4149,8 @@ final class OshiReaderTests: XCTestCase {
                 url: "https://youtube.com/watch?v=shared-vid",
                 title: "Shared video", content_text: nil, author: nil, thumbnail_url: nil,
                 media_type: "video", published_at: now,
-                watch_term_keyword: kw, fetched_at: now
+                watch_term_keyword: kw, fetched_at: now,
+                source: "youtube_api"
             )
         }
         db.setSubscribedPlatforms(platforms: ["youtube"])
@@ -4180,7 +4234,8 @@ final class OshiReaderTests: XCTestCase {
                 url: "https://youtube.com/watch?v=dedup-vid",
                 title: "Dedup video", content_text: nil, author: nil, thumbnail_url: nil,
                 media_type: "video", published_at: now,
-                watch_term_keyword: kw, fetched_at: now
+                watch_term_keyword: kw, fetched_at: now,
+                source: "youtube_api"
             )
         }
         _ = db.mergeItems(newItems: [makeItem("Aiko"), makeItem("Haruka")])
@@ -4276,13 +4331,15 @@ final class OshiReaderTests: XCTestCase {
                 id: "youtube:abc123", platform: "youtube",
                 url: "https://www.youtube.com/watch?v=abc123&utm_source=share",
                 title: "Aiko live clip", content_text: nil, author: nil, thumbnail_url: nil,
-                media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+                media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+                source: "youtube_api"
             ),
             FeedItem(
-                id: "youtube:gnews:abc123", platform: "youtube",
+                id: "youtube:alias:abc123", platform: "youtube",
                 url: "https://youtu.be/abc123?t=30",
                 title: "Aiko live clip", content_text: nil, author: nil, thumbnail_url: nil,
-                media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now
+                media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+                source: "youtube_api"
             ),
         ])
 
@@ -4468,13 +4525,15 @@ final class OshiReaderTests: XCTestCase {
             id: "youtube:inside", platform: "youtube", url: "https://yt/inside",
             title: "Inside", content_text: "Inside", author: nil, thumbnail_url: nil,
             media_type: "video", published_at: inside,
-            watch_term_keyword: "Aiko", fetched_at: inside
+            watch_term_keyword: "Aiko", fetched_at: inside,
+            source: "youtube_api"
         )
         let itemOutside = FeedItem(
             id: "youtube:outside", platform: "youtube", url: "https://yt/outside",
             title: "Outside", content_text: "Outside", author: nil, thumbnail_url: nil,
             media_type: "video", published_at: outside,
-            watch_term_keyword: "Aiko", fetched_at: outside
+            watch_term_keyword: "Aiko", fetched_at: outside,
+            source: "youtube_api"
         )
 
         _ = db.mergeItems(newItems: [itemInside, itemOutside])
@@ -4491,22 +4550,30 @@ final class OshiReaderTests: XCTestCase {
         db.setSubscribedPlatforms(platforms: ["youtube"])
 
         // newer: 1 hour ago in UTC
-        let newerUtc = "2024-06-01T03:00:00Z"
-        // older: 2 hours ago expressed with +09:00 (2024-06-01T10:00:00+09:00 == 2024-06-01T01:00:00Z)
-        // As a string "2024-06-01T10:00:00+09:00" > "2024-06-01T03:00:00Z" — wrong sort order
-        let olderWithOffset = "2024-06-01T10:00:00+09:00"
+        let newerDate = Date().addingTimeInterval(-3600)
+        let utcFormatter = ISO8601DateFormatter()
+        utcFormatter.formatOptions = [.withInternetDateTime]
+        let newerUtc = utcFormatter.string(from: newerDate)
+        // older: 2 hours ago expressed with +09:00; lexicographic ordering must not win.
+        let olderDate = Date().addingTimeInterval(-7200)
+        let offsetFormatter = ISO8601DateFormatter()
+        offsetFormatter.formatOptions = [.withInternetDateTime]
+        offsetFormatter.timeZone = TimeZone(secondsFromGMT: 9 * 60 * 60)
+        let olderWithOffset = offsetFormatter.string(from: olderDate)
 
         let newerItem = FeedItem(
             id: "youtube:newer", platform: "youtube", url: "https://yt/newer",
             title: "Newer", content_text: "Newer", author: nil, thumbnail_url: nil,
             media_type: "video", published_at: newerUtc,
-            watch_term_keyword: "Aiko", fetched_at: newerUtc
+            watch_term_keyword: "Aiko", fetched_at: newerUtc,
+            source: "youtube_api"
         )
         let olderItem = FeedItem(
             id: "youtube:older", platform: "youtube", url: "https://yt/older",
             title: "Older", content_text: "Older", author: nil, thumbnail_url: nil,
             media_type: "video", published_at: olderWithOffset,
-            watch_term_keyword: "Aiko", fetched_at: olderWithOffset
+            watch_term_keyword: "Aiko", fetched_at: olderWithOffset,
+            source: "youtube_api"
         )
 
         _ = db.mergeItems(newItems: [newerItem, olderItem])
@@ -4989,7 +5056,8 @@ final class OshiReaderTests: XCTestCase {
                 media_type: "video",
                 published_at: now,
                 watch_term_keyword: "Miku",
-                fetched_at: now
+                fetched_at: now,
+                source: "youtube_api"
             ),
         ]
         let data = try JSONEncoder().encode(cached)
@@ -5033,7 +5101,8 @@ final class OshiReaderTests: XCTestCase {
                 media_type: "video",
                 published_at: now,
                 watch_term_keyword: "Miku",
-                fetched_at: now
+                fetched_at: now,
+                source: "youtube_api"
             ),
         ]
         try JSONEncoder().encode([existingTerm])
@@ -5126,7 +5195,7 @@ final class OshiReaderTests: XCTestCase {
         let item = FeedItem(id: "youtube:x1", platform: "youtube", url: "https://youtu.be/x1",
                             title: nil, content_text: nil, author: nil, thumbnail_url: nil,
                             media_type: "video", published_at: now,
-                            watch_term_keyword: "Aiko", fetched_at: now)
+                            watch_term_keyword: "Aiko", fetched_at: now, source: "youtube_api")
         _ = db.toggleSaved(item: item)
         XCTAssertEqual(db.getSaved().count, 1)
         db.removeSaved(id: "youtube:x1")
@@ -5190,10 +5259,10 @@ final class OshiReaderTests: XCTestCase {
         let items = [
             FeedItem(id: "youtube:s1", platform: "youtube", url: "https://yt/s1", title: "A",
                      content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
-                     published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+                     published_at: now, watch_term_keyword: "Aiko", fetched_at: now, source: "youtube_api"),
             FeedItem(id: "youtube:s2", platform: "youtube", url: "https://yt/s2", title: "B",
                      content_text: nil, author: nil, thumbnail_url: nil, media_type: "video",
-                     published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
+                     published_at: now, watch_term_keyword: "Aiko", fetched_at: now, source: "youtube_api"),
             FeedItem(id: "news:s3", platform: "news", url: "https://news/s3", title: "C",
                      content_text: nil, author: nil, thumbnail_url: nil, media_type: "article",
                      published_at: now, watch_term_keyword: "Aiko", fetched_at: now),
@@ -5309,7 +5378,8 @@ final class OshiReaderTests: XCTestCase {
                     media_type: "article",
                     published_at: nowString,
                     watch_term_keyword: kw,
-                    fetched_at: nowString
+                    fetched_at: nowString,
+                    source: source == "youtube" ? "youtube_api" : nil
                 )
                 newItems.append(item)
             }
