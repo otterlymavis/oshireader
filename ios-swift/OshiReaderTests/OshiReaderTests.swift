@@ -5438,6 +5438,18 @@ final class NetworkManagerTests: XCTestCase {
             APIClientError.httpStatus(500, detail: "  ").localizedDescription,
             "HTTP 500"
         )
+        XCTAssertTrue(
+            APIClientError.httpStatus(
+                409,
+                detail: #"{"code":"notification_device_required","message":"device required"}"#
+            ).requiresVerifiedNotificationDevice
+        )
+        XCTAssertFalse(
+            APIClientError.httpStatus(
+                409,
+                detail: "Notification-enabled watch terms require a verified APNs device"
+            ).requiresVerifiedNotificationDevice
+        )
     }
 
     // 200 OK with valid JSON → decodes cleanly
@@ -5812,7 +5824,7 @@ final class NetworkManagerTests: XCTestCase {
                     XCTFail("Expected JSON request body")
                 }
                 if capturedNotifyValues == [true] {
-                    return (Data("{\"detail\":\"Notification-enabled watch terms require a verified APNs device\"}".utf8), Self.response(status: 409))
+                    return (Data("{\"detail\":{\"code\":\"notification_device_required\",\"message\":\"device required\"}}".utf8), Self.response(status: 409))
                 }
                 return (createdData, Self.response(status: 200))
             }

@@ -4,9 +4,11 @@ enum APIClientError: LocalizedError {
     case httpStatus(Int, detail: String?)
 
     var requiresVerifiedNotificationDevice: Bool {
-        guard case .httpStatus(409, let detail) = self else { return false }
-        return detail?.trimmingCharacters(in: .whitespacesAndNewlines)
-            == "Notification-enabled watch terms require a verified APNs device"
+        guard case .httpStatus(409, let detail) = self,
+              let data = detail?.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return payload["code"] as? String == "notification_device_required"
     }
 
     var errorDescription: String? {

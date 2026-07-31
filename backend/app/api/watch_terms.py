@@ -47,7 +47,13 @@ def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> 
 
 def _require_verified_notification_device(db: Session, term: WatchTerm) -> None:
     if term.notify_on_new and term.owner_device_secret and not _owner_has_verified_device(db, term.owner_device_secret):
-        raise HTTPException(409, "Notification-enabled watch terms require a verified APNs device")
+        raise HTTPException(
+            409,
+            {
+                "code": "notification_device_required",
+                "message": "Notification-enabled watch terms require a verified APNs device",
+            },
+        )
 
 
 def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> WatchTerm | None:

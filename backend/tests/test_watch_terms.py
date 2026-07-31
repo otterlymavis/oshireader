@@ -313,7 +313,8 @@ class TestCreateWatchTerm:
             )
 
         assert resp.status_code == 409
-        assert "verified APNs device" in resp.json()["detail"]
+        assert resp.json()["detail"]["code"] == "notification_device_required"
+        assert "verified APNs device" in resp.json()["detail"]["message"]
         assert db_session.query(WatchTerm).count() == 0
         mock_poll.assert_not_called()
 
