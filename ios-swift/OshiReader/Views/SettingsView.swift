@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var notificationTestSucceeded = false
     @State private var isSendingNotificationTest = false
     @State private var settingsErrorMessage: String? = nil
+    @State private var notificationUpdateIDs = Set<String>()
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     @AppStorage(BackgroundRefreshLiveTestProbe.resultKey) private var liveBackgroundRefreshResult = ""
     
@@ -151,19 +152,17 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings.keywordMode.\(term.keyword)")
                             
                             // Push notifications bell button
-                            Button(action: {
+                            Button {
                                 let next = !term.notify_on_new
-                                db.updateTerm(id: term.id, notifyOnNew: next)
-                                Task {
-                                    _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, notifyOnNew: next)
-                                }
-                            }) {
+                                updateNotificationPreference(for: term, enabled: next)
+                            } label: {
                                 Image(systemName: term.notify_on_new ? "bell.fill" : "bell.slash")
                                     .foregroundColor(term.notify_on_new ? theme.colors.primary : theme.colors.textMuted)
                                     .font(.body)
                                     .padding(.horizontal, 8)
                             }
                             .buttonStyle(PlainButtonStyle())
+                            .disabled(notificationUpdateIDs.contains(term.id))
                             .accessibilityIdentifier("settings.keywordBell.\(term.keyword)")
                             
                             Toggle("", isOn: Binding(
@@ -606,6 +605,33 @@ struct SettingsView: View {
             notificationTestMessage = remoteRegistrationReady
                 ? i18n.t("notifRemoteTestRequestFailed")
                 : i18n.t("notifRemoteTokenMissing")
+        }
+    }
+
+    private func updateNotificationPreference(for term: WatchTerm, enabled: Bool) {
+        guard !notificationUpdateIDs.contains(term.id) else { return }
+        notificationUpdateIDs.insert(term.id)
+
+        Task {
+            do {
+                let updatedTerm = try await NetworkManager.shared.updateWatchTerm(
+                    id: term.id,
+                    notifyOnNew: enabled
+                )
+                await MainActor.run {
+                    notificationUpdateIDs.remove(term.id)
+                    _ = db.replaceTerm(localId: term.id, with: updatedTerm, ifUnchangedFrom: term)
+                }
+            } catch {
+                await MainActor.run {
+                    notificationUpdateIDs.remove(term.id)
+                    if enabled {
+                        settingsErrorMessage = "Notifications could not be enabled. Allow notifications in iOS Settings, then try again."
+                    } else {
+                        settingsErrorMessage = "The notification setting could not be updated. Please try again."
+                    }
+                }
+            }
         }
     }
 

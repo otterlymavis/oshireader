@@ -5700,7 +5700,7 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testSyncWatchTermsRetriesCreateMutedWhenNotificationsNeedVerifiedDevice() async throws {
+    func testSyncWatchTermsPreservesNotificationPreferenceWhenDeviceIsUnverified() async throws {
         let keyword = "Sync Create Muted \(UUID().uuidString)"
         let repairedTerm = WatchTerm(
             id: UUID().uuidString,
@@ -5750,16 +5750,13 @@ final class NetworkManagerTests: XCTestCase {
 
         let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
 
-        XCTAssertTrue(succeeded)
-        XCTAssertEqual(
-            requestedMethodsAndPaths,
-            ["GET /api/watch-terms", "POST /api/watch-terms", "POST /api/watch-terms"]
-        )
-        XCTAssertEqual(capturedNotifyValues, [true, false])
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
+        XCTAssertEqual(capturedNotifyValues, [true])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
-        XCTAssertEqual(syncedTerm?.id, "42")
-        XCTAssertEqual(syncedTerm?.notify_on_new, false)
-        XCTAssertFalse(syncedTerm?.repaired_from_cache ?? true)
+        XCTAssertEqual(syncedTerm?.id, repairedTerm.id)
+        XCTAssertEqual(syncedTerm?.notify_on_new, true)
+        XCTAssertTrue(syncedTerm?.repaired_from_cache ?? false)
     }
 
     @MainActor

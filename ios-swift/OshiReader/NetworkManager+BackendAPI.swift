@@ -6,8 +6,6 @@ struct BackendTermSyncResult {
     let changed: Bool
 }
 
-private let notificationDeviceRequiredDetail = "Notification-enabled watch terms require a verified APNs device"
-
 extension NetworkManager {
 
     // MARK: - Watch Terms
@@ -32,26 +30,14 @@ extension NetworkManager {
         _ term: WatchTerm,
         timeout: TimeInterval = 30
     ) async throws -> WatchTerm {
-        let notifyOnNew = Self.automaticSyncNotifyOnNewCreate(localTerm: term)
-        do {
-            return try await createWatchTerm(
-                keyword: term.keyword,
-                collectionMode: term.collection_mode,
-                notifyOnNew: notifyOnNew,
-                isActive: term.is_active,
-                aliases: term.aliases,
-                timeout: timeout
-            )
-        } catch APIClientError.httpStatus(409, let detail) where notifyOnNew && detail == notificationDeviceRequiredDetail {
-            return try await createWatchTerm(
-                keyword: term.keyword,
-                collectionMode: term.collection_mode,
-                notifyOnNew: false,
-                isActive: term.is_active,
-                aliases: term.aliases,
-                timeout: timeout
-            )
-        }
+        try await createWatchTerm(
+            keyword: term.keyword,
+            collectionMode: term.collection_mode,
+            notifyOnNew: Self.automaticSyncNotifyOnNewCreate(localTerm: term),
+            isActive: term.is_active,
+            aliases: term.aliases,
+            timeout: timeout
+        )
     }
 
     func fetchWatchTerms(timeout: TimeInterval = 30) async throws -> [WatchTerm] {
@@ -110,6 +96,12 @@ extension NetworkManager {
                         LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm, ifUnchangedFrom: term)
                     }
                     if !replaced { succeeded = false }
+                } else if notifyOnNewUpdate != nil {
+                    // Keep the user's local preference when APNs verification or
+                    // the backend is temporarily unavailable. Replacing it with
+                    // the server's false value makes a transient sync failure
+                    // look like an intentional opt-out.
+                    succeeded = false
                 } else {
                     let replaced = await MainActor.run {
                         LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
