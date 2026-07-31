@@ -498,6 +498,7 @@ struct SettingsView: View {
                     return (searchTerm, items)
                 }
             }
+            var scrapeAttempts = [[FeedItem]]()
             for await scrape in group {
                 guard let latestTerm = currentDeviceFallbackTerm(for: currentTerm) else {
                     group.cancelAll()
@@ -516,9 +517,15 @@ struct SettingsView: View {
                         currentFallbackPlatforms.contains(Platform.normalize(item.platform))
                 }
                 if !mergeableItems.isEmpty {
-                    _ = db.mergeItems(newItems: mergeableItems, notifyOnNew: false)
-                    mergedAnyItems = true
+                    scrapeAttempts.append(mergeableItems)
                 }
+            }
+            if !scrapeAttempts.isEmpty {
+                _ = db.mergeItemsBatched(
+                    newItemsBatches: scrapeAttempts,
+                    notifyOnNew: false
+                )
+                mergedAnyItems = true
             }
         }
         if mergedAnyItems {

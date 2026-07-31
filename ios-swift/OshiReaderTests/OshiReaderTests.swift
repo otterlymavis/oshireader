@@ -2370,6 +2370,65 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.id), ["youtube:fresh"])
     }
 
+    func testBatchedNotificationSnapshotsIgnoreEarlierNonSurvivors() {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let existing = FeedItem(
+            id: "youtube:existing", platform: "youtube", url: "https://example.com/existing",
+            title: "Existing", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
+        )
+        let prunedDuplicate = FeedItem(
+            id: "youtube:duplicate", platform: "youtube", url: "https://news.google.com/rss/articles/duplicate",
+            title: "Pruned duplicate", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "google_news"
+        )
+        let survivingDuplicate = FeedItem(
+            id: prunedDuplicate.id, platform: "youtube", url: "https://youtube.com/watch?v=duplicate",
+            title: "Surviving duplicate", content_text: nil, author: nil, thumbnail_url: nil,
+            media_type: "video", published_at: now, watch_term_keyword: "Aiko", fetched_at: now,
+            source: "youtube_api"
+        )
+
+        let duplicateKey = BackgroundRefreshPolicy.itemKey(survivingDuplicate)
+        let hiddenKeys = Set<String>()
+        let snapshots = BackgroundRefreshPolicy.existingKeySnapshotsForBatchedNotificationAppend(
+            itemBatches: [
+                [prunedDuplicate].filter {
+                    FeedItemPolicy.isMergeEligibleIncomingItem(
+                        $0,
+                        hiddenItems: hiddenKeys,
+                        itemKey: BackgroundRefreshPolicy.itemKey
+                    )
+                },
+                [survivingDuplicate].filter {
+                    FeedItemPolicy.isMergeEligibleIncomingItem(
+                        $0,
+                        hiddenItems: hiddenKeys,
+                        itemKey: BackgroundRefreshPolicy.itemKey
+                    )
+                },
+                [survivingDuplicate].filter {
+                    FeedItemPolicy.isMergeEligibleIncomingItem(
+                        $0,
+                        hiddenItems: hiddenKeys,
+                        itemKey: BackgroundRefreshPolicy.itemKey
+                    )
+                },
+            ],
+            initialKeys: [BackgroundRefreshPolicy.itemKey(existing)],
+            survivingKeys: [
+                BackgroundRefreshPolicy.itemKey(existing),
+                duplicateKey,
+            ]
+        )
+
+        XCTAssertFalse(snapshots[0].contains(duplicateKey))
+        XCTAssertFalse(snapshots[1].contains(duplicateKey))
+        XCTAssertTrue(snapshots[2].contains(duplicateKey))
+    }
+
     @MainActor
     func testBackgroundFallbackCanSkipAttachments() async throws {
         let center = MockNotificationCenter(status: .authorized)
@@ -3197,6 +3256,248 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertTrue(allTimeIds.contains(recentYouTube.id))
         XCTAssertTrue(allTimeIds.contains(oldArticle.id))
         XCTAssertFalse(allTimeIds.contains(oldYouTube.id))
+    }
+
+    func testQueryFeedPerformanceWithRepresentativeCache() throws {
+        let formatter = ISO8601DateFormatter()
+        let publishedAt = formatter.string(from: Date())
+        let platforms = ["news", "tver", "yahoonews", "custom"]
+        let items = (0..<600).map { index in
+            let platform = platforms[index % platforms.count]
+            return FeedItem(
+                id: "\(platform):performance-\(index)",
+                platform: platform,
+                url: "https://performance.example/\(index)",
+                title: "Aiko performance item \(index)",
+                content_text: "Representative cached feed content",
+                author: "Test",
+                thumbnail_url: nil,
+                media_type: platform == "custom" ? "article" : "video",
+                published_at: publishedAt,
+                watch_term_keyword: platform == "custom" ? "" : "Aiko",
+                fetched_at: publishedAt,
+                source: nil
+            )
+        }
+        db.feedItems = items
+
+        // Exclude first-use formatter/cache initialization from the steady-state
+        // measurement so future comparisons are less noisy.
+        let warmupResults = db.queryFeed(keyword: "Aiko", days: 30)
+        XCTAssertEqual(warmupResults.count, 600)
+        measure {
+            for _ in 0..<10 {
+                _ = db.queryFeed(keyword: "Aiko", days: 30)
+            }
+        }
+    }
+
+    func testMergeItemsPerformanceWithRepresentativeRefreshBatch() throws {
+        let formatter = ISO8601DateFormatter()
+        let publishedAt = formatter.string(from: Date())
+        let existingItems = (0..<600).map { index in
+            FeedItem(
+                id: "news:existing-\(index)",
+                platform: "news",
+                url: "https://performance.example/existing-\(index)",
+                title: "Existing refresh item \(index)",
+                content_text: "Cached content",
+                author: "Test",
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: publishedAt,
+                watch_term_keyword: "Aiko",
+                fetched_at: publishedAt,
+                source: nil
+            )
+        }
+        let incomingItems = (0..<100).map { index in
+            FeedItem(
+                id: "news:incoming-\(index)",
+                platform: "news",
+                url: "https://performance.example/incoming-\(index)",
+                title: "Incoming refresh item \(index)",
+                content_text: "Fresh content",
+                author: "Test",
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: publishedAt,
+                watch_term_keyword: "Aiko",
+                fetched_at: publishedAt,
+                source: nil
+            )
+        }
+
+        db.feedItems = existingItems
+        _ = db.mergeItems(newItems: incomingItems, notifyOnNew: false)
+        XCTAssertEqual(db.feedItems.count, 600)
+
+        db.feedItems = existingItems
+        _ = db.mergeItems(newItems: incomingItems, notifyOnNew: false)
+        measure {
+            for _ in 0..<10 {
+                db.feedItems = existingItems
+                _ = db.mergeItems(newItems: incomingItems, notifyOnNew: false)
+            }
+        }
+    }
+
+    func testMergeItemsBatchedPerformanceWithRepresentativePlatformRefreshes() throws {
+        let formatter = ISO8601DateFormatter()
+        let publishedAt = formatter.string(from: Date())
+        let existingItems = (0..<600).map { index in
+            FeedItem(
+                id: "news:batched-existing-\(index)",
+                platform: "news",
+                url: "https://performance.example/batched-existing-\(index)",
+                title: "Existing batched refresh item \(index)",
+                content_text: "Cached content",
+                author: "Test",
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: publishedAt,
+                watch_term_keyword: "Aiko",
+                fetched_at: publishedAt,
+                source: nil
+            )
+        }
+        let incomingBatches = (0..<5).map { batchIndex in
+            (0..<20).map { itemIndex in
+                FeedItem(
+                    id: "news:batched-incoming-\(batchIndex)-\(itemIndex)",
+                    platform: "news",
+                    url: "https://performance.example/batched-incoming-\(batchIndex)-\(itemIndex)",
+                    title: "Incoming batched refresh item \(batchIndex)-\(itemIndex)",
+                    content_text: "Fresh content",
+                    author: "Test",
+                    thumbnail_url: nil,
+                    media_type: "article",
+                    published_at: publishedAt,
+                    watch_term_keyword: "Aiko",
+                    fetched_at: publishedAt,
+                    source: nil
+                )
+            }
+        }
+
+        db.feedItems = existingItems
+        let warmupCounts = db.mergeItemsBatched(
+            newItemsBatches: incomingBatches,
+            notifyOnNew: false
+        )
+        XCTAssertEqual(warmupCounts, [20, 20, 20, 20, 20])
+        XCTAssertEqual(db.feedItems.count, 600)
+
+        measure {
+            for _ in 0..<10 {
+                db.feedItems = existingItems
+                _ = db.mergeItemsBatched(
+                    newItemsBatches: incomingBatches,
+                    notifyOnNew: false
+                )
+            }
+        }
+    }
+
+    func testMergeItemsBatchedReturnsPerBatchAddedCounts() throws {
+        let formatter = ISO8601DateFormatter()
+        let publishedAt = formatter.string(from: Date())
+        let makeItem = { (id: String) in
+            FeedItem(
+                id: "news:\(id)",
+                platform: "news",
+                url: "https://performance.example/\(id)",
+                title: "Aiko \(id)",
+                content_text: "Content",
+                author: "Test",
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: publishedAt,
+                watch_term_keyword: "Aiko",
+                fetched_at: publishedAt,
+                source: nil
+            )
+        }
+
+        let first = makeItem("batch-one")
+        let second = makeItem("batch-two")
+        let counts = db.mergeItemsBatched(
+            newItemsBatches: [[first], [second, first]],
+            notifyOnNew: false
+        )
+
+        XCTAssertEqual(counts, [1, 1])
+        XCTAssertEqual(db.feedItems.map(\.id).sorted(), [first.id, second.id].sorted())
+    }
+
+    func testMergeItemsBatchedSkipsAllEmptyBatches() throws {
+        let formatter = ISO8601DateFormatter()
+        let publishedAt = formatter.string(from: Date())
+        let existing = FeedItem(
+            id: "news:existing-empty-batch",
+            platform: "news",
+            url: "https://performance.example/existing-empty-batch",
+            title: "Aiko existing empty batch",
+            content_text: "Content",
+            author: "Test",
+            thumbnail_url: nil,
+            media_type: "article",
+            published_at: publishedAt,
+            watch_term_keyword: "Aiko",
+            fetched_at: publishedAt,
+            source: nil
+        )
+        db.feedItems = [existing]
+
+        let counts = db.mergeItemsBatched(
+            newItemsBatches: [[], [], []],
+            notifyOnNew: false
+        )
+
+        XCTAssertEqual(counts, [0, 0, 0])
+        XCTAssertEqual(db.feedItems, [existing])
+    }
+
+    func testMergeItemsBatchedEmptyBatchesStillPruneLegacyItems() throws {
+        let formatter = ISO8601DateFormatter()
+        let publishedAt = formatter.string(from: Date())
+        let legacy = FeedItem(
+            id: "youtube:gnews-empty-batch",
+            platform: "youtube",
+            url: "https://news.google.com/rss/articles/empty-batch",
+            title: "Aiko legacy empty batch",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: publishedAt,
+            watch_term_keyword: "Aiko",
+            fetched_at: publishedAt,
+            source: "google_news"
+        )
+        let current = FeedItem(
+            id: "youtube:current-empty-batch",
+            platform: "youtube",
+            url: "https://youtube.com/watch?v=current-empty-batch",
+            title: "Aiko current empty batch",
+            content_text: nil,
+            author: nil,
+            thumbnail_url: nil,
+            media_type: "video",
+            published_at: publishedAt,
+            watch_term_keyword: "Aiko",
+            fetched_at: publishedAt,
+            source: "youtube"
+        )
+        db.feedItems = [legacy, current]
+
+        let counts = db.mergeItemsBatched(
+            newItemsBatches: [[], []],
+            notifyOnNew: false
+        )
+
+        XCTAssertEqual(counts, [0, 0])
+        XCTAssertEqual(db.feedItems, [current])
     }
 
     func testMergePrunesLegacyYouTubeGoogleNewsFallbackItems() throws {

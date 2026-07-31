@@ -36,6 +36,21 @@ enum FeedItemPolicy {
     static func shouldPruneLegacyYouTubeItem(_ item: FeedItem) -> Bool {
         isLegacyYouTubeGoogleNewsFallback(item) || isLegacyUnmarkedYouTubeEstimate(item)
     }
+
+    static func isSearchFallback(_ item: FeedItem) -> Bool {
+        item.id.contains("search:") || item.title?.lowercased().contains("search:") == true
+    }
+
+    static func isMergeEligibleIncomingItem(
+        _ item: FeedItem,
+        hiddenItems: Set<String>,
+        itemKey: (FeedItem) -> String
+    ) -> Bool {
+        let key = itemKey(item)
+        return !hiddenItems.contains(key) &&
+            !isSearchFallback(item) &&
+            !shouldPruneLegacyYouTubeItem(item)
+    }
 }
 
 @MainActor
@@ -491,19 +506,41 @@ class LocalDB: ObservableObject {
         notifyOnNew: Bool = true,
         preserveIncomingItems: Bool = false
     ) -> Int {
+        mergeItemsBatched(
+            newItemsBatches: [newItems],
+            notifyOnNew: notifyOnNew,
+            preserveIncomingItems: preserveIncomingItems
+        ).first ?? 0
+    }
+
+    @discardableResult
+    func mergeItemsBatched(
+        newItemsBatches: [[FeedItem]],
+        notifyOnNew: Bool = true,
+        preserveIncomingItems: Bool = false
+    ) -> [Int] {
+        if newItemsBatches.allSatisfy(\.isEmpty),
+           !feedItems.contains(where: FeedItemPolicy.shouldPruneLegacyYouTubeItem) {
+            return Array(repeating: 0, count: newItemsBatches.count)
+        }
+
         // On a fresh install / cleared cache the whole first fetch is "new"; don't fire a
         // burst of notifications for content the user is seeing for the first time anyway.
         let wasFirstLoad = feedItems.isEmpty
-        var addedCount = 0
+        var addedCounts = Array(repeating: 0, count: newItemsBatches.count)
         var addedItems: [FeedItem] = []
         let itemKey = { (i: FeedItem) -> String in "\(i.id)::\(i.watch_term_keyword)" }
 
-        let filteredNew = newItems.filter { item in
-            let key = itemKey(item)
-            let isHidden = self.hiddenItems.contains(key)
-            let isSearchFallback = item.id.contains("search:") || item.title?.lowercased().contains("search:") == true
-            return !isHidden && !isSearchFallback && !FeedItemPolicy.shouldPruneLegacyYouTubeItem(item)
+        let filteredNewBatches = newItemsBatches.map { newItems in
+            newItems.filter { item in
+                FeedItemPolicy.isMergeEligibleIncomingItem(
+                    item,
+                    hiddenItems: self.hiddenItems,
+                    itemKey: itemKey
+                )
+            }
         }
+        let filteredNew = filteredNewBatches.flatMap { $0 }
 
         var currentMap = [String: FeedItem]()
         for item in feedItems {
@@ -511,36 +548,38 @@ class LocalDB: ObservableObject {
             currentMap[itemKey(item)] = item
         }
 
-        for item in filteredNew {
-            let key = itemKey(item)
-            if currentMap[key] == nil {
-                currentMap[key] = item
-                addedCount += 1
-                addedItems.append(item)
-            } else {
-                // Merge/update fields if needed (like title length, content, published date)
-                let existing = currentMap[key]!
-                let shouldReplaceTitle = (item.title?.isEmpty == false) &&
-                    (existing.title == nil ||
-                     existing.title?.contains("...") == true ||
-                     (item.title?.count ?? 0) > (existing.title?.count ?? 0) + 8)
+        for (batchIndex, filteredBatch) in filteredNewBatches.enumerated() {
+            for item in filteredBatch {
+                let key = itemKey(item)
+                if currentMap[key] == nil {
+                    currentMap[key] = item
+                    addedCounts[batchIndex] += 1
+                    addedItems.append(item)
+                } else {
+                    // Merge/update fields if needed (like title length, content, published date)
+                    let existing = currentMap[key]!
+                    let shouldReplaceTitle = (item.title?.isEmpty == false) &&
+                        (existing.title == nil ||
+                         existing.title?.contains("...") == true ||
+                         (item.title?.count ?? 0) > (existing.title?.count ?? 0) + 8)
 
-                let merged = FeedItem(
-                    id: existing.id,
-                    platform: existing.platform,
-                    url: Self.mergedURL(existing: existing.url, incoming: item.url),
-                    title: shouldReplaceTitle ? item.title : existing.title,
-                    content_text: item.content_text ?? existing.content_text,
-                    author: item.author ?? existing.author,
-                    thumbnail_url: item.thumbnail_url ?? existing.thumbnail_url,
-                    media_type: existing.media_type,
-                    published_at: mergedPublishedAt(existing: existing, incoming: item),
-                    watch_term_keyword: existing.watch_term_keyword,
-                    watch_term_id: existing.watch_term_id ?? item.watch_term_id,
-                    fetched_at: item.fetched_at,
-                    source: item.source ?? existing.source
-                )
-                currentMap[key] = merged
+                    let merged = FeedItem(
+                        id: existing.id,
+                        platform: existing.platform,
+                        url: Self.mergedURL(existing: existing.url, incoming: item.url),
+                        title: shouldReplaceTitle ? item.title : existing.title,
+                        content_text: item.content_text ?? existing.content_text,
+                        author: item.author ?? existing.author,
+                        thumbnail_url: item.thumbnail_url ?? existing.thumbnail_url,
+                        media_type: existing.media_type,
+                        published_at: mergedPublishedAt(existing: existing, incoming: item),
+                        watch_term_keyword: existing.watch_term_keyword,
+                        watch_term_id: existing.watch_term_id ?? item.watch_term_id,
+                        fetched_at: item.fetched_at,
+                        source: item.source ?? existing.source
+                    )
+                    currentMap[key] = merged
+                }
             }
         }
 
@@ -585,11 +624,11 @@ class LocalDB: ObservableObject {
             }
         }
 
-        guard finalItems != feedItems else { return addedCount }
+        guard finalItems != feedItems else { return addedCounts }
 
         feedItems = finalItems
         saveFeedItemsSoon()
-        return addedCount
+        return addedCounts
     }
 
     private static func mergedURL(existing: String, incoming: String) -> String {
@@ -727,7 +766,7 @@ class LocalDB: ObservableObject {
             if hiddenItems.contains(key) { return nil }
 
             // Search pages fallbacks
-            if item.id.contains("search:") || item.title?.lowercased().contains("search:") == true { return nil }
+            if FeedItemPolicy.isSearchFallback(item) { return nil }
             if FeedItemPolicy.shouldPruneLegacyYouTubeItem(item) { return nil }
             if FeedURLPolicy.isBackendMatchRedirectURL(item.url) { return nil }
 
@@ -739,10 +778,22 @@ class LocalDB: ObservableObject {
                 return nil
             }
 
+            // Apply cheap, high-selectivity filters before date parsing, strict
+            // keyword matching, platform lookup, and URL/title deduplication work below.
+            if let kw = keyword, !kw.isEmpty {
+                if item.platform != "custom" && item.watch_term_keyword != kw {
+                    return nil
+                }
+            }
+
+            let platformKey = Platform.normalize(item.platform)
+            if !subscribedPlatformSet.contains(platformKey) {
+                return nil
+            }
+
             let platformDef = Platform.forRawValue(item.platform)
             var parsedPublishedAt: Date?
             let localTerm = item.watch_term_keyword.isEmpty ? nil : termsByKeyword[item.watch_term_keyword]
-            let platformKey = Platform.normalize(item.platform)
 
             if !termsByKeyword.isEmpty, !item.watch_term_keyword.isEmpty, localTerm == nil {
                 return nil
@@ -764,15 +815,6 @@ class LocalDB: ObservableObject {
                 }
             }
 
-            // Keyword filter
-            if let kw = keyword, !kw.isEmpty {
-                if item.platform == "custom" {
-                    // Let custom pages pass if custom matches
-                } else if item.watch_term_keyword != kw {
-                    return nil
-                }
-            }
-
             // Strict keyword matching — news-type platforms require keyword/alias to appear in content
             if platformDef?.usesStrictKeywordMatching == true, !item.watch_term_keyword.isEmpty {
                 let keywordCandidates = [item.watch_term_keyword] + (localTerm?.aliases ?? [])
@@ -781,10 +823,6 @@ class LocalDB: ObservableObject {
                 }
             }
 
-            // Subscribed platforms
-            if !subscribedPlatformSet.contains(platformKey) {
-                return nil
-            }
             return FeedQueryCandidate(
                 item: item,
                 platformKey: platformKey,

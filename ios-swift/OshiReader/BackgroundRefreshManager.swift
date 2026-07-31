@@ -199,6 +199,23 @@ enum BackgroundRefreshPolicy {
         return Array(itemsByKey.values)
     }
 
+    static func existingKeySnapshotsForBatchedNotificationAppend(
+        itemBatches: [[FeedItem]],
+        initialKeys: Set<String>,
+        survivingKeys: Set<String>
+    ) -> [Set<String>] {
+        var knownKeys = initialKeys
+        return itemBatches.map { items in
+            let existingKeys = knownKeys
+            knownKeys.formUnion(
+                items
+                    .map(itemKey)
+                    .filter { survivingKeys.contains($0) }
+            )
+            return existingKeys
+        }
+    }
+
     static func itemKey(_ item: FeedItem) -> String {
         "\(item.id)::\(item.watch_term_keyword)"
     }
@@ -1148,6 +1165,7 @@ final class BackgroundRefreshManager {
                     }
                 }
 
+                var platformResults: [BackendPlatformRefreshResult] = []
                 for await result in group {
                     if Task.isCancelled {
                         group.cancelAll()
@@ -1156,17 +1174,37 @@ final class BackgroundRefreshManager {
                     if result.completed {
                         completion.completedPlatforms.insert(result.platform)
                     }
-                    let platformItems = result.items
-                    guard !platformItems.isEmpty else { continue }
-                    let existingKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
-                    _ = db.mergeItems(newItems: platformItems, notifyOnNew: false)
-                    appendNewNotificationItems(
-                        from: platformItems,
-                        existingKeys: existingKeys,
-                        db: db,
-                        into: &pendingNotificationItems,
-                        seenKeys: &pendingNotificationKeys
+                    platformResults.append(result)
+                }
+                if !platformResults.isEmpty {
+                    let initialKeys = Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
+                    let itemBatches = platformResults.map(\.items)
+                    let notificationCandidateBatches = itemBatches.map { items in
+                        items.filter { item in
+                            FeedItemPolicy.isMergeEligibleIncomingItem(
+                                item,
+                                hiddenItems: db.hiddenItems,
+                                itemKey: BackgroundRefreshPolicy.itemKey
+                            )
+                        }
+                    }
+                    _ = db.mergeItemsBatched(newItemsBatches: itemBatches, notifyOnNew: false)
+
+                    let existingKeySnapshots = BackgroundRefreshPolicy.existingKeySnapshotsForBatchedNotificationAppend(
+                        itemBatches: notificationCandidateBatches,
+                        initialKeys: initialKeys,
+                        survivingKeys: Set(db.feedItems.map(BackgroundRefreshPolicy.itemKey))
                     )
+                    for (index, platformItems) in itemBatches.enumerated() where !platformItems.isEmpty {
+                        let existingKeys = existingKeySnapshots[index]
+                        appendNewNotificationItems(
+                            from: platformItems,
+                            existingKeys: existingKeys,
+                            db: db,
+                            into: &pendingNotificationItems,
+                            seenKeys: &pendingNotificationKeys
+                        )
+                    }
                 }
             }
             guard !Task.isCancelled else {
@@ -1268,6 +1306,7 @@ final class BackgroundRefreshManager {
             }
 
             var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
+            var scrapeAttempts = [[FeedItem]]()
             for await scrape in group {
                 if Task.isCancelled {
                     group.cancelAll()
@@ -1288,9 +1327,13 @@ final class BackgroundRefreshManager {
                         currentFallbackPlatforms.contains(Platform.normalize(item.platform))
                 }
                 scrapeResults.append((scrape.result, scrape.expectedPlatforms.intersection(currentFallbackPlatforms)))
-                if !mergeableItems.isEmpty {
-                    _ = db.mergeItems(newItems: mergeableItems, notifyOnNew: false)
-                }
+                scrapeAttempts.append(mergeableItems)
+            }
+            if !scrapeAttempts.isEmpty {
+                _ = db.mergeItemsBatched(
+                    newItemsBatches: scrapeAttempts,
+                    notifyOnNew: false
+                )
             }
             completion.completedDevicePlatforms.formUnion(
                 BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(

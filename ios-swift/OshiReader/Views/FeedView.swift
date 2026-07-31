@@ -117,6 +117,7 @@ private struct FeedRefreshAttempt {
     let addedCount: Int
     let detail: String?
     let completedDevicePlatforms: Set<String>
+    let items: [FeedItem]
 
     init(
         strategy: String,
@@ -124,7 +125,8 @@ private struct FeedRefreshAttempt {
         itemCount: Int = 0,
         addedCount: Int = 0,
         detail: String? = nil,
-        completedDevicePlatforms: Set<String> = []
+        completedDevicePlatforms: Set<String> = [],
+        items: [FeedItem] = []
     ) {
         self.strategy = strategy
         self.status = status
@@ -132,6 +134,7 @@ private struct FeedRefreshAttempt {
         self.addedCount = addedCount
         self.detail = detail
         self.completedDevicePlatforms = completedDevicePlatforms
+        self.items = items
     }
 
     var diagnosticEvent: ClientDiagnosticEvent {
@@ -592,11 +595,12 @@ struct FeedView: View {
                     }
                     Spacer()
                 } else {
+                    let savedIds = savedItemIds
                     List {
                         ForEach(cachedVisibleItems) { item in
                             if horizontalSizeClass == .regular {
                                 Button(action: { selectedItem = item }) {
-                                    FeedCard(item: item, isSaved: savedItemIds.contains(item.id), theme: theme)
+                                    FeedCard(item: item, isSaved: savedIds.contains(item.id), theme: theme)
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 12)
                                                 .stroke(theme.colors.primary, lineWidth: selectedItem?.id == item.id ? 2 : 0)
@@ -624,7 +628,7 @@ struct FeedView: View {
                                 }
                             } else {
                                 NavigationLink(destination: ReaderView(feedItem: item)) {
-                                    FeedCard(item: item, isSaved: savedItemIds.contains(item.id), theme: theme)
+                                    FeedCard(item: item, isSaved: savedIds.contains(item.id), theme: theme)
                                 }
                                 .buttonStyle(PlainButtonStyle())
                                 .accessibilityIdentifier("feed.card")
@@ -1090,12 +1094,28 @@ struct FeedView: View {
                     )
                 }
             }
+            var platformAttempts: [FeedRefreshAttempt] = []
             for await attempt in group {
                 if Task.isCancelled {
                     group.cancelAll()
                     break
                 }
-                report.append(attempt)
+                platformAttempts.append(attempt)
+            }
+            if !platformAttempts.isEmpty {
+                let addedCounts = db.mergeItemsBatched(
+                    newItemsBatches: platformAttempts.map(\.items)
+                )
+                for (index, attempt) in platformAttempts.enumerated() {
+                    report.append(FeedRefreshAttempt(
+                        strategy: attempt.strategy,
+                        status: attempt.status,
+                        itemCount: attempt.itemCount,
+                        addedCount: addedCounts[index],
+                        detail: attempt.detail,
+                        completedDevicePlatforms: attempt.completedDevicePlatforms
+                    ))
+                }
             }
         }
         guard !Task.isCancelled else { return report }
@@ -1204,6 +1224,7 @@ struct FeedView: View {
                 }
             }
             var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
+            var scrapeAttempts = [[FeedItem]]()
             for await scrape in group {
                 if Task.isCancelled {
                     group.cancelAll()
@@ -1223,16 +1244,23 @@ struct FeedView: View {
                     item.watch_term_keyword == currentTerm.keyword &&
                         currentFallbackPlatforms.contains(Platform.normalize(item.platform))
                 }
-                scrapeResults.append((scrape.result, scrape.expectedPlatforms.intersection(currentFallbackPlatforms)))
-                let added = mergeableItems.isEmpty
-                    ? 0
-                    : db.mergeItems(newItems: mergeableItems)
-                report.record(
-                    strategy: "device_local_scrapers",
-                    status: mergeableItems.isEmpty ? "empty" : "items",
-                    itemCount: mergeableItems.count,
-                    addedCount: added
+                let expectedPlatforms = scrape.expectedPlatforms.intersection(currentFallbackPlatforms)
+                scrapeResults.append((scrape.result, expectedPlatforms))
+                scrapeAttempts.append(mergeableItems)
+            }
+            if !scrapeAttempts.isEmpty {
+                let addedCounts = db.mergeItemsBatched(
+                    newItemsBatches: scrapeAttempts
                 )
+                for (index, mergeableItems) in scrapeAttempts.enumerated() {
+                    let added = addedCounts[index]
+                    report.record(
+                        strategy: "device_local_scrapers",
+                        status: mergeableItems.isEmpty ? "empty" : "items",
+                        itemCount: mergeableItems.count,
+                        addedCount: added
+                    )
+                }
             }
             report.markCompletedDevicePlatforms(
                 BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
@@ -1272,18 +1300,13 @@ struct FeedView: View {
                     timeout: timeout
                 )
             }
-            let added: Int
-            if !items.isEmpty {
-                added = db.mergeItems(newItems: items)
-            } else {
-                added = 0
-            }
             return FeedRefreshAttempt(
                 strategy: "backend_platform_\(platformId)",
                 status: items.isEmpty ? "empty" : "items",
                 itemCount: items.count,
-                addedCount: added,
-                detail: since ?? "days=\(days)"
+                addedCount: 0,
+                detail: since ?? "days=\(days)",
+                items: items
             )
         } catch {
             AppLogger.network.warning("fetchBackendPlatform(\(platformId)) failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
