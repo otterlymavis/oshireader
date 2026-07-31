@@ -3,6 +3,12 @@ import Foundation
 enum APIClientError: LocalizedError {
     case httpStatus(Int, detail: String?)
 
+    var requiresVerifiedNotificationDevice: Bool {
+        guard case .httpStatus(409, let detail) = self else { return false }
+        return detail?.trimmingCharacters(in: .whitespacesAndNewlines)
+            == "Notification-enabled watch terms require a verified APNs device"
+    }
+
     var errorDescription: String? {
         switch self {
         case .httpStatus(let status, let detail):

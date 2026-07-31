@@ -625,10 +625,11 @@ struct SettingsView: View {
             } catch {
                 await MainActor.run {
                     notificationUpdateIDs.remove(term.id)
-                    if enabled {
-                        settingsErrorMessage = "Notifications could not be enabled. Allow notifications in iOS Settings, then try again."
+                    if enabled, let apiError = error as? APIClientError,
+                       apiError.requiresVerifiedNotificationDevice {
+                        settingsErrorMessage = i18n.t("notificationEnableFailed")
                     } else {
-                        settingsErrorMessage = "The notification setting could not be updated. Please try again."
+                        settingsErrorMessage = i18n.t("notificationUpdateFailed")
                     }
                 }
             }

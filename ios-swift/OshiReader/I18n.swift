@@ -503,6 +503,18 @@ class I18nManager: ObservableObject {
             "zh-TW": "允許通知即可接收新相符項目的提醒。",
             "zh-CN": "允许通知即可接收新匹配项目的提醒。"
         ],
+        "notificationEnableFailed": [
+            "en": "Notifications could not be enabled. Allow notifications in iOS Settings, then try again.",
+            "ja": "通知を有効にできませんでした。iOSの設定で通知を許可してから、もう一度お試しください。",
+            "zh-TW": "無法啟用通知。請在 iOS 設定中允許通知後再試一次。",
+            "zh-CN": "无法启用通知。请在 iOS 设置中允许通知后重试。"
+        ],
+        "notificationUpdateFailed": [
+            "en": "The notification setting could not be updated. Please try again.",
+            "ja": "通知設定を更新できませんでした。もう一度お試しください。",
+            "zh-TW": "無法更新通知設定，請再試一次。",
+            "zh-CN": "无法更新通知设置，请重试。"
+        ],
         "notifStatusEnabled": [
             "en": "Enabled",
             "ja": "有効",
