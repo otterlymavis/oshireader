@@ -5604,7 +5604,7 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testSyncWatchTermsDoesNotPatchRepairedTermWhenBackendHasKeyword() async throws {
+    func testSyncWatchTermsPreservesRepairedNotificationPreference() async throws {
         let keyword = "Sync Repaired \(UUID().uuidString)"
         let repairedTerm = WatchTerm(
             id: UUID().uuidString,
@@ -5623,6 +5623,14 @@ final class NetworkManagerTests: XCTestCase {
             notify_on_new: false,
             aliases: ["Aiko Alias"]
         )
+        let updatedTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: []
+        )
         _ = LocalDB.shared.deleteTerm(keyword: keyword)
         LocalDB.shared.addTermFromBackend(repairedTerm)
         defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
@@ -5633,6 +5641,10 @@ final class NetworkManagerTests: XCTestCase {
             if request.url?.path == "/api/watch-terms" {
                 return (backendData, Self.response(status: 200))
             }
+            if request.url?.path == "/api/watch-terms/42" {
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                return (try! JSONEncoder().encode(updatedTerm), Self.response(status: 200))
+            }
             XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
             return (Data(), Self.response(status: 500))
         }
@@ -5640,12 +5652,12 @@ final class NetworkManagerTests: XCTestCase {
         let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
 
         XCTAssertTrue(succeeded)
-        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms"])
+        XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "PATCH /api/watch-terms/42"])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
         XCTAssertEqual(syncedTerm?.id, "42")
-        XCTAssertEqual(syncedTerm?.collection_mode, .mediaOnly)
-        XCTAssertEqual(syncedTerm?.notify_on_new, false)
-        XCTAssertEqual(syncedTerm?.aliases, ["Aiko Alias"])
+        XCTAssertEqual(syncedTerm?.collection_mode, .allInfo)
+        XCTAssertEqual(syncedTerm?.notify_on_new, true)
+        XCTAssertEqual(syncedTerm?.aliases, [])
     }
 
     @MainActor

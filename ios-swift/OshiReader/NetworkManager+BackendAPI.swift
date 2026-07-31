@@ -69,10 +69,36 @@ extension NetworkManager {
             if shouldSkipAfterDelete { continue }
             if let serverTerm = backendByKeyword[term.keyword] {
                 if term.repaired_from_cache {
-                    let replaced = await MainActor.run {
-                        LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
+                    let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
+                        localTerm: term,
+                        serverTerm: serverTerm
+                    )
+                    let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
+                        serverTerm.is_active != term.is_active ||
+                        notifyOnNewUpdate != nil ||
+                        serverTerm.aliases != term.aliases
+                    if needsUpdate,
+                       let updatedTerm = try? await updateWatchTerm(
+                        id: serverTerm.id,
+                        isActive: term.is_active,
+                        collectionMode: term.collection_mode,
+                        notifyOnNew: notifyOnNewUpdate,
+                        aliases: term.aliases,
+                        timeout: timeout
+                       ) {
+                        let replaced = await MainActor.run {
+                            LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm, ifUnchangedFrom: term)
+                        }
+                        if !replaced { succeeded = false }
+                    } else if notifyOnNewUpdate != nil {
+                        succeeded = false
+                    } else {
+                        let replaced = await MainActor.run {
+                            LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
+                        }
+                        if needsUpdate { succeeded = false }
+                        if !replaced { succeeded = false }
                     }
-                    if !replaced { succeeded = false }
                     continue
                 }
                 let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
