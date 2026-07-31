@@ -5661,6 +5661,66 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncWatchTermsPreservesRepairedMutedPreference() async throws {
+        let keyword = "Sync Repaired Muted (UUID().uuidString)"
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: false,
+            aliases: [],
+            repaired_from_cache: true
+        )
+        let backendTerm = WatchTerm(
+            id: "43",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            is_active: false,
+            notify_on_new: true,
+            aliases: ["Alias"]
+        )
+        let updatedTerm = WatchTerm(
+            id: "43",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: false,
+            aliases: []
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(repairedTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        var capturedNotifyOnNew: Bool?
+        MockURLProtocol.handler = { request in
+            if request.url?.path == "/api/watch-terms" {
+                return (backendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms/43" {
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                if let body = request.httpBody,
+                   let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                   let notifyOnNew = payload["notify_on_new"] as? Bool {
+                    capturedNotifyOnNew = notifyOnNew
+                } else {
+                    XCTFail("Expected notify_on_new in PATCH body")
+                }
+                return (try! JSONEncoder().encode(updatedTerm), Self.response(status: 200))
+            }
+            XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(capturedNotifyOnNew, false)
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+    }
+
+    @MainActor
     func testSyncWatchTermsCreatesRepairedTermWhenBackendLacksKeyword() async throws {
         let keyword = "Sync Create \(UUID().uuidString)"
         let repairedTerm = WatchTerm(

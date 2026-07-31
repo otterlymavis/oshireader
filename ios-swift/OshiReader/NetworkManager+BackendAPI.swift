@@ -69,10 +69,9 @@ extension NetworkManager {
             if shouldSkipAfterDelete { continue }
             if let serverTerm = backendByKeyword[term.keyword] {
                 if term.repaired_from_cache {
-                    let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
-                        localTerm: term,
-                        serverTerm: serverTerm
-                    )
+                    let notifyOnNewUpdate = term.notify_on_new == serverTerm.notify_on_new
+                        ? nil
+                        : term.notify_on_new
                     let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
                         serverTerm.is_active != term.is_active ||
                         notifyOnNewUpdate != nil ||
