@@ -24,8 +24,12 @@ class WatchTerm(Base):
     aliases = Column(JSON, default=list)
     language_hint = Column(String)
     collection_mode = Column(String, default="all_info")  # all_info | media_only
+    source_mode = Column(String, nullable=False, default="all")  # all | selected
+    selected_platforms = Column(JSON, default=list)
     is_active = Column(Boolean, default=True)
     notify_on_new = Column(Boolean, default=True)
+    refresh_tier = Column(String, nullable=False, default="free", index=True)
+    last_polled_at = Column(DateTime, index=True)
     owner_device_secret = Column(String, index=True)
     created_at = Column(DateTime, default=_utcnow)
 

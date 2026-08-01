@@ -42,8 +42,11 @@ class WatchTermCreate(BaseModel):
     aliases: list[str] = Field(default=[], max_length=20)
     language_hint: Optional[str] = Field(default=None, max_length=50)
     collection_mode: CollectionMode = CollectionMode.ALL_INFO
+    source_mode: Literal["all", "selected"] = "all"
+    selected_platforms: list[str] = Field(default=[], max_length=100)
     is_active: bool = True
     notify_on_new: bool = True
+    refresh_tier: Literal["free", "standard", "premium"] = "free"
 
     @field_validator("keyword", mode="before")
     @classmethod
@@ -55,14 +58,24 @@ class WatchTermCreate(BaseModel):
     def clean_aliases(cls, v: list) -> list:
         return _clean_aliases_list(v)
 
+    @field_validator("selected_platforms", mode="before")
+    @classmethod
+    def clean_selected_platforms(cls, v: list) -> list:
+        if v is None:
+            return []
+        return sorted({p.strip().casefold() for p in v if isinstance(p, str) and p.strip()})
+
 
 class WatchTermUpdate(BaseModel):
     keyword: Optional[str] = Field(default=None, min_length=1, max_length=200)
     aliases: Optional[list[str]] = Field(default=None, max_length=20)
     language_hint: Optional[str] = Field(default=None, max_length=50)
     collection_mode: Optional[CollectionMode] = None
+    source_mode: Optional[Literal["all", "selected"]] = None
+    selected_platforms: Optional[list[str]] = Field(default=None, max_length=100)
     is_active: Optional[bool] = None
     notify_on_new: Optional[bool] = None
+    refresh_tier: Optional[Literal["free", "standard", "premium"]] = None
 
     @field_validator("keyword", mode="before")
     @classmethod
@@ -77,6 +90,13 @@ class WatchTermUpdate(BaseModel):
         if v is None:
             return None
         return _clean_aliases_list(v)
+
+    @field_validator("selected_platforms", mode="before")
+    @classmethod
+    def clean_selected_platforms(cls, v: Optional[list]) -> Optional[list]:
+        if v is None:
+            return None
+        return sorted({p.strip().casefold() for p in v if isinstance(p, str) and p.strip()})
 
 
 def _utc(v: datetime) -> datetime:
@@ -93,8 +113,12 @@ class WatchTermOut(BaseModel):
     aliases: list[str]
     language_hint: Optional[str]
     collection_mode: CollectionMode
+    source_mode: Literal["all", "selected"] = "all"
+    selected_platforms: list[str] = []
     is_active: bool
     notify_on_new: bool
+    refresh_tier: Literal["free", "standard", "premium"] = "free"
+    last_polled_at: Optional[datetime] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

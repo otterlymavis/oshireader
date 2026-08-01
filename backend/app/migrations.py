@@ -85,8 +85,11 @@ def _backfill_missing_defaults(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text(f"UPDATE watch_terms SET aliases = {aliases_default} WHERE aliases IS NULL"))
         conn.execute(text("UPDATE watch_terms SET collection_mode = 'all_info' WHERE collection_mode IS NULL"))
+        conn.execute(text("UPDATE watch_terms SET source_mode = 'all' WHERE source_mode IS NULL"))
+        conn.execute(text(f"UPDATE watch_terms SET selected_platforms = {aliases_default} WHERE selected_platforms IS NULL"))
         conn.execute(text("UPDATE watch_terms SET is_active = TRUE WHERE is_active IS NULL"))
         conn.execute(text("UPDATE watch_terms SET notify_on_new = TRUE WHERE notify_on_new IS NULL"))
+        conn.execute(text("UPDATE watch_terms SET refresh_tier = 'free' WHERE refresh_tier IS NULL"))
         conn.execute(text("UPDATE watch_terms SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
         conn.execute(text("UPDATE matches SET confidence = 1.0 WHERE confidence IS NULL"))
         conn.execute(text("""
@@ -125,8 +128,12 @@ def _rebuild_sqlite_watch_terms_without_keyword_unique(engine: Engine) -> None:
         "aliases",
         "language_hint",
         "collection_mode",
+        "source_mode",
+        "selected_platforms",
         "is_active",
         "notify_on_new",
+        "refresh_tier",
+        "last_polled_at",
         "owner_device_secret",
         "created_at",
     ]
@@ -145,8 +152,12 @@ def _rebuild_sqlite_watch_terms_without_keyword_unique(engine: Engine) -> None:
                     aliases JSON DEFAULT '[]',
                     language_hint VARCHAR,
                     collection_mode VARCHAR DEFAULT 'all_info',
+                    source_mode VARCHAR DEFAULT 'all',
+                    selected_platforms JSON DEFAULT '[]',
                     is_active BOOLEAN DEFAULT TRUE,
                     notify_on_new BOOLEAN DEFAULT TRUE,
+                    refresh_tier VARCHAR DEFAULT 'free',
+                    last_polled_at TIMESTAMP,
                     owner_device_secret VARCHAR,
                     created_at TIMESTAMP
                 )
@@ -254,8 +265,12 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
             "aliases": f"JSON DEFAULT {_json_default(engine)}",
             "language_hint": "VARCHAR",
             "collection_mode": "VARCHAR DEFAULT 'all_info'",
+            "source_mode": "VARCHAR DEFAULT 'all'",
+            "selected_platforms": f"JSON DEFAULT {_json_default(engine)}",
             "is_active": "BOOLEAN DEFAULT TRUE",
             "notify_on_new": "BOOLEAN DEFAULT TRUE",
+            "refresh_tier": "VARCHAR DEFAULT 'free'",
+            "last_polled_at": "TIMESTAMP",
             "owner_device_secret": "VARCHAR",
             "created_at": "TIMESTAMP",
         },
@@ -332,6 +347,13 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
             " ON muted_feed_items (source_item_id)"
         ))
     _repair_postgres_muted_feed_items_id_default(engine)
+
+    _backfill_missing_defaults(engine)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_watch_terms_last_polled_at"
+            " ON watch_terms (last_polled_at)"
+        ))
 
     if not run_cleanups:
         return

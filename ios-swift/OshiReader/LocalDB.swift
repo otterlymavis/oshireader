@@ -374,24 +374,26 @@ class LocalDB: ObservableObject {
     }
 
     // MARK: - Watch Terms
-    func saveTerm(keyword: String, collectionMode: CollectionMode = .allInfo) -> WatchTerm {
+    func saveTerm(keyword: String, collectionMode: CollectionMode = .allInfo, sourceMode: SourceMode = .all, selectedPlatforms: [String] = []) -> WatchTerm {
         let trimmedKeyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         if termDeleteTombstones.removeValue(forKey: trimmedKeyword) != nil {
             saveTermDeleteTombstones()
         }
-        let term = WatchTerm(keyword: trimmedKeyword, collection_mode: collectionMode)
+        let term = WatchTerm(keyword: trimmedKeyword, collection_mode: collectionMode, source_mode: sourceMode, selected_platforms: selectedPlatforms)
         terms.insert(term, at: 0)
         saveToFile(name: "terms", value: terms)
         BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         return term
     }
 
-    func updateTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) {
+    func updateTerm(id: String, isActive: Bool? = nil, collectionMode: CollectionMode? = nil, sourceMode: SourceMode? = nil, selectedPlatforms: [String]? = nil, notifyOnNew: Bool? = nil, aliases: [String]? = nil) {
         if let idx = terms.firstIndex(where: { $0.id == id }) {
             var term = terms[idx]
             let originalTerm = term
             if let isActive { term.is_active = isActive }
             if let collectionMode { term.collection_mode = collectionMode }
+            if let sourceMode { term.source_mode = sourceMode }
+            if let selectedPlatforms { term.selected_platforms = selectedPlatforms }
             if let notifyOnNew { term.notify_on_new = notifyOnNew }
             if let aliases { term.aliases = aliases }
             terms[idx] = term
@@ -436,6 +438,8 @@ class LocalDB: ObservableObject {
     private static func feedScopeFieldsChanged(from lhs: WatchTerm, to rhs: WatchTerm) -> Bool {
         lhs.keyword != rhs.keyword ||
             lhs.collection_mode != rhs.collection_mode ||
+            lhs.source_mode != rhs.source_mode ||
+            lhs.selected_platforms != rhs.selected_platforms ||
             lhs.is_active != rhs.is_active ||
             lhs.aliases != rhs.aliases
     }

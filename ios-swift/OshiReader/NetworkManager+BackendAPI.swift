@@ -33,6 +33,8 @@ extension NetworkManager {
         try await createWatchTerm(
             keyword: term.keyword,
             collectionMode: term.collection_mode,
+            sourceMode: term.source_mode,
+            selectedPlatforms: term.selected_platforms,
             notifyOnNew: Self.automaticSyncNotifyOnNewCreate(localTerm: term),
             isActive: term.is_active,
             aliases: term.aliases,
@@ -73,6 +75,8 @@ extension NetworkManager {
                         ? nil
                         : term.notify_on_new
                     let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
+                        serverTerm.source_mode != term.source_mode ||
+                        serverTerm.selected_platforms != term.selected_platforms ||
                         serverTerm.is_active != term.is_active ||
                         notifyOnNewUpdate != nil ||
                         serverTerm.aliases != term.aliases
@@ -81,6 +85,8 @@ extension NetworkManager {
                         id: serverTerm.id,
                         isActive: term.is_active,
                         collectionMode: term.collection_mode,
+                        sourceMode: term.source_mode,
+                        selectedPlatforms: term.selected_platforms,
                         notifyOnNew: notifyOnNewUpdate,
                         aliases: term.aliases,
                         timeout: timeout
@@ -105,6 +111,8 @@ extension NetworkManager {
                     serverTerm: serverTerm
                 )
                 let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
+                    serverTerm.source_mode != term.source_mode ||
+                    serverTerm.selected_platforms != term.selected_platforms ||
                     serverTerm.is_active != term.is_active ||
                     notifyOnNewUpdate != nil ||
                     serverTerm.aliases != term.aliases
@@ -113,6 +121,8 @@ extension NetworkManager {
                     id: serverTerm.id,
                     isActive: term.is_active,
                     collectionMode: term.collection_mode,
+                    sourceMode: term.source_mode,
+                    selectedPlatforms: term.selected_platforms,
                     notifyOnNew: notifyOnNewUpdate,
                     aliases: term.aliases,
                     timeout: timeout
@@ -188,6 +198,8 @@ extension NetworkManager {
     func createWatchTerm(
         keyword: String,
         collectionMode: CollectionMode,
+        sourceMode: SourceMode = .all,
+        selectedPlatforms: [String] = [],
         notifyOnNew: Bool = true,
         isActive: Bool = true,
         aliases: [String] = [],
@@ -197,6 +209,8 @@ extension NetworkManager {
             return WatchTerm(
                 keyword: keyword,
                 collection_mode: collectionMode,
+                source_mode: sourceMode,
+                selected_platforms: selectedPlatforms,
                 is_active: isActive,
                 notify_on_new: notifyOnNew,
                 aliases: aliases
@@ -208,6 +222,8 @@ extension NetworkManager {
         var body: [String: Any] = [
             "keyword": keyword,
             "collection_mode": collectionMode.rawValue,
+            "source_mode": sourceMode.rawValue,
+            "selected_platforms": selectedPlatforms,
             "notify_on_new": notifyOnNew,
             "is_active": isActive,
         ]
@@ -227,6 +243,8 @@ extension NetworkManager {
         id: String,
         isActive: Bool? = nil,
         collectionMode: CollectionMode? = nil,
+        sourceMode: SourceMode? = nil,
+        selectedPlatforms: [String]? = nil,
         notifyOnNew: Bool? = nil,
         aliases: [String]? = nil,
         timeout: TimeInterval = 30
@@ -238,6 +256,8 @@ extension NetworkManager {
         var body: [String: Any] = [:]
         if let isActive { body["is_active"] = isActive }
         if let collectionMode { body["collection_mode"] = collectionMode.rawValue }
+        if let sourceMode { body["source_mode"] = sourceMode.rawValue }
+        if let selectedPlatforms { body["selected_platforms"] = selectedPlatforms }
         if let notifyOnNew { body["notify_on_new"] = notifyOnNew }
         if let aliases { body["aliases"] = aliases }
         let bodyData = try JSONSerialization.data(withJSONObject: body)

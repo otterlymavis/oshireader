@@ -414,8 +414,11 @@ enum BackgroundRefreshPolicy {
     ) -> Set<String> {
         guard term.is_active else { return [] }
         let fallbackPlatforms = fallbackPlatformsNeedingDevice(in: subscribedPlatforms)
-        guard term.collection_mode == .mediaOnly else { return fallbackPlatforms }
-        return fallbackPlatforms.filter { platformId in
+        let selectedPlatforms = term.source_mode == .selected
+            ? fallbackPlatforms.intersection(Set(term.selected_platforms.map(Platform.normalize)))
+            : fallbackPlatforms
+        guard term.collection_mode == .mediaOnly else { return selectedPlatforms }
+        return selectedPlatforms.filter { platformId in
             Platform.find(platformId)?.isMediaPlatform == true
         }
     }
@@ -426,8 +429,11 @@ enum BackgroundRefreshPolicy {
     ) -> Set<String> {
         guard term.is_active else { return [] }
         let backendPlatforms = backendPlatformsNeedingRefresh(in: subscribedPlatforms)
-        guard term.collection_mode == .mediaOnly else { return backendPlatforms }
-        return backendPlatforms.filter { platformId in
+        let selectedPlatforms = term.source_mode == .selected
+            ? backendPlatforms.intersection(Set(term.selected_platforms.map(Platform.normalize)))
+            : backendPlatforms
+        guard term.collection_mode == .mediaOnly else { return selectedPlatforms }
+        return selectedPlatforms.filter { platformId in
             Platform.find(platformId)?.isMediaPlatform == true
         }
     }

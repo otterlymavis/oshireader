@@ -250,6 +250,13 @@ def _connector_batches(connectors: list[BaseConnector]) -> list[list[BaseConnect
     ]
 
 
+def _connectors_for_term(term: WatchTerm, connectors: list[BaseConnector]) -> list[BaseConnector]:
+    if (term.source_mode or "all").casefold() != "selected":
+        return connectors
+    selected = {p.strip().casefold() for p in (term.selected_platforms or []) if isinstance(p, str) and p.strip()}
+    return [connector for connector in connectors if connector.PLATFORM.casefold() in selected]
+
+
 def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int, int]:
     total = len(terms)
     limit = settings.poll_terms_per_run
@@ -275,6 +282,70 @@ def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int,
     if offset + limit <= total:
         return terms[offset:offset + limit], offset, next_offset
     return terms[offset:] + terms[:next_offset], offset, next_offset
+
+
+def _term_refresh_interval(term: WatchTerm) -> timedelta:
+    minutes = settings.refresh_intervals_minutes.get(
+        (term.refresh_tier or "free").casefold(),
+        settings.refresh_intervals_minutes["free"],
+    )
+    return timedelta(minutes=minutes)
+
+
+def _term_is_due(term: WatchTerm, now: datetime) -> bool:
+    return term.last_polled_at is None or (
+        (term.last_polled_at if term.last_polled_at.tzinfo else term.last_polled_at.replace(tzinfo=timezone.utc))
+        + _term_refresh_interval(term)
+        <= now
+    )
+
+
+def _term_search_signature(term: WatchTerm) -> tuple[str, tuple[str, ...], str, str | None]:
+    aliases = tuple(sorted({a.strip().casefold() for a in (term.aliases or []) if isinstance(a, str) and a.strip()}))
+    return (
+        term.keyword.strip().casefold(),
+        aliases,
+        (term.collection_mode or CollectionMode.ALL_INFO).casefold(),
+        (term.language_hint or "").strip().casefold() or None,
+    )
+
+
+def _deduplicate_due_terms(terms: list[WatchTerm]) -> tuple[list[WatchTerm], dict[int, list[WatchTerm]]]:
+    representatives: list[WatchTerm] = []
+    groups: dict[int, list[WatchTerm]] = {}
+    by_signature: dict[tuple, WatchTerm] = {}
+    for term in terms:
+        representative = by_signature.get(_term_search_signature(term))
+        if representative is None:
+            by_signature[_term_search_signature(term)] = term
+            representatives.append(term)
+            groups[term.id] = [term]
+        else:
+            groups[representative.id].append(term)
+    return representatives, groups
+
+
+def _inactive_owner_term_ids(db, terms: list[WatchTerm]) -> set[int]:
+    days = max(0, settings.inactive_poll_after_days)
+    if days <= 0:
+        return set()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    owner_secrets = {term.owner_device_secret for term in terms if term.owner_device_secret}
+    if not owner_secrets:
+        return set()
+    active_secrets = {
+        device_secret
+        for (device_secret,) in db.query(APNSDeviceToken.device_secret)
+        .filter(APNSDeviceToken.device_secret.in_(owner_secrets))
+        .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+        .filter(APNSDeviceToken.last_seen_at >= cutoff)
+        .all()
+        if device_secret
+    }
+    return {
+        term.id for term in terms
+        if term.owner_device_secret and term.owner_device_secret not in active_secrets
+    }
 
 
 def _report_orphaned_notification_terms(db) -> set[int]:
@@ -1110,7 +1181,7 @@ async def _poll_once_unlocked() -> None:
             | _report_orphaned_duplicate_terms(db)
             | _report_orphaned_silent_terms(db)
         )
-        all_terms = (
+        active_terms = (
             db.query(WatchTerm)
             .filter(WatchTerm.is_active == True)  # noqa: E712
             .order_by(WatchTerm.id)
@@ -1119,17 +1190,26 @@ async def _poll_once_unlocked() -> None:
         # Preserve the user's active setting, but do not fetch an owner-scoped
         # term while its device is absent. Device registration makes the term
         # eligible again on the next poll.
-        all_terms = [term for term in all_terms if term.id not in orphaned_term_ids]
-        if not all_terms:
-            flushed_pending_term_ids = await _flush_pending_notifications(db, exclude_term_ids=orphaned_term_ids)
+        inactive_term_ids = _inactive_owner_term_ids(db, active_terms)
+        all_terms = [
+            term for term in active_terms
+            if term.id not in orphaned_term_ids and term.id not in inactive_term_ids
+        ]
+        due_terms = [term for term in all_terms if _term_is_due(term, datetime.now(timezone.utc))]
+        if not due_terms:
+            flushed_pending_term_ids = await _flush_pending_notifications(
+                db,
+                exclude_term_ids=orphaned_term_ids | inactive_term_ids,
+            )
             record_backend_event(
                 db,
                 "poll",
                 "skipped",
-                "Scheduled/backend poll skipped because there are no active watch terms",
+                "Scheduled/backend poll skipped because no watch terms are due",
                 {
                     "terms": 0,
-                    "total_terms": 0,
+                    "total_terms": len(active_terms),
+                    "due_terms": 0,
                     "connectors": 0,
                     "flushed_pending_terms": len(flushed_pending_term_ids),
                     "term_offset": 0,
@@ -1141,8 +1221,17 @@ async def _poll_once_unlocked() -> None:
             return
 
         connectors = _build_connectors(db)
-        terms, term_offset, next_term_offset = _poll_term_window(db, all_terms)
-        processed_term_ids = {term.id for term in terms}
+        # Process each due term so failed fetches retain their retry behavior and
+        # duplicate-term notification propagation remains unchanged. Successful
+        # connector results are deduplicated by fetch_cache below within this run.
+        representative_terms = due_terms
+        duplicate_groups = {term.id: [term] for term in due_terms}
+        terms, term_offset, next_term_offset = _poll_term_window(db, representative_terms)
+        processed_term_ids = {
+            duplicate.id
+            for representative in terms
+            for duplicate in duplicate_groups[representative.id]
+        }
         total_new = 0
         failed_connectors = 0
         record_backend_event(
@@ -1152,22 +1241,28 @@ async def _poll_once_unlocked() -> None:
             "Scheduled/backend poll started",
             {
                 "terms": len(terms),
-                "total_terms": len(all_terms),
+                "total_terms": len(active_terms),
+                "due_terms": len(due_terms),
+                "unique_due_terms": len(representative_terms),
                 "connectors": len(connectors),
                 "term_offset": term_offset,
                 "next_term_offset": next_term_offset,
             },
         )
 
-        flushed_pending_term_ids = await _flush_pending_notifications(db, exclude_term_ids=orphaned_term_ids)
+        flushed_pending_term_ids = await _flush_pending_notifications(
+            db,
+            exclude_term_ids=orphaned_term_ids | inactive_term_ids,
+        )
         fetch_cache: dict[tuple[str, str, str], list] = {}
 
         for term in terms:
+            term_connectors = _connectors_for_term(term, connectors)
             for search_term in _search_terms_for(term):
                 # Keep I/O parallel without retaining every connector's response,
                 # parser tree, and result list until the slowest request finishes.
                 # Small batches materially reduce peak RSS on memory-limited hosts.
-                for connector_batch in _connector_batches(connectors):
+                for connector_batch in _connector_batches(term_connectors):
                     mode = CollectionMode(term.collection_mode or "all_info")
                     batch_results: list[list | None] = [None] * len(connector_batch)
                     uncached: list[tuple[int, BaseConnector, tuple[str, str, str]]] = []
@@ -1418,7 +1513,12 @@ async def _poll_once_unlocked() -> None:
 
         await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids | orphaned_term_ids)
 
-        _prune_irrelevant_matches(db, terms)
+        expanded_terms = [
+            duplicate
+            for representative in terms
+            for duplicate in duplicate_groups[representative.id]
+        ]
+        _prune_irrelevant_matches(db, expanded_terms)
 
         # Prune: keep at most 200 items per (platform, watch_term) to
         # prevent unbounded DB growth.  Community platforms (5ch, girlschannel)
@@ -1431,7 +1531,9 @@ async def _poll_once_unlocked() -> None:
             "Scheduled/backend poll completed",
             {
                 "terms": len(terms),
-                "total_terms": len(all_terms),
+                "total_terms": len(active_terms),
+                "due_terms": len(due_terms),
+                "unique_due_terms": len(representative_terms),
                 "connectors": len(connectors),
                 "new_matches": total_new,
                 "failed_connectors": failed_connectors,
@@ -1440,9 +1542,12 @@ async def _poll_once_unlocked() -> None:
             },
         )
         prune_backend_events(db)
-        for term in terms:
+        polled_at = datetime.now(timezone.utc)
+        for representative in terms:
+            for term in duplicate_groups[representative.id]:
+                term.last_polled_at = polled_at
             try:
-                db.expunge(term)
+                db.expunge(representative)
             except Exception:
                 pass
         db.commit()
@@ -1531,7 +1636,37 @@ def _prune_old_items_with_limit(
         pruned = result.rowcount or 0
         muted_pruned = _prune_old_muted_feed_items(db, muted_per_term_limit)
         orphan_source_items_pruned = _delete_orphan_source_items(db)
-        if pruned or muted_pruned or orphan_source_items_pruned:
+        retention_days = max(0, settings.retention_days)
+        retention_matches_pruned = 0
+        retention_muted_pruned = 0
+        retention_source_items_pruned = 0
+        if retention_days > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            retention_matches_pruned = db.execute(
+                sa_text("DELETE FROM matches WHERE created_at < :cutoff"),
+                {"cutoff": cutoff},
+            ).rowcount or 0
+            retention_muted_pruned = db.execute(
+                sa_text("DELETE FROM muted_feed_items WHERE created_at < :cutoff"),
+                {"cutoff": cutoff},
+            ).rowcount or 0
+            retention_source_items_pruned = db.execute(
+                sa_text(
+                    "DELETE FROM source_items "
+                    "WHERE published_at < :cutoff "
+                    "AND id NOT IN (SELECT source_item_id FROM matches) "
+                    "AND id NOT IN (SELECT source_item_id FROM muted_feed_items)"
+                ),
+                {"cutoff": cutoff},
+            ).rowcount or 0
+        if (
+            pruned
+            or muted_pruned
+            or orphan_source_items_pruned
+            or retention_matches_pruned
+            or retention_muted_pruned
+            or retention_source_items_pruned
+        ):
             db.commit()
             log.info(
                 "Pruned %d old match records, %d muted feed items, and %d orphan source items",
@@ -1543,6 +1678,9 @@ def _prune_old_items_with_limit(
             "matches_pruned": pruned,
             "muted_feed_items_pruned": muted_pruned,
             "orphan_source_items_pruned": orphan_source_items_pruned,
+            "retention_matches_pruned": retention_matches_pruned,
+            "retention_muted_feed_items_pruned": retention_muted_pruned,
+            "retention_source_items_pruned": retention_source_items_pruned,
         }
     except Exception as exc:
         log.warning("Prune failed: %s", exc)
@@ -1553,6 +1691,9 @@ def _prune_old_items_with_limit(
             "matches_pruned": 0,
             "muted_feed_items_pruned": 0,
             "orphan_source_items_pruned": 0,
+            "retention_matches_pruned": 0,
+            "retention_muted_feed_items_pruned": 0,
+            "retention_source_items_pruned": 0,
         }
 
 

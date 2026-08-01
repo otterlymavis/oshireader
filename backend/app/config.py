@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     connector_fetch_timeout_seconds: float = 8.0
     connector_concurrency: int = 1
     poll_terms_per_run: int = 1
+    refresh_free_interval_minutes: int = 1440
+    refresh_standard_interval_minutes: int = 360
+    refresh_premium_interval_minutes: int = 180
+    inactive_poll_after_days: int = 30
+    retention_days: int = 30
     notification_freshness_window_minutes: int = 1440
     orphaned_notification_grace_minutes: int = 60
     admin_api_token: str = ""
@@ -38,6 +43,14 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
+    @property
+    def refresh_intervals_minutes(self) -> dict[str, int]:
+        return {
+            "free": max(1, self.refresh_free_interval_minutes),
+            "standard": max(1, self.refresh_standard_interval_minutes),
+            "premium": max(1, self.refresh_premium_interval_minutes),
+        }
 
 
 settings = Settings()

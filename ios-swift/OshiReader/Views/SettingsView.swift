@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var showingClearAllAlert = false
     @State private var newKeyword = ""
     @State private var newCollectionMode = CollectionMode.allInfo
+    @State private var newSourceMode = SourceMode.all
+    @State private var newSelectedPlatforms: Set<String> = []
     @State private var addingAliasForId: String? = nil
     @State private var newAliasText = ""
     @State private var notificationTestMessage: String? = nil
@@ -150,6 +152,37 @@ struct SettingsView: View {
                             }
                             .buttonStyle(PlainButtonStyle())
                             .accessibilityIdentifier("settings.keywordMode.\(term.keyword)")
+
+                            Menu {
+                                Button {
+                                    updateSourceSelection(for: term, mode: .all, platforms: [])
+                                } label: {
+                                    Label("All sources", systemImage: term.source_mode == .all ? "checkmark" : "globe")
+                                }
+                                ForEach(allPlatforms, id: \.0) { key, label in
+                                    Button {
+                                        var selected = term.source_mode == .selected ? Set(term.selected_platforms) : []
+                                        if term.source_mode == .all {
+                                            selected = [key]
+                                        } else if selected.contains(key) {
+                                            selected.remove(key)
+                                        } else {
+                                            selected.insert(key)
+                                        }
+                                        updateSourceSelection(for: term, mode: .selected, platforms: Array(selected).sorted())
+                                    } label: {
+                                        Label(label, systemImage: term.source_mode == .selected && term.selected_platforms.contains(key) ? "checkmark.square" : "square")
+                                    }
+                                }
+                            } label: {
+                                Text(term.source_mode == .all ? "🌐" : "🔎")
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(theme.colors.divider)
+                                    .clipShape(Capsule())
+                            }
+                            .accessibilityIdentifier("settings.keywordSources.\(term.keyword)")
                             
                             // Push notifications bell button
                             Button {
@@ -394,6 +427,36 @@ struct SettingsView: View {
                         Text("📹 " + i18n.t("mediaOnly")).tag(CollectionMode.mediaOnly)
                     }
                     .pickerStyle(.segmented)
+
+                    Picker("Sources", selection: $newSourceMode) {
+                        Text("All sources").tag(SourceMode.all)
+                        Text("Selected").tag(SourceMode.selected)
+                    }
+                    .pickerStyle(.segmented)
+                    if newSourceMode == .selected {
+                        ScrollView {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 125), spacing: 8)], spacing: 8) {
+                                ForEach(allPlatforms, id: \.0) { key, label in
+                                    Button {
+                                        if newSelectedPlatforms.contains(key) {
+                                            newSelectedPlatforms.remove(key)
+                                        } else {
+                                            newSelectedPlatforms.insert(key)
+                                        }
+                                    } label: {
+                                        HStack {
+                                            Image(systemName: newSelectedPlatforms.contains(key) ? "checkmark.square.fill" : "square")
+                                            Text(label).lineLimit(1)
+                                        }
+                                        .font(.caption)
+                                        .foregroundColor(theme.colors.text)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 90)
+                    }
                     
                     HStack(spacing: 10) {
                         Button(i18n.t("cancel")) {
@@ -414,7 +477,7 @@ struct SettingsView: View {
                                 showingAddKeywordAlert = false
                                 return
                             }
-                            let savedTerm = db.saveTerm(keyword: trimmed, collectionMode: newCollectionMode)
+                            let savedTerm = db.saveTerm(keyword: trimmed, collectionMode: newCollectionMode, sourceMode: newSourceMode, selectedPlatforms: Array(newSelectedPlatforms).sorted())
 
                             Task {
                                 await refreshLocalFallbacks(for: savedTerm)
@@ -423,6 +486,8 @@ struct SettingsView: View {
                                 if let serverTerm = try? await NetworkManager.shared.createWatchTerm(
                                     keyword: savedTerm.keyword,
                                     collectionMode: savedTerm.collection_mode,
+                                    sourceMode: savedTerm.source_mode,
+                                    selectedPlatforms: savedTerm.selected_platforms,
                                     notifyOnNew: savedTerm.notify_on_new,
                                     isActive: savedTerm.is_active,
                                     aliases: savedTerm.aliases
@@ -436,6 +501,8 @@ struct SettingsView: View {
                             }
                             
                             newKeyword = ""
+                            newSourceMode = .all
+                            newSelectedPlatforms = []
                             showingAddKeywordAlert = false
                         }
                         .accessibilityIdentifier("settings.confirmAddKeywordButton")
@@ -473,6 +540,17 @@ struct SettingsView: View {
                     settingsErrorMessage = nil
                 }
             }
+        }
+    }
+
+    private func updateSourceSelection(for term: WatchTerm, mode: SourceMode, platforms: [String]) {
+        db.updateTerm(id: term.id, sourceMode: mode, selectedPlatforms: platforms)
+        Task {
+            _ = try? await NetworkManager.shared.updateWatchTerm(
+                id: term.id,
+                sourceMode: mode,
+                selectedPlatforms: platforms
+            )
         }
     }
 
