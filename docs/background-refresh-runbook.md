@@ -59,6 +59,32 @@ Healthy notification output must include:
 - `notification_health.active_notify_terms_without_verified_devices: 0`
 - `pending_notifications: []`
 
+### Automation credential rotation
+
+`ADMIN_API_TOKEN` is intentionally stored independently in three places: the
+Render backend, the Cloudflare Worker secret, and the GitHub Actions secret.
+When rotating it, generate one value and update all three before testing. A
+successful GitHub workflow does not update Render, and updating Render does not
+update the Worker.
+
+Verify the backend first:
+
+```sh
+curl -i https://oshireader.onrender.com/api/admin/poller-health \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
+```
+
+Then verify the Worker:
+
+```sh
+curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
+```
+
+The Worker health check should report `status: ok`, `healthy: true`, no pending
+notifications, and no orphaned notification terms. Run the poll workflow before
+the monitor when manually recovering stale poll data; starting both at once can
+make the monitor observe the pre-poll state.
+
 Manual end-to-end APNs canary:
 
 ```sh

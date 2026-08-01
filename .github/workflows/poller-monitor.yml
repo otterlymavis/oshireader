@@ -48,6 +48,7 @@ jobs:
           latest_success = diagnostics.get("latest_successful_poll") or {}
           created_at = latest_success.get("created_at")
           latest_poll = diagnostics.get("latest_poll") or {}
+          active_poll_is_fresh = False
           apns = diagnostics.get("apns") or {}
           notification_health = diagnostics.get("notification_health") or {}
           pending_notifications = diagnostics.get("pending_notifications") or []
@@ -68,6 +69,15 @@ jobs:
           }
 
           failures = []
+          if latest_poll.get("status") in {"started", "running_past_request_timeout"}:
+              latest_poll_created_at = latest_poll.get("created_at")
+              if latest_poll_created_at:
+                  started_at = datetime.fromisoformat(
+                      latest_poll_created_at.replace("Z", "+00:00")
+                  )
+                  if started_at.tzinfo is None:
+                      started_at = started_at.replace(tzinfo=timezone.utc)
+                  active_poll_is_fresh = (datetime.now(timezone.utc) - started_at).total_seconds() <= 20 * 60
           if status != "200":
               failures.append(f"worker health endpoint returned HTTP {status}")
           if payload.get("status") != "ok" or payload.get("healthy") is not True:
@@ -83,9 +93,14 @@ jobs:
                   completed = completed.replace(tzinfo=timezone.utc)
               age_minutes = (datetime.now(timezone.utc) - completed).total_seconds() / 60
               summary["age_minutes"] = round(age_minutes, 1)
-              if age_minutes > 240:
+              if age_minutes > 240 and not active_poll_is_fresh:
                   failures.append(
                       f"Latest successful poll is too old: {age_minutes:.1f} minutes; payload={payload}"
+                  )
+              elif age_minutes > 240:
+                  print(
+                      "Latest successful poll is old, but a fresh poll is still running; "
+                      "deferring the stale failure."
                   )
           if apns.get("configured") is not True:
               failures.append("APNs is not configured")
@@ -100,17 +115,8 @@ jobs:
                   if pending.get("updated_at")
               ]
 
-              active_poll_is_fresh = False
               pending_rows_are_fresh = False
               now = datetime.now(timezone.utc)
-
-              if latest_poll.get("status") in {"started", "running_past_request_timeout"} and latest_poll_created_at:
-                  started_at = datetime.fromisoformat(
-                      latest_poll_created_at.replace("Z", "+00:00")
-                  )
-                  if started_at.tzinfo is None:
-                      started_at = started_at.replace(tzinfo=timezone.utc)
-                  active_poll_is_fresh = (now - started_at).total_seconds() <= 20 * 60
 
               if pending_updated_at and len(pending_updated_at) == len(pending_notifications):
                   pending_rows_are_fresh = True
