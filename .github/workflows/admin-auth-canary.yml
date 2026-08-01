@@ -1,0 +1,53 @@
+name: Admin auth canary
+
+on:
+  schedule:
+    - cron: "47 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      BACKEND_URL: https://oshireader.onrender.com
+      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+    steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$ADMIN_API_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Verify backend admin authentication
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --max-time 30 \
+            "$BACKEND_URL/api/admin/poller-health" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN")
+
+          echo "Backend auth status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "Backend admin authentication failed"
+            cat "$BODY"
+            exit 1
+          fi
+
+          python3 - "$BODY" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as response_file:
+              payload = json.load(response_file)
+
+          if not isinstance(payload, dict):
+              raise SystemExit("Backend diagnostics response is not a JSON object")
+          print("Backend admin authentication succeeded")
+          PY
