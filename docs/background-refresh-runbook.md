@@ -85,6 +85,15 @@ notifications, and no orphaned notification terms. Run the poll workflow before
 the monitor when manually recovering stale poll data; starting both at once can
 make the monitor observe the pre-poll state.
 
+The `Admin auth canary` workflow runs daily and can also be dispatched manually:
+
+```sh
+gh workflow run admin-auth-canary.yml --repo otterlymavis/oshireader
+```
+
+It verifies the GitHub Actions copy of `ADMIN_API_TOKEN` against Render without
+starting a poll or changing production data.
+
 Manual end-to-end APNs canary:
 
 ```sh
