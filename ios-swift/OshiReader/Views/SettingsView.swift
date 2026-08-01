@@ -544,6 +544,9 @@ struct SettingsView: View {
     }
 
     private func updateSourceSelection(for term: WatchTerm, mode: SourceMode, platforms: [String]) {
+        guard mode != .selected || !platforms.isEmpty else {
+            return
+        }
         db.updateTerm(id: term.id, sourceMode: mode, selectedPlatforms: platforms)
         Task {
             _ = try? await NetworkManager.shared.updateWatchTerm(

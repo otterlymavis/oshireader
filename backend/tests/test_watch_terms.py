@@ -46,6 +46,31 @@ class TestListWatchTerms:
         assert t["is_active"] is True
         assert t["collection_mode"] == "all_info"
 
+    def test_selected_source_mode_requires_a_platform(self, client, db_session):
+        resp = client.post(
+            "/api/watch-terms/",
+            json={"keyword": "Aiko", "source_mode": "selected", "selected_platforms": []},
+        )
+
+        assert resp.status_code == 422
+        assert "at least one selected platform" in resp.json()["detail"]
+        assert db_session.query(WatchTerm).count() == 0
+
+    def test_update_selected_source_mode_requires_a_platform(self, client, db_session):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+
+        resp = client.patch(
+            f"/api/watch-terms/{term.id}",
+            json={"source_mode": "selected", "selected_platforms": []},
+        )
+
+        assert resp.status_code == 422
+        db_session.refresh(term)
+        assert term.source_mode == "all"
+        assert term.selected_platforms == []
+
     def test_registered_device_only_lists_owned_terms(self, client, db_session):
         token = "a" * 64
         other_token = "b" * 64

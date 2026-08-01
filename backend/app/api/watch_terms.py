@@ -14,6 +14,14 @@ from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 router = APIRouter(prefix="/api/watch-terms", tags=["watch-terms"])
 
 
+def _require_nonempty_source_selection(source_mode: str, selected_platforms: list[str]) -> None:
+    if source_mode == "selected" and not selected_platforms:
+        raise HTTPException(
+            422,
+            "selected source mode requires at least one selected platform",
+        )
+
+
 def _term_with_keyword_exists(
     db: Session,
     *,
@@ -130,6 +138,7 @@ async def create_term(
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
+    _require_nonempty_source_selection(body.source_mode, body.selected_platforms)
     term = WatchTerm(**body.model_dump())
     if not auth.is_admin:
         term.owner_device_secret = auth.device_secret
@@ -174,6 +183,10 @@ async def update_term(
     if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
         raise HTTPException(404, "Watch term not found")
     updates = body.model_dump(exclude_none=True)
+    _require_nonempty_source_selection(
+        updates.get("source_mode", term.source_mode),
+        updates.get("selected_platforms", term.selected_platforms or []),
+    )
     if "keyword" in updates and _term_with_keyword_exists(
         db,
         keyword=updates["keyword"],
