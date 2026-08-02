@@ -30,16 +30,13 @@ class TwitterConnector(BaseConnector):
         self.bearer_token = bearer_token
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
+        # Google News/X index timestamps describe aggregator discovery, not
+        # the tweet's created_at. Only the API can provide a trustworthy tweet
+        # date, so fail closed when credentials are unavailable or the API
+        # returns no usable data.
         if not self.bearer_token:
-            return await self._fetch_public_index(keyword, mode)
-        if mode != CollectionMode.MEDIA_ONLY:
-            public_items = await self._fetch_public_index(keyword, mode)
-            if public_items:
-                return public_items
-        items = await self._fetch_api(keyword, mode)
-        if items:
-            return items
-        return [] if mode == CollectionMode.MEDIA_ONLY else await self._fetch_public_index(keyword, mode)
+            return []
+        return await self._fetch_api(keyword, mode)
 
     async def _fetch_api(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         query = f"{keyword} has:media" if mode == CollectionMode.MEDIA_ONLY else keyword

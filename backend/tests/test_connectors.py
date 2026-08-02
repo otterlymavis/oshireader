@@ -651,17 +651,12 @@ class TestConnectorMediaOnlyEarlyReturn:
 
 
 class TestTwitterConnectorNoToken:
-    """Without API credentials, Twitter falls back to indexed public x.com posts."""
+    """Without API credentials, Twitter cannot provide trustworthy tweet dates."""
 
     @pytest.mark.asyncio
-    async def test_returns_public_index_items_when_bearer_token_is_empty_string(self):
-        entry = _rss_entry(link="https://x.com/aiko/status/1", title="Aiko concert update - x.com")
-        with patch("app.connectors.twitter.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.twitter.feedparser.parse", return_value=_FakeFeed([entry])):
-            result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].platform == "twitter"
-        assert result[0].url == "https://x.com/aiko/status/1"
+    async def test_returns_empty_when_bearer_token_is_empty_string(self):
+        result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_media_only_with_no_token(self):
@@ -669,7 +664,7 @@ class TestTwitterConnectorNoToken:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_public_index_uses_jina_when_direct_google_is_empty(self):
+    async def test_does_not_use_public_index_when_direct_google_is_empty(self):
         fallback = [
             SourceItemCreate(
                 platform="twitter",
@@ -681,11 +676,9 @@ class TestTwitterConnectorNoToken:
                 raw_payload={"source": "google_news_jina", "keyword": "Aiko"},
             )
         ]
-        with patch("app.connectors.twitter.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.twitter.feedparser.parse", return_value=_FakeFeed([])), \
-             patch.object(TwitterConnector, "_fetch_public_index_jina", new=AsyncMock(return_value=fallback)):
+        with patch.object(TwitterConnector, "_fetch_public_index_jina", new=AsyncMock(return_value=fallback)):
             result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
-        assert result == fallback
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_jina_public_index_returns_items(self):
@@ -3003,7 +2996,7 @@ class TestTwitterFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_http_error_status_falls_back_to_public_index(self):
+    async def test_http_error_status_does_not_fall_back_to_public_index(self):
         fallback_items = [
             SourceItemCreate(
                 platform="twitter",
@@ -3025,7 +3018,7 @@ class TestTwitterFetch:
         with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=fallback_items)):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
-        assert result == fallback_items
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_filters_tweets_without_keyword(self):
