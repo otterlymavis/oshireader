@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
 from urllib.parse import quote, quote_plus, urljoin
 
 import feedparser
@@ -19,6 +18,7 @@ from app.connectors.base import (
     fetch_search_rss_via_proxy,
     parse_feed_date,
     parse_google_news_markdown,
+    is_recent_search_result,
     title_contains_keyword,
 )
 
@@ -59,7 +59,9 @@ class YahooNewsConnector(BaseConnector):
         if not stripped:
             return []
 
-        # RSS first — it carries real publish dates; Jina only as fallback (no dates available)
+        # RSS first — only dated results are safe to show. Search-page fallbacks
+        # do not expose publication dates reliably, so they must not pin old
+        # articles to the top with the fetch time.
         items = await self._fetch_gnews_rss(stripped)
         if not items:
             items = await self._fetch_direct_search(stripped)
@@ -99,20 +101,9 @@ class YahooNewsConnector(BaseConnector):
             title = _clean_markdown_title(anchor.get_text(" ", strip=True))
             if not title or not title_contains_keyword(keyword, title):
                 continue
-            seen.add(item_id)
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=item_id,
-                    url=article_url,
-                    published_at=datetime.now(timezone.utc),
-                    media_type="article",
-                    title=title,
-                    raw_payload={"keyword": keyword, "source": "direct_search", "date_parsed": False},
-                )
-            )
-            if len(items) >= 25:
-                break
+            # Yahoo's search HTML does not provide a trustworthy publication
+            # date. Do not substitute datetime.now() for an undated article.
+            continue
         return items
 
     async def _fetch_jina(self, keyword: str) -> list[SourceItemCreate]:
@@ -139,20 +130,9 @@ class YahooNewsConnector(BaseConnector):
                 continue
             if not contains_keyword(keyword, title):
                 continue
-            seen.add(item_id)
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=item_id,
-                    url=article_url,
-                    published_at=datetime.now(timezone.utc),
-                    media_type="article",
-                    title=title,
-                    raw_payload={"keyword": keyword, "source": "jina", "date_parsed": False},
-                )
-            )
-            if len(items) >= 25:
-                break
+            # The Jina Yahoo search mirror also omits publication dates.
+            # Keeping these rows would make them appear newly published.
+            continue
         return items
 
     async def _fetch_gnews_rss(self, keyword: str) -> list[SourceItemCreate]:
@@ -187,7 +167,9 @@ class YahooNewsConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
-            if published is None:
+            if published is None or not getattr(published, "date_parsed", True):
+                continue
+            if not is_recent_search_result(published):
                 continue
             items.append(
                 SourceItemCreate(
@@ -198,7 +180,7 @@ class YahooNewsConnector(BaseConnector):
                     media_type="article",
                     title=title,
                     content_text=summary,
-                    raw_payload={"keyword": keyword, "source": "google_news"},
+                    raw_payload={"keyword": keyword, "source": "google_news", "date_parsed": True},
                 )
             )
         if items:
@@ -261,7 +243,9 @@ class YahooNewsConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
-            if published is None:
+            if published is None or not getattr(published, "date_parsed", True):
+                continue
+            if not is_recent_search_result(published):
                 continue
             seen.add(item_id)
             items.append(
@@ -319,7 +303,7 @@ class YahooNewsConnector(BaseConnector):
                     media_type="article",
                     title=title,
                     content_text=entry.get("summary") or None,
-                    raw_payload={"keyword": keyword, "source": source},
+                    raw_payload={"keyword": keyword, "source": source, "date_parsed": True},
                 )
             )
         return items

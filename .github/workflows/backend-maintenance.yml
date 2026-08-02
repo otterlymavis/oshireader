@@ -10,6 +10,7 @@ on:
         options:
           - purge-youtube-bad-dates
           - purge-youtube-google-news
+          - purge-yahoonews-bad-dates
           - prune-storage
 
 jobs:
@@ -57,6 +58,23 @@ jobs:
             -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             --max-time 120)
           echo "YouTube Google News cleanup response HTTP $STATUS"
+          cat "$BODY"
+          if [ "$STATUS" != "200" ]; then
+            exit 1
+          fi
+
+      - name: Purge Yahoo News bad-date items
+        if: inputs.action == 'purge-yahoonews-bad-dates'
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$BACKEND_URL/api/admin/maintenance/purge-yahoonews-bad-dates" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+            --max-time 120)
+          echo "Yahoo News bad-date cleanup response HTTP $STATUS"
           cat "$BODY"
           if [ "$STATUS" != "200" ]; then
             exit 1

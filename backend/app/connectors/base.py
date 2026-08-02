@@ -56,8 +56,8 @@ def mark_date_provenance(value: datetime, *, date_parsed: bool) -> datetime:
     return _FeedDate(value, date_parsed=date_parsed)
 
 
-def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
-    """Return the newest feed activity date, marking fetch-time fallback dates."""
+def parse_feed_date(entry: feedparser.FeedParserDict) -> Optional[datetime]:
+    """Return the newest date supplied by the feed, or None when it is absent."""
     dates: list[datetime] = []
     for attr in ("updated_parsed", "published_parsed"):
         t = getattr(entry, attr, None)
@@ -68,7 +68,7 @@ def parse_feed_date(entry: feedparser.FeedParserDict) -> datetime:
                 pass
     if dates:
         return mark_date_provenance(max(dates), date_parsed=True)
-    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
+    return None
 
 
 def parse_google_news_markdown(text: str) -> list[dict]:
@@ -84,14 +84,12 @@ def parse_google_news_markdown(text: str) -> list[dict]:
         seen.add(url)
         try:
             published = parsedate_to_datetime(match.group("date")).astimezone(timezone.utc)
-            date_parsed = True
         except (TypeError, ValueError, IndexError, AttributeError):
-            published = datetime.now(timezone.utc)
-            date_parsed = False
+            continue
         items.append({
             "title": match.group("title").strip(),
             "url": url,
-            "published_at": mark_date_provenance(published, date_parsed=date_parsed),
+            "published_at": mark_date_provenance(published, date_parsed=True),
         })
     return items
 

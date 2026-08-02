@@ -126,10 +126,9 @@ class TogetterConnector(BaseConnector):
                     except (ValueError, AttributeError):
                         pass
 
-            date_parsed = published is not None
             if not published:
-                published = datetime.now(timezone.utc)
-            elif not _is_recent(published):
+                continue
+            if not _is_recent(published):
                 continue
 
             items.append(
@@ -143,7 +142,7 @@ class TogetterConnector(BaseConnector):
                     thumbnail_url=thumb,
                     content_text=f"Togetter tag: {keyword}" if source == "tag_search" else None,
                     author=None,
-                    raw_payload={"keyword": keyword, "source": source, "date_parsed": date_parsed},
+                    raw_payload={"keyword": keyword, "source": source, "date_parsed": True},
                 )
             )
 

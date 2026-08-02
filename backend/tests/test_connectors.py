@@ -200,20 +200,14 @@ class TestParseFeedDate:
         result = parse_feed_date(entry)
         assert result == datetime(2024, 3, 1, 8, 0, 0, tzinfo=timezone.utc)
 
-    def test_falls_back_to_now_when_both_missing(self):
-        before = datetime.now(timezone.utc)
+    def test_returns_none_when_both_missing(self):
         entry = _entry(published_parsed=None, updated_parsed=None)
-        result = parse_feed_date(entry)
-        after = datetime.now(timezone.utc)
-        assert before <= result <= after
+        assert parse_feed_date(entry) is None
 
-    def test_falls_back_to_now_on_malformed_tuple(self):
+    def test_returns_none_on_malformed_tuple(self):
         # A tuple that produces invalid args for datetime() should not crash
         entry = _entry(published_parsed=(99999, 99, 99, 99, 99, 99))  # month=99 is invalid
-        before = datetime.now(timezone.utc)
-        result = parse_feed_date(entry)
-        after = datetime.now(timezone.utc)
-        assert before <= result <= after
+        assert parse_feed_date(entry) is None
 
     def test_result_is_always_utc_aware(self):
         entry = _entry(published_parsed=(2024, 1, 1, 0, 0, 0, 0, 1, 0))
@@ -1340,7 +1334,7 @@ class TestFiveChFetch:
         assert result[0].published_at == datetime.fromtimestamp(1717200000, tz=timezone.utc)
         assert result[0].raw_payload["date_parsed"] is False
 
-    def test_itest_fetch_time_fallback_is_not_marked_as_parsed(self):
+    def test_itest_invalid_date_is_rejected(self):
         text = (
             "* [2026年99月99日 99時99分 話題度:1 1レス Aiko thread]"
             "(https://itest.5ch.io/server/test/read.cgi/board/999999999999999999999999)"
@@ -1348,8 +1342,7 @@ class TestFiveChFetch:
 
         result = FiveChConnector()._parse_itest_board(text, "board", "Aiko")
 
-        assert len(result) == 1
-        assert result[0].raw_payload["date_parsed"] is False
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_fetch_keeps_subject_fallbacks_when_latest_post_dates_are_sparse(self):
@@ -1522,14 +1515,17 @@ class TestGirlsChannelFetch:
             result = await GirlsChannelConnector().fetch("アイコ", "all_info")
         by_id = {r.item_id: r for r in result}
         assert by_id["12345"].raw_payload["date_parsed"] is True
-        assert by_id["99999"].raw_payload["date_parsed"] is False
+        assert "99999" not in by_id
 
     @pytest.mark.asyncio
     async def test_direct_scrape_deduplicates_by_topic_id(self):
         html = """<html><body>
-          <a href="/topics/100/">Aiko T1</a>
-          <a href="/topics/100/">Aiko T1 again</a>
-          <a href="/topics/101/">Aiko T2</a>
+          <li><time datetime="2026-07-29T10:00:00+09:00"></time>
+            <a href="/topics/100/">Aiko T1</a></li>
+          <li><time datetime="2026-07-29T10:01:00+09:00"></time>
+            <a href="/topics/100/">Aiko T1 again</a></li>
+          <li><time datetime="2026-07-29T10:02:00+09:00"></time>
+            <a href="/topics/101/">Aiko T2</a></li>
         </body></html>"""
         with patch("app.connectors.girlschannel.httpx.AsyncClient", _http_mock(text=html)):
             result = await GirlsChannelConnector().fetch("Aiko", "all_info")
@@ -1784,6 +1780,7 @@ class TestRSSConnectorFetch:
         entry = _FeedEntry(
             id="id1", link="https://news.example.com/1",
             title="Aiko event", summary="aiko concert info",
+            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
             enclosures=[{"type": "image/jpeg", "href": "https://example.com/t.jpg"}],
         )
         fake_feed = _FakeFeed([entry])
@@ -2269,9 +2266,11 @@ class TestTogetterFetch:
         <html><body><ul>
           <li><h3>Aiko Title A</h3>
             <a href="https://togetter.com/li/99999">Aiko TA</a>
+            <time datetime="2026-07-29T10:00:00+09:00"></time>
           </li>
           <li><h3>Aiko Title B</h3>
             <a href="https://togetter.com/li/99999">Aiko TB</a>
+            <time datetime="2026-07-29T10:01:00+09:00"></time>
           </li>
         </ul></body></html>
         """
@@ -2298,7 +2297,8 @@ class TestTogetterFetch:
     @pytest.mark.asyncio
     async def test_caps_at_25_items(self):
         entries = "\n".join(
-            f'<li><h3>Aiko Title {i}</h3><a href="https://togetter.com/li/{i:05d}">Aiko T{i}</a></li>'
+            f'<li><h3>Aiko Title {i}</h3><a href="https://togetter.com/li/{i:05d}">Aiko T{i}</a>'
+            f'<time datetime="2026-07-29T10:00:00+09:00"></time></li>'
             for i in range(1, 30)
         )
         html = f"<html><body><ul>{entries}</ul></body></html>"
@@ -2309,7 +2309,7 @@ class TestTogetterFetch:
 
     @pytest.mark.asyncio
     async def test_bad_datetime_string_does_not_crash(self):
-        # Invalid datetime attribute → fromisoformat raises → falls back to datetime.now()
+        # Invalid datetime attribute → the undated result is rejected.
         html = """
         <html><body><ul>
           <li>
@@ -2322,9 +2322,7 @@ class TestTogetterFetch:
         with patch("app.connectors.togetter.httpx.AsyncClient",
                    _http_mock(text=html, is_success=True)):
             result = await TogetterConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].item_id == "22222"
-        assert result[0].raw_payload["date_parsed"] is False
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_filters_items_without_keyword(self):
@@ -2379,6 +2377,7 @@ class TestYahooNewsFetch:
                 '<a href="https://news.google.com/rss/articles/abc123">'
                 "アイコの最新情報</a> Yahoo!ニュース"
             ),
+            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
         )
         fake_feed = _FakeFeed([entry])
         with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
@@ -2404,14 +2403,13 @@ class TestYahooNewsFetch:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_jina_when_gnews_empty(self):
-        # _JINA_MARKDOWN has 3 entries but one is a dup (abc123 appears twice) → 2 unique items
+        # Undated search-mirror results must not be admitted as fresh items.
         empty_feed = _FakeFeed([])
         with patch("app.connectors.yahoonews.httpx.AsyncClient",
                    _http_mock(content=b"<rss/>", text=_JINA_MARKDOWN)), \
              patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
-        assert len(result) == 2
-        assert all(r.platform == "yahoonews" for r in result)
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_falls_back_to_direct_search_when_gnews_empty(self):
@@ -2428,9 +2426,7 @@ class TestYahooNewsFetch:
              patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
 
-        assert [r.item_id for r in result] == ["abc123", "xyz789"]
-        assert result[0].url == "https://news.yahoo.co.jp/articles/abc123"
-        assert result[0].raw_payload["source"] == "direct_search"
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_jina_non_success_returns_empty(self):
@@ -2466,13 +2462,13 @@ class TestYahooNewsFetch:
 
     @pytest.mark.asyncio
     async def test_gnews_feedparser_exception_falls_back_to_jina(self):
-        # feedparser.parse raises → _fetch_gnews_rss except branch → falls back to jina
+        # feedparser.parse raises; undated fallbacks remain empty.
         with patch("app.connectors.yahoonews.httpx.AsyncClient",
                    _http_mock(content=b"<rss/>", text=_JINA_MARKDOWN)), \
              patch("app.connectors.yahoonews.feedparser.parse",
                    side_effect=ValueError("bad gnews feed")):
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
-        assert len(result) == 2
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_jina_caps_at_25_items(self):
@@ -2485,7 +2481,7 @@ class TestYahooNewsFetch:
                    _http_mock(content=b"<rss/>", text=entries)), \
              patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
-        assert len(result) == 25
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_gnews_rss_skips_bad_entries(self):
@@ -2494,17 +2490,20 @@ class TestYahooNewsFetch:
             id="https://news.yahoo.co.jp/articles/abc1",
             link="https://news.yahoo.co.jp/articles/abc1",
             title="アイコ最新情報",
+            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
         )
         no_link = _FeedEntry(id="nl", link="", title="T")
         dup1 = _FeedEntry(
             id="https://news.yahoo.co.jp/articles/dup",
             link="https://news.yahoo.co.jp/articles/dup",
             title="アイコ Dup A",
+            published_parsed=(2026, 7, 29, 10, 1, 0, 2, 210, 0),
         )
         dup2 = _FeedEntry(
             id="https://news.yahoo.co.jp/articles/dup",
             link="https://news.yahoo.co.jp/articles/dup",
             title="アイコ Dup B",
+            published_parsed=(2026, 7, 29, 10, 2, 0, 2, 210, 0),
         )
         empty_title = _FeedEntry(
             id="https://news.yahoo.co.jp/articles/et",
@@ -2762,6 +2761,7 @@ class TestNoteFetch:
         with_enclosure = _FeedEntry(
             id="enc1", link="https://note.com/u/n/enc1",
             title="Aiko Article with thumb",
+            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
             enclosures=[{"type": "image/jpeg", "href": "https://assets.st-note.com/enc/t.jpg"}],
         )
         fake_feed = _FakeFeed([no_link, with_enclosure])
@@ -2784,6 +2784,7 @@ class TestNoteFetch:
         entry = _FeedEntry(
             id="nid1", link="https://note.com/u/n/nid1",
             title="Aiko Article",
+            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
             media_thumbnail=[{"url": "https://assets.st-note.com/media/t.jpg"}],
         )
         fake_feed = _FakeFeed([entry])
@@ -2807,6 +2808,7 @@ class TestNoteFetch:
             link="https://note.com/u/n/nid1",
             title="unrelated article",
             summary="unrelated summary",
+            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
         )
         fake_feed = _FakeFeed([entry])
         rss_resp = MagicMock()
@@ -2831,6 +2833,7 @@ class TestNoteFetch:
             title="unrelated article",
             summary="Aiko appears only in the article summary",
             author="Aiko fan",
+            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
         )
         fake_feed = _FakeFeed([entry])
         rss_resp = MagicMock(is_success=True, content=b"<rss/>")
@@ -2846,7 +2849,7 @@ class TestNoteFetch:
         assert result[0].raw_payload == {
             "feed_url": "https://note.com/hashtag/Aiko/rss",
             "matched_hashtag": "Aiko",
-            "date_parsed": False,
+            "date_parsed": True,
         }
 
 

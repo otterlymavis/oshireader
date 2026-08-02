@@ -17,6 +17,7 @@ from app.migrations import (
     _purge_bad_date_items,
     _purge_youtube_google_news_items,
     apply_startup_migrations,
+    run_yahoonews_bad_date_cleanup,
     run_youtube_bad_date_cleanup,
     run_youtube_google_news_cleanup,
 )
@@ -125,7 +126,7 @@ class TestApplyStartupMigrations:
             apply_startup_migrations(fresh_engine)
             apply_startup_migrations(fresh_engine)
 
-        assert purge_call_count == 2
+        assert purge_call_count == 3
 
     def test_can_skip_cleanup_migrations_on_serving_startup(self, fresh_engine):
         Session = sessionmaker(bind=fresh_engine)
@@ -156,6 +157,16 @@ class TestApplyStartupMigrations:
             assert log_entry is not None
         finally:
             db.close()
+
+    def test_yahoonews_bad_date_cleanup_runs_only_once(self, fresh_engine):
+        Base.metadata.create_all(bind=fresh_engine)
+        Session = sessionmaker(bind=fresh_engine)
+        with patch("app.migrations.SessionLocal", Session), \
+             patch("app.migrations._purge_bad_date_items") as purge_bad_dates:
+            assert run_yahoonews_bad_date_cleanup(fresh_engine) is True
+            assert run_yahoonews_bad_date_cleanup(fresh_engine) is False
+
+        purge_bad_dates.assert_called_once_with(fresh_engine, platforms=("yahoonews",))
 
     def test_youtube_bad_date_cleanup_runs_only_once(self, fresh_engine):
         Base.metadata.create_all(bind=fresh_engine)

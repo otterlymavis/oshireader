@@ -7,6 +7,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.parse import quote, urlencode, urlparse
 
 import feedparser
@@ -292,11 +293,11 @@ def _thread_url(hit: _ThreadHit) -> str:
     return f"http://{hit.host}/test/read.cgi/{hit.board_key}/{hit.thread_id}/"
 
 
-def _thread_created_at(thread_id: str) -> datetime:
+def _thread_created_at(thread_id: str) -> datetime | None:
     try:
         return datetime.fromtimestamp(int(thread_id), tz=timezone.utc)
     except (TypeError, ValueError, OSError, OverflowError):
-        return datetime.now(timezone.utc)
+        return None
 
 
 def _parse_dat_latest_post_at(text: str) -> datetime | None:
@@ -503,6 +504,8 @@ class FiveChConnector(BaseConnector):
             date_parsed = subback_at is not None
             if subback_at is None:
                 subback_at = _thread_created_at(thread_id)
+            if subback_at is None:
+                continue
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
@@ -535,7 +538,7 @@ class FiveChConnector(BaseConnector):
         self,
         client: httpx.AsyncClient,
         item: SourceItemCreate,
-    ) -> SourceItemCreate:
+    ) -> Optional[SourceItemCreate]:
         payload = item.raw_payload or {}
         latest = await self._fetch_itest_latest_post_at(
             client,
@@ -830,6 +833,8 @@ class FiveChConnector(BaseConnector):
         date_parsed = published_at is not None
         if published_at is None:
             published_at = _thread_created_at(hit.thread_id)
+        if published_at is None:
+            return None
 
         return SourceItemCreate(
             platform=self.PLATFORM,

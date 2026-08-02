@@ -49,6 +49,7 @@ from app.ingestion.scheduler import (
 from app.migrations import (
     apply_startup_migrations,
     force_youtube_google_news_cleanup,
+    run_yahoonews_bad_date_cleanup,
     run_youtube_bad_date_cleanup,
 )
 from app.models import APNSDeviceToken, BackendEvent, CollectionMode, Match, PendingNotification, PlatformCredential, SourceItem, WatchTerm
@@ -610,6 +611,23 @@ def purge_youtube_google_news_maintenance(
         "status": "youtube google-news cleanup completed",
         "purged_count": purged_count,
     }
+
+
+@app.post("/api/admin/maintenance/purge-yahoonews-bad-dates")
+def purge_yahoonews_bad_dates_maintenance(
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    ran = run_yahoonews_bad_date_cleanup(engine)
+    record_backend_event(
+        db,
+        "maintenance",
+        "completed",
+        "Yahoo News bad-date cleanup completed",
+        {"migration": "purge_yahoonews_fetch_time_dates_v1", "ran": ran},
+    )
+    db.commit()
+    return {"status": "yahoo news bad-date cleanup completed", "ran": ran}
 
 
 @app.get("/api/admin/test-fetch")

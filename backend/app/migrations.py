@@ -32,6 +32,7 @@ def _record_migration(slug: str) -> None:
 
 PURGE_YOUTUBE_BAD_DATES_SLUG = "purge_youtube_fetch_time_dates_v2"
 PURGE_YOUTUBE_GOOGLE_NEWS_SLUG = "purge_youtube_google_news_fallback_v1"
+PURGE_YAHOONEWS_BAD_DATES_SLUG = "purge_yahoonews_fetch_time_dates_v1"
 
 
 def run_youtube_bad_date_cleanup(engine: Engine) -> bool:
@@ -55,6 +56,15 @@ def run_youtube_google_news_cleanup(engine: Engine) -> bool:
 def force_youtube_google_news_cleanup(engine: Engine) -> int:
     """Remove YouTube Google News fallback rows even if the migration was already recorded."""
     return _purge_youtube_google_news_items(engine)
+
+
+def run_yahoonews_bad_date_cleanup(engine: Engine) -> bool:
+    """Run the Yahoo News fetch-time cleanup once. Returns True when it ran."""
+    if _migration_applied(PURGE_YAHOONEWS_BAD_DATES_SLUG):
+        return False
+    _purge_bad_date_items(engine, platforms=("yahoonews",))
+    _record_migration(PURGE_YAHOONEWS_BAD_DATES_SLUG)
+    return True
 
 
 def _column_names(engine: Engine, table_name: str) -> set[str]:
@@ -376,6 +386,10 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
     # video's real upload/update time. Remove those rows so old videos stop
     # appearing as newly updated feed items.
     run_youtube_google_news_cleanup(engine)
+
+    # Yahoo News search fallbacks previously used fetch time when publication
+    # dates were unavailable, which made old articles appear freshly found.
+    run_yahoonews_bad_date_cleanup(engine)
 
     # One-time cleanup: remove GirlsChannel items stored via Google News (item_id starts
     # with "http").  The connector now scrapes GirlsChannel directly using numeric topic

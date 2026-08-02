@@ -166,10 +166,9 @@ class GirlsChannelConnector(BaseConnector):
             # Distinguish a genuinely parsed date from the fetch-time placeholder.
             # The scheduler must NOT keep healing placeholder dates toward now()
             # every poll, or undated threads would pin themselves to the top forever.
-            date_parsed = published is not None
             if not published:
-                published = datetime.now(timezone.utc)
-            elif not _is_recent(published):
+                continue
+            if not _is_recent(published):
                 continue
 
             items.append(
@@ -182,7 +181,7 @@ class GirlsChannelConnector(BaseConnector):
                     title=title,
                     thumbnail_url=None,
                     content_text=None,
-                    raw_payload={"keyword": keyword, "source": "direct", "date_parsed": date_parsed},
+                    raw_payload={"keyword": keyword, "source": "direct", "date_parsed": True},
                 )
             )
 

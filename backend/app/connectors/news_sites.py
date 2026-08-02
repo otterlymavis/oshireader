@@ -88,21 +88,21 @@ def _parse_optional_ameba_timestamp(value: object) -> datetime | None:
     return None
 
 
-def _parse_ameba_timestamp(value: object) -> datetime:
+def _parse_ameba_timestamp(value: object) -> datetime | None:
     parsed = _parse_optional_ameba_timestamp(value)
     if parsed:
         return mark_date_provenance(parsed, date_parsed=True)
-    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
+    return None
 
 
-def _parse_ameba_activity_timestamp(*values: object) -> datetime:
+def _parse_ameba_activity_timestamp(*values: object) -> datetime | None:
     dates = [parsed for value in values if (parsed := _parse_optional_ameba_timestamp(value))]
     if dates:
         return mark_date_provenance(max(dates), date_parsed=True)
-    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
+    return None
 
 
-def _parse_jst_datetime(value: str | None) -> datetime:
+def _parse_jst_datetime(value: str | None) -> datetime | None:
     if value:
         try:
             parsed = datetime.fromisoformat(value)
@@ -111,7 +111,7 @@ def _parse_jst_datetime(value: str | None) -> datetime:
             return mark_date_provenance(parsed.astimezone(timezone.utc), date_parsed=True)
         except ValueError:
             pass
-    return mark_date_provenance(datetime.now(timezone.utc), date_parsed=False)
+    return None
 
 
 class _GNewsSiteConnector(BaseConnector):
@@ -521,19 +521,23 @@ class AmebloConnector(_GNewsSiteConnector):
             if not item_url:
                 continue
 
+            published = _parse_ameba_activity_timestamp(
+                raw.get("entryUpdatedDatetime"),
+                raw.get("updatedTime"),
+                raw.get("updatedAt"),
+                raw.get("entryCreatedDatetime"),
+                raw.get("publishedTime"),
+            )
+            if published is None:
+                continue
+
             seen.add(item_id)
             items.append(
                 SourceItemCreate(
                     platform=self.PLATFORM,
                     item_id=item_id,
                     url=item_url,
-                    published_at=_parse_ameba_activity_timestamp(
-                        raw.get("entryUpdatedDatetime"),
-                        raw.get("updatedTime"),
-                        raw.get("updatedAt"),
-                        raw.get("entryCreatedDatetime"),
-                        raw.get("publishedTime"),
-                    ),
+                    published_at=published,
                     media_type="article",
                     author=blog_title,
                     title=display_title,
@@ -625,6 +629,8 @@ class RealSoundConnector(_GNewsSiteConnector):
             author = article.select_one(".entry-author")
             image = article.select_one("img[src]")
             published = _parse_jst_datetime(time_element.get("datetime") if time_element else None)
+            if published is None:
+                continue
             if not is_recent_search_result(published):
                 continue
             items.append(
