@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from urllib.parse import quote, quote_plus, urljoin
+from urllib.parse import quote, quote_plus
 
 import feedparser
 import httpx
@@ -14,7 +14,6 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
-    contains_keyword,
     fetch_search_rss_via_proxy,
     parse_feed_date,
     parse_google_news_markdown,
@@ -26,13 +25,6 @@ log = logging.getLogger(__name__)
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _WHITESPACE_RE = re.compile(r"\s+")
-_JINA_ARTICLE_RE = re.compile(
-    r"^\s*\d+\.\s+\[(.+?)\]\((https://news\.yahoo\.co\.jp/articles/([A-Za-z0-9]+))\)",
-    re.M | re.S,
-)
-_ARTICLE_ID_RE = re.compile(r"/articles/([A-Za-z0-9]+)")
-
-
 def _clean_markdown_title(value: str) -> str:
     value = _MD_IMAGE_RE.sub("", value)
     value = value.replace("_", "")
@@ -70,70 +62,15 @@ class YahooNewsConnector(BaseConnector):
         return items
 
     async def _fetch_direct_search(self, keyword: str) -> list[SourceItemCreate]:
-        encoded = quote(keyword)
-        url = f"https://news.yahoo.co.jp/search?p={encoded}"
-        try:
-            async with httpx.AsyncClient(
-                timeout=15.0,
-                follow_redirects=True,
-                headers=GOOGLE_NEWS_HEADERS,
-            ) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("YahooNews direct search returned status %d", resp.status_code)
-                    return []
-        except Exception as exc:
-            log.warning("YahooNews direct search error: %s", exc)
-            return []
-
-        soup = BeautifulSoup(resp.text, "lxml")
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for anchor in soup.select('a[href*="/articles/"]'):
-            href = anchor.get("href") or ""
-            article_url = urljoin("https://news.yahoo.co.jp", href)
-            id_match = _ARTICLE_ID_RE.search(article_url)
-            if not id_match:
-                continue
-            item_id = id_match.group(1)
-            if item_id in seen:
-                continue
-            title = _clean_markdown_title(anchor.get_text(" ", strip=True))
-            if not title or not title_contains_keyword(keyword, title):
-                continue
-            # Yahoo's search HTML does not provide a trustworthy publication
-            # date. Do not substitute datetime.now() for an undated article.
-            continue
-        return items
+        # Yahoo's search HTML does not provide a trustworthy publication date.
+        # Do not make a request for results that cannot be admitted safely.
+        return []
 
     async def _fetch_jina(self, keyword: str) -> list[SourceItemCreate]:
         """Fallback: r.jina.ai proxy returns Yahoo News results as markdown (no publish dates)."""
-        encoded = quote(keyword)
-        url = f"https://r.jina.ai/https://news.yahoo.co.jp/search?p={encoded}"
-        try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("YahooNews jina mirror returned status %d", resp.status_code)
-                    return []
-        except Exception as exc:
-            log.warning("YahooNews jina fetch error: %s", exc)
-            return []
-
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for m in _JINA_ARTICLE_RE.finditer(resp.text):
-            title = _clean_markdown_title(m.group(1))
-            article_url = m.group(2)
-            item_id = m.group(3)
-            if not title or item_id in seen:
-                continue
-            if not contains_keyword(keyword, title):
-                continue
-            # The Jina Yahoo search mirror also omits publication dates.
-            # Keeping these rows would make them appear newly published.
-            continue
-        return items
+        # The Jina Yahoo search mirror also omits publication dates, so it is
+        # not a valid fallback for feed ingestion.
+        return []
 
     async def _fetch_gnews_rss(self, keyword: str) -> list[SourceItemCreate]:
         """Fallback: Google News RSS filtered to news.yahoo.co.jp."""
