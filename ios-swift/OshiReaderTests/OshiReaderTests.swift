@@ -1272,37 +1272,14 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
-    func testBackendPollAttemptConsumesThrottleBeforeRequestOutcome() {
+    func testBackendPollEligibilityDoesNotConsumeThrottleBeforeRequestOutcome() {
         let now = Date(timeIntervalSince1970: 40_000)
 
-        XCTAssertTrue(BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(now: now))
-        XCTAssertFalse(
-            BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60)),
-            "A failed backend request should still consume the app-side poll attempt window."
-        )
-        XCTAssertFalse(
-            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(now: now.addingTimeInterval(60 * 60))
-        )
-        XCTAssertTrue(
-            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(
-                now: now.addingTimeInterval(BackgroundRefreshPolicy.backendPollTriggerInterval)
-            )
-        )
-    }
-
-    func testBackendPollAttemptRequiresActiveTerms() {
-        let now = Date(timeIntervalSince1970: 50_000)
-
-        XCTAssertFalse(
-            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(hasActiveTerms: false, now: now)
-        )
         XCTAssertTrue(
             BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60)),
-            "A no-work foreground fallback must not consume the backend poll trigger window."
+            "Poll eligibility must remain available until the backend request succeeds."
         )
-        XCTAssertTrue(
-            BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(hasActiveTerms: true, now: now)
-        )
+        BackgroundRefreshPolicy.recordBackendPollTriggered(at: now)
         XCTAssertFalse(
             BackgroundRefreshPolicy.shouldTriggerBackendPoll(now: now.addingTimeInterval(60 * 60))
         )

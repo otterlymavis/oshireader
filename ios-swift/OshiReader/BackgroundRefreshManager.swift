@@ -241,20 +241,6 @@ enum BackgroundRefreshPolicy {
         return now.timeIntervalSince(lastTriggeredAt) >= backendPollTriggerInterval
     }
 
-    static func recordBackendPollAttemptIfDue(now: Date = Date()) -> Bool {
-        guard shouldTriggerBackendPoll(now: now) else { return false }
-        recordBackendPollTriggered(at: now)
-        return true
-    }
-
-    static func recordBackendPollAttemptIfDue(
-        hasActiveTerms: Bool,
-        now: Date = Date()
-    ) -> Bool {
-        guard hasActiveTerms else { return false }
-        return recordBackendPollAttemptIfDue(now: now)
-    }
-
     static func shouldMergePreviewBeforeRefresh(forRemoteNotification userInfo: [AnyHashable: Any]) -> Bool {
         userInfo["preview_item"] != nil ||
             userInfo["item_id"] != nil ||
@@ -1078,9 +1064,13 @@ final class BackgroundRefreshManager {
                 return completion
             }
 
-            if BackgroundRefreshPolicy.recordBackendPollAttemptIfDue() {
+            if BackgroundRefreshPolicy.shouldTriggerBackendPoll() {
                 do {
                     try await NetworkManager.shared.triggerBackgroundPoll(timeout: BackgroundRefreshPolicy.pollTimeout)
+                    // Only consume the app-side poll window after the backend
+                    // accepted the request. A timeout or rejected request must
+                    // remain retryable on the next background opportunity.
+                    BackgroundRefreshPolicy.recordBackendPollTriggered()
                 } catch {
                     AppLogger.network.warning("Background poll trigger failed: \(error.localizedDescription)")
                 }

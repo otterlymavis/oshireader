@@ -1148,11 +1148,12 @@ struct FeedView: View {
                     status: "skipped",
                     detail: "no active terms"
                 )
-            } else if BackgroundRefreshPolicy.recordBackendPollAttemptIfDue(hasActiveTerms: true) {
+            } else if BackgroundRefreshPolicy.shouldTriggerBackendPoll() {
                 do {
                     try await NetworkManager.shared.triggerBackgroundPoll(
                         timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
                     )
+                    BackgroundRefreshPolicy.recordBackendPollTriggered()
                     report.record(strategy: "backend_poll", status: "ok")
                 } catch {
                     report.record(
