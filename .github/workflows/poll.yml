@@ -2,6 +2,10 @@ name: Poll feed
 
 on:
   workflow_call:
+  schedule:
+    # Redundant fallback for a missed Cloudflare cron tick. The backend poll
+    # lock and due-term checks make this safe when the primary poll succeeds.
+    - cron: "30 */3 * * *"
   workflow_dispatch:  # allow manual trigger from GitHub Actions tab
 
 concurrency:
