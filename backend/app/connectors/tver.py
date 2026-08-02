@@ -265,7 +265,9 @@ class TVERConnector(BaseConnector):
             if items:
                 items.sort(key=lambda item: item.published_at, reverse=True)
                 return items
-            return await self._fetch_indexed_history(keyword)
+            # Google News timestamps are not TVer episode update/broadcast
+            # dates, so do not present indexed history as current TVer data.
+            return []
 
     async def _fetch_episode_detail_date(
         self,

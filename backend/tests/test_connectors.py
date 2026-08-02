@@ -780,7 +780,7 @@ class TestFiveChFetch:
              patch("app.connectors.fivech.feedparser.parse") as parse:
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_called()
+        parse.assert_not_called()
         assert result == []
 
     @pytest.mark.asyncio
@@ -1432,9 +1432,7 @@ class TestFiveChFetch:
         with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
             result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
-        assert result[0].platform == "5ch"
-        assert result[0].url == "https://5ch.net/t1"
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_http_error(self):
@@ -1462,7 +1460,7 @@ class TestFiveChFetch:
         with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
              patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
             result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
@@ -2623,7 +2621,7 @@ class TestNicoNicoFetch:
         assert result[0].item_id == "sm42"
 
     @pytest.mark.asyncio
-    async def test_both_rss_fail_falls_back_to_gnews(self):
+    async def test_both_rss_fail_returns_empty_without_gnews_fallback(self):
         call_count = [0]
         fail_resp = MagicMock(is_success=False, status_code=403)
         ok_resp = MagicMock(is_success=True, content=b"<rss/>")
@@ -2637,7 +2635,7 @@ class TestNicoNicoFetch:
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
             result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert len(result) == 1
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_all_sources_fail_returns_empty(self):

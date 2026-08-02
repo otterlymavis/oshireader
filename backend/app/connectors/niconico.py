@@ -41,9 +41,9 @@ class NicoNicoConnector(BaseConnector):
         items = await self._fetch_rss(keyword)
         if items is None:
             items = await self._fetch_tag_rss(keyword)
-        if not items:
-            items = await self._fetch_gnews(keyword)
-        return items
+        # Google News timestamps describe discovery, not NicoNico upload time.
+        # Keep the source empty when NicoNico's own feeds are unavailable.
+        return items or []
 
     async def _fetch_rss(self, keyword: str) -> list[SourceItemCreate] | None:
         """NicoNico keyword search RSS feed (newest first)."""

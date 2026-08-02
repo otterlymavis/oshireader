@@ -379,8 +379,8 @@ class FiveChConnector(BaseConnector):
             return items[:_REAL_5CH_LIMIT]
         if direct_items:
             return self._prioritize_parsed_direct_items(direct_items)
-        log.warning("5ch latest-reply scans returned no items for %r; using real 5ch index fallback", keyword)
-        return await self._fetch_gnews(keyword)
+        log.warning("5ch latest-reply scans returned no items for %r; no source-dated fallback available", keyword)
+        return []
 
     def _prioritize_parsed_direct_items(
         self,

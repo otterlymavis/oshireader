@@ -58,7 +58,9 @@ class TogetterConnector(BaseConnector):
         items = self._merge_items([item for page_items in pages for item in page_items])
         if items:
             return items[:25]
-        return await self._fetch_indexed_history(keyword)
+        # Google News timestamps are discovery dates, not Togetter activity
+        # dates. Do not admit indexed history as current thread activity.
+        return []
 
     async def _fetch_search_page(
         self,
