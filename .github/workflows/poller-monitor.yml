@@ -103,9 +103,9 @@ jobs:
                       "stale grace window; deferring the stale failure."
                   )
           if apns.get("configured") is not True:
-              failures.append("APNs is not configured")
+              print(f"Notification warning: APNs is not configured: {apns}")
           if notification_health.get("healthy") is not True:
-              failures.append(f"notification health is degraded: {notification_health}")
+              print(f"Notification warning: notification health is degraded: {notification_health}")
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
           if pending_notifications:
               latest_poll_created_at = latest_poll.get("created_at")

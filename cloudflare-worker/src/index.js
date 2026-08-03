@@ -750,7 +750,11 @@ export default {
           Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
         );
         const notifications = notificationHealth(diagnostics);
-        const healthy = health.healthy && notifications.healthy;
+        // Feed freshness and notification readiness are separate operational
+        // concerns. A missing device must not make ingestion look unhealthy;
+        // scheduled polling still reports notification degradation through the
+        // watchdog and this response's `notifications` field.
+        const healthy = health.healthy;
         return json(
           {
             status: healthy ? "ok" : "degraded",

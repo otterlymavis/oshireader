@@ -556,7 +556,7 @@ test("health treats a fresh request-timeout marker as in progress", async (conte
   assert.equal((await response.json()).in_progress, true);
 });
 
-test("health reports active notification terms without devices as degraded", async (context) => {
+test("health keeps polling healthy when active notification terms lack devices", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async () => new Response(JSON.stringify({
@@ -589,9 +589,10 @@ test("health reports active notification terms without devices as degraded", asy
     { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
   );
 
-  assert.equal(response.status, 503);
+  assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.status, "degraded");
+  assert.equal(body.status, "ok");
+  assert.equal(body.healthy, true);
   assert.equal(body.notifications.healthy, false);
   assert.equal(body.notifications.at_risk_terms, 1);
   assert.deepEqual(body.notifications.at_risk_keywords, ["Aiko"]);
@@ -646,7 +647,7 @@ test("health trusts backend notification grace period", async (context) => {
   assert.equal(body.notifications.active_notify_terms, 2);
 });
 
-test("health reports missing APNs config as degraded even when backend notification health is green", async (context) => {
+test("health keeps polling healthy when APNs is missing", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   globalThis.fetch = async () => new Response(JSON.stringify({
@@ -688,9 +689,10 @@ test("health reports missing APNs config as degraded even when backend notificat
     { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
   );
 
-  assert.equal(response.status, 503);
+  assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.status, "degraded");
+  assert.equal(body.status, "ok");
+  assert.equal(body.healthy, true);
   assert.equal(body.notifications.healthy, false);
   assert.match(body.notifications.reason, /APNs is not configured/);
 });
