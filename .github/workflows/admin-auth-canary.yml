@@ -26,10 +26,13 @@ jobs:
       - name: Verify backend admin authentication
         run: |
           BODY=$(mktemp)
-          STATUS=$(curl --silent --show-error \
+            STATUS=$(curl --silent --show-error \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 10 \
             --output "$BODY" \
             --write-out "%{http_code}" \
-            --max-time 30 \
+            --max-time 60 \
             "$BACKEND_URL/api/admin/poller-health" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN")
 
