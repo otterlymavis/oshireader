@@ -220,7 +220,7 @@ final class NotificationManager: ObservableObject {
         return await withCheckedContinuation { continuation in
             let id = UUID()
             tokenRegistrationWaiters[id] = continuation
-            UIApplication.shared.registerForRemoteNotifications()
+            registerForRemoteNotificationsForDeviceAuthentication()
 
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))

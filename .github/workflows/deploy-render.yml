@@ -3,13 +3,23 @@ name: Deploy Render
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-render
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
       RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
       BACKEND_URL: https://oshireader.onrender.com
-      EXPECTED_COMMIT: ${{ github.sha }}
+      # The Render service deploys its configured production branch. Keep this
+      # explicit so a manual run started from another ref verifies the commit
+      # that Render will actually deploy.
+      DEPLOY_REF: master
     steps:
       - name: Check required secret
         run: |
@@ -18,6 +28,15 @@ jobs:
             echo "Create a Render deploy hook for the backend service, then save it as this repository secret."
             exit 1
           fi
+
+      - name: Resolve Render deployment commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_REF }}
+          fetch-depth: 1
+
+      - name: Record expected deployment commit
+        run: echo "EXPECTED_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Trigger Render deploy
         run: |
