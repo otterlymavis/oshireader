@@ -414,7 +414,17 @@ extension NetworkManager {
             "device_secret": apnsDeviceSecret,
         ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        try await apiVoid(URL(string: "\(apiBase)/api/devices/apns-token")!, method: "POST", body: bodyData)
+        let registration: APNSDeviceRegistrationResponse = try await apiRequest(
+            URL(string: "\(apiBase)/api/devices/apns-token")!,
+            method: "POST",
+            body: bodyData,
+            acceptRange: 200...299
+        )
+        guard registration.is_verified == true else {
+            throw APIClientError.apnsRegistrationUnverified(
+                registration.verification_error ?? "The server could not verify this device token"
+            )
+        }
         KeychainHelper.write(key: "apns_device_token", value: token)
         KeychainHelper.write(key: "apns_device_environment", value: apnsEnvironment)
     }

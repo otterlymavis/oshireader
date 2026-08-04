@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.auth import require_admin_auth
 from app.config import settings
 from app.database import SessionLocal, get_db
+from app.diagnostics import record_backend_event
 from app.models import APNSDeviceToken, BackendEvent, WatchTerm
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
 
@@ -62,15 +63,16 @@ def _find_authenticated_device(
             raise HTTPException(400, "Invalid APNs device token")
         stored = db.get(APNSDeviceToken, token)
     elif body.device_id:
-        stored = (
-            db.query(APNSDeviceToken)
-            .filter(
-                APNSDeviceToken.device_id == body.device_id,
-                APNSDeviceToken.environment == body.environment,
-            )
-            .order_by(APNSDeviceToken.last_seen_at.desc(), APNSDeviceToken.token.desc())
-            .first()
+        query = db.query(APNSDeviceToken).filter(
+            APNSDeviceToken.device_id == body.device_id,
+            APNSDeviceToken.environment == body.environment,
         )
+        if require_verified:
+            query = query.filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+        stored = query.order_by(
+            APNSDeviceToken.is_verified.desc(),
+            APNSDeviceToken.last_seen_at.desc(), APNSDeviceToken.token.desc()
+        ).first()
     else:
         raise HTTPException(400, "APNs device token or device_id is required")
 
@@ -206,25 +208,56 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
     stored.environment = body.environment
     stored.device_id = body.device_id
     stored.device_secret = _secret_digest(body.device_secret)
+    # A new registration attempt must prove the token again. Never retain a
+    # previous verified state across a failed refresh.
+    stored.is_verified = False
+    stored.verified_at = None
     stored.last_seen_at = datetime.now(timezone.utc)
-    _retire_superseded_device_tokens(db, stored)
     db.commit()
     db.refresh(stored)
 
-    from app.apns import validate_device_registration
+    from app.apns import validate_device_registration_result
 
     stored.verification_attempted_at = datetime.now(timezone.utc)
+    verification_error = None
     if (
         settings.allow_unauthenticated_admin
         and not settings.admin_api_token
-    ) or await validate_device_registration(stored):
+    ):
+        verified = True
+    else:
+        verified, verification_error = await validate_device_registration_result(stored)
+    if verified:
         _mark_verified(stored)
+        # Retire the previous token only after the replacement has passed APNs
+        # validation. A transient rotation failure must not remove the last
+        # verified token for this device.
+        _retire_superseded_device_tokens(db, stored)
         db.commit()
         db.refresh(stored)
     else:
         db.commit()
         db.refresh(stored)
-    return stored
+        record_backend_event(
+            db,
+            "apns_registration",
+            "unverified",
+            "APNs device registration was not verified",
+            {
+                "environment": stored.environment,
+                "device_id_present": bool(stored.device_id),
+                "verification_error": verification_error,
+            },
+        )
+        db.commit()
+    return APNSDeviceTokenOut(
+        token=stored.token,
+        environment=stored.environment,
+        device_id=stored.device_id,
+        last_seen_at=stored.last_seen_at,
+        is_verified=stored.is_verified,
+        verification_error=verification_error,
+    )
 
 
 @router.post("/apns-test-push")

@@ -320,6 +320,14 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings.notificationTestResult")
                     }
 
+                    if let registrationError = notifications.lastRemoteRegistrationError {
+                        Text(registrationError)
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("settings.notificationRegistrationError")
+                    }
+
                     if NetworkManager.shared.isLiveBackgroundPushTesting,
                        !liveBackgroundRefreshResult.isEmpty {
                         Text(liveBackgroundRefreshResult)

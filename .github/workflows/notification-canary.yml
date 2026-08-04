@@ -24,7 +24,50 @@ jobs:
             exit 1
           fi
 
+      - name: Check verified-device eligibility
+        id: eligibility
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --max-time 60 \
+            "https://oshireader.onrender.com/api/admin/poller-health" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN")
+          if [ "$STATUS" != "200" ]; then
+            cat "$BODY"
+            exit 1
+          fi
+          python3 - "$BODY" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as response_file:
+              payload = json.load(response_file)
+          counts = (payload.get("apns") or {}).get(
+              "device_tokens_by_environment_and_verification", {}
+          )
+          verified = sum((value or {}).get("verified", 0) for value in counts.values())
+          if verified < 1:
+              print("No verified APNs device is available; notification canary skipped.")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("canary_allowed=false\n")
+          else:
+              print(f"Verified APNs devices available: {verified}")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("canary_allowed=true\n")
+          PY
+
+      - name: Skip canary without verified device
+        if: steps.eligibility.outputs.canary_allowed != 'true'
+        run: echo "Canary skipped because no verified APNs device is available"
+
       - name: Send synthetic notification canary
+        if: steps.eligibility.outputs.canary_allowed == 'true'
         run: |
           BODY=$(mktemp)
           STATUS=$(curl --silent --show-error \

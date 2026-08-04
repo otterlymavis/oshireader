@@ -84,14 +84,14 @@ class TestAPNSDeviceTokenOut:
     def test_naive_last_seen_at_becomes_utc(self):
         obj = APNSDeviceTokenOut(
             token="a" * 64, environment="production",
-            device_id=None, last_seen_at=_naive(),
+            device_id=None, last_seen_at=_naive(), is_verified=False,
         )
         assert obj.last_seen_at.tzinfo == timezone.utc
 
     def test_none_last_seen_at_stays_none(self):
         obj = APNSDeviceTokenOut(
             token="a" * 64, environment="production",
-            device_id=None, last_seen_at=None,
+            device_id=None, last_seen_at=None, is_verified=False,
         )
         assert obj.last_seen_at is None
 

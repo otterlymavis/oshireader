@@ -1,0 +1,140 @@
+name: Distributed release gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      physical_smoke_test:
+        description: "Run the current Release/TestFlight build on a physical device and confirm APNs registration plus test push"
+        required: true
+        type: choice
+        options:
+          - pending
+          - passed
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+      APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+      APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+      APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up backend Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Run backend contract tests
+        run: python -m pytest -q backend/tests
+
+      - name: Validate production APNs configuration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          project = Path("ios-swift/project.yml").read_text(encoding="utf-8")
+          render = Path("render.yaml").read_text(encoding="utf-8")
+          entitlements = Path("ios-swift/OshiReader/OshiReader.entitlements").read_text(encoding="utf-8")
+
+          release = project.split("        Release:\n", 1)[1].split("  OshiReaderNotificationService:", 1)[0]
+          checks = {
+              "Release APNs environment": "APNS_ENVIRONMENT: production" in release,
+              "Release production API": "OSHIREADER_API_BASE_URL: https://oshireader.onrender.com" in release,
+              "production bundle identifier": "PRODUCT_BUNDLE_IDENTIFIER: com.otterpia.oshireader.plus" in project,
+              "backend APNs topic": "value: com.otterpia.oshireader.plus" in render,
+              "backend uses production APNs": 'APNS_USE_SANDBOX\n        value: "false"' in render,
+              "APNs entitlement is build-configured": "$(APNS_ENVIRONMENT)" in entitlements,
+          }
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              raise SystemExit("Production APNs configuration failed: " + ", ".join(failed))
+          print("Production APNs configuration checks passed")
+          PY
+
+      - name: Validate APNs release secrets
+        run: |
+          missing=()
+          [ -n "$APNS_TEAM_ID" ] || missing+=(APNS_TEAM_ID)
+          [ -n "$APNS_KEY_ID" ] || missing+=(APNS_KEY_ID)
+          [ -n "$APNS_PRIVATE_KEY" ] || missing+=(APNS_PRIVATE_KEY)
+          [ -n "$APNS_TOPIC" ] || missing+=(APNS_TOPIC)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing GitHub Actions secrets: ${missing[*]}"
+            exit 1
+          fi
+          case "$APNS_PRIVATE_KEY" in
+            "-----BEGIN PRIVATE KEY-----"*) ;;
+            *) echo "APNS_PRIVATE_KEY is not a PEM private key"; exit 1 ;;
+          esac
+          if [ "$APNS_TEAM_ID" != "D8H3TBWH7P" ]; then
+            echo "APNS_TEAM_ID does not match the app's signing team"
+            exit 1
+          fi
+          if ! [[ "$APNS_KEY_ID" =~ ^[A-Za-z0-9]{10}$ ]]; then
+            echo "APNS_KEY_ID must be a 10-character Apple key ID"
+            exit 1
+          fi
+          if [ "$APNS_TOPIC" != "com.otterpia.oshireader.plus" ]; then
+            echo "APNS_TOPIC does not match the distributed app bundle ID"
+            exit 1
+          fi
+          echo "APNs release secrets are present and aligned with the production bundle"
+
+      - name: Build production iOS scheme
+        run: |
+          xcodebuild \
+            -project ios-swift/OshiReader.xcodeproj \
+            -scheme "OshiReader Production" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Verify deployed backend contract
+        env:
+          BACKEND_URL: https://oshireader.onrender.com
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          base = os.environ["BACKEND_URL"].rstrip("/")
+          with urllib.request.urlopen(f"{base}/api/health", timeout=30) as response:
+              health = json.load(response)
+          if health.get("status") != "ok":
+              raise SystemExit(f"Backend is not healthy: {health}")
+
+          with urllib.request.urlopen(f"{base}/openapi.json", timeout=30) as response:
+              openapi = json.load(response)
+          schema = (openapi.get("components", {}).get("schemas", {})
+                    .get("APNSDeviceTokenOut", {}))
+          properties = schema.get("properties", {})
+          missing = {"is_verified", "verification_error"} - properties.keys()
+          if missing:
+              raise SystemExit(f"Deployed backend lacks APNs response fields: {sorted(missing)}")
+          print(json.dumps({"health": health, "apns_response_fields": sorted(properties)}, indent=2))
+          PY
+
+      - name: Require physical APNs smoke test
+        env:
+          PHYSICAL_SMOKE_TEST: ${{ inputs.physical_smoke_test }}
+        run: |
+          if [ "$PHYSICAL_SMOKE_TEST" != "passed" ]; then
+            echo "Physical smoke test is required before distribution."
+            echo "Install the Release/TestFlight build, register APNs, send a test push, relaunch, and repeat after token refresh."
+            exit 1
+          fi
+          echo "Physical APNs smoke test confirmed"

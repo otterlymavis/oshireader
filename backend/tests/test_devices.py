@@ -29,6 +29,8 @@ class TestAPNSTokenUpsert:
         data = r.json()
         assert data["token"] == "a" * 64
         assert data["environment"] == "sandbox"
+        assert data["is_verified"] is True
+        assert data["verification_error"] is None
 
     def test_upsert_normalizes_token(self, client):
         raw = "  " + "AB" * 32 + "  "
@@ -38,6 +40,39 @@ class TestAPNSTokenUpsert:
         )
         assert r.status_code == 201
         assert r.json()["token"] == "ab" * 32
+
+    def test_upsert_reports_apns_verification_failure(self, client, db_session, monkeypatch):
+        monkeypatch.setattr(devices_api.settings, "allow_unauthenticated_admin", False)
+        monkeypatch.setattr(devices_api.settings, "admin_api_token", "configured")
+        with patch(
+            "app.apns.validate_device_registration_result",
+            new=AsyncMock(return_value=(False, "TopicDisallowed")),
+        ):
+            r = client.post("/api/devices/apns-token", json=_registration("f" * 64))
+
+        assert r.status_code == 201
+        assert r.json()["is_verified"] is False
+        assert r.json()["verification_error"] == "TopicDisallowed"
+        event = db_session.query(BackendEvent).filter_by(kind="apns_registration").one()
+        assert event.status == "unverified"
+        assert event.payload["verification_error"] == "TopicDisallowed"
+
+    def test_failed_refresh_revokes_previous_verification(self, client, db_session, monkeypatch):
+        token = "e" * 64
+        first = client.post("/api/devices/apns-token", json=_registration(token))
+        assert first.json()["is_verified"] is True
+
+        monkeypatch.setattr(devices_api.settings, "allow_unauthenticated_admin", False)
+        monkeypatch.setattr(devices_api.settings, "admin_api_token", "configured")
+        with patch(
+            "app.apns.validate_device_registration_result",
+            new=AsyncMock(return_value=(False, "BadDeviceToken")),
+        ):
+            refreshed = client.post("/api/devices/apns-token", json=_registration(token))
+
+        assert refreshed.status_code == 201
+        assert refreshed.json()["is_verified"] is False
+        assert db_session.get(APNSDeviceToken, token).is_verified is False
 
     def test_upsert_updates_existing_token(self, client):
         token = "b" * 64
@@ -115,6 +150,35 @@ class TestAPNSTokenUpsert:
         assert r.status_code == 201
         assert db_session.get(APNSDeviceToken, older_token) is None
         assert db_session.get(APNSDeviceToken, newer_token) is not None
+
+    def test_failed_token_rotation_preserves_previous_verified_token(
+        self, client, db_session, monkeypatch
+    ):
+        older_token = "d" * 64
+        newer_token = "e" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json=_registration(older_token, "production", device_id="device-xyz"),
+        )
+
+        monkeypatch.setattr(devices_api.settings, "allow_unauthenticated_admin", False)
+        monkeypatch.setattr(devices_api.settings, "admin_api_token", "configured")
+        with patch(
+            "app.apns.validate_device_registration_result",
+            new=AsyncMock(return_value=(False, "BadDeviceToken")),
+        ):
+            r = client.post(
+                "/api/devices/apns-token",
+                json=_registration(newer_token, "production", device_id="device-xyz"),
+            )
+
+        assert r.status_code == 201
+        old = db_session.get(APNSDeviceToken, older_token)
+        new = db_session.get(APNSDeviceToken, newer_token)
+        assert old is not None
+        assert old.is_verified is True
+        assert new is not None
+        assert new.is_verified is False
 
     def test_upsert_keeps_token_only_registrations_without_device_id(self, client, db_session):
         older_token = "b" * 64
@@ -362,6 +426,58 @@ class TestDeviceScopedTestPush:
         assert r.json() == expected
         sent_device = mock_send.await_args.args[1]
         assert sent_device.token == latest_token
+
+    def test_device_id_test_push_falls_back_to_previous_verified_token_after_failed_rotation(
+        self, client, db_session, monkeypatch
+    ):
+        older_token = "e" * 64
+        newer_token = "f" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={
+                "token": older_token,
+                "environment": "sandbox",
+                "device_id": "device-xyz",
+                "device_secret": "correct-secret-123",
+            },
+        )
+        monkeypatch.setattr(devices_api.settings, "allow_unauthenticated_admin", False)
+        monkeypatch.setattr(devices_api.settings, "admin_api_token", "configured")
+        with patch(
+            "app.apns.validate_device_registration_result",
+            new=AsyncMock(return_value=(False, "BadDeviceToken")),
+        ):
+            refreshed = client.post(
+                "/api/devices/apns-token",
+                json={
+                    "token": newer_token,
+                    "environment": "sandbox",
+                    "device_id": "device-xyz",
+                    "device_secret": "correct-secret-123",
+                },
+            )
+        assert refreshed.json()["is_verified"] is False
+        assert db_session.get(APNSDeviceToken, newer_token).is_verified is False
+
+        expected = {
+            "configured": True,
+            "results": [{"token": older_token[-8:], "status": 200}],
+            "pruned_tokens": 0,
+        }
+        with patch("app.apns.send_test_push_to_device", new=AsyncMock(return_value=expected)) as mock_send:
+            r = client.post(
+                "/api/devices/apns-test-push",
+                json={
+                    "device_id": "device-xyz",
+                    "environment": "sandbox",
+                    "device_secret": "correct-secret-123",
+                },
+            )
+
+        assert r.status_code == 200
+        assert r.json() == expected
+        sent_device = mock_send.await_args.args[1]
+        assert sent_device.token == older_token
 
     def test_device_id_lookup_respects_environment(self, client):
         production_token = "e" * 64

@@ -2,6 +2,7 @@ import Foundation
 
 enum APIClientError: LocalizedError {
     case httpStatus(Int, detail: String?)
+    case apnsRegistrationUnverified(String)
 
     var requiresVerifiedNotificationDevice: Bool {
         guard case .httpStatus(409, let detail) = self,
@@ -19,6 +20,8 @@ enum APIClientError: LocalizedError {
                 return "HTTP \(status): \(trimmedDetail)"
             }
             return "HTTP \(status)"
+        case .apnsRegistrationUnverified(let reason):
+            return "APNs device registration failed: \(reason)"
         }
     }
 }

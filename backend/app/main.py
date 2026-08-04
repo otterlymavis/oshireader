@@ -227,6 +227,31 @@ def _latest_relevant_apns_event(db: Session) -> BackendEvent | None:
     return None
 
 
+def _recent_apns_registration_failures(db: Session, *, hours: int = 24) -> dict:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    events = (
+        db.query(BackendEvent)
+        .filter(
+            BackendEvent.kind == "apns_registration",
+            BackendEvent.status == "unverified",
+            BackendEvent.created_at >= cutoff,
+        )
+        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
+        .all()
+    )
+    reasons: dict[str, int] = {}
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        reason = str(payload.get("verification_error") or "unknown")
+        reasons[reason] = reasons.get(reason, 0) + 1
+    return {
+        "window_hours": hours,
+        "count": len(events),
+        "reasons": reasons,
+        "latest": _backend_event_payload(events[0]) if events else None,
+    }
+
+
 def _latest_canary_apns_event(
     db: Session,
     *,
@@ -1155,6 +1180,7 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
                 for env, _ in device_tokens
             },
         },
+        "apns_registration": _recent_apns_registration_failures(db),
         "latest_poll": _backend_event_payload(latest_poll) if latest_poll else None,
         "latest_successful_poll": (
             _backend_event_payload(latest_successful_poll)
@@ -1315,6 +1341,7 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
                 for env, _ in device_tokens
             },
         },
+        "apns_registration": _recent_apns_registration_failures(db),
         "latest_poll": _backend_event_payload(latest_poll) if latest_poll else None,
         "latest_successful_poll": (
             _backend_event_payload(latest_successful_poll)

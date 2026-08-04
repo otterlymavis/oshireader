@@ -1,0 +1,105 @@
+name: APNs registration monitor
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registration-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BACKEND_URL: https://oshireader.onrender.com
+      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+      ALERT_CONTEXT: apns-registration-monitor
+    steps:
+      - name: Check required secret
+        run: |
+          if [ -z "$ADMIN_API_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Check registration health
+        run: |
+          BODY=$(mktemp)
+          STATUS=$(curl --silent --show-error \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --output "$BODY" \
+            --write-out "%{http_code}" \
+            --max-time 60 \
+            "$BACKEND_URL/api/admin/poller-health" \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN")
+
+          echo "Backend status: $STATUS"
+          cat "$BODY"
+          python3 - "$STATUS" "$BODY" <<'PY'
+          import json
+          import sys
+
+          status = sys.argv[1]
+          with open(sys.argv[2], encoding="utf-8") as response_file:
+              payload = json.load(response_file)
+
+          if status != "200":
+              raise SystemExit(f"Backend diagnostics returned HTTP {status}")
+
+          health = payload.get("notification_health") or {}
+          registration = payload.get("apns_registration") or {}
+          reasons = registration.get("reasons") or {}
+          print(json.dumps({
+              "notification_health": health,
+              "apns_registration": registration,
+          }, ensure_ascii=False, indent=2, default=str))
+
+          failures = []
+          missing = health.get("active_notify_terms_without_verified_devices", 0)
+          if missing:
+              failures.append(f"{missing} active notification term(s) have no verified APNs device")
+          repeated = {reason: count for reason, count in reasons.items() if count >= 3}
+          if repeated:
+              failures.append(f"Repeated APNs registration rejection reasons: {repeated}")
+          if failures:
+              raise SystemExit("; ".join(failures))
+          PY
+
+      - name: Send failure alert
+        if: failure()
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "No ALERT_WEBHOOK_URL configured; skipping failure alert"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          payload = {
+              "status": "failure",
+              "context": os.environ.get("ALERT_CONTEXT"),
+              "workflow": os.environ.get("GITHUB_WORKFLOW"),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "repository": os.environ.get("GITHUB_REPOSITORY"),
+              "url": f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}",
+          }
+          request = urllib.request.Request(
+              os.environ["ALERT_WEBHOOK_URL"],
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  print(f"Alert webhook status: {response.status}")
+          except Exception as exc:
+              print(f"Alert webhook failed: {exc}")
+          PY

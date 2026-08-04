@@ -6646,7 +6646,7 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertTrue(result.first(where: { $0.platform == "youtube" })?.has_bearer_token == true)
     }
 
-    // registerAPNSDeviceToken sends POST and succeeds on 201
+    // registerAPNSDeviceToken sends POST and succeeds on a verified 201 response
     func testRegisterAPNSDeviceTokenSendsPost() async throws {
         var capturedMethod: String?
         var capturedBody: [String: Any]?
@@ -6655,7 +6655,15 @@ final class NetworkManagerTests: XCTestCase {
             if let body = req.httpBody {
                 capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
             }
-            return (Data(), Self.response(status: 201))
+            let response = try! JSONSerialization.data(withJSONObject: [
+                "token": String(repeating: "a", count: 64),
+                "environment": NetworkManager.shared.apnsEnvironment,
+                "device_id": "test-device",
+                "last_seen_at": NSNull(),
+                "is_verified": true,
+                "verification_error": NSNull(),
+            ])
+            return (response, Self.response(status: 201))
         }
 
         do { try await NetworkManager.shared.registerAPNSDeviceToken(String(repeating: "a", count: 64)) }
@@ -6666,6 +6674,50 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertNotNil(capturedBody?["device_secret"] as? String)
         XCTAssertEqual(NetworkManager.shared.registeredAPNSDeviceToken, String(repeating: "a", count: 64))
         XCTAssertEqual(NetworkManager.shared.registeredAPNSDeviceEnvironment, NetworkManager.shared.apnsEnvironment)
+    }
+
+    func testRegisterAPNSDeviceTokenDoesNotPersistUnverifiedResponse() async throws {
+        NetworkManager.shared.clearRegisteredAPNSDeviceToken()
+        MockURLProtocol.handler = { _ in
+            let response = try! JSONSerialization.data(withJSONObject: [
+                "token": String(repeating: "b", count: 64),
+                "environment": NetworkManager.shared.apnsEnvironment,
+                "device_id": "test-device",
+                "last_seen_at": NSNull(),
+                "is_verified": false,
+                "verification_error": "TopicDisallowed",
+            ])
+            return (response, Self.response(status: 201))
+        }
+
+        do {
+            try await NetworkManager.shared.registerAPNSDeviceToken(String(repeating: "b", count: 64))
+            XCTFail("Expected unverified registration to fail")
+        } catch let error as APIClientError {
+            XCTAssertTrue(error.localizedDescription.contains("TopicDisallowed"))
+        }
+        XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceToken)
+    }
+
+    func testRegisterAPNSDeviceTokenTreatsMissingVerificationAsUnverified() async throws {
+        NetworkManager.shared.clearRegisteredAPNSDeviceToken()
+        MockURLProtocol.handler = { _ in
+            let response = try! JSONSerialization.data(withJSONObject: [
+                "token": String(repeating: "c", count: 64),
+                "environment": NetworkManager.shared.apnsEnvironment,
+                "device_id": "test-device",
+                "last_seen_at": NSNull(),
+            ])
+            return (response, Self.response(status: 201))
+        }
+
+        do {
+            try await NetworkManager.shared.registerAPNSDeviceToken(String(repeating: "c", count: 64))
+            XCTFail("Expected missing verification to fail closed")
+        } catch let error as APIClientError {
+            XCTAssertTrue(error.localizedDescription.contains("could not verify"))
+        }
+        XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceToken)
     }
 
     @MainActor

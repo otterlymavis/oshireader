@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      BACKEND_URL: https://oshireader.onrender.com
     steps:
       - name: Check required secret
         run: |
@@ -27,3 +28,37 @@ jobs:
           if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
             exit 1
           fi
+
+      - name: Verify deployed backend and APNs contract
+        run: |
+          for attempt in $(seq 1 24); do
+            if python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          base = os.environ["BACKEND_URL"].rstrip("/")
+          with urllib.request.urlopen(f"{base}/api/health", timeout=20) as response:
+              health = json.load(response)
+          if health.get("status") != "ok":
+              raise SystemExit(f"Backend health is not ready: {health}")
+
+          with urllib.request.urlopen(f"{base}/openapi.json", timeout=20) as response:
+              openapi = json.load(response)
+          properties = (openapi.get("components", {}).get("schemas", {})
+                        .get("APNSDeviceTokenOut", {}).get("properties", {}))
+          required = {"is_verified", "verification_error"}
+          if not required.issubset(properties):
+              raise SystemExit(f"APNs response contract is not deployed: {sorted(properties)}")
+          print(f"Backend is healthy at commit {health.get('commit', 'unknown')}")
+          PY
+            then
+              exit 0
+            fi
+            if [ "$attempt" -eq 24 ]; then
+              echo "Backend did not expose the expected deployed contract"
+              exit 1
+            fi
+            echo "Backend deployment is still rolling out; retrying ($attempt/24)"
+            sleep 15
+          done

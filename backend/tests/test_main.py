@@ -231,6 +231,12 @@ class TestAdminStats:
         assert data["watch_terms"] == []
         assert data["items_by_platform"] == {}
         assert data["apns"]["backend_public_url"]
+        assert data["apns_registration"] == {
+            "window_hours": 24,
+            "count": 0,
+            "reasons": {},
+            "latest": None,
+        }
         assert data["notification_health"] == {
             "healthy": True,
             "active_notify_terms": 0,
@@ -254,6 +260,7 @@ class TestAdminStats:
         assert data["pending_notifications"] == []
         assert data["notification_health"]["healthy"] is True
         assert data["apns"]["configured"] is False
+        assert data["apns_registration"]["count"] == 0
 
     def test_stats_counts_reflect_db_content(self, client, db_session):
         term = WatchTerm(keyword="Aiko")

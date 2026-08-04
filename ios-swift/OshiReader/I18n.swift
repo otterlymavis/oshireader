@@ -647,6 +647,12 @@ class I18nManager: ObservableObject {
             "zh-TW": "遠端推播測試未成功。",
             "zh-CN": "远程推送测试未成功。"
         ],
+        "notifRegistrationRetryExhausted": [
+            "en": "Notifications could not be registered. Open Settings and try again later.",
+            "ja": "通知を登録できませんでした。設定を確認して、後でもう一度お試しください。",
+            "zh-TW": "無法註冊通知。請檢查設定，稍後再試。",
+            "zh-CN": "无法注册通知。请检查设置，稍后再试。"
+        ],
         "notifNewItemsTitle": [
             "en": "%@",
             "ja": "%@",

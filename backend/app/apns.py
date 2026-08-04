@@ -38,6 +38,7 @@ _APNS_TOKEN_DELETE_REASONS = {"BadDeviceToken", "DeviceTokenNotForTopic", "Unreg
 _APNS_TERMINAL_CLEAR_REASONS = {"PayloadTooLarge"}
 _APNS_EVENT_DEVICE_RESULT_LIMIT = 25
 _DEVICE_REVALIDATION_INTERVAL = timedelta(hours=6)
+_APNS_REASON_LIMIT = 200
 
 
 @dataclass(frozen=True)
@@ -205,8 +206,16 @@ async def validate_device_registration(device: APNSDeviceToken) -> bool:
     credential, but device-scoped write auth is only enabled after this server-side
     APNs check succeeds.
     """
+    verified, _ = await validate_device_registration_result(device)
+    return verified
+
+
+async def validate_device_registration_result(
+    device: APNSDeviceToken,
+) -> tuple[bool, str | None]:
+    """Validate a device token and return an actionable APNs rejection reason."""
     if not apns_configured():
-        return False
+        return False, "APNs provider is not configured"
     host = _host(device.environment)
     headers = {
         "authorization": f"bearer {_cached_auth_token()}",
@@ -226,20 +235,21 @@ async def validate_device_registration(device: APNSDeviceToken) -> bool:
             )
     except Exception as exc:
         log.warning("APNs registration validation failed token=%s: %s", device.token[-8:], exc)
-        return False
+        return False, f"APNs validation request failed ({type(exc).__name__})"
     if resp.status_code in {200, 201}:
-        return True
+        return True, None
     try:
         reason = resp.json().get("reason")
     except Exception:
         reason = resp.text
+    reason_text = " ".join(str(reason or "").split())[:_APNS_REASON_LIMIT]
     log.warning(
         "APNs registration validation rejected token=%s status=%d reason=%s",
         device.token[-8:],
         resp.status_code,
-        reason,
+        reason_text,
     )
-    return False
+    return False, reason_text or f"APNs rejected the token (HTTP {resp.status_code})"
 
 
 async def revalidate_unverified_devices(db: Session) -> int:

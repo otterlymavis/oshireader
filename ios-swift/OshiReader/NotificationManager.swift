@@ -29,6 +29,9 @@ final class NotificationManager: ObservableObject {
     private let maximumAttachmentBytes: Int64 = 10 * 1024 * 1024
     private var lastRegisteredDeviceToken: String?
     private var tokenRegistrationWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private var registrationRetryTask: Task<Void, Never>?
+    private var registrationRetryAttempt = 0
+    private let registrationRetryDelays: [UInt64] = [1, 5, 30, 120]
 
     init(
         center: NotificationCenterClient = UNUserNotificationCenter.current(),
@@ -161,13 +164,49 @@ final class NotificationManager: ObservableObject {
         // APNs registration does not present the notification permission prompt.
         // Keep a device credential available for watch-term synchronization even
         // when the user has not granted alert presentation permission.
+        if registrationRetryTask == nil, registrationRetryAttempt >= registrationRetryDelays.count {
+            resetRegistrationRetryState()
+        }
         UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    private func scheduleRegistrationRetry() {
+        guard registrationRetryTask == nil else { return }
+        guard registrationRetryAttempt < registrationRetryDelays.count else {
+            NetworkManager.shared.clearRegisteredAPNSDeviceToken()
+            let summary = I18nManager.shared.t("notifRegistrationRetryExhausted")
+            if let detail = lastRemoteRegistrationError, !detail.isEmpty {
+                lastRemoteRegistrationError = "\(summary) \(detail)"
+            } else {
+                lastRemoteRegistrationError = summary
+            }
+            return
+        }
+
+        let delay = registrationRetryDelays[registrationRetryAttempt]
+        registrationRetryAttempt += 1
+        registrationRetryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay * 1_000_000_000)
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.registrationRetryTask = nil
+            self.registerForRemoteNotificationsForDeviceAuthentication()
+        }
+    }
+
+    private func resetRegistrationRetryState() {
+        registrationRetryTask?.cancel()
+        registrationRetryTask = nil
+        registrationRetryAttempt = 0
     }
 
     func ensureRemoteNotificationsRegisteredIfAllowed(timeout: TimeInterval = 8) async -> Bool {
         await refreshAuthorizationStatus()
         guard canScheduleNotifications else { return false }
-        if lastRegisteredDeviceToken != nil { return true }
+        if lastRegisteredDeviceToken != nil, lastRemoteRegistrationError == nil { return true }
 
         return await withCheckedContinuation { continuation in
             let id = UUID()
@@ -184,6 +223,7 @@ final class NotificationManager: ObservableObject {
     }
 
     func resetRemoteNotificationRegistrationCache() {
+        resetRegistrationRetryState()
         lastRegisteredDeviceToken = nil
         lastRemoteRegistrationError = nil
         NetworkManager.shared.clearRegisteredAPNSDeviceToken()
@@ -197,6 +237,7 @@ final class NotificationManager: ObservableObject {
         let token = Self.deviceTokenString(deviceToken)
         do {
             try await NetworkManager.shared.registerAPNSDeviceToken(token)
+            resetRegistrationRetryState()
             lastRegisteredDeviceToken = token
             lastRemoteRegistrationError = nil
             completeTokenRegistrationWaiters(success: true)
@@ -207,6 +248,7 @@ final class NotificationManager: ObservableObject {
             AppLogger.notifications.error("APNs device token registration failed: \(error.localizedDescription)")
             lastRemoteRegistrationError = error.localizedDescription
             completeTokenRegistrationWaiters(success: false)
+            scheduleRegistrationRetry()
         }
     }
 
@@ -214,6 +256,7 @@ final class NotificationManager: ObservableObject {
         AppLogger.notifications.error("APNs registration failed: \(error.localizedDescription)")
         lastRemoteRegistrationError = error.localizedDescription
         completeTokenRegistrationWaiters(success: false)
+        scheduleRegistrationRetry()
     }
 
     private func completeTokenRegistrationWaiters(success: Bool) {

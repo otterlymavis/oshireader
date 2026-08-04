@@ -197,6 +197,8 @@ class APNSDeviceTokenOut(BaseModel):
     environment: str
     device_id: Optional[str]
     last_seen_at: Optional[datetime]
+    is_verified: bool
+    verification_error: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

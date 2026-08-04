@@ -278,6 +278,15 @@ struct APNSTestPushReport: Codable, Hashable {
     let pruned_tokens: Int?
 }
 
+struct APNSDeviceRegistrationResponse: Codable, Hashable {
+    let token: String
+    let environment: String
+    let device_id: String?
+    let last_seen_at: String?
+    let is_verified: Bool?
+    let verification_error: String?
+}
+
 // MARK: - Client Diagnostics
 struct ClientDiagnosticEvent: Codable, Hashable {
     let strategy: String
