@@ -9,6 +9,7 @@ jobs:
     env:
       RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
       BACKEND_URL: https://oshireader.onrender.com
+      EXPECTED_COMMIT: ${{ github.sha }}
     steps:
       - name: Check required secret
         run: |
@@ -42,6 +43,12 @@ jobs:
               health = json.load(response)
           if health.get("status") != "ok":
               raise SystemExit(f"Backend health is not ready: {health}")
+          deployed_commit = health.get("commit")
+          expected_commit = os.environ["EXPECTED_COMMIT"]
+          if deployed_commit != expected_commit:
+              raise SystemExit(
+                  f"Backend commit is {deployed_commit!r}, expected {expected_commit!r}"
+              )
 
           with urllib.request.urlopen(f"{base}/openapi.json", timeout=20) as response:
               openapi = json.load(response)
