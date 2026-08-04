@@ -695,7 +695,7 @@ final class OshiReaderTests: XCTestCase {
     @MainActor
     func testNotificationManagerUsesPersistedRegisteredToken() async throws {
         let manager = NotificationManager(
-            center: MockNotificationCenter(status: .authorized),
+            center: MockNotificationCenter(status: .denied),
             initialRegisteredDeviceToken: String(repeating: "a", count: 64)
         )
 
@@ -5707,6 +5707,19 @@ final class NetworkManagerTests: XCTestCase {
         HTTPURLResponse(url: mockURL, statusCode: status, httpVersion: nil, headerFields: nil)!
     }
 
+    private static func verifiedAPNSRegistrationResponse() -> Data {
+        Data(#"""
+        {
+            "token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "environment":"sandbox",
+            "device_id":"test-device",
+            "last_seen_at":null,
+            "is_verified":true,
+            "verification_error":null
+        }
+        """#.utf8)
+    }
+
     func testAPIClientHTTPStatusLocalizedDescriptionIncludesDetail() {
         XCTAssertEqual(
             APIClientError.httpStatus(409, detail: "A watch term with this keyword already exists").localizedDescription,
@@ -5797,7 +5810,7 @@ final class NetworkManagerTests: XCTestCase {
                 return (Data("[]".utf8), Self.response(status: 200))
             case "/api/devices/apns-token":
                 registrationRequests += 1
-                return (Data(), Self.response(status: 201))
+                return (Self.verifiedAPNSRegistrationResponse(), Self.response(status: 201))
             default:
                 XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
                 return (Data(), Self.response(status: 500))
@@ -6739,6 +6752,9 @@ final class NetworkManagerTests: XCTestCase {
             if path == "/api/watch-terms" {
                 return (backendTermsData, Self.response(status: 200))
             }
+            if path == "/api/devices/apns-token" {
+                return (Self.verifiedAPNSRegistrationResponse(), Self.response(status: 201))
+            }
             return (Data(), Self.response(status: 201))
         }
 
@@ -7064,7 +7080,7 @@ final class NetworkManagerTests: XCTestCase {
                 )
             }
             if path == "/api/devices/apns-token" {
-                return (Data(), Self.response(status: 201))
+                return (Self.verifiedAPNSRegistrationResponse(), Self.response(status: 201))
             }
             XCTFail("Unexpected request path: \(path)")
             return (Data(), Self.response(status: 500))

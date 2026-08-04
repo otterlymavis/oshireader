@@ -160,11 +160,15 @@ final class NotificationManager: ObservableObject {
         registerForRemoteNotificationsForDeviceAuthentication()
     }
 
-    func registerForRemoteNotificationsForDeviceAuthentication() {
+    func registerForRemoteNotificationsForDeviceAuthentication(
+        resetRetryStateIfExhausted: Bool = true
+    ) {
         // APNs registration does not present the notification permission prompt.
         // Keep a device credential available for watch-term synchronization even
         // when the user has not granted alert presentation permission.
-        if registrationRetryTask == nil, registrationRetryAttempt >= registrationRetryDelays.count {
+        if resetRetryStateIfExhausted,
+           registrationRetryTask == nil,
+           registrationRetryAttempt >= registrationRetryDelays.count {
             resetRegistrationRetryState()
         }
         UIApplication.shared.registerForRemoteNotifications()
@@ -193,7 +197,9 @@ final class NotificationManager: ObservableObject {
             }
             guard let self else { return }
             self.registrationRetryTask = nil
-            self.registerForRemoteNotificationsForDeviceAuthentication()
+            self.registerForRemoteNotificationsForDeviceAuthentication(
+                resetRetryStateIfExhausted: false
+            )
         }
     }
 
@@ -205,7 +211,10 @@ final class NotificationManager: ObservableObject {
 
     func ensureRemoteNotificationsRegisteredIfAllowed(timeout: TimeInterval = 8) async -> Bool {
         await refreshAuthorizationStatus()
-        guard canScheduleNotifications else { return false }
+        // APNs device registration is independent of alert presentation
+        // permission. A user can deny banners/sounds and still need a server
+        // device identity for term ownership and background refresh. Calling
+        // registerForRemoteNotifications does not show the permission prompt.
         if lastRegisteredDeviceToken != nil, lastRemoteRegistrationError == nil { return true }
 
         return await withCheckedContinuation { continuation in
