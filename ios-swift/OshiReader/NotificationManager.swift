@@ -29,7 +29,11 @@ final class NotificationManager: ObservableObject {
     private let remoteRegistration: @MainActor () -> Void
     private let maximumAttachmentBytes: Int64 = 10 * 1024 * 1024
     private var lastRegisteredDeviceToken: String?
-    private var tokenRegistrationWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private struct TokenRegistrationWaiter {
+        let continuation: CheckedContinuation<Bool, Never>
+        let syncAfterVerification: Bool
+    }
+    private var tokenRegistrationWaiters: [UUID: TokenRegistrationWaiter] = [:]
     private var registrationRetryTask: Task<Void, Never>?
     private var registrationRetryAttempt = 0
     private let registrationRetryDelays: [UInt64] = [1, 5, 30, 120]
@@ -216,7 +220,8 @@ final class NotificationManager: ObservableObject {
 
     func ensureRemoteNotificationsRegisteredIfAllowed(
         timeout: TimeInterval = 8,
-        forceRefresh: Bool = false
+        forceRefresh: Bool = false,
+        syncAfterVerification: Bool = true
     ) async -> Bool {
         await refreshAuthorizationStatus()
         // APNs device registration is independent of alert presentation
@@ -241,10 +246,12 @@ final class NotificationManager: ObservableObject {
                 do {
                     try await NetworkManager.shared.registerAPNSDeviceToken(cachedToken)
                     lastRegisteredDeviceToken = cachedToken
-                    completeTokenRegistrationWaiters(success: true)
-                    _ = await NetworkManager.shared.syncWatchTermsToBackend(
-                        localTerms: LocalDB.shared.terms
-                    )
+                    let shouldSyncWaiters = completeTokenRegistrationWaiters(success: true)
+                    if syncAfterVerification || shouldSyncWaiters {
+                        _ = await NetworkManager.shared.syncWatchTermsToBackend(
+                            localTerms: LocalDB.shared.terms
+                        )
+                    }
                     return true
                 } catch {
                     AppLogger.notifications.warning(
@@ -256,13 +263,16 @@ final class NotificationManager: ObservableObject {
 
         return await withCheckedContinuation { continuation in
             let id = UUID()
-            tokenRegistrationWaiters[id] = continuation
+            tokenRegistrationWaiters[id] = TokenRegistrationWaiter(
+                continuation: continuation,
+                syncAfterVerification: syncAfterVerification
+            )
             registerForRemoteNotificationsForDeviceAuthentication()
 
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if let continuation = tokenRegistrationWaiters.removeValue(forKey: id) {
-                    continuation.resume(returning: false)
+                if let waiter = tokenRegistrationWaiters.removeValue(forKey: id) {
+                    waiter.continuation.resume(returning: false)
                 }
             }
         }
@@ -286,10 +296,13 @@ final class NotificationManager: ObservableObject {
             resetRegistrationRetryState()
             lastRegisteredDeviceToken = token
             lastRemoteRegistrationError = nil
-            completeTokenRegistrationWaiters(success: true)
-            _ = await NetworkManager.shared.syncWatchTermsToBackend(
-                localTerms: LocalDB.shared.terms
-            )
+            let hadWaiters = !tokenRegistrationWaiters.isEmpty
+            let shouldSync = completeTokenRegistrationWaiters(success: true)
+            if !hadWaiters || shouldSync {
+                _ = await NetworkManager.shared.syncWatchTermsToBackend(
+                    localTerms: LocalDB.shared.terms
+                )
+            }
         } catch {
             AppLogger.notifications.error("APNs device token registration failed: \(error.localizedDescription)")
             lastRemoteRegistrationError = error.localizedDescription
@@ -305,12 +318,14 @@ final class NotificationManager: ObservableObject {
         scheduleRegistrationRetry()
     }
 
-    private func completeTokenRegistrationWaiters(success: Bool) {
+    @discardableResult
+    private func completeTokenRegistrationWaiters(success: Bool) -> Bool {
         let waiters = tokenRegistrationWaiters.values
         tokenRegistrationWaiters.removeAll()
-        for continuation in waiters {
-            continuation.resume(returning: success)
+        for waiter in waiters {
+            waiter.continuation.resume(returning: success)
         }
+        return waiters.contains { $0.syncAfterVerification }
     }
 
     func notifyForNewItems(

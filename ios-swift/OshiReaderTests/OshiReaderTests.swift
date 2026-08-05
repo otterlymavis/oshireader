@@ -6862,6 +6862,45 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertNotNil(capturedBody?["device_id"] as? String)
     }
 
+    @MainActor
+    func testNotificationManagerPreflightRegistrationSkipsNestedTermSync() async throws {
+        let seededTerm = LocalDB.shared.saveTerm(
+            keyword: "CI APNS Preflight \(UUID().uuidString)",
+            collectionMode: .allInfo
+        )
+        defer { LocalDB.shared.deleteTerm(id: seededTerm.id) }
+
+        let backendTermsData = try JSONEncoder().encode([seededTerm])
+        var capturedPaths: [String] = []
+        MockURLProtocol.handler = { req in
+            let path = req.url?.path ?? ""
+            capturedPaths.append(path)
+            if path == "/api/devices/apns-token" {
+                return (Self.verifiedAPNSRegistrationResponse(), Self.response(status: 201))
+            }
+            return (backendTermsData, Self.response(status: 200))
+        }
+
+        let manager = NotificationManager(
+            center: MockNotificationCenter(status: .authorized),
+            initialRegisteredDeviceToken: nil
+        )
+        let registration = Task { @MainActor in
+            await manager.ensureRemoteNotificationsRegisteredIfAllowed(
+                timeout: 2,
+                forceRefresh: true,
+                syncAfterVerification: false
+            )
+        }
+        await Task.yield()
+        await manager.handleRegisteredDeviceToken(Data(repeating: 0xcd, count: 32))
+
+        let registrationSucceeded = await registration.value
+        XCTAssertTrue(registrationSucceeded)
+        XCTAssertTrue(capturedPaths.contains("/api/devices/apns-token"))
+        XCTAssertFalse(capturedPaths.contains("/api/watch-terms"))
+    }
+
     func testSendRemoteTestPushUsesDeviceScopedEndpointWhenTokenStored() async throws {
         KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
         KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)

@@ -225,7 +225,8 @@ extension NetworkManager {
         if notifyOnNew && (!isUnitTesting || forceAPNSRefresh) {
             let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
                 timeout: min(timeout, 8),
-                forceRefresh: forceAPNSRefresh
+                forceRefresh: forceAPNSRefresh,
+                syncAfterVerification: false
             )
             guard registrationReady else {
                 throw APIClientError.apnsRegistrationUnverified(
@@ -272,7 +273,8 @@ extension NetworkManager {
             // fresh device verification attempt.
             let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
                 timeout: min(timeout, 8),
-                forceRefresh: forceAPNSRefresh
+                forceRefresh: forceAPNSRefresh,
+                syncAfterVerification: false
             )
             guard registrationReady else {
                 throw APIClientError.apnsRegistrationUnverified(
