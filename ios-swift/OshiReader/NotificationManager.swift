@@ -228,6 +228,31 @@ final class NotificationManager: ObservableObject {
         if forceRefresh {
             resetRegistrationRetryState()
             lastRemoteRegistrationError = nil
+
+            // APNs may return the same token without immediately invoking the
+            // delegate. Revalidate a cached token directly so a device whose
+            // backend verification expired can recover on foreground activation.
+            // Unit tests use fake tokens and must continue through the injected
+            // registration callback instead of making a live request.
+            if !NetworkManager.shared.isUnitTesting,
+               NetworkManager.shared.hasRegisteredAPNSDeviceForCurrentEnvironment,
+               let cachedToken = NetworkManager.shared.registeredAPNSDeviceToken {
+                do {
+                    try await NetworkManager.shared.registerAPNSDeviceToken(cachedToken)
+                    lastRegisteredDeviceToken = cachedToken
+                    completeTokenRegistrationWaiters(success: true)
+                    _ = await NetworkManager.shared.syncWatchTermsToBackend(
+                        localTerms: LocalDB.shared.terms
+                    )
+                    return true
+                } catch {
+                    AppLogger.notifications.warning(
+                        "Cached APNs token revalidation failed: \(error.localizedDescription)"
+                    )
+                    NetworkManager.shared.clearRegisteredAPNSDeviceToken()
+                    lastRegisteredDeviceToken = nil
+                }
+            }
         }
 
         return await withCheckedContinuation { continuation in
