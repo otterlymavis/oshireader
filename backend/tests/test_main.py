@@ -723,6 +723,116 @@ class TestAdminMaintenance:
         assert db_session.query(SourceItem).count() == 0
         assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 1
 
+    def test_mute_orphaned_notify_terms_requires_current_orphan(self, client, db_session):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        orphan = WatchTerm(
+            keyword="Orphan",
+            is_active=True,
+            notify_on_new=True,
+            owner_device_secret="orphan-secret",
+            created_at=old,
+        )
+        global_term = WatchTerm(
+            keyword="Global",
+            is_active=True,
+            notify_on_new=True,
+            created_at=old,
+        )
+        verified = WatchTerm(
+            keyword="Verified",
+            is_active=True,
+            notify_on_new=True,
+            owner_device_secret="verified-secret",
+            created_at=old,
+        )
+        db_session.add_all([
+            orphan,
+            global_term,
+            verified,
+            APNSDeviceToken(
+                token="v" * 64,
+                environment="production",
+                device_secret="verified-secret",
+                is_verified=True,
+            ),
+        ])
+        db_session.flush()
+        db_session.add(PendingNotification(watch_term_id=orphan.id, new_count=3))
+        db_session.commit()
+
+        rejected = client.post(
+            "/api/admin/maintenance/orphaned-terms",
+            params={
+                "action": "mute-notify",
+                "term_ids": f"{orphan.id},{global_term.id},{verified.id}",
+            },
+        )
+
+        assert rejected.status_code == 409
+        db_session.refresh(orphan)
+        assert orphan.notify_on_new is True
+        assert db_session.get(PendingNotification, orphan.id) is not None
+        assert {row["reason"] for row in rejected.json()["detail"]["failures"]} == {
+            "not_owner_scoped",
+            "has_verified_apns_device",
+        }
+
+        accepted = client.post(
+            "/api/admin/maintenance/orphaned-terms",
+            params={"action": "mute-notify", "term_ids": str(orphan.id)},
+        )
+
+        assert accepted.status_code == 200
+        db_session.refresh(orphan)
+        assert orphan.is_active is True
+        assert orphan.notify_on_new is False
+        assert db_session.get(PendingNotification, orphan.id) is None
+        event = db_session.query(BackendEvent).filter_by(kind="maintenance").one()
+        assert event.payload["action"] == "mute-notify"
+        assert event.payload["term_ids"] == [orphan.id]
+
+    def test_deactivate_orphaned_terms_requires_silent_orphan(self, client, db_session):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        silent = WatchTerm(
+            keyword="Silent",
+            is_active=True,
+            notify_on_new=False,
+            owner_device_secret="silent-secret",
+            created_at=old,
+        )
+        notifying = WatchTerm(
+            keyword="Notify",
+            is_active=True,
+            notify_on_new=True,
+            owner_device_secret="notify-secret",
+            created_at=old,
+        )
+        db_session.add_all([silent, notifying])
+        db_session.flush()
+        db_session.add(PendingNotification(watch_term_id=silent.id, new_count=1))
+        db_session.commit()
+
+        rejected = client.post(
+            "/api/admin/maintenance/orphaned-terms",
+            params={"action": "deactivate", "term_ids": str(notifying.id)},
+        )
+
+        assert rejected.status_code == 409
+        assert rejected.json()["detail"]["failures"] == [
+            {"term_id": notifying.id, "reason": "not_silent"}
+        ]
+
+        accepted = client.post(
+            "/api/admin/maintenance/orphaned-terms",
+            params={"action": "deactivate", "term_ids": str(silent.id)},
+        )
+
+        assert accepted.status_code == 200
+        db_session.refresh(silent)
+        assert silent.is_active is False
+        assert silent.notify_on_new is False
+        assert db_session.get(PendingNotification, silent.id) is None
+
     def test_prune_storage_returns_500_when_core_prune_fails(self, client, db_session):
         with patch(
             "app.ingestion.scheduler._prune_old_items_with_limit",

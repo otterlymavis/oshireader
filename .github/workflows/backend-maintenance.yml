@@ -116,56 +116,28 @@ jobs:
           import json
           import os
           import urllib.error
+          import urllib.parse
           import urllib.request
 
           backend_url = os.environ["BACKEND_URL"].rstrip("/")
           token = os.environ["ADMIN_API_TOKEN"]
-          raw_ids = os.environ["TERM_IDS"]
-          term_ids = []
-          for raw in raw_ids.split(","):
-              raw = raw.strip()
-              if not raw:
-                  continue
-              if not raw.isdigit():
-                  raise SystemExit(f"Invalid watch term id: {raw!r}")
-              term_ids.append(int(raw))
-
-          if not term_ids:
-              raise SystemExit("No watch term ids provided")
-
-          results = []
-          for term_id in term_ids:
-              request = urllib.request.Request(
-                  f"{backend_url}/api/watch-terms/{term_id}",
-                  data=json.dumps({"notify_on_new": False}).encode("utf-8"),
-                  headers={
-                      "Authorization": f"Bearer {token}",
-                      "Content-Type": "application/json",
-                  },
-                  method="PATCH",
-              )
-              try:
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      body = json.load(response)
-                      results.append({
-                          "term_id": term_id,
-                          "status": response.status,
-                          "notify_on_new": body.get("notify_on_new"),
-                          "is_active": body.get("is_active"),
-                          "keyword": body.get("keyword"),
-                      })
-              except urllib.error.HTTPError as exc:
-                  error_body = exc.read().decode("utf-8", errors="replace")
-                  results.append({
-                      "term_id": term_id,
-                      "status": exc.code,
-                      "error": error_body,
-                  })
-
-          print(json.dumps({"muted_terms": results}, ensure_ascii=False, indent=2))
-          failed = [row for row in results if row.get("status") != 200]
-          if failed:
-              raise SystemExit(f"Failed to mute one or more terms: {failed}")
+          query = urllib.parse.urlencode({
+              "action": "mute-notify",
+              "term_ids": os.environ["TERM_IDS"],
+          })
+          request = urllib.request.Request(
+              f"{backend_url}/api/admin/maintenance/orphaned-terms?{query}",
+              headers={"Authorization": f"Bearer {token}"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+                  print(json.dumps(payload, ensure_ascii=False, indent=2))
+          except urllib.error.HTTPError as exc:
+              error_body = exc.read().decode("utf-8", errors="replace")
+              print(error_body)
+              raise SystemExit(f"orphaned term maintenance returned HTTP {exc.code}")
           PY
 
       - name: Deactivate orphaned terms
@@ -180,54 +152,26 @@ jobs:
           import json
           import os
           import urllib.error
+          import urllib.parse
           import urllib.request
 
           backend_url = os.environ["BACKEND_URL"].rstrip("/")
           token = os.environ["ADMIN_API_TOKEN"]
-          raw_ids = os.environ["TERM_IDS"]
-          term_ids = []
-          for raw in raw_ids.split(","):
-              raw = raw.strip()
-              if not raw:
-                  continue
-              if not raw.isdigit():
-                  raise SystemExit(f"Invalid watch term id: {raw!r}")
-              term_ids.append(int(raw))
-
-          if not term_ids:
-              raise SystemExit("No watch term ids provided")
-
-          results = []
-          for term_id in term_ids:
-              request = urllib.request.Request(
-                  f"{backend_url}/api/watch-terms/{term_id}",
-                  data=json.dumps({"is_active": False}).encode("utf-8"),
-                  headers={
-                      "Authorization": f"Bearer {token}",
-                      "Content-Type": "application/json",
-                  },
-                  method="PATCH",
-              )
-              try:
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      body = json.load(response)
-                      results.append({
-                          "term_id": term_id,
-                          "status": response.status,
-                          "notify_on_new": body.get("notify_on_new"),
-                          "is_active": body.get("is_active"),
-                          "keyword": body.get("keyword"),
-                      })
-              except urllib.error.HTTPError as exc:
-                  error_body = exc.read().decode("utf-8", errors="replace")
-                  results.append({
-                      "term_id": term_id,
-                      "status": exc.code,
-                      "error": error_body,
-                  })
-
-          print(json.dumps({"deactivated_terms": results}, ensure_ascii=False, indent=2))
-          failed = [row for row in results if row.get("status") != 200]
-          if failed:
-              raise SystemExit(f"Failed to deactivate one or more terms: {failed}")
+          query = urllib.parse.urlencode({
+              "action": "deactivate",
+              "term_ids": os.environ["TERM_IDS"],
+          })
+          request = urllib.request.Request(
+              f"{backend_url}/api/admin/maintenance/orphaned-terms?{query}",
+              headers={"Authorization": f"Bearer {token}"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+                  print(json.dumps(payload, ensure_ascii=False, indent=2))
+          except urllib.error.HTTPError as exc:
+              error_body = exc.read().decode("utf-8", errors="replace")
+              print(error_body)
+              raise SystemExit(f"orphaned term maintenance returned HTTP {exc.code}")
           PY

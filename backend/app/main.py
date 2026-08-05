@@ -13,7 +13,7 @@ import zlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Literal, Optional
 from urllib.parse import quote, quote_plus
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -599,6 +599,130 @@ def prune_storage_maintenance(
     )
     db.commit()
     return {"status": "storage pruned", **summary}
+
+
+def _parse_maintenance_term_ids(raw_term_ids: str) -> list[int]:
+    ids: list[int] = []
+    for raw in raw_term_ids.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        if not raw.isdigit():
+            raise HTTPException(
+                422,
+                {"message": "term_ids must be a comma-separated list of positive integers", "value": raw},
+            )
+        ids.append(int(raw))
+    if not ids:
+        raise HTTPException(422, "term_ids must include at least one watch term id")
+    unique_ids = list(dict.fromkeys(ids))
+    if len(unique_ids) > 20:
+        raise HTTPException(422, "term_ids must include 20 or fewer watch term ids")
+    return unique_ids
+
+
+def _orphaned_owner_grace_elapsed(term: WatchTerm) -> bool:
+    if not term.created_at:
+        return True
+    created_at = term.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=max(0, settings.orphaned_notification_grace_minutes)
+    )
+    return created_at <= cutoff
+
+
+def _owner_has_verified_apns_device(db: Session, term: WatchTerm) -> bool:
+    if not term.owner_device_secret:
+        return False
+    return (
+        db.query(APNSDeviceToken.token)
+        .filter(
+            APNSDeviceToken.device_secret == term.owner_device_secret,
+            APNSDeviceToken.is_verified == True,  # noqa: E712
+        )
+        .first()
+        is not None
+    )
+
+
+def _orphaned_term_maintenance_failure(
+    db: Session,
+    term: WatchTerm | None,
+    action: Literal["mute-notify", "deactivate"],
+) -> str | None:
+    if term is None:
+        return "not_found"
+    if not term.owner_device_secret:
+        return "not_owner_scoped"
+    if not term.is_active:
+        return "not_active"
+    if action == "mute-notify" and not term.notify_on_new:
+        return "not_notification_enabled"
+    if action == "deactivate" and term.notify_on_new:
+        return "not_silent"
+    if not _orphaned_owner_grace_elapsed(term):
+        return "within_orphan_grace_period"
+    if _owner_has_verified_apns_device(db, term):
+        return "has_verified_apns_device"
+    return None
+
+
+@app.post("/api/admin/maintenance/orphaned-terms")
+def orphaned_terms_maintenance(
+    action: Literal["mute-notify", "deactivate"] = Query(...),
+    term_ids: str = Query(...),
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    parsed_ids = _parse_maintenance_term_ids(term_ids)
+    terms_by_id = {
+        term.id: term
+        for term in db.query(WatchTerm).filter(WatchTerm.id.in_(parsed_ids)).all()
+    }
+    failures = []
+    for term_id in parsed_ids:
+        term = terms_by_id.get(term_id)
+        reason = _orphaned_term_maintenance_failure(db, term, action)
+        if reason:
+            failures.append({"term_id": term_id, "reason": reason})
+    if failures:
+        raise HTTPException(
+            409,
+            {
+                "message": "Only current orphaned owner-scoped terms can be modified",
+                "action": action,
+                "failures": failures,
+            },
+        )
+
+    updated_terms = []
+    for term_id in parsed_ids:
+        term = terms_by_id[term_id]
+        if action == "mute-notify":
+            term.notify_on_new = False
+        elif action == "deactivate":
+            term.is_active = False
+        pending = db.get(PendingNotification, term.id)
+        if pending is not None:
+            db.delete(pending)
+        updated_terms.append({
+            "term_id": term.id,
+            "keyword": term.keyword,
+            "is_active": term.is_active,
+            "notify_on_new": term.notify_on_new,
+        })
+
+    record_backend_event(
+        db,
+        "maintenance",
+        "completed",
+        "Orphaned watch term maintenance completed",
+        {"action": action, "term_ids": parsed_ids, "updated_terms": updated_terms},
+    )
+    db.commit()
+    return {"status": "orphaned term maintenance completed", "action": action, "updated_terms": updated_terms}
 
 
 @app.post("/api/admin/maintenance/purge-youtube-bad-dates")
