@@ -504,7 +504,8 @@ struct SettingsView: View {
                                     selectedPlatforms: savedTerm.selected_platforms,
                                     notifyOnNew: savedTerm.notify_on_new,
                                     isActive: savedTerm.is_active,
-                                    aliases: savedTerm.aliases
+                                    aliases: savedTerm.aliases,
+                                    forceAPNSRefresh: savedTerm.notify_on_new
                                 ) {
                                     _ = db.replaceTerm(
                                         localId: savedTerm.id,

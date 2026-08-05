@@ -34,12 +34,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // APNs tokens and server-side verification can change independently of an
         // app update. Re-register on each foreground activation so a transient
         // registration failure cannot strand background sync indefinitely.
-        Task { @MainActor in
-            _ = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
-                timeout: 12,
-                forceRefresh: true
-            )
-        }
+        NotificationManager.shared.registerForRemoteNotificationsForDeviceAuthentication()
         BackgroundRefreshManager.shared.schedule()
     }
 

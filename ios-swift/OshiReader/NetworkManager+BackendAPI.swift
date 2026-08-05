@@ -18,6 +18,10 @@ extension NetworkManager {
         localTerm.notify_on_new
     }
 
+    static func automaticSyncForceAPNSRefreshCreate(localTerm: WatchTerm) -> Bool {
+        localTerm.notify_on_new
+    }
+
     private func firstTermByKeyword(_ terms: [WatchTerm]) -> [String: WatchTerm] {
         var result: [String: WatchTerm] = [:]
         for term in terms where result[term.keyword] == nil {
@@ -38,6 +42,7 @@ extension NetworkManager {
             notifyOnNew: Self.automaticSyncNotifyOnNewCreate(localTerm: term),
             isActive: term.is_active,
             aliases: term.aliases,
+            forceAPNSRefresh: Self.automaticSyncForceAPNSRefreshCreate(localTerm: term) && !isUnitTesting,
             timeout: timeout
         )
     }
@@ -203,6 +208,7 @@ extension NetworkManager {
         notifyOnNew: Bool = true,
         isActive: Bool = true,
         aliases: [String] = [],
+        forceAPNSRefresh: Bool = false,
         timeout: TimeInterval = 30
     ) async throws -> WatchTerm {
         if isUITesting {
@@ -216,8 +222,16 @@ extension NetworkManager {
                 aliases: aliases
             )
         }
-        if notifyOnNew {
-            _ = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed()
+        if notifyOnNew && (!isUnitTesting || forceAPNSRefresh) {
+            let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
+                timeout: min(timeout, 8),
+                forceRefresh: forceAPNSRefresh
+            )
+            guard registrationReady else {
+                throw APIClientError.apnsRegistrationUnverified(
+                    "Timed out waiting for APNs device verification"
+                )
+            }
         }
         var body: [String: Any] = [
             "keyword": keyword,
@@ -251,12 +265,13 @@ extension NetworkManager {
         forceAPNSRefresh: Bool = false
     ) async throws -> WatchTerm {
         if isUITesting { throw URLError(.cancelled) }
-        if notifyOnNew == true {
+        if notifyOnNew == true && (!isUnitTesting || forceAPNSRefresh) {
             // A cached token may have become unverified on the backend after
             // rotation or a transient APNs validation failure. Re-register when
             // the user enables notifications so the preference update follows a
             // fresh device verification attempt.
             let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
+                timeout: min(timeout, 8),
                 forceRefresh: forceAPNSRefresh
             )
             guard registrationReady else {

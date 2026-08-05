@@ -690,6 +690,8 @@ final class OshiReaderTests: XCTestCase {
         )
         XCTAssertTrue(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localEnabled))
         XCTAssertFalse(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localDisabled))
+        XCTAssertTrue(NetworkManager.automaticSyncForceAPNSRefreshCreate(localTerm: localEnabled))
+        XCTAssertFalse(NetworkManager.automaticSyncForceAPNSRefreshCreate(localTerm: localDisabled))
     }
 
     @MainActor
@@ -6467,6 +6469,55 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(capturedBody?["notify_on_new"] as? Bool, false)
         XCTAssertEqual(capturedBody?["is_active"] as? Bool, false)
         XCTAssertEqual(created.keyword, "Haruka")
+    }
+
+    func testCreateWatchTermRequiresVerifiedAPNSBeforeNotificationCreate() async throws {
+        KeychainHelper.delete(key: "apns_device_token")
+        KeychainHelper.delete(key: "apns_device_environment")
+        var requestCount = 0
+        MockURLProtocol.handler = { _ in
+            requestCount += 1
+            return (Data(), Self.response(status: 500))
+        }
+
+        do {
+            _ = try await NetworkManager.shared.createWatchTerm(
+                keyword: "Haruka",
+                collectionMode: .allInfo,
+                notifyOnNew: true,
+                forceAPNSRefresh: true,
+                timeout: 0.01
+            )
+            XCTFail("Expected APNs verification failure")
+        } catch let error as APIClientError {
+            XCTAssertTrue(error.requiresVerifiedNotificationDevice)
+        }
+
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    func testUpdateWatchTermRequiresVerifiedAPNSBeforeNotificationEnable() async throws {
+        KeychainHelper.delete(key: "apns_device_token")
+        KeychainHelper.delete(key: "apns_device_environment")
+        var requestCount = 0
+        MockURLProtocol.handler = { _ in
+            requestCount += 1
+            return (Data(), Self.response(status: 500))
+        }
+
+        do {
+            _ = try await NetworkManager.shared.updateWatchTerm(
+                id: "42",
+                notifyOnNew: true,
+                timeout: 0.01,
+                forceAPNSRefresh: true
+            )
+            XCTFail("Expected APNs verification failure")
+        } catch let error as APIClientError {
+            XCTAssertTrue(error.requiresVerifiedNotificationDevice)
+        }
+
+        XCTAssertEqual(requestCount, 0)
     }
 
     // updateWatchTerm sends PATCH and decodes the updated term
