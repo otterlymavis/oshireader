@@ -297,6 +297,7 @@ struct SettingsView: View {
                         }
                         .accessibilityIdentifier("settings.openSettingsButton")
                     default:
+#if DEBUG
                         Button {
                             Task { await sendTestNotification() }
                         } label: {
@@ -308,8 +309,12 @@ struct SettingsView: View {
                         }
                         .disabled(isSendingNotificationTest)
                         .accessibilityIdentifier("settings.testNotificationButton")
+#else
+                        EmptyView()
+#endif
                     }
 
+#if DEBUG
                     if let notificationTestMessage {
                         Label(
                             notificationTestMessage,
@@ -319,6 +324,7 @@ struct SettingsView: View {
                         .foregroundColor(notificationTestSucceeded ? theme.colors.primary : .orange)
                         .accessibilityIdentifier("settings.notificationTestResult")
                     }
+#endif
 
                     if let registrationError = notifications.lastRemoteRegistrationError {
                         Text(registrationError)
@@ -712,7 +718,8 @@ struct SettingsView: View {
             do {
                 let updatedTerm = try await NetworkManager.shared.updateWatchTerm(
                     id: term.id,
-                    notifyOnNew: enabled
+                    notifyOnNew: enabled,
+                    forceAPNSRefresh: enabled
                 )
                 await MainActor.run {
                     notificationUpdateIDs.remove(term.id)

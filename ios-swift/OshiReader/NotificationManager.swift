@@ -26,6 +26,7 @@ final class NotificationManager: ObservableObject {
     @Published private(set) var lastRemoteRegistrationError: String?
 
     private let center: NotificationCenterClient
+    private let remoteRegistration: () -> Void
     private let maximumAttachmentBytes: Int64 = 10 * 1024 * 1024
     private var lastRegisteredDeviceToken: String?
     private var tokenRegistrationWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
@@ -37,9 +38,13 @@ final class NotificationManager: ObservableObject {
         center: NotificationCenterClient = UNUserNotificationCenter.current(),
         initialRegisteredDeviceToken: String? = NetworkManager.shared.hasRegisteredAPNSDeviceForCurrentEnvironment
             ? NetworkManager.shared.registeredAPNSDeviceToken
-            : nil
+            : nil,
+        remoteRegistration: @escaping () -> Void = {
+            UIApplication.shared.registerForRemoteNotifications()
+        }
     ) {
         self.center = center
+        self.remoteRegistration = remoteRegistration
         self.lastRegisteredDeviceToken = initialRegisteredDeviceToken
         Task {
             await refreshAuthorizationStatus()
@@ -171,7 +176,7 @@ final class NotificationManager: ObservableObject {
            registrationRetryAttempt >= registrationRetryDelays.count {
             resetRegistrationRetryState()
         }
-        UIApplication.shared.registerForRemoteNotifications()
+        remoteRegistration()
     }
 
     private func scheduleRegistrationRetry() {
@@ -209,13 +214,21 @@ final class NotificationManager: ObservableObject {
         registrationRetryAttempt = 0
     }
 
-    func ensureRemoteNotificationsRegisteredIfAllowed(timeout: TimeInterval = 8) async -> Bool {
+    func ensureRemoteNotificationsRegisteredIfAllowed(
+        timeout: TimeInterval = 8,
+        forceRefresh: Bool = false
+    ) async -> Bool {
         await refreshAuthorizationStatus()
         // APNs device registration is independent of alert presentation
         // permission. A user can deny banners/sounds and still need a server
         // device identity for term ownership and background refresh. Calling
         // registerForRemoteNotifications does not show the permission prompt.
-        if lastRegisteredDeviceToken != nil, lastRemoteRegistrationError == nil { return true }
+        if !forceRefresh, lastRegisteredDeviceToken != nil, lastRemoteRegistrationError == nil { return true }
+
+        if forceRefresh {
+            resetRegistrationRetryState()
+            lastRemoteRegistrationError = nil
+        }
 
         return await withCheckedContinuation { continuation in
             let id = UUID()

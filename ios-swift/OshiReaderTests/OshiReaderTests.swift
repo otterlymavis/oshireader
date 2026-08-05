@@ -694,13 +694,23 @@ final class OshiReaderTests: XCTestCase {
 
     @MainActor
     func testNotificationManagerUsesPersistedRegisteredToken() async throws {
+        var registrationCallCount = 0
         let manager = NotificationManager(
             center: MockNotificationCenter(status: .denied),
-            initialRegisteredDeviceToken: String(repeating: "a", count: 64)
+            initialRegisteredDeviceToken: String(repeating: "a", count: 64),
+            remoteRegistration: { registrationCallCount += 1 }
         )
 
         let registered = await manager.ensureRemoteNotificationsRegisteredIfAllowed(timeout: 0.01)
         XCTAssertTrue(registered)
+        XCTAssertEqual(registrationCallCount, 0)
+
+        let forceRefreshRegistered = await manager.ensureRemoteNotificationsRegisteredIfAllowed(
+            timeout: 0.01,
+            forceRefresh: true
+        )
+        XCTAssertFalse(forceRefreshRegistered)
+        XCTAssertEqual(registrationCallCount, 1)
     }
 
     func testBackgroundRefreshUsesLocalFallbackOnlyWithoutRemoteToken() {
@@ -5740,6 +5750,10 @@ final class NetworkManagerTests: XCTestCase {
                 409,
                 detail: "Notification-enabled watch terms require a verified APNs device"
             ).requiresVerifiedNotificationDevice
+        )
+        XCTAssertTrue(
+            APIClientError.apnsRegistrationUnverified("registration timed out")
+                .requiresVerifiedNotificationDevice
         )
     }
 

@@ -247,11 +247,23 @@ extension NetworkManager {
         selectedPlatforms: [String]? = nil,
         notifyOnNew: Bool? = nil,
         aliases: [String]? = nil,
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 30,
+        forceAPNSRefresh: Bool = false
     ) async throws -> WatchTerm {
         if isUITesting { throw URLError(.cancelled) }
         if notifyOnNew == true {
-            _ = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed()
+            // A cached token may have become unverified on the backend after
+            // rotation or a transient APNs validation failure. Re-register when
+            // the user enables notifications so the preference update follows a
+            // fresh device verification attempt.
+            let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
+                forceRefresh: forceAPNSRefresh
+            )
+            guard registrationReady else {
+                throw APIClientError.apnsRegistrationUnverified(
+                    "Timed out waiting for APNs device verification"
+                )
+            }
         }
         var body: [String: Any] = [:]
         if let isActive { body["is_active"] = isActive }

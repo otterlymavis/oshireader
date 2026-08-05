@@ -5,6 +5,7 @@ enum APIClientError: LocalizedError {
     case apnsRegistrationUnverified(String)
 
     var requiresVerifiedNotificationDevice: Bool {
+        if case .apnsRegistrationUnverified = self { return true }
         guard case .httpStatus(409, let detail) = self,
               let data = detail?.data(using: .utf8),
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
