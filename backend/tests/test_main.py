@@ -472,6 +472,24 @@ class TestAdminStats:
         assert health["active_silent_orphan_term_ids"] == []
         assert health["active_notify_term_ids_without_verified_devices"] == []
 
+    def test_stats_flags_global_notify_terms_without_verified_devices_immediately(self, client, db_session):
+        term = WatchTerm(
+            keyword="Global notify",
+            is_active=True,
+            notify_on_new=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(term)
+        db_session.commit()
+
+        stats_health = client.get("/api/admin/stats").json()["notification_health"]
+        poller_health = client.get("/api/admin/poller-health").json()["notification_health"]
+
+        assert stats_health["healthy"] is False
+        assert stats_health["active_notify_term_ids_without_verified_devices"] == [term.id]
+        assert poller_health["healthy"] is False
+        assert poller_health["active_notify_term_ids_without_verified_devices"] == [term.id]
+
     def test_stats_includes_recent_backend_events(self, client, db_session):
         db_session.add(BackendEvent(
             kind="apns",

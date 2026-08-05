@@ -628,6 +628,8 @@ def _parse_maintenance_term_ids(raw_term_ids: str) -> list[int]:
 
 
 def _orphaned_owner_grace_elapsed(term: WatchTerm) -> bool:
+    if not term.owner_device_secret:
+        return True
     if not term.created_at:
         return True
     created_at = term.created_at
@@ -1219,18 +1221,6 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
     active_notify_without_verified_devices: list[dict] = []
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
-    orphaned_cutoff = datetime.now(timezone.utc) - timedelta(minutes=orphaned_grace_minutes)
-
-    def is_past_owner_grace(term: WatchTerm) -> bool:
-        if not term.owner_device_secret:
-            return True
-        if not term.created_at:
-            return True
-        created_at = term.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-        return created_at <= orphaned_cutoff
-
     for term in terms:
         device_counts = notification_device_counts(term)
         row = {
@@ -1247,13 +1237,13 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             active_notify_terms += 1
             if (
                 device_counts["notification_verified_devices"] == 0
-                and is_past_owner_grace(term)
+                and _orphaned_owner_grace_elapsed(term)
             ):
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
             and device_counts["notification_verified_devices"] == 0
-            and is_past_owner_grace(term)
+            and _orphaned_owner_grace_elapsed(term)
         ):
             active_silent_orphans.append(row)
 
@@ -1405,8 +1395,6 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
     active_notify_without_verified_devices: list[dict] = []
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
-    orphaned_cutoff = datetime.now(timezone.utc) - timedelta(minutes=orphaned_grace_minutes)
-
     for term in terms:
         device_counts = notification_device_counts(term)
         row = {
@@ -1422,20 +1410,11 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
         if term.notify_on_new:
             active_notify_terms += 1
             if device_counts["notification_verified_devices"] == 0 and (
-                not term.owner_device_secret
-                or not term.created_at
-                or (
-                    term.created_at.replace(tzinfo=timezone.utc)
-                    if term.created_at.tzinfo is None else term.created_at
-                ) <= orphaned_cutoff
+                _orphaned_owner_grace_elapsed(term)
             ):
                 active_notify_without_verified_devices.append(row)
         elif term.owner_device_secret and device_counts["notification_verified_devices"] == 0 and (
-            not term.created_at
-            or (
-                term.created_at.replace(tzinfo=timezone.utc)
-                if term.created_at.tzinfo is None else term.created_at
-            ) <= orphaned_cutoff
+            _orphaned_owner_grace_elapsed(term)
         ):
             active_silent_orphans.append(row)
 
