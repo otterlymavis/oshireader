@@ -497,21 +497,30 @@ struct SettingsView: View {
                                 await refreshLocalFallbacks(for: savedTerm)
                             }
                             Task {
-                                if let serverTerm = try? await NetworkManager.shared.createWatchTerm(
-                                    keyword: savedTerm.keyword,
-                                    collectionMode: savedTerm.collection_mode,
-                                    sourceMode: savedTerm.source_mode,
-                                    selectedPlatforms: savedTerm.selected_platforms,
-                                    notifyOnNew: savedTerm.notify_on_new,
-                                    isActive: savedTerm.is_active,
-                                    aliases: savedTerm.aliases,
-                                    forceAPNSRefresh: savedTerm.notify_on_new
-                                ) {
+                                do {
+                                    let serverTerm = try await NetworkManager.shared.createWatchTerm(
+                                        keyword: savedTerm.keyword,
+                                        collectionMode: savedTerm.collection_mode,
+                                        sourceMode: savedTerm.source_mode,
+                                        selectedPlatforms: savedTerm.selected_platforms,
+                                        notifyOnNew: savedTerm.notify_on_new,
+                                        isActive: savedTerm.is_active,
+                                        aliases: savedTerm.aliases,
+                                        forceAPNSRefresh: savedTerm.notify_on_new
+                                    )
                                     _ = db.replaceTerm(
                                         localId: savedTerm.id,
                                         with: serverTerm,
                                         ifUnchangedFrom: savedTerm
                                     )
+                                } catch {
+                                    await MainActor.run {
+                                        settingsErrorMessage = Self.notificationSyncErrorMessage(
+                                            for: error,
+                                            enabling: savedTerm.notify_on_new,
+                                            i18n: i18n
+                                        )
+                                    }
                                 }
                             }
                             
@@ -729,15 +738,26 @@ struct SettingsView: View {
             } catch {
                 await MainActor.run {
                     notificationUpdateIDs.remove(term.id)
-                    if enabled, let apiError = error as? APIClientError,
-                       apiError.requiresVerifiedNotificationDevice {
-                        settingsErrorMessage = i18n.t("notificationEnableFailed")
-                    } else {
-                        settingsErrorMessage = i18n.t("notificationUpdateFailed")
-                    }
+                    settingsErrorMessage = Self.notificationSyncErrorMessage(
+                        for: error,
+                        enabling: enabled,
+                        i18n: i18n
+                    )
                 }
             }
         }
+    }
+
+    static func notificationSyncErrorMessage(
+        for error: Error,
+        enabling: Bool,
+        i18n: I18nManager = .shared
+    ) -> String {
+        if enabling, let apiError = error as? APIClientError,
+           apiError.requiresVerifiedNotificationDevice {
+            return i18n.t("notificationEnableFailed")
+        }
+        return i18n.t("notificationUpdateFailed")
     }
 
     private func remoteTestDiagnostic(_ error: Error) -> String {

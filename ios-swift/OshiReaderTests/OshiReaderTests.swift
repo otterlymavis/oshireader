@@ -6520,6 +6520,35 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(requestCount, 0)
     }
 
+    func testSettingsNotificationSyncErrorMessageSurfacesAPNSRetryState() {
+        let i18n = I18nManager.shared
+
+        XCTAssertEqual(
+            SettingsView.notificationSyncErrorMessage(
+                for: APIClientError.apnsRegistrationUnverified("missing verified device"),
+                enabling: true,
+                i18n: i18n
+            ),
+            i18n.t("notificationEnableFailed")
+        )
+        XCTAssertEqual(
+            SettingsView.notificationSyncErrorMessage(
+                for: APIClientError.apnsRegistrationUnverified("missing verified device"),
+                enabling: false,
+                i18n: i18n
+            ),
+            i18n.t("notificationUpdateFailed")
+        )
+        XCTAssertEqual(
+            SettingsView.notificationSyncErrorMessage(
+                for: URLError(.timedOut),
+                enabling: true,
+                i18n: i18n
+            ),
+            i18n.t("notificationUpdateFailed")
+        )
+    }
+
     // updateWatchTerm sends PATCH and decodes the updated term
     func testUpdateWatchTermSendsPatchAndDecodesTerm() async throws {
         var capturedMethod: String?
