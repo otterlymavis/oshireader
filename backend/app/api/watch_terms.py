@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, require_admin_or_device_auth
+from app.config import settings
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll
 from app.models import APNSDeviceToken, Match, PendingNotification, WatchTerm
@@ -64,6 +67,20 @@ def _require_verified_notification_device(db: Session, term: WatchTerm) -> None:
         )
 
 
+def _owner_grace_elapsed(term: WatchTerm) -> bool:
+    if not term.owner_device_secret:
+        return True
+    if not term.created_at:
+        return True
+    created_at = term.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=max(0, settings.orphaned_notification_grace_minutes)
+    )
+    return created_at <= cutoff
+
+
 def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> WatchTerm | None:
     if incoming.owner_device_secret is None:
         return None
@@ -79,6 +96,8 @@ def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> Watch
         .all()
     )
     for candidate in candidates:
+        if not _owner_grace_elapsed(candidate):
+            continue
         if _owner_has_verified_device(db, candidate.owner_device_secret):
             continue
         candidate.owner_device_secret = incoming.owner_device_secret

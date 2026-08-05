@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import pytest
 from unittest.mock import patch
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.config import settings
 from app.models import APNSDeviceToken, Match, PendingNotification, SourceItem, WatchTerm
@@ -237,6 +237,7 @@ class TestCreateWatchTerm:
         secret = "current-device-secret"
         owner_secret = hashlib.sha256(secret.encode()).hexdigest()
         stale_owner_secret = hashlib.sha256("stale-device-secret".encode()).hexdigest()
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
         stale = WatchTerm(
             keyword="Aiko",
             collection_mode="media_only",
@@ -244,6 +245,7 @@ class TestCreateWatchTerm:
             is_active=True,
             aliases=["old"],
             owner_device_secret=stale_owner_secret,
+            created_at=old,
         )
         db_session.add_all([
             stale,
@@ -289,11 +291,13 @@ class TestCreateWatchTerm:
         secret = "current-device-secret"
         owner_secret = hashlib.sha256(secret.encode()).hexdigest()
         stale_owner_secret = hashlib.sha256("stale-device-secret".encode()).hexdigest()
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
         stale = WatchTerm(
             keyword="Aiko",
             notify_on_new=False,
             is_active=True,
             owner_device_secret=stale_owner_secret,
+            created_at=old,
         )
         db_session.add_all([
             stale,
@@ -326,6 +330,46 @@ class TestCreateWatchTerm:
         assert stale.owner_device_secret == owner_secret
         assert stale.notify_on_new is True
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
+        mock_poll.assert_called_once()
+
+    def test_registered_device_does_not_adopt_recent_orphaned_same_keyword(self, client, db_session):
+        token = "a" * 64
+        secret = "current-device-secret"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        stale_owner_secret = hashlib.sha256("stale-device-secret".encode()).hexdigest()
+        recent = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret=stale_owner_secret,
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add_all([
+            recent,
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch.object(settings, "orphaned_notification_grace_minutes", 60), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["id"] != recent.id
+        db_session.refresh(recent)
+        assert recent.owner_device_secret == stale_owner_secret
+        assert recent.notify_on_new is False
+        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
         mock_poll.assert_called_once()
 
     def test_device_create_notify_term_requires_verified_device(self, client, db_session):
