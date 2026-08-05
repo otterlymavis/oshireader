@@ -29,6 +29,14 @@ extension NetworkManager {
         return mergedTerm
     }
 
+    static func shouldRevalidateAPNSBeforeNotificationWrite(
+        notifyOnNew: Bool?,
+        forceAPNSRefresh: Bool,
+        isUnitTesting: Bool
+    ) -> Bool {
+        notifyOnNew == true && (forceAPNSRefresh || !isUnitTesting)
+    }
+
     private func firstTermByKeyword(_ terms: [WatchTerm]) -> [String: WatchTerm] {
         var result: [String: WatchTerm] = [:]
         for term in terms where result[term.keyword] == nil {
@@ -233,10 +241,15 @@ extension NetworkManager {
                 aliases: aliases
             )
         }
-        if notifyOnNew && (!isUnitTesting || forceAPNSRefresh) {
+        let shouldRevalidateAPNS = Self.shouldRevalidateAPNSBeforeNotificationWrite(
+            notifyOnNew: notifyOnNew,
+            forceAPNSRefresh: forceAPNSRefresh,
+            isUnitTesting: isUnitTesting
+        )
+        if shouldRevalidateAPNS {
             let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
                 timeout: min(timeout, 8),
-                forceRefresh: forceAPNSRefresh,
+                forceRefresh: forceAPNSRefresh || !isUnitTesting,
                 syncAfterVerification: false
             )
             guard registrationReady else {
@@ -277,14 +290,19 @@ extension NetworkManager {
         forceAPNSRefresh: Bool = false
     ) async throws -> WatchTerm {
         if isUITesting { throw URLError(.cancelled) }
-        if notifyOnNew == true && (!isUnitTesting || forceAPNSRefresh) {
+        let shouldRevalidateAPNS = Self.shouldRevalidateAPNSBeforeNotificationWrite(
+            notifyOnNew: notifyOnNew,
+            forceAPNSRefresh: forceAPNSRefresh,
+            isUnitTesting: isUnitTesting
+        )
+        if shouldRevalidateAPNS {
             // A cached token may have become unverified on the backend after
             // rotation or a transient APNs validation failure. Re-register when
             // the user enables notifications so the preference update follows a
             // fresh device verification attempt.
             let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
                 timeout: min(timeout, 8),
-                forceRefresh: forceAPNSRefresh,
+                forceRefresh: forceAPNSRefresh || !isUnitTesting,
                 syncAfterVerification: false
             )
             guard registrationReady else {

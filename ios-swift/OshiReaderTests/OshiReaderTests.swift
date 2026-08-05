@@ -6537,6 +6537,44 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(requestCount, 0)
     }
 
+    func testNotificationWritesRevalidateAPNSOutsideUnitTestsByDefault() {
+        XCTAssertTrue(
+            NetworkManager.shouldRevalidateAPNSBeforeNotificationWrite(
+                notifyOnNew: true,
+                forceAPNSRefresh: false,
+                isUnitTesting: false
+            )
+        )
+        XCTAssertTrue(
+            NetworkManager.shouldRevalidateAPNSBeforeNotificationWrite(
+                notifyOnNew: true,
+                forceAPNSRefresh: true,
+                isUnitTesting: true
+            )
+        )
+        XCTAssertFalse(
+            NetworkManager.shouldRevalidateAPNSBeforeNotificationWrite(
+                notifyOnNew: true,
+                forceAPNSRefresh: false,
+                isUnitTesting: true
+            )
+        )
+        XCTAssertFalse(
+            NetworkManager.shouldRevalidateAPNSBeforeNotificationWrite(
+                notifyOnNew: false,
+                forceAPNSRefresh: true,
+                isUnitTesting: false
+            )
+        )
+        XCTAssertFalse(
+            NetworkManager.shouldRevalidateAPNSBeforeNotificationWrite(
+                notifyOnNew: nil,
+                forceAPNSRefresh: true,
+                isUnitTesting: false
+            )
+        )
+    }
+
     func testUpdateWatchTermRequiresVerifiedAPNSBeforeNotificationEnable() async throws {
         KeychainHelper.delete(key: "apns_device_token")
         KeychainHelper.delete(key: "apns_device_environment")
