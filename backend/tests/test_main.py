@@ -723,6 +723,54 @@ class TestAdminMaintenance:
         assert db_session.query(SourceItem).count() == 0
         assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 1
 
+    @pytest.mark.parametrize("term_ids", ["", "0", "-1", "abc"])
+    def test_orphaned_term_maintenance_rejects_invalid_ids(self, client, term_ids):
+        r = client.post(
+            "/api/admin/maintenance/orphaned-terms",
+            params={"action": "mute-notify", "term_ids": term_ids},
+        )
+
+        assert r.status_code == 422
+
+    def test_orphaned_term_maintenance_deduplicates_ids_before_limit(self, client, db_session):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        orphan = WatchTerm(
+            keyword="Orphan",
+            is_active=True,
+            notify_on_new=True,
+            owner_device_secret="orphan-secret",
+            created_at=old,
+        )
+        db_session.add(orphan)
+        db_session.commit()
+
+        r = client.post(
+            "/api/admin/maintenance/orphaned-terms",
+            params={"action": "mute-notify", "term_ids": f"{orphan.id},{orphan.id}"},
+        )
+
+        assert r.status_code == 200
+        assert r.json()["updated_terms"] == [
+            {
+                "term_id": orphan.id,
+                "keyword": "Orphan",
+                "is_active": True,
+                "notify_on_new": False,
+            }
+        ]
+        assert db_session.query(BackendEvent).filter_by(kind="maintenance").count() == 1
+
+    def test_orphaned_term_maintenance_limits_unique_ids(self, client):
+        r = client.post(
+            "/api/admin/maintenance/orphaned-terms",
+            params={
+                "action": "mute-notify",
+                "term_ids": ",".join(str(index) for index in range(1, 22)),
+            },
+        )
+
+        assert r.status_code == 422
+
     def test_mute_orphaned_notify_terms_requires_current_orphan(self, client, db_session):
         old = datetime.now(timezone.utc) - timedelta(hours=2)
         orphan = WatchTerm(

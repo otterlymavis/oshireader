@@ -612,7 +612,13 @@ def _parse_maintenance_term_ids(raw_term_ids: str) -> list[int]:
                 422,
                 {"message": "term_ids must be a comma-separated list of positive integers", "value": raw},
             )
-        ids.append(int(raw))
+        term_id = int(raw)
+        if term_id <= 0:
+            raise HTTPException(
+                422,
+                {"message": "term_ids must be a comma-separated list of positive integers", "value": raw},
+            )
+        ids.append(term_id)
     if not ids:
         raise HTTPException(422, "term_ids must include at least one watch term id")
     unique_ids = list(dict.fromkeys(ids))
