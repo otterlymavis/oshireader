@@ -13,8 +13,9 @@ on:
           - purge-yahoonews-bad-dates
           - prune-storage
           - mute-orphaned-notify-terms
+          - deactivate-orphaned-terms
       term_ids:
-        description: Comma-separated watch term IDs for mute-orphaned-notify-terms
+        description: Comma-separated watch term IDs for orphaned-term maintenance actions
         required: false
         default: ""
 
@@ -165,4 +166,68 @@ jobs:
           failed = [row for row in results if row.get("status") != 200]
           if failed:
               raise SystemExit(f"Failed to mute one or more terms: {failed}")
+          PY
+
+      - name: Deactivate orphaned terms
+        if: inputs.action == 'deactivate-orphaned-terms'
+        run: |
+          if [ -z "$TERM_IDS" ]; then
+            echo "term_ids is required for deactivate-orphaned-terms"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          token = os.environ["ADMIN_API_TOKEN"]
+          raw_ids = os.environ["TERM_IDS"]
+          term_ids = []
+          for raw in raw_ids.split(","):
+              raw = raw.strip()
+              if not raw:
+                  continue
+              if not raw.isdigit():
+                  raise SystemExit(f"Invalid watch term id: {raw!r}")
+              term_ids.append(int(raw))
+
+          if not term_ids:
+              raise SystemExit("No watch term ids provided")
+
+          results = []
+          for term_id in term_ids:
+              request = urllib.request.Request(
+                  f"{backend_url}/api/watch-terms/{term_id}",
+                  data=json.dumps({"is_active": False}).encode("utf-8"),
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                  },
+                  method="PATCH",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      body = json.load(response)
+                      results.append({
+                          "term_id": term_id,
+                          "status": response.status,
+                          "notify_on_new": body.get("notify_on_new"),
+                          "is_active": body.get("is_active"),
+                          "keyword": body.get("keyword"),
+                      })
+              except urllib.error.HTTPError as exc:
+                  error_body = exc.read().decode("utf-8", errors="replace")
+                  results.append({
+                      "term_id": term_id,
+                      "status": exc.code,
+                      "error": error_body,
+                  })
+
+          print(json.dumps({"deactivated_terms": results}, ensure_ascii=False, indent=2))
+          failed = [row for row in results if row.get("status") != 200]
+          if failed:
+              raise SystemExit(f"Failed to deactivate one or more terms: {failed}")
           PY
