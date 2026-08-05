@@ -22,6 +22,13 @@ extension NetworkManager {
         localTerm.notify_on_new
     }
 
+    static func pulledBackendTermForLocalMerge(localTerm: WatchTerm, serverTerm: WatchTerm) -> WatchTerm {
+        guard localTerm.notify_on_new, !serverTerm.notify_on_new else { return serverTerm }
+        var mergedTerm = serverTerm
+        mergedTerm.notify_on_new = true
+        return mergedTerm
+    }
+
     private func firstTermByKeyword(_ terms: [WatchTerm]) -> [String: WatchTerm] {
         var result: [String: WatchTerm] = [:]
         for term in terms where result[term.keyword] == nil {
@@ -186,9 +193,13 @@ extension NetworkManager {
             }
             if shouldSkipAfterDelete { continue }
             if let localTerm = localByKeyword[term.keyword] {
-                if localTerm != term {
+                let mergedTerm = Self.pulledBackendTermForLocalMerge(
+                    localTerm: localTerm,
+                    serverTerm: term
+                )
+                if localTerm != mergedTerm {
                     let replaced = await MainActor.run {
-                        LocalDB.shared.replaceTerm(localId: localTerm.id, with: term, ifUnchangedFrom: localTerm)
+                        LocalDB.shared.replaceTerm(localId: localTerm.id, with: mergedTerm, ifUnchangedFrom: localTerm)
                     }
                     changed = changed || replaced
                 }

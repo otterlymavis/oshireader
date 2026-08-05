@@ -5923,6 +5923,47 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
+    func testSyncTermsFromBackendPreservesLocalEnabledNotificationPreference() async throws {
+        let keyword = "Pull Preserve Notify \(UUID().uuidString)"
+        let localTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: []
+        )
+        let backendTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            is_active: false,
+            notify_on_new: false,
+            aliases: ["Server Alias"]
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(localTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/watch-terms")
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (backendData, Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.syncTermsFromBackendWithStatus()
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertTrue(result.changed)
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.collection_mode, .mediaOnly)
+        XCTAssertEqual(syncedTerm?.is_active, false)
+        XCTAssertEqual(syncedTerm?.notify_on_new, true)
+        XCTAssertEqual(syncedTerm?.aliases, ["Server Alias"])
+    }
+
+    @MainActor
     func testSyncWatchTermsPreservesRepairedNotificationPreference() async throws {
         let keyword = "Sync Repaired \(UUID().uuidString)"
         let repairedTerm = WatchTerm(
