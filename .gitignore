@@ -11,6 +11,7 @@ otterpia.db-shm
 otterpia.db-wal
 
 # iOS
+build/
 ios-swift/build/
 ios-swift/*.log
 ios-swift/**/*.xcuserstate
