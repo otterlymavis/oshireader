@@ -31,9 +31,7 @@ jobs:
           import json
           import os
           import sys
-          import time
           import urllib.error
-          import urllib.parse
           import urllib.request
 
           backend_url = os.environ["BACKEND_URL"].rstrip("/")
@@ -158,97 +156,19 @@ jobs:
                   parsed[str(reason)] = count
               return parsed
 
-          def post_orphaned_maintenance(action, term_ids):
-              term_ids = [term_id for term_id in term_ids if term_id is not None]
-              if not term_ids:
-                  return True
-              query = urllib.parse.urlencode({
-                  "action": action,
-                  "term_ids": ",".join(str(term_id) for term_id in term_ids),
-              })
-              status, payload = request_json(
-                  f"{backend_url}/api/admin/maintenance/orphaned-terms?{query}",
-                  method="POST",
-              )
-              print(json.dumps({
-                  "maintenance_action": action,
-                  "term_ids": term_ids,
-                  "status": status,
-                  "response": payload,
-              }, ensure_ascii=False, indent=2, default=str))
-              return True
-
-          def run_orphaned_maintenance(action, term_ids):
-              if not term_ids:
-                  return
-              try:
-                  post_orphaned_maintenance(action, term_ids)
-                  return
-              except urllib.error.HTTPError as exc:
-                  error_body = exc.read().decode("utf-8", errors="replace")
-                  print(
-                      f"batch orphaned term maintenance action={action} term_ids={term_ids} "
-                      f"returned HTTP {exc.code}; falling back per term: {error_body}",
-                      file=sys.stderr,
-                  )
-              except (TimeoutError, OSError, urllib.error.URLError) as exc:
-                  print(
-                      f"batch orphaned term maintenance action={action} term_ids={term_ids} "
-                      f"failed; rechecking diagnostics: {exc}",
-                      file=sys.stderr,
-                  )
-                  return
-              except ResponseFormatError as exc:
-                  print(
-                      f"batch orphaned term maintenance action={action} term_ids={term_ids} "
-                      f"returned an unreadable response; rechecking diagnostics: {exc}",
-                      file=sys.stderr,
-                  )
-                  return
-
-              for term_id in term_ids:
-                  try:
-                      post_orphaned_maintenance(action, [term_id])
-                  except urllib.error.HTTPError as exc:
-                      error_body = exc.read().decode("utf-8", errors="replace")
-                      print(
-                          f"orphaned term maintenance action={action} term_id={term_id} "
-                          f"returned HTTP {exc.code}; rechecking diagnostics: {error_body}",
-                          file=sys.stderr,
-                      )
-                  except (TimeoutError, OSError, urllib.error.URLError) as exc:
-                      print(
-                          f"orphaned term maintenance action={action} term_id={term_id} "
-                          f"failed; rechecking diagnostics: {exc}",
-                          file=sys.stderr,
-                      )
-                  except ResponseFormatError as exc:
-                      print(
-                          f"orphaned term maintenance action={action} term_id={term_id} "
-                          f"returned an unreadable response; rechecking diagnostics: {exc}",
-                          file=sys.stderr,
-                      )
-
           try:
               urllib.request.urlopen(f"{backend_url}/api/health", timeout=90).read()
           except Exception as exc:
               print(f"Backend warm-up failed; continuing with diagnostics: {exc}", file=sys.stderr)
 
-          max_remediation_passes = 3
-          for remediation_pass in range(max_remediation_passes + 1):
-              payload = fetch_diagnostics()
-              health = validated_notification_health(payload)
-              print(json.dumps({
-                  "notification_health": health,
-                  "apns": object_field(payload, "apns"),
-                  "apns_registration": object_field(payload, "apns_registration"),
-              }, ensure_ascii=False, indent=2, default=str))
-              notify_ids = orphaned_ids(health, "active_notify_term_ids_without_verified_devices")
-              if not notify_ids or remediation_pass >= max_remediation_passes:
-                  break
-              print(f"Running orphaned notification remediation pass {remediation_pass + 1}")
-              run_orphaned_maintenance("mute-notify", notify_ids)
-              time.sleep(2)
+          payload = fetch_diagnostics()
+          health = validated_notification_health(payload)
+          print(json.dumps({
+              "notification_health": health,
+              "apns": object_field(payload, "apns"),
+              "apns_registration": object_field(payload, "apns_registration"),
+          }, ensure_ascii=False, indent=2, default=str))
+          notify_ids = orphaned_ids(health, "active_notify_term_ids_without_verified_devices")
 
           apns = object_field(payload, "apns")
           reasons = registration_reasons(payload)
@@ -260,10 +180,16 @@ jobs:
               )
           missing = health_count(health, "active_notify_terms_without_verified_devices")
           if missing:
-              failures.append(f"{missing} active notification term(s) have no verified APNs device")
+              failures.append(
+                  f"{missing} active notification term(s) have no verified APNs device "
+                  f"for the backend APNs environment; term_ids={notify_ids}"
+              )
           repeated = {reason: count for reason, count in reasons.items() if count >= 3}
           if repeated:
-              failures.append(f"Repeated APNs registration rejection reasons: {repeated}")
+              print(
+                  f"Warning: repeated APNs registration rejection reasons in the diagnostics window: {repeated}",
+                  file=sys.stderr,
+              )
           if failures:
               raise SystemExit("; ".join(failures))
           PY

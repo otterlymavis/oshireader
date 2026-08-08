@@ -10,9 +10,30 @@ on:
         options:
           - pending
           - passed
+      ipa_artifact_name:
+        description: "Optional GitHub Actions artifact name containing an exported TestFlight IPA"
+        required: false
+        type: string
+      ipa_artifact_run_id:
+        description: "Required when ipa_artifact_name is set; workflow run id that uploaded the IPA artifact"
+        required: false
+        type: string
+      ipa_path:
+        description: "Optional existing IPA path on the runner, for self-hosted/local dispatches"
+        required: false
+        type: string
+      expected_version:
+        description: "Expected CFBundleShortVersionString for ipa_path"
+        required: false
+        type: string
+      expected_build:
+        description: "Expected CFBundleVersion for ipa_path"
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   gate:
@@ -61,6 +82,55 @@ jobs:
               raise SystemExit("Production APNs configuration failed: " + ", ".join(failed))
           print("Production APNs configuration checks passed")
           PY
+
+      - name: Download exported TestFlight IPA artifact
+        if: ${{ inputs.ipa_artifact_name != '' && inputs.ipa_artifact_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.ipa_artifact_name }}
+          path: downloaded-testflight-ipa
+          run-id: ${{ inputs.ipa_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify exported TestFlight IPA
+        env:
+          IPA_ARTIFACT_NAME: ${{ inputs.ipa_artifact_name }}
+          IPA_ARTIFACT_RUN_ID: ${{ inputs.ipa_artifact_run_id }}
+          IPA_PATH: ${{ inputs.ipa_path }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          EXPECTED_BUILD: ${{ inputs.expected_build }}
+          EXPECTED_BUNDLE_ID: com.otterpia.oshireader.plus
+        run: |
+          missing=()
+          [ -n "$EXPECTED_VERSION" ] || missing+=(expected_version)
+          [ -n "$EXPECTED_BUILD" ] || missing+=(expected_build)
+          if [ -n "$IPA_ARTIFACT_NAME" ]; then
+            [ -n "$IPA_ARTIFACT_RUN_ID" ] || missing+=(ipa_artifact_run_id)
+            IPA_PATH=""
+            if [ -n "$IPA_ARTIFACT_RUN_ID" ] && [ -d downloaded-testflight-ipa ]; then
+              mapfile -t downloaded_ipas < <(find downloaded-testflight-ipa -type f -name '*.ipa' | sort)
+              if [ "${#downloaded_ipas[@]}" -eq 1 ]; then
+                IPA_PATH="${downloaded_ipas[0]}"
+              elif [ "${#downloaded_ipas[@]}" -gt 1 ]; then
+                echo "Expected exactly one downloaded .ipa, found ${#downloaded_ipas[@]}:"
+                printf '  %s\n' "${downloaded_ipas[@]}"
+                exit 1
+              fi
+            fi
+            [ -n "$IPA_PATH" ] || missing+=("downloaded .ipa")
+          else
+            [ -n "$IPA_PATH" ] || missing+=(ipa_path)
+          fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Provide all IPA verification inputs: ${missing[*]}"
+            exit 1
+          fi
+          echo "Verifying IPA: $IPA_PATH"
+          python3 scripts/verify_testflight_ipa.py \
+            --ipa "$IPA_PATH" \
+            --version "$EXPECTED_VERSION" \
+            --build "$EXPECTED_BUILD" \
+            --bundle-id "$EXPECTED_BUNDLE_ID"
 
       - name: Validate APNs release secrets
         run: |

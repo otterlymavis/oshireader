@@ -60,6 +60,25 @@ Healthy notification output must include:
 - `notification_health.active_notify_terms_without_verified_devices: 0`
 - `pending_notifications: []`
 
+For TestFlight or App Store builds, verify the exported IPA payload rather than
+the archive bundle. The export step re-signs the app for distribution, so the
+release artifact is the source of truth:
+
+```sh
+python3 scripts/verify_testflight_ipa.py \
+  --ipa build/OshiReader-1.0.0-40-export/OshiReader.ipa \
+  --version 1.0.0 \
+  --build 40 \
+  --bundle-id com.otterpia.oshireader.plus
+```
+
+The verifier must report `bundle_id: com.otterpia.oshireader.plus`,
+`aps_environment: production`, and `get_task_allow: False`. In GitHub Actions,
+`Distributed release gate` requires an exported IPA source plus
+`expected_version` and `expected_build`; use `ipa_artifact_name` and
+`ipa_artifact_run_id` so the gate downloads the exported IPA artifact before
+verification.
+
 ### Automation credential rotation
 
 `ADMIN_API_TOKEN` is intentionally stored independently in three places: the
@@ -182,14 +201,29 @@ suffix and environment.
 3. If polls are starting but not completing, reduce workload knobs in `render.yaml`.
 4. If `notification_health` is degraded, inspect the listed term ids and use
    Settings notification repair/test on the affected device to re-register APNs,
-   then check health again. The `APNs registration monitor` also runs guarded
-   orphaned-term maintenance for notification-enabled owner-scoped terms older
-   than `ORPHANED_NOTIFICATION_GRACE_MINUTES`: it mutes the orphaned term,
-   clears pending notifications, and rechecks diagnostics for up to three
-   remediation passes before failing.
+   then check health again. The `APNs registration monitor` fails loudly and
+   includes affected term ids when notification-enabled terms lack a verified
+   production APNs device after the grace window. Use `backend-maintenance.yml`
+   for explicit orphaned-term maintenance only after reviewing those ids.
 5. If health looks clean but notifications are still suspect, run
    `gh workflow run notification-canary.yml --ref master` and inspect the APNs
    canary event.
 6. Trigger `gh workflow run deploy-render.yml --ref master` for backend config changes.
 7. Check worker health after the next scheduled run, or manually trigger a poll
    when you need immediate proof of a fresh `latest_successful_poll`.
+
+## TestFlight Notification Release Checklist
+
+Before distributing a build that changes notification behavior:
+
+1. Archive and export the production IPA.
+2. Run `scripts/verify_testflight_ipa.py` against the exported IPA and confirm
+   the production bundle ID, production APNs signing, and expected version/build.
+3. Install the uploaded TestFlight build on a physical device.
+4. Toggle one keyword bell on; this is the only user-facing registration path.
+5. Confirm `/api/admin/poller-health` shows a verified production device for
+   the notification-enabled term and no affected term id under
+   `active_notify_term_ids_without_verified_devices`.
+6. Use the release-visible Settings test notification button and confirm the
+   push arrives.
+7. Run one poll and confirm no stale backlog notification is sent.
