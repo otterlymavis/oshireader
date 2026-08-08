@@ -16,10 +16,10 @@ class I18nManager: ObservableObject {
     
     private let translations: [String: [String: String]] = [
         "appTitle": [
-            "en": "OshiReader+",
-            "ja": "推しリーダー+",
-            "zh-TW": "OshiReader+",
-            "zh-CN": "OshiReader+"
+            "en": "oshireader+",
+            "ja": "oshireader+",
+            "zh-TW": "oshireader+",
+            "zh-CN": "oshireader+"
         ],
         "tabFeed": [
             "en": "Feed",
