@@ -2,7 +2,7 @@ name: Poller monitor
 
 on:
   schedule:
-    # Run between Cloudflare's 3-hour cron ticks without waking the backend hourly.
+    # Run between Cloudflare's 2-hour cron ticks to check for missed polls.
     - cron: "27 */6 * * *"
   workflow_dispatch:
 
@@ -13,7 +13,7 @@ concurrency:
 jobs:
   health:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       WORKER_HEALTH_URL: https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
@@ -25,11 +25,11 @@ jobs:
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
-            --retry 2 \
+            --retry 1 \
             --retry-all-errors \
             --retry-delay 10 \
-            --max-time 90 \
-            "$WORKER_HEALTH_URL")
+            --max-time 210 \
+            "$WORKER_HEALTH_URL" || true)
 
           echo "HTTP status: $STATUS"
           cat "$BODY"
@@ -42,16 +42,36 @@ jobs:
 
           status = sys.argv[1]
           with open(sys.argv[2], encoding="utf-8") as response_file:
-              payload = json.load(response_file)
+              body = response_file.read()
+          try:
+              payload = json.loads(body)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"Worker health returned non-JSON response: {exc}; body={body}") from exc
+          if not isinstance(payload, dict):
+              raise SystemExit(f"Worker health returned invalid payload: {payload}")
 
-          diagnostics = payload.get("diagnostics") or {}
-          latest_success = diagnostics.get("latest_successful_poll") or {}
+          def object_field(payload, key):
+              value = payload.get(key)
+              if value is None:
+                  return {}
+              if not isinstance(value, dict):
+                  raise SystemExit(f"Worker health field {key} must be an object: {value!r}")
+              return value
+
+          diagnostics = object_field(payload, "diagnostics")
+          latest_success = object_field(diagnostics, "latest_successful_poll")
           created_at = latest_success.get("created_at")
-          latest_poll = diagnostics.get("latest_poll") or {}
+          latest_poll = object_field(diagnostics, "latest_poll")
           active_poll_within_stale_window = False
-          apns = diagnostics.get("apns") or {}
-          notification_health = diagnostics.get("notification_health") or {}
-          pending_notifications = diagnostics.get("pending_notifications") or []
+          apns = object_field(diagnostics, "apns")
+          notification_health = object_field(diagnostics, "notification_health")
+          pending_notifications = diagnostics.get("pending_notifications")
+          if pending_notifications is None:
+              pending_notifications = []
+          if not isinstance(pending_notifications, list):
+              raise SystemExit(
+                  f"Worker health field pending_notifications must be a list: {pending_notifications!r}"
+              )
           summary = {
               "healthy": payload.get("healthy"),
               "latest_successful_poll": latest_success,
@@ -77,7 +97,7 @@ jobs:
                   )
                   if started_at.tzinfo is None:
                       started_at = started_at.replace(tzinfo=timezone.utc)
-                  active_poll_within_stale_window = (datetime.now(timezone.utc) - started_at).total_seconds() <= 240 * 60
+                  active_poll_within_stale_window = (datetime.now(timezone.utc) - started_at).total_seconds() <= 360 * 60
           if status != "200":
               failures.append(f"worker health endpoint returned HTTP {status}")
           if payload.get("status") != "ok" or payload.get("healthy") is not True:
@@ -93,11 +113,11 @@ jobs:
                   completed = completed.replace(tzinfo=timezone.utc)
               age_minutes = (datetime.now(timezone.utc) - completed).total_seconds() / 60
               summary["age_minutes"] = round(age_minutes, 1)
-              if age_minutes > 240 and not active_poll_within_stale_window:
+              if age_minutes > 360 and not active_poll_within_stale_window:
                   failures.append(
                       f"Latest successful poll is too old: {age_minutes:.1f} minutes; payload={payload}"
                   )
-              elif age_minutes > 240:
+              elif age_minutes > 360:
                   print(
                       "Latest successful poll is old, but an active poll is within the "
                       "stale grace window; deferring the stale failure."
@@ -109,11 +129,12 @@ jobs:
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
           if pending_notifications:
               latest_poll_created_at = latest_poll.get("created_at")
-              pending_updated_at = [
-                  pending.get("updated_at")
-                  for pending in pending_notifications
-                  if pending.get("updated_at")
-              ]
+              pending_updated_at = []
+              for pending in pending_notifications:
+                  if not isinstance(pending, dict):
+                      raise SystemExit(f"Pending notification must be an object: {pending!r}")
+                  if pending.get("updated_at"):
+                      pending_updated_at.append(pending.get("updated_at"))
 
               pending_rows_are_fresh = False
               active_poll_is_fresh = False

@@ -11,7 +11,7 @@ permissions:
 jobs:
   registration-health:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     env:
       BACKEND_URL: https://oshireader.onrender.com
       ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
@@ -27,40 +27,238 @@ jobs:
 
       - name: Check registration health
         run: |
-          BODY=$(mktemp)
-          STATUS=$(curl --silent --show-error \
-            --retry 2 \
-            --retry-all-errors \
-            --retry-delay 10 \
-            --output "$BODY" \
-            --write-out "%{http_code}" \
-            --max-time 60 \
-            "$BACKEND_URL/api/admin/poller-health" \
-            -H "Authorization: Bearer $ADMIN_API_TOKEN")
-
-          echo "Backend status: $STATUS"
-          cat "$BODY"
-          python3 - "$STATUS" "$BODY" <<'PY'
+          python3 - <<'PY'
           import json
+          import os
           import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
 
-          status = sys.argv[1]
-          with open(sys.argv[2], encoding="utf-8") as response_file:
-              payload = json.load(response_file)
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          token = os.environ["ADMIN_API_TOKEN"]
 
-          if status != "200":
-              raise SystemExit(f"Backend diagnostics returned HTTP {status}")
+          class ResponseFormatError(Exception):
+              pass
 
-          health = payload.get("notification_health") or {}
-          registration = payload.get("apns_registration") or {}
-          reasons = registration.get("reasons") or {}
-          print(json.dumps({
-              "notification_health": health,
-              "apns_registration": registration,
-          }, ensure_ascii=False, indent=2, default=str))
+          def request_json(url, *, method="GET", timeout=90):
+              request = urllib.request.Request(
+                  url,
+                  headers={"Authorization": f"Bearer {token}"},
+                  method=method,
+              )
+              with urllib.request.urlopen(request, timeout=timeout) as response:
+                  body = response.read().decode("utf-8", errors="replace")
+                  try:
+                      payload = json.loads(body)
+                  except json.JSONDecodeError as exc:
+                      raise ResponseFormatError(
+                          f"Backend returned non-JSON response from {url}: {body}"
+                      ) from exc
+                  return response.status, payload
 
+          def fetch_diagnostics():
+              try:
+                  status, payload = request_json(f"{backend_url}/api/admin/poller-health")
+              except urllib.error.HTTPError as exc:
+                  error_body = exc.read().decode("utf-8", errors="replace")
+                  raise SystemExit(
+                      f"Backend diagnostics returned HTTP {exc.code}: {error_body}"
+                  ) from exc
+              except ResponseFormatError as exc:
+                  raise SystemExit(str(exc)) from exc
+              print(f"Backend status: {status}")
+              print(json.dumps(payload, ensure_ascii=False, default=str))
+              if status != 200:
+                  raise SystemExit(f"Backend diagnostics returned HTTP {status}")
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"Backend diagnostics must be an object: {payload!r}")
+              return payload
+
+          def orphaned_ids(health, key):
+              raw_ids = health.get(key)
+              if raw_ids is None:
+                  raw_ids = []
+              if not isinstance(raw_ids, list):
+                  raise SystemExit(f"notification_health field {key} must be a list: {raw_ids!r}")
+              ids = []
+              for raw_id in raw_ids:
+                  try:
+                      term_id = int(raw_id)
+                  except (TypeError, ValueError) as exc:
+                      raise SystemExit(
+                          f"notification_health field {key} contains invalid term id: {raw_id!r}"
+                      ) from exc
+                  if term_id <= 0:
+                      raise SystemExit(
+                          f"notification_health field {key} contains non-positive term id: {term_id}"
+                      )
+                  ids.append(term_id)
+              return list(dict.fromkeys(ids))
+
+          def object_field(payload, key):
+              value = payload.get(key)
+              if value is None:
+                  return {}
+              if not isinstance(value, dict):
+                  raise SystemExit(f"{key} diagnostics must be an object: {value!r}")
+              return value
+
+          def validated_notification_health(payload):
+              health = payload.get("notification_health")
+              required_keys = {
+                  "active_notify_terms",
+                  "active_notify_terms_without_verified_devices",
+                  "active_notify_term_ids_without_verified_devices",
+              }
+              if not isinstance(health, dict):
+                  raise SystemExit(f"Missing notification_health diagnostics: {payload}")
+              missing_keys = sorted(required_keys - set(health))
+              if missing_keys:
+                  raise SystemExit(
+                      f"notification_health diagnostics missing required field(s): {missing_keys}"
+                  )
+              return health
+
+          def health_count(health, key):
+              try:
+                  value = int(health.get(key))
+              except (TypeError, ValueError) as exc:
+                  raise SystemExit(
+                      f"notification_health field {key} is not an integer: {health.get(key)!r}"
+                  ) from exc
+              if value < 0:
+                  raise SystemExit(f"notification_health field {key} is negative: {value}")
+              return value
+
+          def registration_reasons(payload):
+              registration = payload.get("apns_registration")
+              if registration is None:
+                  registration = {}
+              if not isinstance(registration, dict):
+                  raise SystemExit(f"apns_registration diagnostics must be an object: {registration!r}")
+              reasons = registration.get("reasons")
+              if reasons is None:
+                  reasons = {}
+              if not isinstance(reasons, dict):
+                  raise SystemExit(f"apns_registration.reasons must be an object: {reasons!r}")
+              parsed = {}
+              for reason, raw_count in reasons.items():
+                  try:
+                      count = int(raw_count)
+                  except (TypeError, ValueError) as exc:
+                      raise SystemExit(
+                          f"apns_registration reason count for {reason!r} is not an integer: {raw_count!r}"
+                      ) from exc
+                  if count < 0:
+                      raise SystemExit(
+                          f"apns_registration reason count for {reason!r} is negative: {count}"
+                      )
+                  parsed[str(reason)] = count
+              return parsed
+
+          def post_orphaned_maintenance(action, term_ids):
+              term_ids = [term_id for term_id in term_ids if term_id is not None]
+              if not term_ids:
+                  return True
+              query = urllib.parse.urlencode({
+                  "action": action,
+                  "term_ids": ",".join(str(term_id) for term_id in term_ids),
+              })
+              status, payload = request_json(
+                  f"{backend_url}/api/admin/maintenance/orphaned-terms?{query}",
+                  method="POST",
+              )
+              print(json.dumps({
+                  "maintenance_action": action,
+                  "term_ids": term_ids,
+                  "status": status,
+                  "response": payload,
+              }, ensure_ascii=False, indent=2, default=str))
+              return True
+
+          def run_orphaned_maintenance(action, term_ids):
+              if not term_ids:
+                  return
+              try:
+                  post_orphaned_maintenance(action, term_ids)
+                  return
+              except urllib.error.HTTPError as exc:
+                  error_body = exc.read().decode("utf-8", errors="replace")
+                  print(
+                      f"batch orphaned term maintenance action={action} term_ids={term_ids} "
+                      f"returned HTTP {exc.code}; falling back per term: {error_body}",
+                      file=sys.stderr,
+                  )
+              except (TimeoutError, OSError, urllib.error.URLError) as exc:
+                  print(
+                      f"batch orphaned term maintenance action={action} term_ids={term_ids} "
+                      f"failed; rechecking diagnostics: {exc}",
+                      file=sys.stderr,
+                  )
+                  return
+              except ResponseFormatError as exc:
+                  print(
+                      f"batch orphaned term maintenance action={action} term_ids={term_ids} "
+                      f"returned an unreadable response; rechecking diagnostics: {exc}",
+                      file=sys.stderr,
+                  )
+                  return
+
+              for term_id in term_ids:
+                  try:
+                      post_orphaned_maintenance(action, [term_id])
+                  except urllib.error.HTTPError as exc:
+                      error_body = exc.read().decode("utf-8", errors="replace")
+                      print(
+                          f"orphaned term maintenance action={action} term_id={term_id} "
+                          f"returned HTTP {exc.code}; rechecking diagnostics: {error_body}",
+                          file=sys.stderr,
+                      )
+                  except (TimeoutError, OSError, urllib.error.URLError) as exc:
+                      print(
+                          f"orphaned term maintenance action={action} term_id={term_id} "
+                          f"failed; rechecking diagnostics: {exc}",
+                          file=sys.stderr,
+                      )
+                  except ResponseFormatError as exc:
+                      print(
+                          f"orphaned term maintenance action={action} term_id={term_id} "
+                          f"returned an unreadable response; rechecking diagnostics: {exc}",
+                          file=sys.stderr,
+                      )
+
+          try:
+              urllib.request.urlopen(f"{backend_url}/api/health", timeout=90).read()
+          except Exception as exc:
+              print(f"Backend warm-up failed; continuing with diagnostics: {exc}", file=sys.stderr)
+
+          max_remediation_passes = 3
+          for remediation_pass in range(max_remediation_passes + 1):
+              payload = fetch_diagnostics()
+              health = validated_notification_health(payload)
+              print(json.dumps({
+                  "notification_health": health,
+                  "apns": object_field(payload, "apns"),
+                  "apns_registration": object_field(payload, "apns_registration"),
+              }, ensure_ascii=False, indent=2, default=str))
+              notify_ids = orphaned_ids(health, "active_notify_term_ids_without_verified_devices")
+              if not notify_ids or remediation_pass >= max_remediation_passes:
+                  break
+              print(f"Running orphaned notification remediation pass {remediation_pass + 1}")
+              run_orphaned_maintenance("mute-notify", notify_ids)
+              time.sleep(2)
+
+          apns = object_field(payload, "apns")
+          reasons = registration_reasons(payload)
           failures = []
-          missing = health.get("active_notify_terms_without_verified_devices", 0)
+          active_notify_terms = health_count(health, "active_notify_terms")
+          if active_notify_terms and apns.get("configured") is not True:
+              failures.append(
+                  f"APNs is not configured while {active_notify_terms} active notification term(s) exist"
+              )
+          missing = health_count(health, "active_notify_terms_without_verified_devices")
           if missing:
               failures.append(f"{missing} active notification term(s) have no verified APNs device")
           repeated = {reason: count for reason, count in reasons.items() if count >= 3}

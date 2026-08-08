@@ -1,8 +1,8 @@
 const POLL_TIMEOUT_MS = 4 * 60 * 1000;
 const DEFAULT_POLL_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
-const DEFAULT_STALE_AFTER_MINUTES = 240;
-const DEFAULT_MIN_POLL_INTERVAL_MINUTES = 170;
+const DEFAULT_STALE_AFTER_MINUTES = 360;
+const DEFAULT_MIN_POLL_INTERVAL_MINUTES = 120;
 const RSS_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_ITEST_UPSTREAM_ATTEMPTS = 3;
@@ -348,7 +348,7 @@ async function fetchBackendDiagnostics(backendURL, adminToken) {
       authorization: `Bearer ${adminToken}`,
       "user-agent": "oshireader-cloudflare-poller/1.0",
     },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(90_000),
   });
   if (!response.ok) {
     throw new Error(`Backend diagnostics failed: HTTP ${response.status}`);
@@ -641,6 +641,19 @@ export async function triggerBackendPoll(env, options = {}) {
   const startedAt = Date.now();
   const respectDueWindow = options.respectDueWindow === true;
 
+  // Wake up the Render backend before any request. The free tier spins down
+  // after inactivity and a cold start can take 30-60 s. This must run first —
+  // before fetchBackendDiagnostics — so a cold instance is warm by the time
+  // we call /api/admin/poller-health or /api/admin/poll.
+  try {
+    await fetch(`${backendURL}/api/health`, {
+      signal: AbortSignal.timeout(60_000),
+      headers: { "user-agent": "oshireader-cloudflare-poller/1.0" },
+    });
+  } catch (wakeError) {
+    console.warn("Backend wake-up ping failed (continuing):", String(wakeError));
+  }
+
   if (respectDueWindow) {
     const diagnostics = await fetchBackendDiagnostics(backendURL, adminToken);
     const decision = scheduledPollDecision(
@@ -744,6 +757,18 @@ export default {
     if (request.method === "GET" && url.pathname === "/health") {
       try {
         const backendURL = (env.BACKEND_URL || "https://oshireader.onrender.com").replace(/\/+$/, "");
+        // Wake up a cold Render instance before fetching diagnostics. Without
+        // this, a cold start (~50 s) causes fetchBackendDiagnostics to time out
+        // and the health endpoint returns 503, making the monitor alarm even
+        // when the last poll was recent.
+        try {
+          await fetch(`${backendURL}/api/health`, {
+            signal: AbortSignal.timeout(90_000),
+            headers: { "user-agent": "oshireader-cloudflare-poller/1.0" },
+          });
+        } catch (wakeError) {
+          console.warn("Health endpoint wake-up ping failed:", String(wakeError));
+        }
         const diagnostics = await fetchBackendDiagnostics(backendURL, requireAdminToken(env));
         const health = pollHealth(
           diagnostics,

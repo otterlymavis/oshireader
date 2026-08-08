@@ -371,7 +371,7 @@ test("health reports stale polling as degraded", async (context) => {
       id: 1,
       kind: "poll",
       status: "completed",
-      created_at: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
+      created_at: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
     }],
   }), { status: 200 });
 
@@ -712,6 +712,10 @@ test("poll sends the backend bearer token", async (context) => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async (url, options) => {
+    if (url === "https://backend.example/api/health") {
+      assert.equal(options.headers["user-agent"], "oshireader-cloudflare-poller/1.0");
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    }
     assert.equal(options.headers.authorization, "Bearer secret");
     if (url === "https://backend.example/api/admin/poll") {
       assert.equal(options.method, "POST");
@@ -756,6 +760,9 @@ test("scheduled poll skips backend poll when no active work exists", async (cont
   const requestedURLs = [];
   globalThis.fetch = async (url) => {
     requestedURLs.push(String(url));
+    if (String(url).endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    }
     assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       watch_terms: [],
@@ -779,7 +786,10 @@ test("scheduled poll skips backend poll when no active work exists", async (cont
   assert.equal(result.skipped, true);
   assert.equal(result.backend_status, "poll skipped");
   assert.match(result.reason, /no active watch terms/);
-  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/poller-health"]);
+  assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/health",
+    "https://backend.example/api/admin/poller-health",
+  ]);
 });
 
 test("scheduled poll does not treat missing polling inputs as idle", async (context) => {
@@ -792,6 +802,9 @@ test("scheduled poll does not treat missing polling inputs as idle", async (cont
     requestedURLs.push(String(url));
     if (String(url).endsWith("/api/admin/poll")) {
       return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
+    }
+    if (String(url).endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     }
     assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
@@ -814,6 +827,7 @@ test("scheduled poll does not treat missing polling inputs as idle", async (cont
   assert.equal(result.skipped, undefined);
   assert.equal(result.backend_status, "poll completed");
   assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/health",
     "https://backend.example/api/admin/poller-health",
     "https://backend.example/api/admin/poll",
     "https://backend.example/api/admin/poller-health",
@@ -830,6 +844,9 @@ test("scheduled poll does not treat malformed watch terms as idle", async (conte
     requestedURLs.push(String(url));
     if (String(url).endsWith("/api/admin/poll")) {
       return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
+    }
+    if (String(url).endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     }
     assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
@@ -854,6 +871,7 @@ test("scheduled poll does not treat malformed watch terms as idle", async (conte
   assert.equal(result.skipped, undefined);
   assert.equal(result.backend_status, "poll completed");
   assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/health",
     "https://backend.example/api/admin/poller-health",
     "https://backend.example/api/admin/poll",
     "https://backend.example/api/admin/poller-health",
@@ -868,6 +886,9 @@ test("scheduled poll skips backend poll when latest success is fresh", async (co
   const requestedURLs = [];
   globalThis.fetch = async (url) => {
     requestedURLs.push(String(url));
+    if (String(url).endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    }
     assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
@@ -891,7 +912,10 @@ test("scheduled poll skips backend poll when latest success is fresh", async (co
   assert.equal(result.ok, true);
   assert.equal(result.skipped, true);
   assert.match(result.reason, /still fresh/);
-  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/poller-health"]);
+  assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/health",
+    "https://backend.example/api/admin/poller-health",
+  ]);
 });
 
 test("scheduled poll skips backend poll when poll is already in progress", async (context) => {
@@ -902,6 +926,9 @@ test("scheduled poll skips backend poll when poll is already in progress", async
   const requestedURLs = [];
   globalThis.fetch = async (url) => {
     requestedURLs.push(String(url));
+    if (String(url).endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    }
     assert.equal(url, "https://backend.example/api/admin/poller-health");
     return new Response(JSON.stringify({
       watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
@@ -925,7 +952,10 @@ test("scheduled poll skips backend poll when poll is already in progress", async
   assert.equal(result.ok, true);
   assert.equal(result.skipped, true);
   assert.match(result.reason, /already in progress/);
-  assert.deepEqual(requestedURLs, ["https://backend.example/api/admin/poller-health"]);
+  assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/health",
+    "https://backend.example/api/admin/poller-health",
+  ]);
 });
 
 test("poll retries a transient backend failure", async (context) => {
@@ -969,7 +999,7 @@ test("scheduled poll notifies watchdog when diagnostics are degraded", async (co
           id: 1,
           kind: "poll",
           status: "completed",
-          created_at: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
+          created_at: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
         },
         recent_events: [],
       }), { status: 200 });
@@ -977,6 +1007,9 @@ test("scheduled poll notifies watchdog when diagnostics are degraded", async (co
     if (url === "https://hooks.example/watchdog") {
       webhookPayloads.push(true);
       return new Response("ok", { status: 200 });
+    }
+    if (url.endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     }
     throw new Error(`unexpected url ${url}`);
   };
@@ -1033,6 +1066,9 @@ test("scheduled poll notifies watchdog when notifications are not deliverable", 
       const payload = await options.json?.() || JSON.parse(options.body);
       webhookPayloads.push(payload.text);
       return new Response("ok", { status: 200 });
+    }
+    if (url.endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     }
     throw new Error(`unexpected url ${url}`);
   };

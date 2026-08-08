@@ -22,7 +22,7 @@ on:
 jobs:
   maintenance:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       BACKEND_URL: https://oshireader.onrender.com
       ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
@@ -36,10 +36,20 @@ jobs:
             exit 1
           fi
 
+      - name: Warm backend
+        run: |
+          curl --silent --show-error \
+            --retry 2 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --max-time 90 \
+            "$BACKEND_URL/api/health" || true
+
       - name: Purge YouTube bad-date items
         if: inputs.action == 'purge-youtube-bad-dates'
         run: |
           BODY=$(mktemp)
+          set +e
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
@@ -47,8 +57,15 @@ jobs:
             "$BACKEND_URL/api/admin/maintenance/purge-youtube-bad-dates" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             --max-time 120)
+          CURL_EXIT=$?
+          set -e
           echo "YouTube bad-date cleanup response HTTP $STATUS"
           cat "$BODY"
+          rm -f "$BODY"
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "YouTube bad-date cleanup curl failed with exit code $CURL_EXIT"
+            exit "$CURL_EXIT"
+          fi
           if [ "$STATUS" != "200" ]; then
             exit 1
           fi
@@ -57,6 +74,7 @@ jobs:
         if: inputs.action == 'purge-youtube-google-news'
         run: |
           BODY=$(mktemp)
+          set +e
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
@@ -64,8 +82,15 @@ jobs:
             "$BACKEND_URL/api/admin/maintenance/purge-youtube-google-news" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             --max-time 120)
+          CURL_EXIT=$?
+          set -e
           echo "YouTube Google News cleanup response HTTP $STATUS"
           cat "$BODY"
+          rm -f "$BODY"
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "YouTube Google News cleanup curl failed with exit code $CURL_EXIT"
+            exit "$CURL_EXIT"
+          fi
           if [ "$STATUS" != "200" ]; then
             exit 1
           fi
@@ -74,6 +99,7 @@ jobs:
         if: inputs.action == 'purge-yahoonews-bad-dates'
         run: |
           BODY=$(mktemp)
+          set +e
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
@@ -81,8 +107,15 @@ jobs:
             "$BACKEND_URL/api/admin/maintenance/purge-yahoonews-bad-dates" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             --max-time 120)
+          CURL_EXIT=$?
+          set -e
           echo "Yahoo News bad-date cleanup response HTTP $STATUS"
           cat "$BODY"
+          rm -f "$BODY"
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "Yahoo News bad-date cleanup curl failed with exit code $CURL_EXIT"
+            exit "$CURL_EXIT"
+          fi
           if [ "$STATUS" != "200" ]; then
             exit 1
           fi
@@ -91,6 +124,7 @@ jobs:
         if: inputs.action == 'prune-storage'
         run: |
           BODY=$(mktemp)
+          set +e
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
@@ -98,8 +132,15 @@ jobs:
             "$BACKEND_URL/api/admin/maintenance/prune-storage?match_per_term_platform_limit=100&muted_per_term_limit=500&backend_event_keep=200&include_discussion_platforms=true" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN" \
             --max-time 60)
+          CURL_EXIT=$?
+          set -e
           echo "Prune response HTTP $STATUS"
           cat "$BODY"
+          rm -f "$BODY"
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "Prune storage curl failed with exit code $CURL_EXIT"
+            exit "$CURL_EXIT"
+          fi
           if [ "$STATUS" != "200" ]; then
             exit 1
           fi
@@ -131,13 +172,19 @@ jobs:
               method="POST",
           )
           try:
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  payload = json.load(response)
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  body = response.read().decode("utf-8", errors="replace")
+                  try:
+                      payload = json.loads(body)
+                  except json.JSONDecodeError as exc:
+                      raise SystemExit(f"orphaned term maintenance returned non-JSON response: {body}") from exc
                   print(json.dumps(payload, ensure_ascii=False, indent=2))
           except urllib.error.HTTPError as exc:
               error_body = exc.read().decode("utf-8", errors="replace")
               print(error_body)
               raise SystemExit(f"orphaned term maintenance returned HTTP {exc.code}")
+          except (TimeoutError, urllib.error.URLError, OSError) as exc:
+              raise SystemExit(f"orphaned term maintenance request failed: {exc}") from exc
           PY
 
       - name: Deactivate orphaned terms
@@ -167,11 +214,17 @@ jobs:
               method="POST",
           )
           try:
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  payload = json.load(response)
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  body = response.read().decode("utf-8", errors="replace")
+                  try:
+                      payload = json.loads(body)
+                  except json.JSONDecodeError as exc:
+                      raise SystemExit(f"orphaned term maintenance returned non-JSON response: {body}") from exc
                   print(json.dumps(payload, ensure_ascii=False, indent=2))
           except urllib.error.HTTPError as exc:
               error_body = exc.read().decode("utf-8", errors="replace")
               print(error_body)
               raise SystemExit(f"orphaned term maintenance returned HTTP {exc.code}")
+          except (TimeoutError, urllib.error.URLError, OSError) as exc:
+              raise SystemExit(f"orphaned term maintenance request failed: {exc}") from exc
           PY

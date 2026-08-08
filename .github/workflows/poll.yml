@@ -5,7 +5,8 @@ on:
   schedule:
     # Redundant fallback for a missed Cloudflare cron tick. The backend poll
     # lock and due-term checks make this safe when the primary poll succeeds.
-    - cron: "30 */3 * * *"
+    # CF crons fire at 0 */2 and 0 1/2; this fires at :30 as a mid-window catch.
+    - cron: "30 */2 * * *"
   workflow_dispatch:  # allow manual trigger from GitHub Actions tab
 
 concurrency:
@@ -33,27 +34,54 @@ jobs:
         run: |
           for attempt in $(seq 1 18); do
             BODY=$(mktemp)
+            set +e
             STATUS=$(curl -sS -o "$BODY" -w "%{http_code} time=%{time_total}s" -X POST \
               "$BACKEND_URL/api/admin/poll" \
               -H "Authorization: Bearer $ADMIN_API_TOKEN" \
               -H "Content-Type: application/json" \
               --max-time 260)
+            CURL_EXIT=$?
+            set -e
             echo "Attempt $attempt response status: $STATUS"
             echo "Attempt $attempt response body: $(cat "$BODY")"
+            if [ "$CURL_EXIT" -eq 28 ]; then
+              rm -f "$BODY"
+              echo "Poll request timed out locally; diagnostics will wait for the backend poll to settle."
+              echo "diagnostics_ready=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$CURL_EXIT" -ne 0 ]; then
+              rm -f "$BODY"
+              echo "Poll request curl failed with exit code $CURL_EXIT"
+              exit "$CURL_EXIT"
+            fi
             CODE=${STATUS%% *}
             if [ "$CODE" != "200" ] && [ "$CODE" != "202" ]; then
+              rm -f "$BODY"
               echo "Poll request failed with status $CODE"
               exit 1
             fi
 
-            POLL_STATUS=$(python3 - "$BODY" <<'PY'
+            if ! POLL_STATUS=$(python3 - "$BODY" <<'PY'
           import json
           import sys
 
           with open(sys.argv[1], "r", encoding="utf-8") as fh:
-              print((json.load(fh).get("status") or "").strip())
+              body = fh.read()
+          try:
+              payload = json.loads(body)
+          except json.JSONDecodeError as exc:
+              print(f"Invalid poll response JSON: {exc}; body={body}", file=sys.stderr)
+              raise SystemExit(2)
+          if not isinstance(payload, dict):
+              print(f"Invalid poll response payload: {payload}", file=sys.stderr)
+              raise SystemExit(2)
+          print((payload.get("status") or "").strip())
           PY
-          )
+          ); then
+              rm -f "$BODY"
+              exit 1
+            fi
             rm -f "$BODY"
 
             if [ "$POLL_STATUS" = "poll completed" ]; then
@@ -70,8 +98,9 @@ jobs:
               exit 1
             fi
             if [ "$attempt" -eq 18 ]; then
-              echo "Backend poll remained busy after $attempt attempts"
-              exit 1
+              echo "Backend poll remained busy after $attempt attempts; diagnostics will check whether it is still healthy."
+              echo "diagnostics_ready=true" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
             sleep 20
           done
@@ -100,14 +129,39 @@ jobs:
           import sys
 
           with open(sys.argv[1], "r", encoding="utf-8") as fh:
-              data = json.load(fh)
+              body = fh.read()
+          try:
+              data = json.loads(body)
+          except json.JSONDecodeError as exc:
+              print(f"Invalid diagnostics JSON: {exc}; body={body}", file=sys.stderr)
+              raise SystemExit(2)
+          if not isinstance(data, dict):
+              print(f"Invalid diagnostics payload: {data}", file=sys.stderr)
+              raise SystemExit(2)
           attempt = sys.argv[2]
 
-          apns = data.get("apns", {})
-          notification_health = data.get("notification_health") or {}
-          pending_notifications = data.get("pending_notifications") or []
-          latest_poll = data.get("latest_poll") or {}
-          latest_successful_poll = data.get("latest_successful_poll") or {}
+          def object_field(payload, key):
+              value = payload.get(key)
+              if value is None:
+                  return {}
+              if not isinstance(value, dict):
+                  print(f"Invalid diagnostics field {key}: {value}", file=sys.stderr)
+                  raise SystemExit(2)
+              return value
+
+          apns = object_field(data, "apns")
+          notification_health = object_field(data, "notification_health")
+          latest_poll = object_field(data, "latest_poll")
+          latest_successful_poll = object_field(data, "latest_successful_poll")
+          pending_notifications = data.get("pending_notifications")
+          if pending_notifications is None:
+              pending_notifications = []
+          if not isinstance(pending_notifications, list):
+              print(
+                  f"Invalid diagnostics field pending_notifications: {pending_notifications}",
+                  file=sys.stderr,
+              )
+              raise SystemExit(2)
           summary = {
               "items_total": data.get("items_total"),
               "matches_total": data.get("matches_total"),
