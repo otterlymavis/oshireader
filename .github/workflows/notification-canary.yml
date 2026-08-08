@@ -148,7 +148,19 @@ jobs:
           import os
           import urllib.request
 
+          run_url = (
+              f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}"
+              f"/actions/runs/{os.environ.get('GITHUB_RUN_ID')}"
+          )
+          message = (
+              "OshiReader workflow failure: "
+              f"{os.environ.get('ALERT_CONTEXT')} "
+              f"({os.environ.get('GITHUB_WORKFLOW')} / {os.environ.get('GITHUB_JOB')})\n"
+              f"{run_url}"
+          )
           payload = {
+              "content": message,
+              "text": message,
               "status": "failure",
               "context": os.environ.get("ALERT_CONTEXT"),
               "workflow": os.environ.get("GITHUB_WORKFLOW"),
@@ -158,16 +170,16 @@ jobs:
               "repository": os.environ.get("GITHUB_REPOSITORY"),
               "ref": os.environ.get("GITHUB_REF_NAME"),
               "sha": os.environ.get("GITHUB_SHA"),
-              "url": (
-                  f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}"
-                  f"/actions/runs/{os.environ.get('GITHUB_RUN_ID')}"
-              ),
+              "url": run_url,
           }
           data = json.dumps(payload).encode("utf-8")
           req = urllib.request.Request(
               os.environ["ALERT_WEBHOOK_URL"],
               data=data,
-              headers={"Content-Type": "application/json"},
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "OshiReader-Monitor/1.0",
+              },
               method="POST",
           )
           try:

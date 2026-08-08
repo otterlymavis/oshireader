@@ -281,18 +281,30 @@ jobs:
           import os
           import urllib.request
 
+          run_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}"
+          message = (
+              "OshiReader workflow failure: "
+              f"{os.environ.get('ALERT_CONTEXT')} "
+              f"({os.environ.get('GITHUB_WORKFLOW')})\n"
+              f"{run_url}"
+          )
           payload = {
+              "content": message,
+              "text": message,
               "status": "failure",
               "context": os.environ.get("ALERT_CONTEXT"),
               "workflow": os.environ.get("GITHUB_WORKFLOW"),
               "run_id": os.environ.get("GITHUB_RUN_ID"),
               "repository": os.environ.get("GITHUB_REPOSITORY"),
-              "url": f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}",
+              "url": run_url,
           }
           request = urllib.request.Request(
               os.environ["ALERT_WEBHOOK_URL"],
               data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "OshiReader-Monitor/1.0",
+              },
               method="POST",
           )
           try:
