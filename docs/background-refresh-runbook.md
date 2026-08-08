@@ -114,6 +114,7 @@ out of budget before the full connector/term workload finished.
 Look for:
 
 - `latest_poll.status == "started"` or `"running_past_request_timeout"`
+- `latest_poll.created_at` older than 30 minutes while still active
 - `latest_successful_poll.created_at` older than 240 minutes
 - repeated `latest_poll.id` changes without a matching completed event
 
@@ -139,6 +140,7 @@ These are intentionally conservative for the current Render instance:
 - `ORPHANED_NOTIFICATION_GRACE_MINUTES=60`
 - Worker `MIN_POLL_INTERVAL_MINUTES=120`
 - Worker `STALE_AFTER_MINUTES=360`
+- Worker `ACTIVE_POLL_TIMEOUT_MINUTES=30`
 - iOS/backend device-triggered polls remain throttled to a 170-minute cadence,
   so app background refresh cannot bypass the Worker schedule.
 
@@ -149,9 +151,11 @@ knob back before debugging connectors.
 ## Alerting
 
 The GitHub Actions workflow `Poller monitor` runs every 6 hours and fails if
-the worker health endpoint is degraded, if the latest successful poll is older
-than 360 minutes while polling work is active, or if authenticated backend
-notification health is degraded. The `Backend keep-alive` workflow is
+the worker health endpoint is degraded, if an active poll is still marked
+`started` or `running_past_request_timeout` after 30 minutes, if the latest
+successful poll is older than 360 minutes without an active poll inside the
+stale window, or if authenticated backend notification health is degraded.
+The `Backend keep-alive` workflow is
 manual-only so it does not wake Render and trigger startup database work on a
 fixed schedule.
 

@@ -2,6 +2,7 @@ const POLL_TIMEOUT_MS = 4 * 60 * 1000;
 const DEFAULT_POLL_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 5_000;
 const DEFAULT_STALE_AFTER_MINUTES = 360;
+const DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES = 30;
 const DEFAULT_MIN_POLL_INTERVAL_MINUTES = 120;
 const RSS_PROXY_TIMEOUT_MS = 20_000;
 const FIVECH_PROXY_TIMEOUT_MS = 20_000;
@@ -455,7 +456,11 @@ function notificationHealth(diagnostics) {
   };
 }
 
-function pollHealth(diagnostics, staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES) {
+function pollHealth(
+  diagnostics,
+  staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES,
+  activePollTimeoutMinutes = DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES,
+) {
   const inputs = activePollingInputs(diagnostics);
   if (!inputs.available) {
     return {
@@ -474,6 +479,14 @@ function pollHealth(diagnostics, staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES
   const event = diagnostics.latest_successful_poll;
   const completedAt = event?.created_at ? Date.parse(event.created_at) : Number.NaN;
   const activePollAgeMinutes = activeBackendPollAgeMinutes(diagnostics, completedAt);
+  if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes > activePollTimeoutMinutes) {
+    return {
+      healthy: false,
+      in_progress: true,
+      age_minutes: Math.max(0, Math.floor(activePollAgeMinutes)),
+      reason: `Active backend poll has been running for ${Math.floor(activePollAgeMinutes)} minutes`,
+    };
+  }
   if (!Number.isFinite(completedAt)) {
     if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes <= staleAfterMinutes) {
       return {
@@ -585,6 +598,7 @@ function scheduledPollDecision(
   diagnostics,
   minIntervalMinutes = DEFAULT_MIN_POLL_INTERVAL_MINUTES,
   staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES,
+  activePollTimeoutMinutes = DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES,
 ) {
   const inputs = activePollingInputs(diagnostics);
   if (!inputs.available) {
@@ -605,6 +619,15 @@ function scheduledPollDecision(
   const event = diagnostics.latest_successful_poll;
   const completedAt = event?.created_at ? Date.parse(event.created_at) : Number.NaN;
   const activePollAgeMinutes = activeBackendPollAgeMinutes(diagnostics, completedAt);
+  if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes > activePollTimeoutMinutes) {
+    return {
+      due: true,
+      reason: `active backend poll exceeded ${activePollTimeoutMinutes} minutes (${Math.max(0, Math.floor(activePollAgeMinutes))} minutes old)`,
+      in_progress: true,
+      age_minutes: Math.max(0, Math.floor(activePollAgeMinutes)),
+      ...inputs,
+    };
+  }
   if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes <= staleAfterMinutes) {
     return {
       due: false,
@@ -660,6 +683,7 @@ export async function triggerBackendPoll(env, options = {}) {
       diagnostics,
       Number(env.MIN_POLL_INTERVAL_MINUTES ?? DEFAULT_MIN_POLL_INTERVAL_MINUTES),
       Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
+      Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
     );
     if (!decision.due) {
       return {
@@ -724,6 +748,7 @@ export default {
           const health = pollHealth(
             result.diagnostics,
             Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
+            Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
           );
           const notifications = notificationHealth(result.diagnostics);
           if (!health.healthy) {
@@ -773,6 +798,7 @@ export default {
         const health = pollHealth(
           diagnostics,
           Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
+          Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
         );
         const notifications = notificationHealth(diagnostics);
         // Feed freshness and notification readiness are separate operational

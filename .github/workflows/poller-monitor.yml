@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 10
     env:
       WORKER_HEALTH_URL: https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
+      ACTIVE_POLL_TIMEOUT_MINUTES: "30"
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       ALERT_CONTEXT: poller-monitor
     steps:
@@ -37,6 +38,7 @@ jobs:
 
           python3 - "$STATUS" "$BODY" <<'PY'
           import json
+          import os
           import sys
           from datetime import datetime, timezone
 
@@ -63,6 +65,8 @@ jobs:
           created_at = latest_success.get("created_at")
           latest_poll = object_field(diagnostics, "latest_poll")
           active_poll_within_stale_window = False
+          active_poll_age_minutes = None
+          active_poll_timeout_minutes = float(os.environ.get("ACTIVE_POLL_TIMEOUT_MINUTES", "30"))
           apns = object_field(diagnostics, "apns")
           notification_health = object_field(diagnostics, "notification_health")
           pending_notifications = diagnostics.get("pending_notifications")
@@ -97,7 +101,15 @@ jobs:
                   )
                   if started_at.tzinfo is None:
                       started_at = started_at.replace(tzinfo=timezone.utc)
-                  active_poll_within_stale_window = (datetime.now(timezone.utc) - started_at).total_seconds() <= 360 * 60
+                  active_poll_age_minutes = (datetime.now(timezone.utc) - started_at).total_seconds() / 60
+                  summary["active_poll_age_minutes"] = round(active_poll_age_minutes, 1)
+                  active_poll_within_stale_window = active_poll_age_minutes <= 360
+                  if active_poll_age_minutes > active_poll_timeout_minutes:
+                      failures.append(
+                          "Active backend poll is stuck: "
+                          f"{active_poll_age_minutes:.1f} minutes old; "
+                          f"threshold={active_poll_timeout_minutes:.1f}; payload={latest_poll}"
+                      )
           if status != "200":
               failures.append(f"worker health endpoint returned HTTP {status}")
           if payload.get("status") != "ok" or payload.get("healthy") is not True:

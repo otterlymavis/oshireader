@@ -556,6 +556,43 @@ test("health treats a fresh request-timeout marker as in progress", async (conte
   assert.equal((await response.json()).in_progress, true);
 });
 
+test("health reports an old request-timeout marker as degraded", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+    pending_notifications: [],
+    latest_poll: {
+      id: 5,
+      kind: "poll",
+      status: "running_past_request_timeout",
+      created_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    },
+    latest_successful_poll: {
+      id: 4,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    {
+      ADMIN_API_TOKEN: "secret",
+      BACKEND_URL: "https://backend.example",
+      ACTIVE_POLL_TIMEOUT_MINUTES: "30",
+    },
+  );
+
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.status, "degraded");
+  assert.equal(body.in_progress, true);
+  assert.match(body.reason, /Active backend poll has been running/);
+});
+
 test("health keeps polling healthy when active notification terms lack devices", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
@@ -954,6 +991,61 @@ test("scheduled poll skips backend poll when poll is already in progress", async
   assert.match(result.reason, /already in progress/);
   assert.deepEqual(requestedURLs, [
     "https://backend.example/api/health",
+    "https://backend.example/api/admin/poller-health",
+  ]);
+});
+
+test("scheduled poll retries when an active poll exceeds the timeout", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requestedURLs = [];
+  let diagnosticsCalls = 0;
+  globalThis.fetch = async (url) => {
+    requestedURLs.push(String(url));
+    if (String(url).endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    }
+    if (String(url).endsWith("/api/admin/poll")) {
+      return new Response(JSON.stringify({ status: "poll already running" }), { status: 200 });
+    }
+    assert.equal(url, "https://backend.example/api/admin/poller-health");
+    diagnosticsCalls += 1;
+    return new Response(JSON.stringify({
+      watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+      pending_notifications: [],
+      latest_poll: {
+        id: 2,
+        kind: "poll",
+        status: "running_past_request_timeout",
+        created_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+      },
+      latest_successful_poll: {
+        id: 1,
+        kind: "poll",
+        status: "completed",
+        created_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+      },
+      recent_events: [],
+    }), { status: 200 });
+  };
+
+  const result = await triggerBackendPoll({
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+    ACTIVE_POLL_TIMEOUT_MINUTES: "30",
+    POLL_RETRIES: "0",
+  }, { respectDueWindow: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, undefined);
+  assert.equal(result.backend_status, "poll already running");
+  assert.equal(diagnosticsCalls, 2);
+  assert.deepEqual(requestedURLs, [
+    "https://backend.example/api/health",
+    "https://backend.example/api/admin/poller-health",
+    "https://backend.example/api/admin/poll",
     "https://backend.example/api/admin/poller-health",
   ]);
 });

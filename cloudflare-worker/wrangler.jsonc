@@ -11,6 +11,7 @@
     "POLL_RETRIES": "1",
     "POLL_RETRY_DELAY_MS": "5000",
     "STALE_AFTER_MINUTES": "360",
+    "ACTIVE_POLL_TIMEOUT_MINUTES": "30",
     "MIN_POLL_INTERVAL_MINUTES": "120"
   },
   "triggers": {
