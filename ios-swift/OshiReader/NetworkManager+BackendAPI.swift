@@ -11,22 +11,19 @@ extension NetworkManager {
     // MARK: - Watch Terms
 
     static func automaticSyncNotifyOnNewUpdate(localTerm: WatchTerm, serverTerm: WatchTerm) -> Bool? {
-        localTerm.notify_on_new && !serverTerm.notify_on_new ? true : nil
+        nil
     }
 
     static func automaticSyncNotifyOnNewCreate(localTerm: WatchTerm) -> Bool {
-        localTerm.notify_on_new
+        false
     }
 
     static func automaticSyncForceAPNSRefreshCreate(localTerm: WatchTerm) -> Bool {
-        localTerm.notify_on_new
+        false
     }
 
     static func pulledBackendTermForLocalMerge(localTerm: WatchTerm, serverTerm: WatchTerm) -> WatchTerm {
-        guard localTerm.notify_on_new, !serverTerm.notify_on_new else { return serverTerm }
-        var mergedTerm = serverTerm
-        mergedTerm.notify_on_new = true
-        return mergedTerm
+        serverTerm
     }
 
     static func shouldRevalidateAPNSBeforeNotificationWrite(
@@ -49,15 +46,20 @@ extension NetworkManager {
         _ term: WatchTerm,
         timeout: TimeInterval = 30
     ) async throws -> WatchTerm {
-        try await createWatchTerm(
+        let notifyOnNew = term.repaired_from_cache
+            ? false
+            : Self.automaticSyncNotifyOnNewCreate(localTerm: term)
+        return try await createWatchTerm(
             keyword: term.keyword,
             collectionMode: term.collection_mode,
             sourceMode: term.source_mode,
             selectedPlatforms: term.selected_platforms,
-            notifyOnNew: Self.automaticSyncNotifyOnNewCreate(localTerm: term),
+            notifyOnNew: notifyOnNew,
             isActive: term.is_active,
             aliases: term.aliases,
-            forceAPNSRefresh: Self.automaticSyncForceAPNSRefreshCreate(localTerm: term) && !isUnitTesting,
+            forceAPNSRefresh: !term.repaired_from_cache &&
+                Self.automaticSyncForceAPNSRefreshCreate(localTerm: term) &&
+                !isUnitTesting,
             timeout: timeout
         )
     }
@@ -91,14 +93,10 @@ extension NetworkManager {
             if shouldSkipAfterDelete { continue }
             if let serverTerm = backendByKeyword[term.keyword] {
                 if term.repaired_from_cache {
-                    let notifyOnNewUpdate = term.notify_on_new == serverTerm.notify_on_new
-                        ? nil
-                        : term.notify_on_new
                     let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
                         serverTerm.source_mode != term.source_mode ||
                         serverTerm.selected_platforms != term.selected_platforms ||
                         serverTerm.is_active != term.is_active ||
-                        notifyOnNewUpdate != nil ||
                         serverTerm.aliases != term.aliases
                     if needsUpdate,
                        let updatedTerm = try? await updateWatchTerm(
@@ -107,7 +105,7 @@ extension NetworkManager {
                         collectionMode: term.collection_mode,
                         sourceMode: term.source_mode,
                         selectedPlatforms: term.selected_platforms,
-                        notifyOnNew: notifyOnNewUpdate,
+                        notifyOnNew: nil,
                         aliases: term.aliases,
                         timeout: timeout
                        ) {
@@ -115,8 +113,6 @@ extension NetworkManager {
                             LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm, ifUnchangedFrom: term)
                         }
                         if !replaced { succeeded = false }
-                    } else if notifyOnNewUpdate != nil {
-                        succeeded = false
                     } else {
                         let replaced = await MainActor.run {
                             LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
@@ -201,10 +197,12 @@ extension NetworkManager {
             }
             if shouldSkipAfterDelete { continue }
             if let localTerm = localByKeyword[term.keyword] {
-                let mergedTerm = Self.pulledBackendTermForLocalMerge(
-                    localTerm: localTerm,
-                    serverTerm: term
-                )
+                let mergedTerm = localTerm.repaired_from_cache
+                    ? term
+                    : Self.pulledBackendTermForLocalMerge(
+                        localTerm: localTerm,
+                        serverTerm: term
+                    )
                 if localTerm != mergedTerm {
                     let replaced = await MainActor.run {
                         LocalDB.shared.replaceTerm(localId: localTerm.id, with: mergedTerm, ifUnchangedFrom: localTerm)
@@ -224,10 +222,36 @@ extension NetworkManager {
         collectionMode: CollectionMode,
         sourceMode: SourceMode = .all,
         selectedPlatforms: [String] = [],
-        notifyOnNew: Bool = true,
+        notifyOnNew: Bool = false,
         isActive: Bool = true,
         aliases: [String] = [],
         forceAPNSRefresh: Bool = false,
+        timeout: TimeInterval = 30
+    ) async throws -> WatchTerm {
+        try await createWatchTermRequest(
+            keyword: keyword,
+            collectionMode: collectionMode,
+            sourceMode: sourceMode,
+            selectedPlatforms: selectedPlatforms,
+            notifyOnNew: notifyOnNew,
+            isActive: isActive,
+            aliases: aliases,
+            forceAPNSRefresh: forceAPNSRefresh,
+            apnsAlreadyVerified: false,
+            timeout: timeout
+        )
+    }
+
+    private func createWatchTermRequest(
+        keyword: String,
+        collectionMode: CollectionMode,
+        sourceMode: SourceMode = .all,
+        selectedPlatforms: [String] = [],
+        notifyOnNew: Bool = false,
+        isActive: Bool = true,
+        aliases: [String] = [],
+        forceAPNSRefresh: Bool = false,
+        apnsAlreadyVerified: Bool = false,
         timeout: TimeInterval = 30
     ) async throws -> WatchTerm {
         if isUITesting {
@@ -245,7 +269,7 @@ extension NetworkManager {
             notifyOnNew: notifyOnNew,
             forceAPNSRefresh: forceAPNSRefresh,
             isUnitTesting: isUnitTesting
-        )
+        ) && !apnsAlreadyVerified
         if shouldRevalidateAPNS {
             let registrationReady = await NotificationManager.shared.ensureRemoteNotificationsRegisteredIfAllowed(
                 timeout: min(timeout, 8),
@@ -289,12 +313,38 @@ extension NetworkManager {
         timeout: TimeInterval = 30,
         forceAPNSRefresh: Bool = false
     ) async throws -> WatchTerm {
+        try await updateWatchTermRequest(
+            id: id,
+            isActive: isActive,
+            collectionMode: collectionMode,
+            sourceMode: sourceMode,
+            selectedPlatforms: selectedPlatforms,
+            notifyOnNew: notifyOnNew,
+            aliases: aliases,
+            timeout: timeout,
+            forceAPNSRefresh: forceAPNSRefresh,
+            apnsAlreadyVerified: false
+        )
+    }
+
+    private func updateWatchTermRequest(
+        id: String,
+        isActive: Bool? = nil,
+        collectionMode: CollectionMode? = nil,
+        sourceMode: SourceMode? = nil,
+        selectedPlatforms: [String]? = nil,
+        notifyOnNew: Bool? = nil,
+        aliases: [String]? = nil,
+        timeout: TimeInterval = 30,
+        forceAPNSRefresh: Bool = false,
+        apnsAlreadyVerified: Bool = false
+    ) async throws -> WatchTerm {
         if isUITesting { throw URLError(.cancelled) }
         let shouldRevalidateAPNS = Self.shouldRevalidateAPNSBeforeNotificationWrite(
             notifyOnNew: notifyOnNew,
             forceAPNSRefresh: forceAPNSRefresh,
             isUnitTesting: isUnitTesting
-        )
+        ) && !apnsAlreadyVerified
         if shouldRevalidateAPNS {
             // A cached token may have become unverified on the backend after
             // rotation or a transient APNs validation failure. Re-register when
@@ -341,16 +391,31 @@ extension NetworkManager {
                 timeout: timeout,
                 forceAPNSRefresh: enabled
             )
-        } catch APIClientError.httpStatus(404, _) where enabled {
+        } catch APIClientError.httpStatus(404, _) {
             if let existing = try await fetchWatchTerms(timeout: timeout).first(where: { $0.keyword == term.keyword }) {
-                return try await updateWatchTerm(
+                return try await updateWatchTermRequest(
                     id: existing.id,
-                    notifyOnNew: true,
+                    notifyOnNew: enabled,
                     timeout: timeout,
-                    forceAPNSRefresh: true
+                    forceAPNSRefresh: enabled,
+                    apnsAlreadyVerified: true
                 )
             }
-            return try await createWatchTerm(
+            if !enabled {
+                return WatchTerm(
+                    id: term.id,
+                    keyword: term.keyword,
+                    collection_mode: term.collection_mode,
+                    source_mode: term.source_mode,
+                    selected_platforms: term.selected_platforms,
+                    is_active: term.is_active,
+                    notify_on_new: false,
+                    aliases: term.aliases,
+                    repaired_from_cache: term.repaired_from_cache,
+                    created_at: term.created_at
+                )
+            }
+            return try await createWatchTermRequest(
                 keyword: term.keyword,
                 collectionMode: term.collection_mode,
                 sourceMode: term.source_mode,
@@ -359,6 +424,7 @@ extension NetworkManager {
                 isActive: term.is_active,
                 aliases: term.aliases,
                 forceAPNSRefresh: true,
+                apnsAlreadyVerified: true,
                 timeout: timeout
             )
         }

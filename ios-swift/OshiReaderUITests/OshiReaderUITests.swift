@@ -375,6 +375,9 @@ final class OshiReaderUITests: XCTestCase {
     func testSettingsNotificationControls() throws {
         tapTab(index: 4, labels: ["Settings"])
 
+        let keywordBell = waitForElement(identifier: "settings.keywordBell.UITest Oshi", timeout: 2, swipes: 3)
+        XCTAssertTrue(keywordBell.exists, "Expected the seeded keyword to expose a notification bell")
+
         XCTAssertTrue(waitForElement(identifier: "settings.notificationStatus", timeout: 2, swipes: 4).exists)
         XCTAssertTrue(waitForElement(identifier: "settings.notificationSetupHint", timeout: 2, swipes: 0).exists)
 

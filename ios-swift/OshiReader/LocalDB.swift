@@ -281,7 +281,7 @@ class LocalDB: ObservableObject {
         let keywords = cachedKeywords.subtracting(existingKeywords).sorted()
         guard !keywords.isEmpty else { return false }
         terms.append(contentsOf: keywords.map {
-            WatchTerm(keyword: $0, collection_mode: .allInfo, is_active: true, notify_on_new: true, repaired_from_cache: true)
+            WatchTerm(keyword: $0, collection_mode: .allInfo, is_active: true, notify_on_new: false, repaired_from_cache: true)
         })
         saveToFile(name: "terms", value: terms)
         AppLogger.persistence.info("Repaired \(keywords.count) missing watch terms from cached feed items")
@@ -374,12 +374,18 @@ class LocalDB: ObservableObject {
     }
 
     // MARK: - Watch Terms
-    func saveTerm(keyword: String, collectionMode: CollectionMode = .allInfo, sourceMode: SourceMode = .all, selectedPlatforms: [String] = []) -> WatchTerm {
+    func saveTerm(keyword: String, collectionMode: CollectionMode = .allInfo, sourceMode: SourceMode = .all, selectedPlatforms: [String] = [], notifyOnNew: Bool = false) -> WatchTerm {
         let trimmedKeyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         if termDeleteTombstones.removeValue(forKey: trimmedKeyword) != nil {
             saveTermDeleteTombstones()
         }
-        let term = WatchTerm(keyword: trimmedKeyword, collection_mode: collectionMode, source_mode: sourceMode, selected_platforms: selectedPlatforms)
+        let term = WatchTerm(
+            keyword: trimmedKeyword,
+            collection_mode: collectionMode,
+            source_mode: sourceMode,
+            selected_platforms: selectedPlatforms,
+            notify_on_new: notifyOnNew
+        )
         terms.insert(term, at: 0)
         saveToFile(name: "terms", value: terms)
         BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()

@@ -285,6 +285,17 @@ final class NotificationManager: ObservableObject {
         NetworkManager.shared.clearRegisteredAPNSDeviceToken()
     }
 
+    #if DEBUG || targetEnvironment(simulator)
+    func waitForTokenRegistrationWaiterForTesting(timeout: TimeInterval = 2) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while tokenRegistrationWaiters.isEmpty {
+            if Date() >= deadline { return false }
+            await Task.yield()
+        }
+        return true
+    }
+    #endif
+
     nonisolated static func deviceTokenString(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
     }

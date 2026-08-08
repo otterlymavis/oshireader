@@ -135,6 +135,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.terms.first?.keyword, "Test Oshi")
         XCTAssertEqual(db.terms.first?.collection_mode, .mediaOnly)
         XCTAssertTrue(db.terms.first?.is_active ?? false)
+        XCTAssertEqual(db.terms.first?.notify_on_new, false)
         
         // 2. Update watch term
         db.updateTerm(id: term.id, isActive: false, collectionMode: .allInfo)
@@ -669,7 +670,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertNil(NetworkManager.normalizedAPNSEnvironment(nil))
     }
 
-    func testAutomaticTermSyncPreservesNotificationOwnership() throws {
+    func testAutomaticTermSyncDoesNotPromoteNotificationPreference() throws {
         let serverEnabled = WatchTerm(keyword: "Aiko", notify_on_new: true)
         let serverDisabled = WatchTerm(keyword: "Aiko", notify_on_new: false)
         let localEnabled = WatchTerm(keyword: "Aiko", notify_on_new: true)
@@ -681,16 +682,15 @@ final class OshiReaderTests: XCTestCase {
                 serverTerm: serverEnabled
             )
         )
-        XCTAssertEqual(
+        XCTAssertNil(
             NetworkManager.automaticSyncNotifyOnNewUpdate(
                 localTerm: localEnabled,
                 serverTerm: serverDisabled
-            ),
-            true
+            )
         )
-        XCTAssertTrue(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localEnabled))
+        XCTAssertFalse(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localEnabled))
         XCTAssertFalse(NetworkManager.automaticSyncNotifyOnNewCreate(localTerm: localDisabled))
-        XCTAssertTrue(NetworkManager.automaticSyncForceAPNSRefreshCreate(localTerm: localEnabled))
+        XCTAssertFalse(NetworkManager.automaticSyncForceAPNSRefreshCreate(localTerm: localEnabled))
         XCTAssertFalse(NetworkManager.automaticSyncForceAPNSRefreshCreate(localTerm: localDisabled))
     }
 
@@ -5002,6 +5002,11 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(i18n.lang, "en")
         XCTAssertEqual(i18n.t("tabFeed"), "Feed")
         XCTAssertEqual(i18n.t("tabSaved"), "Saved")
+        XCTAssertEqual(
+            i18n.t("notificationSetupHint"),
+            "Turn on a keyword bell to register this device for remote notifications."
+        )
+        XCTAssertEqual(i18n.t("settingsSyncFailed"), "This setting could not be synced. Please try again.")
         
         i18n.setLanguage("zh-TW")
         XCTAssertEqual(i18n.lang, "zh-TW")
@@ -5360,6 +5365,7 @@ final class OshiReaderTests: XCTestCase {
 
         XCTAssertEqual(freshDB.terms.map(\.keyword).sorted(), ["Aiko", "Miku"])
         XCTAssertTrue(freshDB.terms.allSatisfy(\.is_active))
+        XCTAssertTrue(freshDB.terms.allSatisfy { !$0.notify_on_new })
         XCTAssertTrue(freshDB.terms.allSatisfy(\.repaired_from_cache))
     }
 
@@ -5408,6 +5414,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(freshDB.term(matchingKeyword: "Aiko")?.id, "server-aiko")
         XCTAssertFalse(freshDB.term(matchingKeyword: "Aiko")?.repaired_from_cache ?? true)
         XCTAssertTrue(freshDB.term(matchingKeyword: "Miku")?.repaired_from_cache ?? false)
+        XCTAssertFalse(freshDB.term(matchingKeyword: "Miku")?.notify_on_new ?? true)
     }
 
     // MARK: - setSourcesOrder / setWallpaper / setOshiAvatar
@@ -5521,8 +5528,7 @@ final class OshiReaderTests: XCTestCase {
         let term = try JSONDecoder().decode(WatchTerm.self, from: Data(json.utf8))
         XCTAssertEqual(term.aliases, [])
         XCTAssertTrue(term.is_active)
-        // notify_on_new now defaults to true so new terms alert on new feed items.
-        XCTAssertTrue(term.notify_on_new)
+        XCTAssertFalse(term.notify_on_new)
     }
 
     // MARK: - Content Cache
@@ -5923,7 +5929,7 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testSyncTermsFromBackendPreservesLocalEnabledNotificationPreference() async throws {
+    func testSyncTermsFromBackendAdoptsBackendNotificationPreference() async throws {
         let keyword = "Pull Preserve Notify \(UUID().uuidString)"
         let localTerm = WatchTerm(
             id: UUID().uuidString,
@@ -5959,12 +5965,53 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(syncedTerm?.id, "42")
         XCTAssertEqual(syncedTerm?.collection_mode, .mediaOnly)
         XCTAssertEqual(syncedTerm?.is_active, false)
-        XCTAssertEqual(syncedTerm?.notify_on_new, true)
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
         XCTAssertEqual(syncedTerm?.aliases, ["Server Alias"])
     }
 
     @MainActor
-    func testSyncWatchTermsPreservesRepairedNotificationPreference() async throws {
+    func testSyncTermsFromBackendDoesNotPreserveRepairedEnabledNotificationPreference() async throws {
+        let keyword = "Pull Repaired Notify \(UUID().uuidString)"
+        let repairedTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: true,
+            aliases: [],
+            repaired_from_cache: true
+        )
+        let backendTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            is_active: false,
+            notify_on_new: false,
+            aliases: ["Server Alias"]
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(repairedTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/watch-terms")
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (backendData, Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.syncTermsFromBackendWithStatus()
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertTrue(result.changed)
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+        XCTAssertFalse(syncedTerm?.repaired_from_cache ?? true)
+        XCTAssertEqual(syncedTerm?.aliases, ["Server Alias"])
+    }
+
+    @MainActor
+    func testSyncWatchTermsDoesNotPushRepairedEnabledPreferenceToExistingBackendTerm() async throws {
         let keyword = "Sync Repaired \(UUID().uuidString)"
         let repairedTerm = WatchTerm(
             id: UUID().uuidString,
@@ -5988,7 +6035,7 @@ final class NetworkManagerTests: XCTestCase {
             keyword: keyword,
             collection_mode: .allInfo,
             is_active: true,
-            notify_on_new: true,
+            notify_on_new: false,
             aliases: []
         )
         _ = LocalDB.shared.deleteTerm(keyword: keyword)
@@ -5996,6 +6043,7 @@ final class NetworkManagerTests: XCTestCase {
         defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
         let backendData = try JSONEncoder().encode([backendTerm])
         var requestedMethodsAndPaths: [String] = []
+        var capturedBody: [String: Any] = [:]
         MockURLProtocol.handler = { request in
             requestedMethodsAndPaths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
             if request.url?.path == "/api/watch-terms" {
@@ -6003,6 +6051,12 @@ final class NetworkManagerTests: XCTestCase {
             }
             if request.url?.path == "/api/watch-terms/42" {
                 XCTAssertEqual(request.httpMethod, "PATCH")
+                if let body = request.httpBody,
+                   let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    capturedBody = parsed
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
                 return (try! JSONEncoder().encode(updatedTerm), Self.response(status: 200))
             }
             XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
@@ -6013,15 +6067,82 @@ final class NetworkManagerTests: XCTestCase {
 
         XCTAssertTrue(succeeded)
         XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "PATCH /api/watch-terms/42"])
+        XCTAssertNil(capturedBody["notify_on_new"])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
         XCTAssertEqual(syncedTerm?.id, "42")
         XCTAssertEqual(syncedTerm?.collection_mode, .allInfo)
-        XCTAssertEqual(syncedTerm?.notify_on_new, true)
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
         XCTAssertEqual(syncedTerm?.aliases, [])
     }
 
     @MainActor
-    func testSyncWatchTermsPreservesRepairedMutedPreference() async throws {
+    func testSyncWatchTermsDoesNotPushLegacyEnabledPreferenceToExistingBackendTerm() async throws {
+        let keyword = "Sync Legacy Enabled \(UUID().uuidString)"
+        let localTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            source_mode: .selected,
+            selected_platforms: ["youtube"],
+            is_active: true,
+            notify_on_new: true,
+            aliases: ["Local Alias"]
+        )
+        let backendTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            source_mode: .all,
+            selected_platforms: [],
+            is_active: false,
+            notify_on_new: false,
+            aliases: []
+        )
+        let updatedTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            source_mode: .selected,
+            selected_platforms: ["youtube"],
+            is_active: true,
+            notify_on_new: false,
+            aliases: ["Local Alias"]
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(localTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        var capturedBody: [String: Any] = [:]
+        MockURLProtocol.handler = { request in
+            if request.url?.path == "/api/watch-terms" {
+                return (backendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms/42" {
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                if let body = request.httpBody,
+                   let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    capturedBody = payload
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
+                return (try! JSONEncoder().encode(updatedTerm), Self.response(status: 200))
+            }
+            XCTFail("Unexpected request path: \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [localTerm])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertNil(capturedBody["notify_on_new"])
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+        XCTAssertEqual(syncedTerm?.aliases, ["Local Alias"])
+    }
+
+    @MainActor
+    func testSyncWatchTermsDoesNotPushRepairedMutedPreferenceToExistingBackendTerm() async throws {
         let keyword = "Sync Repaired Muted \(UUID().uuidString)"
         let repairedTerm = WatchTerm(
             id: UUID().uuidString,
@@ -6045,14 +6166,14 @@ final class NetworkManagerTests: XCTestCase {
             keyword: keyword,
             collection_mode: .allInfo,
             is_active: true,
-            notify_on_new: false,
+            notify_on_new: true,
             aliases: []
         )
         _ = LocalDB.shared.deleteTerm(keyword: keyword)
         LocalDB.shared.addTermFromBackend(repairedTerm)
         defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
         let backendData = try JSONEncoder().encode([backendTerm])
-        var capturedNotifyOnNew: Bool?
+        var capturedBody: [String: Any] = [:]
         MockURLProtocol.handler = { request in
             if request.url?.path == "/api/watch-terms" {
                 return (backendData, Self.response(status: 200))
@@ -6060,11 +6181,10 @@ final class NetworkManagerTests: XCTestCase {
             if request.url?.path == "/api/watch-terms/43" {
                 XCTAssertEqual(request.httpMethod, "PATCH")
                 if let body = request.httpBody,
-                   let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-                   let notifyOnNew = payload["notify_on_new"] as? Bool {
-                    capturedNotifyOnNew = notifyOnNew
+                   let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    capturedBody = payload
                 } else {
-                    XCTFail("Expected notify_on_new in PATCH body")
+                    XCTFail("Expected JSON request body")
                 }
                 return (try! JSONEncoder().encode(updatedTerm), Self.response(status: 200))
             }
@@ -6075,9 +6195,9 @@ final class NetworkManagerTests: XCTestCase {
         let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
 
         XCTAssertTrue(succeeded)
-        XCTAssertEqual(capturedNotifyOnNew, false)
+        XCTAssertNil(capturedBody["notify_on_new"])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
-        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+        XCTAssertEqual(syncedTerm?.notify_on_new, true)
     }
 
     @MainActor
@@ -6124,7 +6244,7 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
         XCTAssertEqual(capturedBody["keyword"] as? String, keyword)
         XCTAssertEqual(capturedBody["collection_mode"] as? String, "all_info")
-        XCTAssertEqual(capturedBody["notify_on_new"] as? Bool, true)
+        XCTAssertEqual(capturedBody["notify_on_new"] as? Bool, false)
         XCTAssertEqual(capturedBody["is_active"] as? Bool, true)
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
         XCTAssertEqual(syncedTerm?.id, "42")
@@ -6132,7 +6252,62 @@ final class NetworkManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testSyncWatchTermsPreservesNotificationPreferenceWhenDeviceIsUnverified() async throws {
+    func testSyncWatchTermsCreatesLegacyEnabledTermMutedWhenBackendLacksKeyword() async throws {
+        let keyword = "Sync Create Legacy Enabled \(UUID().uuidString)"
+        let localTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: keyword,
+            collection_mode: .allInfo,
+            source_mode: .selected,
+            selected_platforms: ["youtube"],
+            is_active: true,
+            notify_on_new: true,
+            aliases: ["Alias"]
+        )
+        let createdTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            source_mode: .selected,
+            selected_platforms: ["youtube"],
+            is_active: true,
+            notify_on_new: false,
+            aliases: ["Alias"]
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(localTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let emptyBackendData = try JSONEncoder().encode([WatchTerm]())
+        let createdData = try JSONEncoder().encode(createdTerm)
+        var capturedBody: [String: Any] = [:]
+        MockURLProtocol.handler = { request in
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (emptyBackendData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "POST" {
+                if let body = request.httpBody,
+                   let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    capturedBody = payload
+                } else {
+                    XCTFail("Expected JSON request body")
+                }
+                return (createdData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(request.httpMethod ?? "") \(request.url?.path ?? "nil")")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [localTerm])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(capturedBody["notify_on_new"] as? Bool, false)
+        let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+    }
+
+    @MainActor
+    func testSyncWatchTermsCreatesRepairedTermMutedWithoutDeviceVerification() async throws {
         let keyword = "Sync Create Muted \(UUID().uuidString)"
         let repairedTerm = WatchTerm(
             id: UUID().uuidString,
@@ -6182,13 +6357,13 @@ final class NetworkManagerTests: XCTestCase {
 
         let succeeded = await NetworkManager.shared.syncWatchTermsToBackend(localTerms: [repairedTerm])
 
-        XCTAssertFalse(succeeded)
+        XCTAssertTrue(succeeded)
         XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
-        XCTAssertEqual(capturedNotifyValues, [true])
+        XCTAssertEqual(capturedNotifyValues, [false])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
-        XCTAssertEqual(syncedTerm?.id, repairedTerm.id)
-        XCTAssertEqual(syncedTerm?.notify_on_new, true)
-        XCTAssertTrue(syncedTerm?.repaired_from_cache ?? false)
+        XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
+        XCTAssertFalse(syncedTerm?.repaired_from_cache ?? true)
     }
 
     @MainActor
@@ -6232,7 +6407,7 @@ final class NetworkManagerTests: XCTestCase {
 
         XCTAssertFalse(succeeded)
         XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
-        XCTAssertEqual(capturedNotifyValues, [true])
+        XCTAssertEqual(capturedNotifyValues, [false])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
         XCTAssertEqual(syncedTerm?.notify_on_new, true)
         XCTAssertTrue(syncedTerm?.repaired_from_cache ?? false)
@@ -6279,7 +6454,7 @@ final class NetworkManagerTests: XCTestCase {
 
         XCTAssertFalse(succeeded)
         XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "POST /api/watch-terms"])
-        XCTAssertEqual(capturedNotifyValues, [true])
+        XCTAssertEqual(capturedNotifyValues, [false])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
         XCTAssertEqual(syncedTerm?.notify_on_new, true)
         XCTAssertTrue(syncedTerm?.repaired_from_cache ?? false)
@@ -6309,7 +6484,7 @@ final class NetworkManagerTests: XCTestCase {
             keyword: keyword,
             collection_mode: .allInfo,
             is_active: true,
-            notify_on_new: true,
+            notify_on_new: false,
             aliases: ["Aiko Alias"]
         )
         _ = LocalDB.shared.deleteTerm(keyword: keyword)
@@ -6343,11 +6518,12 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertTrue(succeeded)
         XCTAssertEqual(requestedMethodsAndPaths, ["GET /api/watch-terms", "PATCH /api/watch-terms/42"])
         XCTAssertEqual(capturedBody["collection_mode"] as? String, "all_info")
-        XCTAssertEqual(capturedBody["notify_on_new"] as? Bool, true)
+        XCTAssertNil(capturedBody["notify_on_new"])
         XCTAssertEqual(capturedBody["is_active"] as? Bool, true)
         XCTAssertEqual(capturedBody["aliases"] as? [String], ["Aiko Alias"])
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
         XCTAssertEqual(syncedTerm?.id, "42")
+        XCTAssertEqual(syncedTerm?.notify_on_new, false)
         XCTAssertEqual(syncedTerm?.aliases, ["Aiko Alias"])
     }
 
@@ -6499,7 +6675,6 @@ final class NetworkManagerTests: XCTestCase {
         let created = try await NetworkManager.shared.createWatchTerm(
             keyword: "Haruka",
             collectionMode: .allInfo,
-            notifyOnNew: false,
             isActive: false
         )
         XCTAssertEqual(capturedMethod, "POST")
@@ -6597,6 +6772,312 @@ final class NetworkManagerTests: XCTestCase {
         }
 
         XCTAssertEqual(requestCount, 0)
+    }
+
+    func testSetWatchTermNotificationPreferenceEnablingRegistersAPNSAndPatchesTerm() async throws {
+        await NotificationManager.shared.resetRemoteNotificationRegistrationCache()
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: false)
+        let updated = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: true)
+        let updatedData = try JSONEncoder().encode(updated)
+        var apnsRegistrationRequests = 0
+        var paths: [String] = []
+        var patchBody: [String: Any]?
+
+        MockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            paths.append(path)
+            if path == "/api/devices/apns-token" {
+                apnsRegistrationRequests += 1
+                return (Self.verifiedAPNSRegistrationResponse(), Self.response(status: 201))
+            }
+            if path == "/api/watch-terms/42" {
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                if let body = request.httpBody {
+                    patchBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+                }
+                return (updatedData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request path: \(path)")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let update = Task {
+            try await NetworkManager.shared.setWatchTermNotificationPreference(
+                for: term,
+                enabled: true,
+                timeout: 2
+            )
+        }
+        let firstWaiterReady = await NotificationManager.shared.waitForTokenRegistrationWaiterForTesting()
+        XCTAssertTrue(firstWaiterReady)
+        await NotificationManager.shared.handleRegisteredDeviceToken(Data(repeating: 0xab, count: 32))
+        let result = try await update.value
+
+        XCTAssertEqual(result.id, "42")
+        XCTAssertTrue(result.notify_on_new)
+        XCTAssertEqual(apnsRegistrationRequests, 1)
+        XCTAssertEqual(paths, ["/api/devices/apns-token", "/api/watch-terms/42"])
+        XCTAssertEqual(patchBody?["notify_on_new"] as? Bool, true)
+    }
+
+    func testSetWatchTermNotificationPreferenceAdoptsSameKeywordTermAfterNotFound() async throws {
+        await NotificationManager.shared.resetRemoteNotificationRegistrationCache()
+        let localTerm = WatchTerm(id: UUID().uuidString, keyword: "Aiko", collection_mode: .allInfo, notify_on_new: false)
+        let backendTerm = WatchTerm(id: "99", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: false)
+        let updated = WatchTerm(id: "99", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: true)
+        let backendTermsData = try JSONEncoder().encode([backendTerm])
+        let updatedData = try JSONEncoder().encode(updated)
+        let lock = NSLock()
+        var requests: [String] = []
+        var apnsRegistrationRequests = 0
+
+        MockURLProtocol.handler = { request in
+            let methodAndPath = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            lock.lock()
+            requests.append(methodAndPath)
+            lock.unlock()
+            if request.url?.path == "/api/devices/apns-token" {
+                lock.lock()
+                apnsRegistrationRequests += 1
+                lock.unlock()
+                return (Self.verifiedAPNSRegistrationResponse(), Self.response(status: 201))
+            }
+            if request.url?.path == "/api/watch-terms/\(localTerm.id)" {
+                return (Data(#"{"detail":"not found"}"#.utf8), Self.response(status: 404))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (backendTermsData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms/99" {
+                return (updatedData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(methodAndPath)")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let update = Task {
+            try await NetworkManager.shared.setWatchTermNotificationPreference(
+                for: localTerm,
+                enabled: true,
+                timeout: 2
+            )
+        }
+        let firstWaiterReady = await NotificationManager.shared.waitForTokenRegistrationWaiterForTesting()
+        XCTAssertTrue(firstWaiterReady)
+        await NotificationManager.shared.handleRegisteredDeviceToken(Data(repeating: 0xac, count: 32))
+        let result = try await update.value
+
+        XCTAssertEqual(result.id, "99")
+        XCTAssertTrue(result.notify_on_new)
+        XCTAssertEqual(apnsRegistrationRequests, 1)
+        let capturedRequests = lock.withLock { requests }
+        XCTAssertEqual(
+            capturedRequests,
+            [
+                "POST /api/devices/apns-token",
+                "PATCH /api/watch-terms/\(localTerm.id)",
+                "GET /api/watch-terms",
+                "PATCH /api/watch-terms/99",
+            ]
+        )
+    }
+
+    func testSetWatchTermNotificationPreferenceDisablingAdoptsSameKeywordTermAfterNotFound() async throws {
+        await NotificationManager.shared.resetRemoteNotificationRegistrationCache()
+        let localTerm = WatchTerm(id: UUID().uuidString, keyword: "Aiko", collection_mode: .allInfo, notify_on_new: true)
+        let backendTerm = WatchTerm(id: "99", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: true)
+        let updated = WatchTerm(id: "99", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: false)
+        let backendTermsData = try JSONEncoder().encode([backendTerm])
+        let updatedData = try JSONEncoder().encode(updated)
+        let lock = NSLock()
+        var requests: [String] = []
+        var patchBody: [String: Any]?
+
+        MockURLProtocol.handler = { request in
+            let methodAndPath = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            lock.lock()
+            requests.append(methodAndPath)
+            lock.unlock()
+            if request.url?.path == "/api/watch-terms/\(localTerm.id)" {
+                return (Data(#"{"detail":"not found"}"#.utf8), Self.response(status: 404))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (backendTermsData, Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms/99" {
+                if let body = request.httpBody {
+                    patchBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+                }
+                return (updatedData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(methodAndPath)")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let result = try await NetworkManager.shared.setWatchTermNotificationPreference(
+            for: localTerm,
+            enabled: false,
+            timeout: 2
+        )
+
+        XCTAssertEqual(result.id, "99")
+        XCTAssertFalse(result.notify_on_new)
+        XCTAssertEqual(patchBody?["notify_on_new"] as? Bool, false)
+        let capturedRequests = lock.withLock { requests }
+        XCTAssertEqual(
+            capturedRequests,
+            [
+                "PATCH /api/watch-terms/\(localTerm.id)",
+                "GET /api/watch-terms",
+                "PATCH /api/watch-terms/99",
+            ]
+        )
+    }
+
+    func testSetWatchTermNotificationPreferenceDisablingMissingTermClearsLocalPreference() async throws {
+        await NotificationManager.shared.resetRemoteNotificationRegistrationCache()
+        let localTerm = WatchTerm(id: UUID().uuidString, keyword: "Aiko", collection_mode: .allInfo, notify_on_new: true)
+        var requests: [String] = []
+
+        MockURLProtocol.handler = { request in
+            let methodAndPath = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            requests.append(methodAndPath)
+            if request.url?.path == "/api/watch-terms/\(localTerm.id)" {
+                return (Data(#"{"detail":"not found"}"#.utf8), Self.response(status: 404))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (Data("[]".utf8), Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(methodAndPath)")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let result = try await NetworkManager.shared.setWatchTermNotificationPreference(
+            for: localTerm,
+            enabled: false,
+            timeout: 2
+        )
+
+        XCTAssertEqual(result.id, localTerm.id)
+        XCTAssertFalse(result.notify_on_new)
+        XCTAssertEqual(
+            requests,
+            [
+                "PATCH /api/watch-terms/\(localTerm.id)",
+                "GET /api/watch-terms",
+            ]
+        )
+    }
+
+    func testSetWatchTermNotificationPreferenceCreatesTermAfterNotFoundAndNoBackendMatch() async throws {
+        await NotificationManager.shared.resetRemoteNotificationRegistrationCache()
+        let localTerm = WatchTerm(
+            id: UUID().uuidString,
+            keyword: "Aiko",
+            collection_mode: .mediaOnly,
+            source_mode: .selected,
+            selected_platforms: ["youtube"],
+            is_active: true,
+            notify_on_new: false,
+            aliases: ["Alias"]
+        )
+        let created = WatchTerm(id: "123", keyword: "Aiko", collection_mode: .mediaOnly, notify_on_new: true)
+        let createdData = try JSONEncoder().encode(created)
+        let lock = NSLock()
+        var requests: [String] = []
+        var apnsRegistrationRequests = 0
+        var createBody: [String: Any]?
+
+        MockURLProtocol.handler = { request in
+            let methodAndPath = "\(request.httpMethod ?? "") \(request.url?.path ?? "")"
+            lock.lock()
+            requests.append(methodAndPath)
+            lock.unlock()
+            if request.url?.path == "/api/devices/apns-token" {
+                lock.lock()
+                apnsRegistrationRequests += 1
+                lock.unlock()
+                return (Self.verifiedAPNSRegistrationResponse(), Self.response(status: 201))
+            }
+            if request.url?.path == "/api/watch-terms/\(localTerm.id)" {
+                return (Data(#"{"detail":"not found"}"#.utf8), Self.response(status: 404))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "GET" {
+                return (Data("[]".utf8), Self.response(status: 200))
+            }
+            if request.url?.path == "/api/watch-terms", request.httpMethod == "POST" {
+                if let body = request.httpBody {
+                    createBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+                }
+                return (createdData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request: \(methodAndPath)")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let update = Task {
+            try await NetworkManager.shared.setWatchTermNotificationPreference(
+                for: localTerm,
+                enabled: true,
+                timeout: 2
+            )
+        }
+        let firstWaiterReady = await NotificationManager.shared.waitForTokenRegistrationWaiterForTesting()
+        XCTAssertTrue(firstWaiterReady)
+        await NotificationManager.shared.handleRegisteredDeviceToken(Data(repeating: 0xad, count: 32))
+        let result = try await update.value
+
+        XCTAssertEqual(result.id, "123")
+        XCTAssertTrue(result.notify_on_new)
+        XCTAssertEqual(apnsRegistrationRequests, 1)
+        XCTAssertEqual(createBody?["keyword"] as? String, "Aiko")
+        XCTAssertEqual(createBody?["notify_on_new"] as? Bool, true)
+        XCTAssertEqual(createBody?["collection_mode"] as? String, "media_only")
+        XCTAssertEqual(createBody?["source_mode"] as? String, "selected")
+        XCTAssertEqual(createBody?["selected_platforms"] as? [String], ["youtube"])
+        XCTAssertEqual(createBody?["aliases"] as? [String], ["Alias"])
+        let capturedRequests = lock.withLock { requests }
+        XCTAssertEqual(
+            capturedRequests,
+            [
+                "POST /api/devices/apns-token",
+                "PATCH /api/watch-terms/\(localTerm.id)",
+                "GET /api/watch-terms",
+                "POST /api/watch-terms",
+            ]
+        )
+    }
+
+    func testSetWatchTermNotificationPreferenceDisablingDoesNotForceAPNSRefresh() async throws {
+        await NotificationManager.shared.resetRemoteNotificationRegistrationCache()
+        let term = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: true)
+        let updated = WatchTerm(id: "42", keyword: "Aiko", collection_mode: .allInfo, notify_on_new: false)
+        let updatedData = try JSONEncoder().encode(updated)
+        var paths: [String] = []
+        var patchBody: [String: Any]?
+
+        MockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            paths.append(path)
+            if path == "/api/watch-terms/42" {
+                if let body = request.httpBody {
+                    patchBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+                }
+                return (updatedData, Self.response(status: 200))
+            }
+            XCTFail("Unexpected request path: \(path)")
+            return (Data(), Self.response(status: 500))
+        }
+
+        let result = try await NetworkManager.shared.setWatchTermNotificationPreference(
+            for: term,
+            enabled: false,
+            timeout: 2
+        )
+
+        XCTAssertFalse(result.notify_on_new)
+        XCTAssertEqual(paths, ["/api/watch-terms/42"])
+        XCTAssertEqual(patchBody?["notify_on_new"] as? Bool, false)
     }
 
     func testSettingsNotificationSyncErrorMessageSurfacesAPNSRetryState() {

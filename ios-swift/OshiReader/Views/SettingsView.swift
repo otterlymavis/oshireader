@@ -184,19 +184,7 @@ struct SettingsView: View {
                             }
                             .accessibilityIdentifier("settings.keywordSources.\(term.keyword)")
                             
-                            // Push notifications bell button
-                            Button {
-                                let next = !term.notify_on_new
-                                updateNotificationPreference(for: term, enabled: next)
-                            } label: {
-                                Image(systemName: term.notify_on_new ? "bell.fill" : "bell.slash")
-                                    .foregroundColor(term.notify_on_new ? theme.colors.primary : theme.colors.textMuted)
-                                    .font(.body)
-                                    .padding(.horizontal, 8)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .disabled(notificationUpdateIDs.contains(term.id))
-                            .accessibilityIdentifier("settings.keywordBell.\(term.keyword)")
+                            keywordNotificationButton(for: term)
                             
                             Toggle("", isOn: Binding(
                                 get: { term.is_active },
@@ -509,11 +497,7 @@ struct SettingsView: View {
                                     )
                                 } catch {
                                     await MainActor.run {
-                                        settingsErrorMessage = Self.notificationSyncErrorMessage(
-                                            for: error,
-                                            enabling: savedTerm.notify_on_new,
-                                            i18n: i18n
-                                        )
+                                        settingsErrorMessage = i18n.t("settingsSyncFailed")
                                     }
                                 }
                             }
@@ -559,6 +543,49 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func keywordNotificationButton(for term: WatchTerm) -> some View {
+        let isEnabled = term.notify_on_new
+        let isUpdating = notificationUpdateIDs.contains(term.id)
+
+        return Button {
+            let next = !isEnabled
+            updateNotificationPreference(for: term, enabled: next)
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isEnabled ? theme.colors.primaryBg : theme.colors.divider)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(
+                                isEnabled ? theme.colors.primary.opacity(0.55) : theme.colors.border,
+                                lineWidth: isEnabled ? 2 : 1
+                            )
+                    }
+
+                Group {
+                    if isUpdating {
+                        ProgressView()
+                            .tint(isEnabled ? theme.colors.primary : theme.colors.textMuted)
+                    } else {
+                        Image(systemName: isEnabled ? "bell.fill" : "bell.slash")
+                            .font(.system(size: 27, weight: .semibold))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(isEnabled ? theme.colors.primary : theme.colors.textMuted)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(width: 62, height: 62)
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .opacity(isUpdating ? 0.78 : 1)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(isUpdating)
+        .accessibilityIdentifier("settings.keywordBell.\(term.keyword)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(isEnabled ? "Notifications on" : "Notifications off")
     }
 
     private func updateSourceSelection(for term: WatchTerm, mode: SourceMode, platforms: [String]) {

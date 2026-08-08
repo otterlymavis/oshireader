@@ -498,10 +498,10 @@ class I18nManager: ObservableObject {
             "zh-CN": "推送通知"
         ],
         "notificationSetupHint": [
-            "en": "Allow notifications to receive alerts for new matches.",
-            "ja": "新しい一致の通知を受け取るには、通知を許可してください。",
-            "zh-TW": "允許通知即可接收新相符項目的提醒。",
-            "zh-CN": "允许通知即可接收新匹配项目的提醒。"
+            "en": "Turn on a keyword bell to register this device for remote notifications.",
+            "ja": "キーワードのベルをオンにすると、このデバイスをリモート通知に登録します。",
+            "zh-TW": "開啟關鍵字鈴鐺即可為此裝置註冊遠端通知。",
+            "zh-CN": "打开关键词铃铛即可为此设备注册远程通知。"
         ],
         "notificationEnableFailed": [
             "en": "Notifications could not be enabled. Allow notifications in iOS Settings, then try again.",
@@ -514,6 +514,12 @@ class I18nManager: ObservableObject {
             "ja": "通知設定を更新できませんでした。もう一度お試しください。",
             "zh-TW": "無法更新通知設定，請再試一次。",
             "zh-CN": "无法更新通知设置，请重试。"
+        ],
+        "settingsSyncFailed": [
+            "en": "This setting could not be synced. Please try again.",
+            "ja": "この設定を同期できませんでした。もう一度お試しください。",
+            "zh-TW": "無法同步此設定，請再試一次。",
+            "zh-CN": "无法同步此设置，请重试。"
         ],
         "notifStatusEnabled": [
             "en": "Enabled",
