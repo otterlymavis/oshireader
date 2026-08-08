@@ -329,6 +329,41 @@ extension NetworkManager {
         )
     }
 
+    func setWatchTermNotificationPreference(
+        for term: WatchTerm,
+        enabled: Bool,
+        timeout: TimeInterval = 30
+    ) async throws -> WatchTerm {
+        do {
+            return try await updateWatchTerm(
+                id: term.id,
+                notifyOnNew: enabled,
+                timeout: timeout,
+                forceAPNSRefresh: enabled
+            )
+        } catch APIClientError.httpStatus(404, _) where enabled {
+            if let existing = try await fetchWatchTerms(timeout: timeout).first(where: { $0.keyword == term.keyword }) {
+                return try await updateWatchTerm(
+                    id: existing.id,
+                    notifyOnNew: true,
+                    timeout: timeout,
+                    forceAPNSRefresh: true
+                )
+            }
+            return try await createWatchTerm(
+                keyword: term.keyword,
+                collectionMode: term.collection_mode,
+                sourceMode: term.source_mode,
+                selectedPlatforms: term.selected_platforms,
+                notifyOnNew: true,
+                isActive: term.is_active,
+                aliases: term.aliases,
+                forceAPNSRefresh: true,
+                timeout: timeout
+            )
+        }
+    }
+
     func deleteWatchTerm(id: String) async throws {
         if isUITesting { return }
         try await apiVoid(
