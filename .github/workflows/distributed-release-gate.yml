@@ -108,12 +108,13 @@ jobs:
             [ -n "$IPA_ARTIFACT_RUN_ID" ] || missing+=(ipa_artifact_run_id)
             IPA_PATH=""
             if [ -n "$IPA_ARTIFACT_RUN_ID" ] && [ -d downloaded-testflight-ipa ]; then
-              mapfile -t downloaded_ipas < <(find downloaded-testflight-ipa -type f -name '*.ipa' | sort)
-              if [ "${#downloaded_ipas[@]}" -eq 1 ]; then
-                IPA_PATH="${downloaded_ipas[0]}"
-              elif [ "${#downloaded_ipas[@]}" -gt 1 ]; then
-                echo "Expected exactly one downloaded .ipa, found ${#downloaded_ipas[@]}:"
-                printf '  %s\n' "${downloaded_ipas[@]}"
+              ipa_list="$(find downloaded-testflight-ipa -type f -name '*.ipa' | sort)"
+              ipa_count="$(printf '%s\n' "$ipa_list" | sed '/^$/d' | wc -l | tr -d ' ')"
+              if [ "$ipa_count" -eq 1 ]; then
+                IPA_PATH="$(printf '%s\n' "$ipa_list" | sed '/^$/d')"
+              elif [ "$ipa_count" -gt 1 ]; then
+                echo "Expected exactly one downloaded .ipa, found $ipa_count:"
+                printf '%s\n' "$ipa_list" | sed '/^$/d; s/^/  /'
                 exit 1
               fi
             fi
