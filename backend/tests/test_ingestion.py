@@ -404,7 +404,7 @@ class TestIngestionNotifications:
         mock_notify.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_late_same_day_discovery_for_established_term_notifies(
+    async def test_recent_late_discovery_for_established_term_notifies(
         self,
         db_engine,
         db_session,
@@ -433,7 +433,7 @@ class TestIngestionNotifications:
         late_new_discovery = _make_item(
             platform="youtube",
             item_id="same-day-but-new-to-feed",
-            published_at=datetime.now(timezone.utc) - timedelta(hours=12),
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=90),
             title="Aiko same-day but newly discovered",
             content_text="Aiko same-day but newly discovered",
             raw_payload={"date_parsed": True},
@@ -474,7 +474,7 @@ class TestIngestionNotifications:
             platform="yahoonews",
             item_id="late-existing",
             url="https://news.example.com/late-existing",
-            published_at=now - timedelta(hours=12),
+            published_at=now - timedelta(minutes=90),
             media_type="article",
             title="Aiko late existing result",
             content_text="Aiko late existing result",
@@ -648,7 +648,7 @@ class TestIngestionNotifications:
             platform="yahoonews",
             item_id="shared-grouped",
             url="https://news.example.com/shared-grouped",
-            published_at=now - timedelta(hours=12),
+            published_at=now - timedelta(minutes=90),
             media_type="article",
             title="Aiko Haruka shared result",
             content_text="Aiko Haruka shared result",
@@ -718,7 +718,7 @@ class TestIngestionNotifications:
             platform="yahoonews",
             item_id="recent-article",
             url="https://news.example.com/recent-article",
-            published_at=now - timedelta(hours=2),
+            published_at=now - timedelta(minutes=90),
             media_type="article",
             title="Aiko recent article",
             content_text="Aiko recent article",

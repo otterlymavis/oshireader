@@ -29,7 +29,7 @@ services:
       - key: RETENTION_DAYS
         value: "30"
       - key: NOTIFICATION_FRESHNESS_WINDOW_MINUTES
-        value: "1440"
+        value: "120"
       - key: ORPHANED_NOTIFICATION_GRACE_MINUTES
         value: "60"
       - key: BACKEND_PUBLIC_URL
