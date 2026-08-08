@@ -81,13 +81,13 @@ class TestListWatchTerms:
         db_session.add_all([
             APNSDeviceToken(
                 token=token,
-                environment="sandbox",
+                environment="production",
                 device_secret=owner_secret,
                 is_verified=True,
             ),
             APNSDeviceToken(
                 token=other_token,
-                environment="sandbox",
+                environment="production",
                 device_secret=other_owner_secret,
                 is_verified=True,
             ),
@@ -113,7 +113,7 @@ class TestListWatchTerms:
         db_session.add_all([
             APNSDeviceToken(
                 token=token,
-                environment="sandbox",
+                environment="production",
                 device_secret=owner_secret,
                 is_verified=True,
             ),
@@ -144,6 +144,7 @@ class TestCreateWatchTerm:
         body = resp.json()
         assert body["keyword"] == "Aiko"
         assert body["id"] is not None
+        assert body["notify_on_new"] is False
 
     def test_creates_term_with_aliases(self, client):
         with patch("app.api.watch_terms.queue_poll"):
@@ -202,13 +203,13 @@ class TestCreateWatchTerm:
         db_session.add_all([
             APNSDeviceToken(
                 token=first_token,
-                environment="sandbox",
+                environment="production",
                 device_secret=hashlib.sha256(first_secret.encode()).hexdigest(),
                 is_verified=True,
             ),
             APNSDeviceToken(
                 token=second_token,
-                environment="sandbox",
+                environment="production",
                 device_secret=hashlib.sha256(second_secret.encode()).hexdigest(),
                 is_verified=True,
             ),
@@ -241,6 +242,8 @@ class TestCreateWatchTerm:
         stale = WatchTerm(
             keyword="Aiko",
             collection_mode="media_only",
+            source_mode="all",
+            selected_platforms=[],
             notify_on_new=False,
             is_active=True,
             aliases=["old"],
@@ -251,7 +254,7 @@ class TestCreateWatchTerm:
             stale,
             APNSDeviceToken(
                 token=token,
-                environment="sandbox",
+                environment="production",
                 device_secret=owner_secret,
                 is_verified=True,
             ),
@@ -265,6 +268,8 @@ class TestCreateWatchTerm:
                 json={
                     "keyword": "Aiko",
                     "collection_mode": "all_info",
+                    "source_mode": "selected",
+                    "selected_platforms": ["youtube"],
                     "notify_on_new": True,
                     "aliases": ["new"],
                 },
@@ -276,6 +281,8 @@ class TestCreateWatchTerm:
         db_session.refresh(stale)
         assert stale.owner_device_secret == owner_secret
         assert stale.collection_mode == "all_info"
+        assert stale.source_mode == "selected"
+        assert stale.selected_platforms == ["youtube"]
         assert stale.notify_on_new is True
         assert stale.aliases == ["new"]
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
@@ -303,13 +310,13 @@ class TestCreateWatchTerm:
             stale,
             APNSDeviceToken(
                 token=token,
-                environment="sandbox",
+                environment="production",
                 device_secret=owner_secret,
                 is_verified=True,
             ),
             APNSDeviceToken(
                 token=stale_token,
-                environment="sandbox",
+                environment="production",
                 device_secret=stale_owner_secret,
                 is_verified=False,
             ),
@@ -348,7 +355,7 @@ class TestCreateWatchTerm:
             recent,
             APNSDeviceToken(
                 token=token,
-                environment="sandbox",
+                environment="production",
                 device_secret=owner_secret,
                 is_verified=True,
             ),
@@ -384,6 +391,31 @@ class TestCreateWatchTerm:
         assert resp.status_code == 409
         assert resp.json()["detail"]["code"] == "notification_device_required"
         assert "verified APNs device" in resp.json()["detail"]["message"]
+        assert db_session.query(WatchTerm).count() == 0
+        mock_poll.assert_not_called()
+
+    def test_device_create_notify_term_requires_verified_device_for_server_environment(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        db_session.add(APNSDeviceToken(
+            token=token,
+            environment="sandbox",
+            device_secret=hashlib.sha256(secret.encode()).hexdigest(),
+            is_verified=True,
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch.object(settings, "apns_use_sandbox", False), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "notification_device_required"
         assert db_session.query(WatchTerm).count() == 0
         mock_poll.assert_not_called()
 
@@ -424,6 +456,40 @@ class TestCreateWatchTerm:
         assert term.notify_on_new is False
         mock_poll.assert_not_called()
 
+    def test_device_update_notify_term_requires_verified_device_for_server_environment(self, client, db_session):
+        token = "a" * 64
+        secret = "device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            owner_device_secret=owner_secret,
+        )
+        db_session.add_all([
+            term,
+            APNSDeviceToken(
+                token=token,
+                environment="sandbox",
+                device_secret=owner_secret,
+                is_verified=True,
+            ),
+        ])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch.object(settings, "apns_use_sandbox", False), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"notify_on_new": True},
+                headers={"X-Device-Token": token, "X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 409
+        db_session.refresh(term)
+        assert term.notify_on_new is False
+        mock_poll.assert_not_called()
+
     def test_registered_device_does_not_adopt_same_keyword_with_existing_owner_device(self, client, db_session):
         current_token = "a" * 64
         old_token = "b" * 64
@@ -441,13 +507,13 @@ class TestCreateWatchTerm:
             stale,
             APNSDeviceToken(
                 token=current_token,
-                environment="sandbox",
+                environment="production",
                 device_secret=current_owner_secret,
                 is_verified=True,
             ),
             APNSDeviceToken(
                 token=old_token,
-                environment="sandbox",
+                environment="production",
                 device_secret=old_owner_secret,
                 is_verified=True,
             ),
@@ -473,7 +539,7 @@ class TestCreateWatchTerm:
         secret = "device-secret-value"
         db_session.add(APNSDeviceToken(
             token=token,
-            environment="sandbox",
+            environment="production",
             device_secret=hashlib.sha256(secret.encode()).hexdigest(),
             is_verified=True,
         ))
@@ -499,7 +565,7 @@ class TestCreateWatchTerm:
         secret = "device-secret-value"
         db_session.add(APNSDeviceToken(
             token=token,
-            environment="sandbox",
+            environment="production",
             device_secret=hashlib.sha256(secret.encode()).hexdigest(),
             is_verified=True,
         ))
@@ -551,7 +617,7 @@ class TestCreateWatchTerm:
         secret = "device-secret-value"
         db_session.add(APNSDeviceToken(
             token=token,
-            environment="sandbox",
+            environment="production",
             device_secret=hashlib.sha256(secret.encode()).hexdigest(),
             is_verified=False,
         ))

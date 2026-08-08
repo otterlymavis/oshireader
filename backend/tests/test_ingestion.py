@@ -1135,6 +1135,7 @@ class TestIngestionNotifications:
             existing,
             APNSDeviceToken(
                 token="owner-token",
+                environment="production",
                 device_secret="owner-secret",
                 is_verified=True,
             ),

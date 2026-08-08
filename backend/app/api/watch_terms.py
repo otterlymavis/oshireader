@@ -45,11 +45,13 @@ def _term_with_keyword_exists(
 def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> bool:
     if owner_device_secret is None:
         return False
+    server_environment = "sandbox" if settings.apns_use_sandbox else "production"
     return (
         db.query(APNSDeviceToken.token)
         .filter(
             APNSDeviceToken.device_secret == owner_device_secret,
             APNSDeviceToken.is_verified == True,  # noqa: E712
+            APNSDeviceToken.environment == server_environment,
         )
         .first()
         is not None
@@ -102,6 +104,8 @@ def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> Watch
             continue
         candidate.owner_device_secret = incoming.owner_device_secret
         candidate.collection_mode = incoming.collection_mode
+        candidate.source_mode = incoming.source_mode
+        candidate.selected_platforms = incoming.selected_platforms
         candidate.is_active = incoming.is_active
         candidate.notify_on_new = incoming.notify_on_new
         candidate.aliases = incoming.aliases

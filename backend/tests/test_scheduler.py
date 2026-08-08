@@ -16,6 +16,7 @@ from app.database import Base
 from unittest.mock import patch
 
 from app.connectors import news_sites
+from app.config import settings as app_settings
 from app.ingestion.scheduler import (
     _build_connectors,
     _cache_successful_fetch,
@@ -619,6 +620,10 @@ class TestPollTermWindow:
 
 
 class TestNotificationFreshnessWindow:
+    def test_default_freshness_window_stays_short(self):
+        assert app_settings.notification_freshness_window_minutes == 120
+        assert _notification_freshness_window() == timedelta(hours=2)
+
     def test_uses_configured_freshness_window(self):
         with patch("app.ingestion.scheduler.settings") as mock_settings:
             mock_settings.notification_freshness_window_minutes = 120
@@ -680,6 +685,62 @@ class TestNotificationFreshnessWindow:
                 source_item=source_item,
                 observed_at=observed_at,
             ) is False
+
+    def test_rejects_articles_far_beyond_observed_clock_skew(self, db):
+        observed_at = datetime(2026, 7, 9, 15, 0, tzinfo=timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            created_at=observed_at - timedelta(days=3),
+        )
+        source_item = SourceItem(
+            id="oricon:future-item",
+            platform="oricon",
+            item_id="future-item",
+            url="https://example.com/future",
+            published_at=observed_at + timedelta(hours=6),
+            media_type="article",
+            title="Aiko future-dated article",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, source_item])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 120
+
+            assert _is_notification_eligible(
+                term=term,
+                source_item=source_item,
+                observed_at=observed_at,
+            ) is False
+
+    def test_allows_articles_with_small_future_clock_skew(self, db):
+        observed_at = datetime(2026, 7, 9, 15, 0, tzinfo=timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            created_at=observed_at - timedelta(days=3),
+        )
+        source_item = SourceItem(
+            id="oricon:clock-skew-item",
+            platform="oricon",
+            item_id="clock-skew-item",
+            url="https://example.com/clock-skew",
+            published_at=observed_at + timedelta(minutes=3),
+            media_type="article",
+            title="Aiko near-future article",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, source_item])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 120
+
+            assert _is_notification_eligible(
+                term=term,
+                source_item=source_item,
+                observed_at=observed_at,
+            ) is True
 
 
 class TestQueuePendingNotification:
@@ -745,6 +806,94 @@ class TestDeliverPendingNotification:
 
         with patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()) as mock_send:
             delivered = await _deliver_pending_notification(db, term)
+
+        assert delivered is True
+        assert db.get(PendingNotification, term_id) is None
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_drops_stale_pending_notification_without_sending(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        stale_item = SourceItem(
+            id="news:stale",
+            platform="news",
+            item_id="stale",
+            url="https://example.com/stale",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=3),
+            media_type="article",
+            title="Aiko stale article",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, stale_item])
+        db.flush()
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=stale_item.id),
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "id": stale_item.id,
+                    "title": stale_item.title,
+                    "published_at": stale_item.published_at.isoformat(),
+                },
+            ),
+        ])
+        db.commit()
+        term_id = term.id
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 120
+            with patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()) as mock_send:
+                delivered = await _deliver_pending_notification(db, term)
+
+        assert delivered is True
+        assert db.get(PendingNotification, term_id) is None
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_drops_future_dated_pending_notification_without_sending(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        future_item = SourceItem(
+            id="news:future",
+            platform="news",
+            item_id="future",
+            url="https://example.com/future",
+            published_at=datetime.now(timezone.utc) + timedelta(hours=6),
+            media_type="article",
+            title="Aiko future-dated article",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, future_item])
+        db.flush()
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=future_item.id),
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                preview_item={
+                    "id": future_item.id,
+                    "title": future_item.title,
+                    "published_at": future_item.published_at.isoformat(),
+                },
+            ),
+        ])
+        db.commit()
+        term_id = term.id
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 120
+            with patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()) as mock_send:
+                delivered = await _deliver_pending_notification(db, term)
 
         assert delivered is True
         assert db.get(PendingNotification, term_id) is None
@@ -916,10 +1065,38 @@ class TestReportOrphanedNotificationTerms:
 
         with patch("app.ingestion.scheduler.settings") as mock_settings:
             mock_settings.orphaned_notification_grace_minutes = 60
+            mock_settings.apns_use_sandbox = False
             orphaned = _report_orphaned_notification_terms(db)
 
         db.refresh(term)
         assert orphaned == set()
+        assert term.notify_on_new is True
+
+    def test_reports_term_with_only_wrong_environment_owner_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        db.add(APNSDeviceToken(
+            token="s" * 64,
+            environment="sandbox",
+            device_secret="owner-secret",
+            is_verified=True,
+        ))
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="owner-secret",
+            created_at=old,
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            mock_settings.apns_use_sandbox = False
+            orphaned = _report_orphaned_notification_terms(db)
+
+        db.refresh(term)
+        assert orphaned == {term.id}
         assert term.notify_on_new is True
 
     def test_reports_term_with_unverified_owner_device(self, db):
@@ -1001,6 +1178,7 @@ class TestReportOrphanedDuplicateTerms:
 
         with patch("app.ingestion.scheduler.settings") as mock_settings:
             mock_settings.orphaned_notification_grace_minutes = 60
+            mock_settings.apns_use_sandbox = False
             orphaned = _report_orphaned_duplicate_terms(db)
 
         db.refresh(stale)
@@ -1065,11 +1243,51 @@ class TestReportOrphanedDuplicateTerms:
 
         with patch("app.ingestion.scheduler.settings") as mock_settings:
             mock_settings.orphaned_notification_grace_minutes = 60
+            mock_settings.apns_use_sandbox = False
             orphaned = _report_orphaned_duplicate_terms(db)
 
         db.refresh(term)
         assert orphaned == set()
         assert term.is_active is True
+
+    def test_keeps_duplicate_when_replacement_only_has_wrong_environment_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        stale = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        replacement = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            owner_device_secret="current-secret",
+            created_at=old,
+        )
+        db.add_all([
+            stale,
+            replacement,
+            APNSDeviceToken(
+                token="s" * 64,
+                environment="sandbox",
+                device_secret="current-secret",
+                is_verified=True,
+            ),
+        ])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            mock_settings.apns_use_sandbox = False
+            orphaned = _report_orphaned_duplicate_terms(db)
+
+        db.refresh(stale)
+        db.refresh(replacement)
+        assert orphaned == set()
+        assert stale.is_active is True
+        assert replacement.is_active is True
 
 
 class TestReportOrphanedSilentTerms:
@@ -1166,6 +1384,33 @@ class TestReportOrphanedSilentTerms:
 
         with patch("app.ingestion.scheduler.settings") as mock_settings:
             mock_settings.orphaned_notification_grace_minutes = 60
+            orphaned = _report_orphaned_silent_terms(db)
+
+        db.refresh(term)
+        assert orphaned == {term.id}
+        assert term.is_active is True
+
+    def test_reports_silent_term_with_only_wrong_environment_owner_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        db.add(APNSDeviceToken(
+            token="s" * 64,
+            environment="sandbox",
+            device_secret="old-secret",
+            is_verified=True,
+        ))
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="old-secret",
+            created_at=old,
+        )
+        db.add(term)
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            mock_settings.apns_use_sandbox = False
             orphaned = _report_orphaned_silent_terms(db)
 
         db.refresh(term)

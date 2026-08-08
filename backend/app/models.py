@@ -27,7 +27,7 @@ class WatchTerm(Base):
     source_mode = Column(String, nullable=False, default="all")  # all | selected
     selected_platforms = Column(JSON, default=list)
     is_active = Column(Boolean, default=True)
-    notify_on_new = Column(Boolean, default=True)
+    notify_on_new = Column(Boolean, default=False)
     refresh_tier = Column(String, nullable=False, default="free", index=True)
     last_polled_at = Column(DateTime, index=True)
     owner_device_secret = Column(String, index=True)

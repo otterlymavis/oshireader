@@ -77,6 +77,10 @@ def _past_orphaned_owner_grace_filter(cutoff: datetime):
     return or_(WatchTerm.created_at.is_(None), WatchTerm.created_at <= cutoff)
 
 
+def _server_apns_environment() -> str:
+    return "sandbox" if settings.apns_use_sandbox is True else "production"
+
+
 def _build_connectors(db) -> list[BaseConnector]:
     connectors: list[BaseConnector] = [
         RSSConnector(),
@@ -373,6 +377,7 @@ def _report_orphaned_notification_terms(db) -> set[int]:
             db.query(APNSDeviceToken.token)
             .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
             .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+            .filter(APNSDeviceToken.environment == _server_apns_environment())
             .first()
             is not None
         )
@@ -400,6 +405,7 @@ def _report_orphaned_notification_terms(db) -> set[int]:
 
 def _term_has_verified_device(db, term: WatchTerm) -> bool:
     query = db.query(APNSDeviceToken.token).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+    query = query.filter(APNSDeviceToken.environment == _server_apns_environment())
     if term.owner_device_secret:
         query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
     return query.first() is not None
@@ -424,6 +430,7 @@ def _report_orphaned_duplicate_terms(db) -> set[int]:
             db.query(APNSDeviceToken.token)
             .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
             .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+            .filter(APNSDeviceToken.environment == _server_apns_environment())
             .first()
             is not None
         )
@@ -480,6 +487,7 @@ def _report_orphaned_silent_terms(db) -> set[int]:
             db.query(APNSDeviceToken.token)
             .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
             .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+            .filter(APNSDeviceToken.environment == _server_apns_environment())
             .first()
             is not None
         )
@@ -540,7 +548,7 @@ def _is_notification_eligible(
         observed_at - _notification_freshness_window(),
         term_created_at - _WATCH_TERM_CLOCK_SKEW,
     )
-    return published_at >= cutoff
+    return cutoff <= published_at <= observed_at + _WATCH_TERM_CLOCK_SKEW
 
 
 def _candidate_is_newer(

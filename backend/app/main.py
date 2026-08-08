@@ -278,8 +278,31 @@ def _apns_event_delivered(event: BackendEvent | None) -> bool:
         return False
 
 
+def _server_apns_environment() -> str:
+    return "sandbox" if settings.apns_use_sandbox else "production"
+
+
+def _notification_device_counts(db: Session, term: WatchTerm) -> dict:
+    query = db.query(APNSDeviceToken)
+    if term.owner_device_secret:
+        query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
+    total = query.count()
+    verified = query.filter(APNSDeviceToken.is_verified == True).count()  # noqa: E712
+    verified_for_server_environment = query.filter(
+        APNSDeviceToken.is_verified == True,  # noqa: E712
+        APNSDeviceToken.environment == _server_apns_environment(),
+    ).count()
+    return {
+        "owner_scoped": bool(term.owner_device_secret),
+        "notification_devices": total,
+        "notification_verified_devices": verified,
+        "notification_verified_devices_for_server_environment": verified_for_server_environment,
+    }
+
+
 def _term_verified_device_count(db: Session, term: WatchTerm) -> int:
     query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+    query = query.filter(APNSDeviceToken.environment == _server_apns_environment())
     if term.owner_device_secret:
         query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
     return query.count()
@@ -649,6 +672,7 @@ def _owner_has_verified_apns_device(db: Session, term: WatchTerm) -> bool:
         .filter(
             APNSDeviceToken.device_secret == term.owner_device_secret,
             APNSDeviceToken.is_verified == True,  # noqa: E712
+            APNSDeviceToken.environment == _server_apns_environment(),
         )
         .first()
         is not None
@@ -1204,25 +1228,13 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         .all()
     )
 
-    def notification_device_counts(term: WatchTerm) -> dict:
-        query = db.query(APNSDeviceToken)
-        if term.owner_device_secret:
-            query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
-        total = query.count()
-        verified = query.filter(APNSDeviceToken.is_verified == True).count()  # noqa: E712
-        return {
-            "owner_scoped": bool(term.owner_device_secret),
-            "notification_devices": total,
-            "notification_verified_devices": verified,
-        }
-
     watch_term_rows: list[dict] = []
     active_silent_orphans: list[dict] = []
     active_notify_without_verified_devices: list[dict] = []
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     for term in terms:
-        device_counts = notification_device_counts(term)
+        device_counts = _notification_device_counts(db, term)
         row = {
             "id": term.id,
             "keyword": term.keyword,
@@ -1236,13 +1248,13 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         if term.notify_on_new:
             active_notify_terms += 1
             if (
-                device_counts["notification_verified_devices"] == 0
+                device_counts["notification_verified_devices_for_server_environment"] == 0
                 and _orphaned_owner_grace_elapsed(term)
             ):
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
-            and device_counts["notification_verified_devices"] == 0
+            and device_counts["notification_verified_devices_for_server_environment"] == 0
             and _orphaned_owner_grace_elapsed(term)
         ):
             active_silent_orphans.append(row)
@@ -1257,9 +1269,9 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             "active_silent_orphan_terms": len(active_silent_orphans),
             "active_notify_terms_without_verified_devices": len(active_notify_without_verified_devices),
             "orphaned_notification_grace_minutes": orphaned_grace_minutes,
-            "active_silent_orphan_term_ids": [term["id"] for term in active_silent_orphans[:20]],
+            "active_silent_orphan_term_ids": [term["id"] for term in active_silent_orphans],
             "active_notify_term_ids_without_verified_devices": [
-                term["id"] for term in active_notify_without_verified_devices[:20]
+                term["id"] for term in active_notify_without_verified_devices
             ],
         },
         "items_by_platform": {p: c for p, c in by_platform},
@@ -1283,7 +1295,7 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         ],
         "apns": {
             "configured": apns_configured(),
-            "server_environment": "sandbox" if settings.apns_use_sandbox else "production",
+            "server_environment": _server_apns_environment(),
             "backend_public_url": settings.backend_public_url,
             "device_tokens_by_environment": {env: c for env, c in device_tokens},
             "device_tokens_by_environment_and_verification": {
@@ -1378,25 +1390,13 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
         .all()
     )
 
-    def notification_device_counts(term: WatchTerm) -> dict:
-        query = db.query(APNSDeviceToken)
-        if term.owner_device_secret:
-            query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
-        total = query.count()
-        verified = query.filter(APNSDeviceToken.is_verified == True).count()  # noqa: E712
-        return {
-            "owner_scoped": bool(term.owner_device_secret),
-            "notification_devices": total,
-            "notification_verified_devices": verified,
-        }
-
     watch_term_rows: list[dict] = []
     active_silent_orphans: list[dict] = []
     active_notify_without_verified_devices: list[dict] = []
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     for term in terms:
-        device_counts = notification_device_counts(term)
+        device_counts = _notification_device_counts(db, term)
         row = {
             "id": term.id,
             "keyword": term.keyword,
@@ -1409,12 +1409,14 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
             continue
         if term.notify_on_new:
             active_notify_terms += 1
-            if device_counts["notification_verified_devices"] == 0 and (
+            if device_counts["notification_verified_devices_for_server_environment"] == 0 and (
                 _orphaned_owner_grace_elapsed(term)
             ):
                 active_notify_without_verified_devices.append(row)
-        elif term.owner_device_secret and device_counts["notification_verified_devices"] == 0 and (
-            _orphaned_owner_grace_elapsed(term)
+        elif (
+            term.owner_device_secret
+            and device_counts["notification_verified_devices_for_server_environment"] == 0
+            and _orphaned_owner_grace_elapsed(term)
         ):
             active_silent_orphans.append(row)
 
@@ -1426,14 +1428,14 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
             "active_silent_orphan_terms": len(active_silent_orphans),
             "active_notify_terms_without_verified_devices": len(active_notify_without_verified_devices),
             "orphaned_notification_grace_minutes": orphaned_grace_minutes,
-            "active_silent_orphan_term_ids": [term["id"] for term in active_silent_orphans[:20]],
+            "active_silent_orphan_term_ids": [term["id"] for term in active_silent_orphans],
             "active_notify_term_ids_without_verified_devices": [
-                term["id"] for term in active_notify_without_verified_devices[:20]
+                term["id"] for term in active_notify_without_verified_devices
             ],
         },
         "apns": {
             "configured": apns_configured(),
-            "server_environment": "sandbox" if settings.apns_use_sandbox else "production",
+            "server_environment": _server_apns_environment(),
             "backend_public_url": settings.backend_public_url,
             "device_tokens_by_environment": {env: count for env, count in device_tokens},
             "device_tokens_by_environment_and_verification": {

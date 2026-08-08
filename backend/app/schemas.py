@@ -45,7 +45,7 @@ class WatchTermCreate(BaseModel):
     source_mode: Literal["all", "selected"] = "all"
     selected_platforms: list[str] = Field(default=[], max_length=100)
     is_active: bool = True
-    notify_on_new: bool = True
+    notify_on_new: bool = False
     refresh_tier: Literal["free", "standard", "premium"] = "free"
 
     @field_validator("keyword", mode="before")
