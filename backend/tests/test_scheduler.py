@@ -582,10 +582,19 @@ class TestPollTermWindow:
 
         assert [term.keyword for term in selected] == [f"term-{index}" for index in range(5)]
         assert offset == 0
-        assert next_offset == 5
+        assert next_offset == 0
 
-    def test_rotates_from_previous_successful_poll(self, db):
+    def test_selects_oldest_due_terms_even_when_previous_offset_would_skip(self, db):
         terms = self._terms(db, 8)
+        now = datetime.now(timezone.utc)
+        terms[0].last_polled_at = now - timedelta(hours=1)
+        terms[1].last_polled_at = now - timedelta(hours=2)
+        terms[2].last_polled_at = now - timedelta(days=5)
+        terms[3].last_polled_at = now - timedelta(days=4)
+        terms[4].last_polled_at = now - timedelta(days=3)
+        terms[5].last_polled_at = now - timedelta(days=2)
+        terms[6].last_polled_at = now - timedelta(hours=3)
+        terms[7].last_polled_at = now - timedelta(hours=4)
         db.add(BackendEvent(
             kind="poll",
             status="completed",
@@ -598,14 +607,14 @@ class TestPollTermWindow:
             selected, offset, next_offset = _poll_term_window(db, terms)
 
         assert [term.keyword for term in selected] == [
+            "term-2",
+            "term-3",
+            "term-4",
             "term-5",
-            "term-6",
             "term-7",
-            "term-0",
-            "term-1",
         ]
-        assert offset == 5
-        assert next_offset == 2
+        assert offset == 0
+        assert next_offset == 0
 
     def test_zero_limit_processes_all_terms(self, db):
         terms = self._terms(db, 3)

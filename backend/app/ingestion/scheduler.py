@@ -263,25 +263,20 @@ def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int,
     if total == 0 or limit <= 0 or limit >= total:
         return terms, 0, 0
 
-    latest = (
-        db.query(BackendEvent)
-        .filter(
-            BackendEvent.kind == "poll",
-            BackendEvent.status.in_(["completed", "completed_with_errors"]),
-        )
-        .order_by(BackendEvent.created_at.desc(), BackendEvent.id.desc())
-        .first()
-    )
-    try:
-        offset = int((latest.payload or {}).get("next_term_offset", 0)) if latest else 0
-    except (TypeError, ValueError):
-        offset = 0
-    offset %= total
-    next_offset = (offset + limit) % total
+    def sort_key(term: WatchTerm) -> tuple[datetime, int]:
+        last_polled = term.last_polled_at
+        if last_polled is None:
+            last_polled = datetime.min.replace(tzinfo=timezone.utc)
+        elif last_polled.tzinfo is None:
+            last_polled = last_polled.replace(tzinfo=timezone.utc)
+        else:
+            last_polled = last_polled.astimezone(timezone.utc)
+        return last_polled, term.id or 0
 
-    if offset + limit <= total:
-        return terms[offset:offset + limit], offset, next_offset
-    return terms[offset:] + terms[:next_offset], offset, next_offset
+    # Poll the stalest due terms first. Reusing an offset from the previous
+    # due-term list can skip terms after the list shrinks between runs.
+    selected = sorted(terms, key=sort_key)[:limit]
+    return selected, 0, 0
 
 
 def _term_refresh_interval(term: WatchTerm) -> timedelta:
