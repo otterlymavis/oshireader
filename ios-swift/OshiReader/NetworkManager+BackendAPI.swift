@@ -122,15 +122,10 @@ extension NetworkManager {
                     }
                     continue
                 }
-                let notifyOnNewUpdate = Self.automaticSyncNotifyOnNewUpdate(
-                    localTerm: term,
-                    serverTerm: serverTerm
-                )
                 let needsUpdate = serverTerm.collection_mode != term.collection_mode ||
                     serverTerm.source_mode != term.source_mode ||
                     serverTerm.selected_platforms != term.selected_platforms ||
                     serverTerm.is_active != term.is_active ||
-                    notifyOnNewUpdate != nil ||
                     serverTerm.aliases != term.aliases
                 if needsUpdate,
                    let updatedTerm = try? await updateWatchTerm(
@@ -139,7 +134,7 @@ extension NetworkManager {
                     collectionMode: term.collection_mode,
                     sourceMode: term.source_mode,
                     selectedPlatforms: term.selected_platforms,
-                    notifyOnNew: notifyOnNewUpdate,
+                    notifyOnNew: nil,
                     aliases: term.aliases,
                     timeout: timeout
                    ) {
@@ -147,12 +142,6 @@ extension NetworkManager {
                         LocalDB.shared.replaceTerm(localId: term.id, with: updatedTerm, ifUnchangedFrom: term)
                     }
                     if !replaced { succeeded = false }
-                } else if notifyOnNewUpdate != nil {
-                    // Keep the user's local preference when APNs verification or
-                    // the backend is temporarily unavailable. Replacing it with
-                    // the server's false value makes a transient sync failure
-                    // look like an intentional opt-out.
-                    succeeded = false
                 } else {
                     let replaced = await MainActor.run {
                         LocalDB.shared.replaceTerm(localId: term.id, with: serverTerm, ifUnchangedFrom: term)
@@ -402,6 +391,9 @@ extension NetworkManager {
                 )
             }
             if !enabled {
+                // Term doesn't exist on the backend — treat as a local-only
+                // term so the next sync resolves it by keyword rather than
+                // repeatedly PATCHing the local UUID (which always 404s).
                 return WatchTerm(
                     id: term.id,
                     keyword: term.keyword,
@@ -411,7 +403,7 @@ extension NetworkManager {
                     is_active: term.is_active,
                     notify_on_new: false,
                     aliases: term.aliases,
-                    repaired_from_cache: term.repaired_from_cache,
+                    repaired_from_cache: true,
                     created_at: term.created_at
                 )
             }
@@ -577,7 +569,8 @@ extension NetworkManager {
             URL(string: "\(apiBase)/api/devices/apns-token")!,
             method: "POST",
             body: bodyData,
-            acceptRange: 200...299
+            acceptRange: 200...299,
+            timeout: 90
         )
         guard registration.is_verified == true else {
             throw APIClientError.apnsRegistrationUnverified(
