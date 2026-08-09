@@ -12,6 +12,7 @@ on:
           - purge-youtube-google-news
           - purge-yahoonews-bad-dates
           - prune-storage
+          - enable-notify-terms
           - mute-orphaned-notify-terms
           - deactivate-orphaned-terms
       term_ids:
@@ -185,6 +186,79 @@ jobs:
               raise SystemExit(f"orphaned term maintenance returned HTTP {exc.code}")
           except (TimeoutError, urllib.error.URLError, OSError) as exc:
               raise SystemExit(f"orphaned term maintenance request failed: {exc}") from exc
+          PY
+
+      - name: Enable notification terms with verified devices
+        if: inputs.action == 'enable-notify-terms'
+        run: |
+          if [ -z "$TERM_IDS" ]; then
+            echo "term_ids is required for enable-notify-terms"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          token = os.environ["ADMIN_API_TOKEN"]
+          headers = {"Authorization": f"Bearer {token}"}
+          try:
+              term_ids = list(dict.fromkeys(
+                  int(value.strip())
+                  for value in os.environ["TERM_IDS"].split(",")
+                  if value.strip()
+              ))
+          except ValueError as exc:
+              raise SystemExit(f"term_ids must contain only integers: {os.environ['TERM_IDS']!r}") from exc
+          if not term_ids or any(term_id <= 0 for term_id in term_ids):
+              raise SystemExit("term_ids must contain positive integers")
+
+          health_request = urllib.request.Request(
+              f"{backend_url}/api/admin/poller-health",
+              headers=headers,
+          )
+          with urllib.request.urlopen(health_request, timeout=90) as response:
+              health = json.load(response)
+          terms = {
+              int(term["id"]): term
+              for term in health.get("watch_terms", [])
+              if isinstance(term, dict) and "id" in term
+          }
+          failures = []
+          for term_id in term_ids:
+              term = terms.get(term_id)
+              if term is None:
+                  failures.append({"term_id": term_id, "reason": "not_found"})
+              elif int(term.get("notification_verified_devices") or 0) <= 0:
+                  failures.append({"term_id": term_id, "reason": "no_verified_apns_device"})
+          if failures:
+              raise SystemExit(f"Refusing to enable notification term(s): {failures}")
+
+          for term_id in term_ids:
+              request = urllib.request.Request(
+                  f"{backend_url}/api/watch-terms/{term_id}",
+                  data=json.dumps({"notify_on_new": True}).encode("utf-8"),
+                  headers={**headers, "Content-Type": "application/json"},
+                  method="PATCH",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=90) as response:
+                      payload = json.load(response)
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  raise SystemExit(
+                      f"Failed to enable term {term_id}: HTTP {exc.code}: {body}"
+                  ) from exc
+              if payload.get("notify_on_new") is not True:
+                  raise SystemExit(f"Term {term_id} did not enable notifications: {payload}")
+              print(json.dumps({
+                  "term_id": term_id,
+                  "keyword": payload.get("keyword"),
+                  "notify_on_new": payload.get("notify_on_new"),
+              }, ensure_ascii=False))
           PY
 
       - name: Deactivate orphaned terms
