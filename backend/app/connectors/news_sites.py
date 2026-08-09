@@ -88,13 +88,6 @@ def _parse_optional_ameba_timestamp(value: object) -> datetime | None:
     return None
 
 
-def _parse_ameba_timestamp(value: object) -> datetime | None:
-    parsed = _parse_optional_ameba_timestamp(value)
-    if parsed:
-        return mark_date_provenance(parsed, date_parsed=True)
-    return None
-
-
 def _parse_ameba_activity_timestamp(*values: object) -> datetime | None:
     dates = [parsed for value in values if (parsed := _parse_optional_ameba_timestamp(value))]
     if dates:

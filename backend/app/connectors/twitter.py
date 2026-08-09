@@ -1,19 +1,12 @@
 import logging
-import asyncio
 from datetime import datetime
-from urllib.parse import quote
 
-import feedparser
 import httpx
 
 from app.connectors.base import (
     BaseConnector,
-    GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     contains_keyword,
-    fetch_search_rss_via_proxy,
-    parse_feed_date,
-    parse_google_news_markdown,
 )
 from app.models import CollectionMode
 
@@ -102,130 +95,3 @@ class TwitterConnector(BaseConnector):
             )
 
         return items
-
-    async def _fetch_public_index(
-        self,
-        keyword: str,
-        mode: CollectionMode,
-    ) -> list[SourceItemCreate]:
-        encoded = quote(f"{keyword} site:x.com when:1y")
-        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
-        feed = None
-        try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("X public-index fallback returned status %d", resp.status_code)
-                else:
-                    feed = await asyncio.to_thread(feedparser.parse, resp.content)
-        except Exception as exc:
-            log.warning("X public-index fallback failed: %s", exc)
-
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in (feed.entries if feed else [])[:25]:
-            title = (entry.get("title") or "").strip()
-            link = entry.get("link", "")
-            item_id = entry.get("id") or link
-            if not link or not contains_keyword(keyword, title) or item_id in seen:
-                continue
-            if mode == CollectionMode.MEDIA_ONLY:
-                continue
-            published = parse_feed_date(entry)
-            if published is None:
-                continue
-            seen.add(item_id)
-            items.append(SourceItemCreate(
-                platform=self.PLATFORM,
-                item_id=item_id,
-                url=link,
-                published_at=published,
-                media_type="text",
-                title=title,
-                content_text=entry.get("summary") or None,
-                raw_payload={"source": "google_news_public_index", "keyword": keyword},
-            ))
-        if items:
-            return items
-        items = await self._fetch_public_index_jina(keyword, mode, url)
-        if items:
-            return items
-        return await self._fetch_public_index_proxy(keyword, mode)
-
-    async def _fetch_public_index_jina(
-        self,
-        keyword: str,
-        mode: CollectionMode,
-        google_news_url: str,
-    ) -> list[SourceItemCreate]:
-        if mode == CollectionMode.MEDIA_ONLY:
-            return []
-        proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
-        try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-                resp = await client.get(proxy_url)
-                if not resp.is_success:
-                    log.warning("X public-index Jina fallback returned status %d", resp.status_code)
-                    return []
-        except Exception as exc:
-            log.warning("X public-index Jina fallback failed: %s", exc)
-            return []
-
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in parse_google_news_markdown(resp.text)[:25]:
-            title = entry["title"]
-            link = entry["url"]
-            if not link or not contains_keyword(keyword, title) or link in seen:
-                continue
-            seen.add(link)
-            items.append(SourceItemCreate(
-                platform=self.PLATFORM,
-                item_id=link,
-                url=link,
-                published_at=entry["published_at"],
-                media_type="text",
-                title=title,
-                content_text=None,
-                raw_payload={"source": "google_news_jina", "keyword": keyword},
-            ))
-        return items
-
-    async def _fetch_public_index_proxy(
-        self,
-        keyword: str,
-        mode: CollectionMode,
-    ) -> list[SourceItemCreate]:
-        if mode == CollectionMode.MEDIA_ONLY:
-            return []
-        query = f"{keyword} site:x.com when:1y"
-        for target, source in (("google", "google_news_proxy"), ("bing", "bing_news_proxy")):
-            content = await fetch_search_rss_via_proxy(query, target=target)
-            if not content:
-                continue
-            feed = await asyncio.to_thread(feedparser.parse, content)
-            items: list[SourceItemCreate] = []
-            seen: set[str] = set()
-            for entry in feed.entries[:25]:
-                title = (entry.get("title") or "").strip()
-                link = entry.get("link", "")
-                item_id = entry.get("id") or link
-                if not link or not contains_keyword(keyword, title) or item_id in seen:
-                    continue
-                published = parse_feed_date(entry)
-                if published is None:
-                    continue
-                seen.add(item_id)
-                items.append(SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=item_id,
-                    url=link,
-                    published_at=published,
-                    media_type="text",
-                    title=title,
-                    content_text=entry.get("summary") or None,
-                    raw_payload={"source": source, "keyword": keyword},
-                ))
-            if items:
-                return items
-        return []

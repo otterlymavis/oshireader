@@ -1,12 +1,10 @@
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
 
-import feedparser
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, contains_keyword, parse_feed_date
+from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, contains_keyword
 from app.connectors.scrapling_helpers import attr_of, first, scrapling_page, text_of
 
 log = logging.getLogger(__name__)
@@ -164,42 +162,3 @@ class TogetterConnector(BaseConnector):
             ),
             reverse=True,
         )
-
-    async def _fetch_indexed_history(self, keyword: str) -> list[SourceItemCreate]:
-        encoded = quote(f"{keyword} site:togetter.com when:10y")
-        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
-        try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    return []
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
-        except Exception as exc:
-            log.warning("Togetter indexed-history fallback failed: %s", exc)
-            return []
-
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in feed.entries[:25]:
-            title = (entry.get("title") or "").strip()
-            link = entry.get("link", "")
-            item_id = entry.get("id") or link
-            if not link or not contains_keyword(keyword, title) or item_id in seen:
-                continue
-            published = parse_feed_date(entry)
-            if published is None:
-                continue
-            if not _is_recent(published):
-                continue
-            seen.add(item_id)
-            items.append(SourceItemCreate(
-                platform=self.PLATFORM,
-                item_id=item_id,
-                url=link,
-                published_at=published,
-                media_type="article",
-                title=title,
-                content_text=entry.get("summary") or None,
-                raw_payload={"source": "google_news_history", "keyword": keyword},
-            ))
-        return items

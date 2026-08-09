@@ -304,31 +304,6 @@ def _term_is_due(term: WatchTerm, now: datetime) -> bool:
     )
 
 
-def _term_search_signature(term: WatchTerm) -> tuple[str, tuple[str, ...], str, str | None]:
-    aliases = tuple(sorted({a.strip().casefold() for a in (term.aliases or []) if isinstance(a, str) and a.strip()}))
-    return (
-        term.keyword.strip().casefold(),
-        aliases,
-        (term.collection_mode or CollectionMode.ALL_INFO).casefold(),
-        (term.language_hint or "").strip().casefold() or None,
-    )
-
-
-def _deduplicate_due_terms(terms: list[WatchTerm]) -> tuple[list[WatchTerm], dict[int, list[WatchTerm]]]:
-    representatives: list[WatchTerm] = []
-    groups: dict[int, list[WatchTerm]] = {}
-    by_signature: dict[tuple, WatchTerm] = {}
-    for term in terms:
-        representative = by_signature.get(_term_search_signature(term))
-        if representative is None:
-            by_signature[_term_search_signature(term)] = term
-            representatives.append(term)
-            groups[term.id] = [term]
-        else:
-            groups[representative.id].append(term)
-    return representatives, groups
-
-
 def _inactive_owner_term_ids(db, terms: list[WatchTerm]) -> set[int]:
     days = max(0, settings.inactive_poll_after_days)
     if days <= 0:
@@ -839,26 +814,6 @@ def _parse_pending_preview_published_at(preview_item: dict) -> datetime | None:
     return parsed
 
 
-def _fallback_pending_preview_is_fresh(
-    term: WatchTerm,
-    preview_item: dict,
-    observed_at: datetime,
-) -> bool:
-    published_at = _parse_pending_preview_published_at(preview_item)
-    if published_at is None:
-        return False
-
-    term_created_at = term.created_at or observed_at
-    if term_created_at.tzinfo is None:
-        term_created_at = term_created_at.replace(tzinfo=timezone.utc)
-
-    cutoff = max(
-        observed_at - _notification_freshness_window(),
-        term_created_at - _WATCH_TERM_CLOCK_SKEW,
-    )
-    return published_at >= cutoff
-
-
 def _pending_preview_is_notification_eligible(
     db,
     term: WatchTerm,
@@ -1156,9 +1111,6 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
             exc_info=True,
         )
         return False
-
-    return True
-
 
 async def _flush_pending_notifications(
     db,

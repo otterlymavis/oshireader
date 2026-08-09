@@ -61,7 +61,7 @@ from app.connectors.togetter import TogetterConnector
 from app.connectors.tver import TVERConnector, _parse_tver_date
 from app.connectors.twitter import TwitterConnector
 from app.connectors.yahoonews import YahooNewsConnector
-from app.connectors.yahoonews import _clean_html_summary, _clean_markdown_title
+from app.connectors.yahoonews import _clean_html_summary
 from app.connectors.youtube import YouTubeConnector, _parse_youtube_relative
 
 
@@ -565,32 +565,6 @@ class TestCleanMdprTitle:
         assert _clean_mdpr_title("  Title  ") == "Title"
 
 
-class TestCleanMarkdownTitle:
-    def test_removes_image_markdown(self):
-        result = _clean_markdown_title("Check ![img](https://example.com/img.png) this")
-        assert result == "Check this"
-
-    def test_removes_underscores(self):
-        result = _clean_markdown_title("Hello_World")
-        assert result == "HelloWorld"
-
-    def test_collapses_whitespace(self):
-        result = _clean_markdown_title("too   many   spaces")
-        assert result == "too many spaces"
-
-    def test_strips_leading_trailing(self):
-        result = _clean_markdown_title("  trimmed  ")
-        assert result == "trimmed"
-
-    def test_plain_text_unchanged(self):
-        result = _clean_markdown_title("アイコの新曲リリース")
-        assert result == "アイコの新曲リリース"
-
-    def test_combined_cleanup(self):
-        result = _clean_markdown_title("  Hello_![x](u)  World  ")
-        assert result == "Hello World"
-
-
 class TestConnectorMediaOnlyEarlyReturn:
     """Text/article connectors must return [] immediately for media_only — no HTTP calls made."""
 
@@ -662,42 +636,6 @@ class TestTwitterConnectorNoToken:
     async def test_returns_empty_for_media_only_with_no_token(self):
         result = await TwitterConnector(bearer_token="").fetch("Aiko", "media_only")
         assert result == []
-
-    @pytest.mark.asyncio
-    async def test_does_not_use_public_index_when_direct_google_is_empty(self):
-        fallback = [
-            SourceItemCreate(
-                platform="twitter",
-                item_id="https://news.google.com/rss/articles/x1",
-                url="https://news.google.com/rss/articles/x1",
-                published_at=datetime.now(timezone.utc),
-                media_type="text",
-                title="Aiko indexed X post - x.com",
-                raw_payload={"source": "google_news_jina", "keyword": "Aiko"},
-            )
-        ]
-        with patch.object(TwitterConnector, "_fetch_public_index_jina", new=AsyncMock(return_value=fallback)):
-            result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_jina_public_index_returns_items(self):
-        markdown = """### [Aiko indexed X post - x.com](https://news.google.com/rss/articles/x1)
-
-[Aiko indexed X post](https://news.google.com/rss/articles/x1)
-
-Wed, 24 Jul 2026 02:07:03 GMT
-"""
-        with patch("app.connectors.twitter.httpx.AsyncClient", _http_mock(text=markdown)):
-            result = await TwitterConnector(bearer_token="")._fetch_public_index_jina(
-                "Aiko",
-                "all_info",
-                "https://news.google.com/rss/search?q=Aiko%20site%3Ax.com",
-            )
-        assert len(result) == 1
-        assert result[0].title == "Aiko indexed X post - x.com"
-        assert result[0].raw_payload["source"] == "google_news_jina"
-
 
 # ---------------------------------------------------------------------------
 # HTTP-level connector tests (mock httpx.AsyncClient + feedparser.parse)
@@ -2403,7 +2341,7 @@ class TestYahooNewsFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_direct_search_when_gnews_empty(self):
+    async def test_undated_direct_search_html_is_not_admitted(self):
         empty_feed = _FakeFeed([])
         html = """
         <html><body>
@@ -2978,8 +2916,7 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
-             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=[])):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
 
@@ -2988,23 +2925,12 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(side_effect=Exception("connection refused"))
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
-             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=[])):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
     async def test_http_error_status_does_not_fall_back_to_public_index(self):
-        fallback_items = [
-            SourceItemCreate(
-                platform="twitter",
-                item_id="public-1",
-                url="https://x.com/example/status/public-1",
-                published_at=datetime.now(timezone.utc),
-                media_type="text",
-                title="Aiko public index result",
-            )
-        ]
         resp = MagicMock()
         resp.is_success = False
         resp.status_code = 429
@@ -3013,8 +2939,7 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
-             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=fallback_items)):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
 
@@ -3233,8 +3158,7 @@ class TestTVERFetch:
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("app.connectors.tver.httpx.AsyncClient", MagicMock(return_value=ctx)), \
-             patch.object(TVERConnector, "_fetch_indexed_history", new=AsyncMock(return_value=[])):
+        with patch("app.connectors.tver.httpx.AsyncClient", MagicMock(return_value=ctx)):
             result = await TVERConnector().fetch("Aiko", "all_info")
 
         assert result == []
@@ -3244,8 +3168,7 @@ class TestTVERFetch:
         tr = _tver_token_resp()
         ep = _tver_ep(ep_id="epold", title="Aiko Old", published_at_unix=1590969600)
         sr = _tver_search_resp(episodes=[ep])
-        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)), \
-             patch.object(TVERConnector, "_fetch_indexed_history", new=AsyncMock(return_value=[])):
+        with patch("app.connectors.tver.httpx.AsyncClient", _tver_client_ctx(tr, search_resp=sr)):
             result = await TVERConnector().fetch("Aiko", "all_info")
         assert result == []
 

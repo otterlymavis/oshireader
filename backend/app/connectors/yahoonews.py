@@ -23,12 +23,7 @@ from app.connectors.base import (
 
 log = logging.getLogger(__name__)
 
-_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _WHITESPACE_RE = re.compile(r"\s+")
-def _clean_markdown_title(value: str) -> str:
-    value = _MD_IMAGE_RE.sub("", value)
-    value = value.replace("_", "")
-    return _WHITESPACE_RE.sub(" ", value).strip()
 
 
 def _clean_html_summary(value: str | None) -> str | None:
@@ -51,26 +46,9 @@ class YahooNewsConnector(BaseConnector):
         if not stripped:
             return []
 
-        # RSS first — only dated results are safe to show. Search-page fallbacks
-        # do not expose publication dates reliably, so they must not pin old
-        # articles to the top with the fetch time.
-        items = await self._fetch_gnews_rss(stripped)
-        if not items:
-            items = await self._fetch_direct_search(stripped)
-        if not items:
-            items = await self._fetch_jina(stripped)
-        return items
-
-    async def _fetch_direct_search(self, keyword: str) -> list[SourceItemCreate]:
-        # Yahoo's search HTML does not provide a trustworthy publication date.
-        # Do not make a request for results that cannot be admitted safely.
-        return []
-
-    async def _fetch_jina(self, keyword: str) -> list[SourceItemCreate]:
-        """Fallback: r.jina.ai proxy returns Yahoo News results as markdown (no publish dates)."""
-        # The Jina Yahoo search mirror also omits publication dates, so it is
-        # not a valid fallback for feed ingestion.
-        return []
+        # Only dated RSS/search-feed results are safe to show. Yahoo search HTML
+        # and direct Jina mirrors omit trustworthy publication dates.
+        return await self._fetch_gnews_rss(stripped)
 
     async def _fetch_gnews_rss(self, keyword: str) -> list[SourceItemCreate]:
         """Fallback: Google News RSS filtered to news.yahoo.co.jp."""
