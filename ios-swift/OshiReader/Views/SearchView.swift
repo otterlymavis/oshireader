@@ -523,9 +523,6 @@ let staticSearchLinks: [SearchLink] = [
     SearchLink(id: "girlschannel", group: "Community", label: "GirlsChannel", domain: "girlschannel.net", platform: "girlschannel") {
         "https://girlschannel.net/topics/search/?q=\($0.urlQueryEscaped)"
     },
-    SearchLink(id: "togetter", group: "Community", label: "Togetter", domain: "togetter.com", platform: "togetter") {
-        "https://togetter.com/search?q=\($0.urlQueryEscaped)"
-    },
     SearchLink(id: "google-web", group: "Web", label: "Google Japan", domain: "google.co.jp", platform: "custom") {
         "https://www.google.co.jp/search?q=\($0.urlQueryEscaped)&hl=ja&gl=JP"
     },

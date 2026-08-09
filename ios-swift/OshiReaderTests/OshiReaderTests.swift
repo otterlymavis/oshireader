@@ -2739,7 +2739,6 @@ final class OshiReaderTests: XCTestCase {
     func testActivityDatePlatformsUseDateWindowRefresh() throws {
         XCTAssertTrue(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("5ch"))
         XCTAssertTrue(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("girlschannel"))
-        XCTAssertTrue(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("togetter"))
         XCTAssertFalse(BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh("youtube"))
     }
 
@@ -3771,7 +3770,6 @@ final class OshiReaderTests: XCTestCase {
 
         XCTAssertTrue(Platform.shouldUseDateWindowRefresh("5ch"))
         XCTAssertTrue(Platform.shouldUseDateWindowRefresh("girlschannel"))
-        XCTAssertTrue(Platform.shouldUseDateWindowRefresh("togetter"))
         XCTAssertFalse(Platform.shouldUseDateWindowRefresh("news"))
     }
 
@@ -3782,7 +3780,7 @@ final class OshiReaderTests: XCTestCase {
     
     // MARK: - skipDateCutoff flag: forum platforms always pass date filter
     func testSkipDateCutoffAllowsOldForumItems() throws {
-        db.setSubscribedPlatforms(platforms: ["5ch", "togetter", "news"])
+        db.setSubscribedPlatforms(platforms: ["5ch", "news"])
         let fmt = ISO8601DateFormatter()
         let old = fmt.string(from: Calendar.current.date(byAdding: .day, value: -60, to: Date())!)
         let recent = fmt.string(from: Calendar.current.date(byAdding: .day, value: -1, to: Date())!)
@@ -5214,7 +5212,6 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(linksById["niconico"]?.platform, "niconico")
         XCTAssertEqual(linksById["x"]?.platform, "twitter")
         XCTAssertEqual(linksById["girlschannel"]?.platform, "girlschannel")
-        XCTAssertEqual(linksById["togetter"]?.platform, "togetter")
     }
 
     func testFiveChFeedItemsOpenInWebMode() throws {
@@ -5423,6 +5420,19 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.sourcesOrder, ["youtube", "news", "tver"])
         db.clearAllData()
         XCTAssertNil(db.sourcesOrder)
+    }
+
+    func testLoadFiltersRemovedPlatformsFromSourceSettings() throws {
+        defer { UserDefaults.standard.removeObject(forKey: "sources_order") }
+        let persistedPlatforms = ["news", "togetter", "youtube", "missing", "news"]
+        try JSONEncoder().encode(persistedPlatforms)
+            .write(to: tempDir.appendingPathComponent("subscribed_platforms.json"))
+        UserDefaults.standard.set(["togetter", "youtube", "missing", "news"], forKey: "sources_order")
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.subscribedPlatforms, ["news", "youtube"])
+        XCTAssertEqual(freshDB.sourcesOrder, ["youtube", "news"])
     }
 
     func testSetWallpaperUpdatesAndNilClearsOnClearAll() throws {

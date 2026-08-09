@@ -111,7 +111,7 @@ class LocalDB: ObservableObject {
     private let maxFeedItems = 600
     private let minFeedItemsPerSubscribedPlatform = 8
     private let minFeedItemsPerDiscussionPlatform = 25
-    private let discussionActivityPlatforms: Set<String> = ["5ch", "girlschannel", "togetter"]
+    private let discussionActivityPlatforms: Set<String> = ["5ch", "girlschannel"]
     private let termDeleteTombstonesFileName = "term_delete_tombstones"
     private let termDeleteTombstoneLifetime: TimeInterval = 10 * 60
     private let feedItemsSaveCoalescingDelay: DispatchTimeInterval
@@ -148,9 +148,11 @@ class LocalDB: ObservableObject {
         self.savedPages = loadFromFile(name: "saved_pages", defaultValue: [])
         self.customUrls = loadFromFile(name: "custom_urls", defaultValue: [])
         let defaultPlatforms = Platform.all.filter(\.subscribedByDefault).map(\.id)
-        self.subscribedPlatforms = loadFromFile(name: "subscribed_platforms", defaultValue: defaultPlatforms)
+        let loadedPlatforms: [String] = loadFromFile(name: "subscribed_platforms", defaultValue: defaultPlatforms)
+        self.subscribedPlatforms = normalizedKnownPlatformList(loadedPlatforms)
         self.wallpaper = UserDefaults.standard.string(forKey: "wallpaper_url")
-        self.sourcesOrder = UserDefaults.standard.stringArray(forKey: "sources_order")
+        let loadedSourcesOrder = UserDefaults.standard.stringArray(forKey: "sources_order")
+        self.sourcesOrder = loadedSourcesOrder.map(normalizedKnownPlatformList)
         self.oshiAvatars = loadFromFile(name: "oshi_avatars", defaultValue: [:])
         self.compositions = loadFromFile(name: "oshi_compositions", defaultValue: [:])
         let hiddenArray: [String] = loadFromFile(name: "hidden_items", defaultValue: [])
@@ -158,7 +160,11 @@ class LocalDB: ObservableObject {
         self.termDeleteTombstones = loadFromFile(name: termDeleteTombstonesFileName, defaultValue: [:])
         pruneTermDeleteTombstones()
         let prunedLegacyYouTubeFallbacks = pruneLegacyYouTubeItems()
-        return applyPersistedTermDeletes() || prunedLegacyYouTubeFallbacks
+        let normalizedSourceScope = persistNormalizedSourceScopeIfNeeded(
+            loadedPlatforms: loadedPlatforms,
+            loadedSourcesOrder: loadedSourcesOrder
+        )
+        return applyPersistedTermDeletes() || prunedLegacyYouTubeFallbacks || normalizedSourceScope
     }
 
     // MARK: - Schema Migrations
@@ -239,7 +245,9 @@ class LocalDB: ObservableObject {
 
     @discardableResult
     private func pruneIrrelevantCachedArticleItems() -> Bool {
-        let termsByKeyword = Dictionary(uniqueKeysWithValues: terms.map { ($0.keyword, $0) })
+        let termsByKeyword = terms.reduce(into: [String: WatchTerm]()) { result, term in
+            result[term.keyword] = term
+        }
         let originalCount = self.feedItems.count
         self.feedItems.removeAll { item in
             guard Platform.forRawValue(item.platform)?.usesStrictKeywordMatching == true,
@@ -371,6 +379,39 @@ class LocalDB: ObservableObject {
             self.pendingFeedItemsSave = nil
         }
         queue.sync {}
+    }
+
+    @discardableResult
+    private func persistNormalizedSourceScopeIfNeeded(
+        loadedPlatforms: [String],
+        loadedSourcesOrder: [String]?
+    ) -> Bool {
+        var changed = false
+        if subscribedPlatforms != loadedPlatforms {
+            saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
+            changed = true
+        }
+        if sourcesOrder != loadedSourcesOrder {
+            if let sourcesOrder {
+                UserDefaults.standard.set(sourcesOrder, forKey: "sources_order")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "sources_order")
+            }
+            changed = true
+        }
+        return changed
+    }
+
+    private func normalizedKnownPlatformList(_ platforms: [String]) -> [String] {
+        var seen = Set<String>()
+        return platforms.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let platformId = Platform.normalize(trimmed)
+            guard Platform.find(platformId) != nil else { return nil }
+            guard seen.insert(platformId).inserted else { return nil }
+            return platformId
+        }
     }
 
     // MARK: - Watch Terms
@@ -746,8 +787,8 @@ class LocalDB: ObservableObject {
     }
 
     // Sort every item by its real published / last-updated date — never by fetch time.
-    // The backend heals forum published_at to the real last-reply date (girlschannel,
-    // togetter) and device-side scrapes carry the article's real pubDate, so a batch of
+    // The backend heals forum published_at to the real last-reply date for discussion
+    // sources, and device-side scrapes carry the article's real pubDate, so a batch of
     // forum threads fetched together no longer shares fetched_at≈now and clumps at the
     // top of the feed.
     private func sortDate(for item: FeedItem) -> Date {
@@ -1053,9 +1094,9 @@ class LocalDB: ObservableObject {
     // MARK: - Subscribed Platforms
     func setSubscribedPlatforms(platforms: [String]) {
         let originalPlatforms = Set(subscribedPlatforms)
-        subscribedPlatforms = platforms
+        subscribedPlatforms = normalizedKnownPlatformList(platforms)
         saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
-        if Set(platforms) != originalPlatforms {
+        if Set(subscribedPlatforms) != originalPlatforms {
             BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         }
     }
@@ -1149,8 +1190,9 @@ class LocalDB: ObservableObject {
     }
 
     func setSourcesOrder(order: [String]) {
-        sourcesOrder = order
-        UserDefaults.standard.set(order, forKey: "sources_order")
+        let normalizedOrder = normalizedKnownPlatformList(order)
+        sourcesOrder = normalizedOrder
+        UserDefaults.standard.set(normalizedOrder, forKey: "sources_order")
     }
 
     // MARK: - Oshi Avatars & Compositions

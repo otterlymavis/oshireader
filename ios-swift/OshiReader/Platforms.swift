@@ -164,16 +164,6 @@ struct Platform {
             googleNewsFallbackSite: "5ch.net"
         ),
         Platform(
-            id: "togetter", name: "Togetter", icon: "🐧",
-            accent: .green, bg: Color(red: 0.9, green: 0.98, blue: 0.92), fg: .green,
-            rawPlatformValues: ["togetter"],
-            usesStrictKeywordMatching: true, skipDateCutoff: true,
-            isMediaPlatform: false, subscribedByDefault: true,
-            fetchRole: .deviceFallback,
-            usesActivityDateWindow: true,
-            googleNewsFallbackSite: "togetter.com"
-        ),
-        Platform(
             id: "news", name: "News", icon: "📰",
             accent: .purple, bg: Color(red: 0.96, green: 0.9, blue: 1.0), fg: .purple,
             rawPlatformValues: ["news"],   // "news:*" wildcard handled in normalize()
