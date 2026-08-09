@@ -388,6 +388,19 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertTrue(hasEnable || hasTest || hasOpenSettings, "Expected a notification control button")
     }
 
+    func testSettingsKeywordRowTextTapDoesNotOpenAvatarEditor() throws {
+        tapTab(index: 4, labels: ["Settings"])
+
+        let keyword = waitForElement(label: "UITest Oshi", timeout: 2, swipes: 3)
+        XCTAssertTrue(keyword.exists, "Expected the seeded keyword to be visible")
+
+        keyword.tap()
+        XCTAssertFalse(
+            app.buttons["avatar.saveButton"].waitForExistence(timeout: 1),
+            "Tapping the keyword row text should not open the avatar editor"
+        )
+    }
+
     func testLiveBackgroundPush() throws {
         guard liveUITestsEnabled else {
             throw XCTSkip("Set OSHI_READER_RUN_LIVE_UI_TESTS=1 to run live APNs UI checks")
@@ -686,6 +699,19 @@ final class OshiReaderUITests: XCTestCase {
 
     private func waitForElement(identifier: String, timeout: TimeInterval, swipes: Int) -> XCUIElement {
         let element = app.descendants(matching: .any)[identifier]
+        for attempt in 0...swipes {
+            if element.waitForExistence(timeout: timeout) {
+                return element
+            }
+            if attempt < swipes {
+                app.swipeUp()
+            }
+        }
+        return element
+    }
+
+    private func waitForElement(label: String, timeout: TimeInterval, swipes: Int) -> XCUIElement {
+        let element = app.staticTexts[label]
         for attempt in 0...swipes {
             if element.waitForExistence(timeout: timeout) {
                 return element

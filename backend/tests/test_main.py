@@ -262,6 +262,35 @@ class TestAdminStats:
         assert data["apns"]["configured"] is False
         assert data["apns_registration"]["count"] == 0
 
+    def test_apns_registration_diagnostics_ignore_preserved_transient_failures(
+        self, client, db_session
+    ):
+        terminal = BackendEvent(
+            kind="apns_registration",
+            status="unverified",
+            message="APNs device registration was not verified",
+            payload={"verification_error": "BadDeviceToken"},
+        )
+        preserved = BackendEvent(
+            kind="apns_registration",
+            status="verification_failed_preserved",
+            message="APNs device registration was not verified",
+            payload={
+                "verification_error": "APNs validation request failed (ConnectTimeout)",
+                "preserved_existing_verification": True,
+            },
+        )
+        db_session.add_all([terminal, preserved])
+        db_session.commit()
+
+        r = client.get("/api/admin/poller-health")
+
+        assert r.status_code == 200
+        registration = r.json()["apns_registration"]
+        assert registration["count"] == 1
+        assert registration["reasons"] == {"BadDeviceToken": 1}
+        assert registration["latest"]["id"] == terminal.id
+
     def test_stats_counts_reflect_db_content(self, client, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)

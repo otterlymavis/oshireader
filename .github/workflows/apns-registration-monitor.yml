@@ -186,9 +186,8 @@ jobs:
               )
           repeated = {reason: count for reason, count in reasons.items() if count >= 3}
           if repeated:
-              print(
-                  f"Warning: repeated APNs registration rejection reasons in the diagnostics window: {repeated}",
-                  file=sys.stderr,
+              failures.append(
+                  f"Repeated APNs registration rejection reason(s) in the diagnostics window: {repeated}"
               )
           if failures:
               raise SystemExit("; ".join(failures))

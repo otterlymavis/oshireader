@@ -74,6 +74,63 @@ class TestAPNSTokenUpsert:
         assert refreshed.json()["is_verified"] is False
         assert db_session.get(APNSDeviceToken, token).is_verified is False
 
+    def test_transient_failed_refresh_preserves_previous_verification(
+        self, client, db_session, monkeypatch
+    ):
+        token = "e" * 64
+        first = client.post("/api/devices/apns-token", json=_registration(token))
+        assert first.json()["is_verified"] is True
+
+        monkeypatch.setattr(devices_api.settings, "allow_unauthenticated_admin", False)
+        monkeypatch.setattr(devices_api.settings, "admin_api_token", "configured")
+        with patch(
+            "app.apns.validate_device_registration_result",
+            new=AsyncMock(return_value=(False, "APNs validation request failed (ConnectTimeout)")),
+        ):
+            refreshed = client.post("/api/devices/apns-token", json=_registration(token))
+
+        assert refreshed.status_code == 201
+        assert refreshed.json()["is_verified"] is True
+        assert refreshed.json()["verification_error"] == "APNs validation request failed (ConnectTimeout)"
+        assert db_session.get(APNSDeviceToken, token).is_verified is True
+        event = db_session.query(BackendEvent).filter_by(kind="apns_registration").one()
+        assert event.status == "verification_failed_preserved"
+        assert event.payload["preserved_existing_verification"] is True
+
+    def test_transient_failed_secret_rotation_does_not_preserve_verification(
+        self, client, db_session, monkeypatch
+    ):
+        token = "e" * 64
+        first = client.post(
+            "/api/devices/apns-token",
+            json=_registration(token, device_id="device-xyz"),
+        )
+        assert first.json()["is_verified"] is True
+
+        monkeypatch.setattr(devices_api.settings, "allow_unauthenticated_admin", False)
+        monkeypatch.setattr(devices_api.settings, "admin_api_token", "configured")
+        with patch(
+            "app.apns.validate_device_registration_result",
+            new=AsyncMock(return_value=(False, "APNs validation request failed (ConnectTimeout)")),
+        ):
+            refreshed = client.post(
+                "/api/devices/apns-token",
+                json=_registration(
+                    token,
+                    device_id="device-xyz",
+                    device_secret="new-device-secret-123",
+                ),
+            )
+
+        assert refreshed.status_code == 201
+        assert refreshed.json()["is_verified"] is False
+        stored = db_session.get(APNSDeviceToken, token)
+        assert stored.is_verified is False
+        assert devices_api._secret_matches(stored.device_secret, "new-device-secret-123")
+        event = db_session.query(BackendEvent).filter_by(kind="apns_registration").one()
+        assert event.status == "unverified"
+        assert event.payload["preserved_existing_verification"] is False
+
     def test_upsert_updates_existing_token(self, client):
         token = "b" * 64
         client.post("/api/devices/apns-token", json=_registration(token))

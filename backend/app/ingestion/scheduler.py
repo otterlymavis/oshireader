@@ -1076,7 +1076,10 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
         db.delete(pending)
         db.commit()
         return True
-    observed_at = datetime.now(timezone.utc)
+    queued_at = pending.updated_at
+    if queued_at is not None and queued_at.tzinfo is None:
+        queued_at = queued_at.replace(tzinfo=timezone.utc)
+    observed_at = queued_at if queued_at is not None else datetime.now(timezone.utc)
     try:
         pending_items = _pending_notification_items(pending)
         if not pending_items:

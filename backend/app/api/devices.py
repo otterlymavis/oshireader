@@ -116,6 +116,10 @@ def _mark_verified(device: APNSDeviceToken) -> None:
     device.verified_at = datetime.now(timezone.utc)
 
 
+def _registration_failure_revokes_existing_token(reason: str | None) -> bool:
+    return reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"}
+
+
 async def _send_delayed_device_test_push(token: str, delay_seconds: float) -> None:
     if delay_seconds:
         await asyncio.sleep(delay_seconds)
@@ -195,6 +199,13 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
         raise HTTPException(400, "Invalid APNs device token")
 
     stored = db.get(APNSDeviceToken, token)
+    previously_verified_for_environment = bool(
+        stored
+        and stored.is_verified
+        and stored.environment == body.environment
+        and stored.device_secret
+        and _secret_matches(stored.device_secret, body.device_secret)
+    )
     if not stored:
         stored = APNSDeviceToken(token=token, is_verified=False)
         db.add(stored)
@@ -208,10 +219,9 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
     stored.environment = body.environment
     stored.device_id = body.device_id
     stored.device_secret = _secret_digest(body.device_secret)
-    # A new registration attempt must prove the token again. Never retain a
-    # previous verified state across a failed refresh.
-    stored.is_verified = False
-    stored.verified_at = None
+    if not previously_verified_for_environment:
+        stored.is_verified = False
+        stored.verified_at = None
     stored.last_seen_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(stored)
@@ -236,17 +246,24 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
         db.commit()
         db.refresh(stored)
     else:
+        if _registration_failure_revokes_existing_token(verification_error):
+            stored.is_verified = False
+            stored.verified_at = None
         db.commit()
         db.refresh(stored)
+        event_status = "unverified"
+        if stored.is_verified:
+            event_status = "verification_failed_preserved"
         record_backend_event(
             db,
             "apns_registration",
-            "unverified",
+            event_status,
             "APNs device registration was not verified",
             {
                 "environment": stored.environment,
                 "device_id_present": bool(stored.device_id),
                 "verification_error": verification_error,
+                "preserved_existing_verification": stored.is_verified,
             },
         )
         db.commit()

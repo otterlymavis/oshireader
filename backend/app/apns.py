@@ -242,7 +242,10 @@ async def validate_device_registration_result(
         reason = resp.json().get("reason")
     except Exception:
         reason = resp.text
-    reason_text = " ".join(str(reason or "").split())[:_APNS_REASON_LIMIT]
+    if resp.status_code == 410:
+        reason_text = "Unregistered"
+    else:
+        reason_text = " ".join(str(reason or "").split())[:_APNS_REASON_LIMIT]
     log.warning(
         "APNs registration validation rejected token=%s status=%d reason=%s",
         device.token[-8:],

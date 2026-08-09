@@ -25,6 +25,7 @@ from app.apns import (
     send_new_match_notifications,
     send_test_push,
     send_test_push_to_device,
+    validate_device_registration_result,
 )
 from app.models import APNSDeviceToken, BackendEvent, WatchTerm
 
@@ -728,6 +729,28 @@ def _term_and_device():
     term.id = 1
     device = APNSDeviceToken(token="a" * 64, environment="sandbox")
     return term, device
+
+
+class TestValidateDeviceRegistrationResult:
+    @pytest.mark.asyncio
+    async def test_normalizes_410_response_to_unregistered(self):
+        _, device = _term_and_device()
+        client = _mock_client(response=_mock_response(410, {"reason": "SomeOtherReason"}))
+
+        with patch("app.apns._cached_auth_token", return_value="tok"), \
+             patch("app.apns.httpx.AsyncClient") as client_cls, \
+             patch("app.apns.settings") as s:
+            s.apns_topic = "com.example.app"
+            s.apns_team_id = "team-id"
+            s.apns_key_id = "key-id"
+            s.apns_private_key = "private-key"
+            s.apns_private_key_path = ""
+            client_cls.return_value.__aenter__.return_value = client
+
+            verified, reason = await validate_device_registration_result(device)
+
+        assert verified is False
+        assert reason == "Unregistered"
 
 
 class TestSendOne:

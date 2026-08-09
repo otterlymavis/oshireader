@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var isSendingNotificationTest = false
     @State private var settingsErrorMessage: String? = nil
     @State private var notificationUpdateIDs = Set<String>()
+    @State private var avatarEditorKeyword: String? = nil
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     @AppStorage(BackgroundRefreshLiveTestProbe.resultKey) private var liveBackgroundRefreshResult = ""
     
@@ -33,173 +34,7 @@ struct SettingsView: View {
                 // Section: Keywords management
                 Section(header: Text(i18n.t("watchTerms"))) {
                     ForEach(db.terms) { term in
-                        HStack {
-                            NavigationLink(destination: AvatarEditorView(keyword: term.keyword)) {
-                                ZStack {
-                                    Circle()
-                                        .fill(theme.colors.divider)
-                                        .frame(width: 38, height: 38)
-                                    if let avatar = db.oshiAvatars[term.keyword], let url = URL(string: avatar) {
-                                        AsyncImage(url: url) { image in
-                                            image
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                        } placeholder: {
-                                            Text("🎨")
-                                        }
-                                        .frame(width: 38, height: 38)
-                                        .clipShape(Circle())
-                                    } else {
-                                        Text("🎨")
-                                            .font(.body)
-                                    }
-                                }
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .accessibilityIdentifier("settings.keywordAvatar.\(term.keyword)")
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(term.keyword)
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(theme.colors.text)
-                                // Alias chips
-                                if !term.aliases.isEmpty || addingAliasForId == term.id {
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 4) {
-                                            ForEach(term.aliases, id: \.self) { alias in
-                                                HStack(spacing: 2) {
-                                                    Text(alias)
-                                                        .font(.caption2)
-                                                        .foregroundColor(theme.colors.textSub)
-                                                    Button {
-                                                        let updated = term.aliases.filter { $0 != alias }
-                                                        db.updateTerm(id: term.id, aliases: updated)
-                                                        Task { _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, aliases: updated) }
-                                                    } label: {
-                                                        Image(systemName: "xmark")
-                                                            .font(.system(size: 8, weight: .bold))
-                                                            .foregroundColor(theme.colors.textMuted)
-                                                    }
-                                                    .buttonStyle(.plain)
-                                                }
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 3)
-                                                .background(theme.colors.divider)
-                                                .cornerRadius(99)
-                                            }
-                                            if addingAliasForId == term.id {
-                                                TextField(i18n.t("keyword"), text: $newAliasText)
-                                                    .font(.caption2)
-                                                    .frame(width: 80)
-                                                    .autocorrectionDisabled()
-                                                    .textInputAutocapitalization(.never)
-                                                    .submitLabel(.done)
-                                                    .onSubmit {
-                                                        let trimmed = newAliasText.trimmingCharacters(in: .whitespacesAndNewlines)
-                                                        if !trimmed.isEmpty && !term.aliases.contains(trimmed) {
-                                                            let updated = term.aliases + [trimmed]
-                                                            db.updateTerm(id: term.id, aliases: updated)
-                                                            Task { _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, aliases: updated) }
-                                                        }
-                                                        newAliasText = ""
-                                                        addingAliasForId = nil
-                                                    }
-                                            }
-                                            Button {
-                                                newAliasText = ""
-                                                addingAliasForId = addingAliasForId == term.id ? nil : term.id
-                                            } label: {
-                                                Image(systemName: addingAliasForId == term.id ? "checkmark" : "plus")
-                                                    .font(.system(size: 9, weight: .bold))
-                                                    .foregroundColor(theme.colors.primary)
-                                                    .frame(width: 20, height: 18)
-                                                    .background(theme.colors.primaryBg)
-                                                    .cornerRadius(99)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                } else {
-                                    Button {
-                                        newAliasText = ""
-                                        addingAliasForId = term.id
-                                    } label: {
-                                        Label(i18n.t("addAlias"), systemImage: "plus")
-                                            .font(.caption2)
-                                            .foregroundColor(theme.colors.textMuted)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            Spacer()
-
-                            Button {
-                                let next: CollectionMode = term.collection_mode == .allInfo ? .mediaOnly : .allInfo
-                                db.updateTerm(id: term.id, collectionMode: next)
-                                Task {
-                                    _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, collectionMode: next)
-                                }
-                            } label: {
-                                Text(term.collection_mode == .mediaOnly ? "📹" : "📄")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 5)
-                                    .background(theme.colors.divider)
-                                    .foregroundColor(theme.colors.textSub)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .accessibilityIdentifier("settings.keywordMode.\(term.keyword)")
-
-                            Menu {
-                                Button {
-                                    updateSourceSelection(for: term, mode: .all, platforms: [])
-                                } label: {
-                                    Label("All sources", systemImage: term.source_mode == .all ? "checkmark" : "globe")
-                                }
-                                ForEach(allPlatforms, id: \.0) { key, label in
-                                    Button {
-                                        var selected = term.source_mode == .selected ? Set(term.selected_platforms) : []
-                                        if term.source_mode == .all {
-                                            selected = [key]
-                                        } else if selected.contains(key) {
-                                            selected.remove(key)
-                                        } else {
-                                            selected.insert(key)
-                                        }
-                                        updateSourceSelection(for: term, mode: .selected, platforms: Array(selected).sorted())
-                                    } label: {
-                                        Label(label, systemImage: term.source_mode == .selected && term.selected_platforms.contains(key) ? "checkmark.square" : "square")
-                                    }
-                                }
-                            } label: {
-                                Text(term.source_mode == .all ? "🌐" : "🔎")
-                                    .font(.caption)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 5)
-                                    .background(theme.colors.divider)
-                                    .clipShape(Capsule())
-                            }
-                            .accessibilityIdentifier("settings.keywordSources.\(term.keyword)")
-                            
-                            keywordNotificationButton(for: term)
-                            
-                            Toggle("", isOn: Binding(
-                                get: { term.is_active },
-                                set: { next in
-                                    db.updateTerm(id: term.id, isActive: next)
-                                    // Async updates backend too
-                                    Task {
-                                        _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, isActive: next)
-                                    }
-                                }
-                            ))
-                            .tint(theme.colors.primary)
-                            .accessibilityIdentifier("settings.keywordToggle.\(term.keyword)")
-                        }
-                        .accessibilityIdentifier("settings.keywordRow.\(term.keyword)")
+                        keywordRow(for: term)
                     }
                     .onDelete { offsets in
                         let termsToDelete = offsets.compactMap { index in
@@ -542,7 +377,217 @@ struct SettingsView: View {
                     settingsErrorMessage = nil
                 }
             }
+            .navigationDestination(item: $avatarEditorKeyword) { keyword in
+                AvatarEditorView(keyword: keyword)
+            }
         }
+    }
+
+    private func keywordRow(for term: WatchTerm) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            keywordAvatarButton(for: term)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(term.keyword)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .foregroundColor(theme.colors.text)
+
+                keywordAliasControls(for: term)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 10) {
+                keywordCollectionModeButton(for: term)
+                keywordSourceMenu(for: term)
+                keywordStatusPill(for: term)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private func keywordAvatarButton(for term: WatchTerm) -> some View {
+        Button {
+            avatarEditorKeyword = term.keyword
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(theme.colors.divider)
+                    .frame(width: 44, height: 44)
+                if let avatar = db.oshiAvatars[term.keyword], let url = URL(string: avatar) {
+                    AsyncImage(url: url) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Text("🎨")
+                    }
+                    .frame(width: 44, height: 44)
+                    .clipShape(Circle())
+                } else {
+                    Text("🎨")
+                        .font(.body)
+                }
+            }
+            .contentShape(Circle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Edit avatar")
+        .accessibilityIdentifier("settings.keywordAvatar.\(term.keyword)")
+    }
+
+    @ViewBuilder
+    private func keywordAliasControls(for term: WatchTerm) -> some View {
+        if !term.aliases.isEmpty || addingAliasForId == term.id {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(term.aliases, id: \.self) { alias in
+                        HStack(spacing: 2) {
+                            Text(alias)
+                                .font(.caption2)
+                                .foregroundColor(theme.colors.textSub)
+                            Button {
+                                let updated = term.aliases.filter { $0 != alias }
+                                db.updateTerm(id: term.id, aliases: updated)
+                                Task { _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, aliases: updated) }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundColor(theme.colors.textMuted)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(theme.colors.divider)
+                        .cornerRadius(99)
+                    }
+                    if addingAliasForId == term.id {
+                        TextField(i18n.t("keyword"), text: $newAliasText)
+                            .font(.caption2)
+                            .frame(width: 80)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.done)
+                            .onSubmit {
+                                let trimmed = newAliasText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !trimmed.isEmpty && !term.aliases.contains(trimmed) {
+                                    let updated = term.aliases + [trimmed]
+                                    db.updateTerm(id: term.id, aliases: updated)
+                                    Task { _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, aliases: updated) }
+                                }
+                                newAliasText = ""
+                                addingAliasForId = nil
+                            }
+                    }
+                    Button {
+                        newAliasText = ""
+                        addingAliasForId = addingAliasForId == term.id ? nil : term.id
+                    } label: {
+                        Image(systemName: addingAliasForId == term.id ? "checkmark" : "plus")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(theme.colors.primary)
+                            .frame(width: 20, height: 18)
+                            .background(theme.colors.primaryBg)
+                            .cornerRadius(99)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        } else {
+            Button {
+                newAliasText = ""
+                addingAliasForId = term.id
+            } label: {
+                Label(i18n.t("addAlias"), systemImage: "plus")
+                    .font(.caption2)
+                    .foregroundColor(theme.colors.textMuted)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func keywordCollectionModeButton(for term: WatchTerm) -> some View {
+        Button {
+            let next: CollectionMode = term.collection_mode == .allInfo ? .mediaOnly : .allInfo
+            db.updateTerm(id: term.id, collectionMode: next)
+            Task {
+                _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, collectionMode: next)
+            }
+        } label: {
+            Text(term.collection_mode == .mediaOnly ? "📹" : "📄")
+                .font(.caption)
+                .frame(width: 34, height: 34)
+                .background(theme.colors.divider)
+                .foregroundColor(theme.colors.textSub)
+                .clipShape(Circle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .accessibilityIdentifier("settings.keywordMode.\(term.keyword)")
+    }
+
+    private func keywordSourceMenu(for term: WatchTerm) -> some View {
+        Menu {
+            Button {
+                updateSourceSelection(for: term, mode: .all, platforms: [])
+            } label: {
+                Label("All sources", systemImage: term.source_mode == .all ? "checkmark" : "globe")
+            }
+            ForEach(allPlatforms, id: \.0) { key, label in
+                Button {
+                    var selected = term.source_mode == .selected ? Set(term.selected_platforms) : []
+                    if term.source_mode == .all {
+                        selected = [key]
+                    } else if selected.contains(key) {
+                        selected.remove(key)
+                    } else {
+                        selected.insert(key)
+                    }
+                    updateSourceSelection(for: term, mode: .selected, platforms: Array(selected).sorted())
+                } label: {
+                    Label(label, systemImage: term.source_mode == .selected && term.selected_platforms.contains(key) ? "checkmark.square" : "square")
+                }
+            }
+        } label: {
+            Text(term.source_mode == .all ? "🌐" : "🔎")
+                .font(.caption)
+                .frame(width: 34, height: 34)
+                .background(theme.colors.divider)
+                .foregroundColor(theme.colors.textSub)
+                .clipShape(Circle())
+        }
+        .accessibilityIdentifier("settings.keywordSources.\(term.keyword)")
+    }
+
+    private func keywordStatusPill(for term: WatchTerm) -> some View {
+        HStack(spacing: 6) {
+            keywordNotificationButton(for: term)
+
+            Toggle("", isOn: Binding(
+                get: { term.is_active },
+                set: { next in
+                    db.updateTerm(id: term.id, isActive: next)
+                    Task {
+                        _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, isActive: next)
+                    }
+                }
+            ))
+            .labelsHidden()
+            .tint(theme.colors.primary)
+            .accessibilityIdentifier("settings.keywordToggle.\(term.keyword)")
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 6)
+        .padding(.vertical, 5)
+        .background(term.notify_on_new ? theme.colors.primaryBg : theme.colors.divider)
+        .overlay {
+            Capsule()
+                .stroke(term.notify_on_new ? theme.colors.primary.opacity(0.45) : theme.colors.border, lineWidth: 1)
+        }
+        .clipShape(Capsule())
     }
 
     private func keywordNotificationButton(for term: WatchTerm) -> some View {
@@ -553,32 +598,19 @@ struct SettingsView: View {
             let next = !isEnabled
             updateNotificationPreference(for: term, enabled: next)
         } label: {
-            ZStack(alignment: .topTrailing) {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(isEnabled ? theme.colors.primaryBg : theme.colors.divider)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(
-                                isEnabled ? theme.colors.primary.opacity(0.55) : theme.colors.border,
-                                lineWidth: isEnabled ? 2 : 1
-                            )
-                    }
-
-                Group {
-                    if isUpdating {
-                        ProgressView()
-                            .tint(isEnabled ? theme.colors.primary : theme.colors.textMuted)
-                    } else {
-                        Image(systemName: isEnabled ? "bell.fill" : "bell.slash")
-                            .font(.system(size: 27, weight: .semibold))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(isEnabled ? theme.colors.primary : theme.colors.textMuted)
-                    }
+            Group {
+                if isUpdating {
+                    ProgressView()
+                        .tint(isEnabled ? theme.colors.primary : theme.colors.textMuted)
+                } else {
+                    Image(systemName: isEnabled ? "bell.fill" : "bell.slash")
+                        .font(.system(size: 20, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(isEnabled ? theme.colors.primary : theme.colors.textMuted)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(width: 62, height: 62)
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .frame(width: 34, height: 34)
+            .contentShape(Circle())
             .opacity(isUpdating ? 0.78 : 1)
         }
         .buttonStyle(PlainButtonStyle())
