@@ -277,6 +277,24 @@ def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int,
     return selected, 0, 0
 
 
+def _notify_lane_terms(
+    due_terms: list[WatchTerm],
+    orphaned_term_ids: set[int],
+) -> list[WatchTerm]:
+    """Owner-scoped notify-enabled due terms that are not orphaned.
+
+    These are polled first so that a large backlog of silent/feed-only terms
+    cannot delay APNs checks. Global terms (no owner) are excluded because they
+    have no device to deliver to.
+    """
+    return [
+        term for term in due_terms
+        if term.notify_on_new
+        and term.owner_device_secret is not None
+        and term.id not in orphaned_term_ids
+    ]
+
+
 def _term_refresh_interval(term: WatchTerm) -> timedelta:
     minutes = settings.refresh_intervals_minutes.get(
         (term.refresh_tier or "free").casefold(),
@@ -1117,6 +1135,278 @@ async def _flush_pending_notifications(
     return flushed_term_ids
 
 
+async def _poll_terms_batch(
+    db,
+    terms: list[WatchTerm],
+    connectors: list[BaseConnector],
+    fetch_cache: dict[tuple[str, str, str], list],
+    flushed_pending_term_ids: set[int],
+) -> tuple[int, int]:
+    """Poll a list of terms using the shared connector pool and fetch cache.
+
+    Returns (total_new_matches, failed_connector_count). The caller is
+    responsible for stamping last_polled_at and committing afterwards.
+    """
+    total_new = 0
+    failed_connectors = 0
+    for term in terms:
+        term_connectors = _connectors_for_term(term, connectors)
+        for search_term in _search_terms_for(term):
+            # Keep I/O parallel without retaining every connector's response,
+            # parser tree, and result list until the slowest request finishes.
+            # Small batches materially reduce peak RSS on memory-limited hosts.
+            for connector_batch in _connector_batches(term_connectors):
+                mode = CollectionMode(term.collection_mode or "all_info")
+                batch_results: list[list | None] = [None] * len(connector_batch)
+                uncached: list[tuple[int, BaseConnector, tuple[str, str, str]]] = []
+                for idx, connector in enumerate(connector_batch):
+                    cache_key = (connector.PLATFORM, search_term, mode.value)
+                    if cache_key in fetch_cache:
+                        batch_results[idx] = fetch_cache[cache_key]
+                    else:
+                        uncached.append((idx, connector, cache_key))
+
+                if uncached:
+                    fetched = await asyncio.gather(
+                        *[
+                            _fetch_one_result(connector, search_term, mode)
+                            for _, connector, _ in uncached
+                        ]
+                    )
+                    for (idx, _, cache_key), (items, fetch_succeeded) in zip(uncached, fetched):
+                        _cache_successful_fetch(
+                            fetch_cache,
+                            cache_key,
+                            items,
+                            fetch_succeeded=fetch_succeeded,
+                        )
+                        batch_results[idx] = items
+
+                for connector, items in zip(connector_batch, batch_results):
+                    if not items:
+                        continue
+                    try:
+                        new_count = 0
+                        notification_candidates: list[_NotificationCandidate] = []
+                        discussion_reply_source_ids: set[str] = set()
+                        ids = [raw.composite_id for raw in items]
+                        now = datetime.now(timezone.utc)
+
+                        # Fetch existing ids AND their stored published_at so we can
+                        # fix bad dates (fetch-time placeholders) when the connector
+                        # now returns a real publication date.
+                        existing_items: dict[str, datetime] = {
+                            r[0]: r[1]
+                            for r in db.query(SourceItem.id, SourceItem.published_at)
+                            .filter(SourceItem.id.in_(ids))
+                            .all()
+                        }
+                        existing_source_ids = set(existing_items.keys())
+                        existing_match_ids = {
+                            r[0]: r[1]
+                            for r in db.query(Match.source_item_id, Match.id)
+                            .filter(
+                                Match.watch_term_id == term.id,
+                                Match.source_item_id.in_(ids),
+                            )
+                            .all()
+                        }
+                        muted_source_ids = {
+                            r[0]
+                            for r in db.query(MutedFeedItem.source_item_id)
+                            .filter(
+                                MutedFeedItem.watch_term_id == term.id,
+                                MutedFeedItem.source_item_id.in_(ids),
+                            )
+                            .all()
+                        }
+                        for raw in items:
+                            if raw.composite_id in muted_source_ids:
+                                continue
+                            published_at = raw.published_at
+                            if published_at.tzinfo is None:
+                                published_at = published_at.replace(tzinfo=timezone.utc)
+                            discussion_reply_match_id: int | None = None
+                            if raw.composite_id not in existing_source_ids:
+                                db.add(
+                                    SourceItem(
+                                        id=raw.composite_id,
+                                        platform=raw.platform,
+                                        item_id=raw.item_id,
+                                        url=raw.url,
+                                        published_at=published_at,
+                                        media_type=raw.media_type,
+                                        author=raw.author,
+                                        title=raw.title,
+                                        content_text=raw.content_text,
+                                        thumbnail_url=raw.thumbnail_url,
+                                        raw_payload=raw.raw_payload,
+                                    )
+                                )
+                                existing_source_ids.add(raw.composite_id)
+                                existing_items[raw.composite_id] = published_at
+                            else:
+                                # Update published_at when the connector returns a better date.
+                                # Discussion platforms: always update toward newer dates so
+                                # threads with recent replies sort above stale ones.
+                                # Other platforms: only heal when dates differ significantly
+                                # (avoids spurious updates from fetch-time placeholders).
+                                stored = existing_items.get(raw.composite_id)
+                                if stored is not None:
+                                    stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
+                                    if raw.platform in _DISCUSSION_PLATFORMS:
+                                        # Only heal toward a newer date when the connector
+                                        # actually parsed a real timestamp. A fetch-time
+                                        # placeholder (date_parsed=False) is always ~now and
+                                        # would otherwise re-pin the thread to the top every poll.
+                                        date_parsed = (raw.raw_payload or {}).get("date_parsed", True)
+                                        should_update = date_parsed and published_at > stored_aware
+                                    else:
+                                        new_age = (now - published_at).total_seconds()
+                                        diff = abs((published_at - stored_aware).total_seconds())
+                                        should_update = new_age > 300 and diff > 300
+                                    if should_update:
+                                        source_item = db.get(SourceItem, raw.composite_id)
+                                        if source_item is not None:
+                                            source_item.published_at = published_at
+                                            if raw.platform in _DISCUSSION_PLATFORMS:
+                                                source_item.url = raw.url or source_item.url
+                                                source_item.media_type = raw.media_type or source_item.media_type
+                                                source_item.author = raw.author or source_item.author
+                                                source_item.title = raw.title or source_item.title
+                                                source_item.content_text = raw.content_text or source_item.content_text
+                                                source_item.thumbnail_url = raw.thumbnail_url or source_item.thumbnail_url
+                                            healed_payload = {
+                                                **(source_item.raw_payload or {}),
+                                                **(raw.raw_payload or {}),
+                                            }
+                                            if raw.platform in _DISCUSSION_PLATFORMS:
+                                                healed_payload["date_parsed"] = True
+                                            source_item.raw_payload = healed_payload
+                                        existing_items[raw.composite_id] = published_at
+                                        log.info(
+                                            "healed published_at for %s: %s → %s",
+                                            raw.composite_id,
+                                            stored_aware.isoformat(),
+                                            published_at.isoformat(),
+                                        )
+                                        if (
+                                            raw.platform in _DISCUSSION_PLATFORMS
+                                            and raw.composite_id in existing_match_ids
+                                        ):
+                                            discussion_reply_match_id = existing_match_ids[raw.composite_id]
+                                            discussion_reply_source_ids.add(raw.composite_id)
+
+                            if discussion_reply_match_id is not None:
+                                db.flush()
+                                source_item = db.get(SourceItem, raw.composite_id)
+                                match = db.get(Match, discussion_reply_match_id)
+                                if source_item is not None and match is not None:
+                                    notification_candidates.append(_newest_notification_candidate(
+                                        None,
+                                        source_item=source_item,
+                                        match=match,
+                                        observed_at=now,
+                                        preview_source=_PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE,
+                                    ))
+
+                        # Flush source_items before inserting matches so that
+                        # SQLite's FOREIGN KEY enforcement (PRAGMA foreign_keys=ON)
+                        # can verify the source_item_id reference exists.
+                        db.flush()
+
+                        new_matches: list[tuple[Match, SourceItemCreate]] = []
+                        for raw in items:
+                            if raw.composite_id in muted_source_ids:
+                                continue
+                            if raw.composite_id not in existing_match_ids:
+                                match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
+                                db.add(match)
+                                existing_match_ids[raw.composite_id] = match.id
+                                new_count += 1
+                                new_matches.append((match, raw))
+
+                        # Single flush assigns autoincrement IDs to all new matches at once.
+                        if new_matches:
+                            db.flush()
+
+                        for match, raw in new_matches:
+                            source_item = db.get(SourceItem, raw.composite_id)
+                            if source_item is None:
+                                raise RuntimeError(
+                                    f"source item disappeared before notification preview: {raw.composite_id}"
+                                )
+                            if not _is_notification_eligible(
+                                term=term,
+                                source_item=source_item,
+                                observed_at=now,
+                            ):
+                                continue
+                            notification_candidates.append(_newest_notification_candidate(
+                                None,
+                                source_item=source_item,
+                                match=match,
+                                observed_at=now,
+                            ))
+
+                        _queue_pending_notification(
+                            db,
+                            term,
+                            notification_candidates,
+                        )
+                        _queue_duplicate_term_notifications(
+                            db,
+                            term,
+                            items,
+                            now,
+                            discussion_reply_source_ids=discussion_reply_source_ids,
+                        )
+                        db.flush()
+                        db.commit()
+                        if new_count:
+                            total_new += new_count
+                        log.info(
+                            "term=%r search=%r connector=%s fetched=%d new=%d",
+                            term.keyword,
+                            search_term,
+                            connector.PLATFORM,
+                            len(items),
+                            new_count,
+                        )
+                    except Exception as exc:
+                        failed_connectors += 1
+                        log.warning(
+                            "poll failed term=%r search=%r connector=%s: %s",
+                            term.keyword,
+                            search_term,
+                            connector.PLATFORM,
+                            exc,
+                            exc_info=True,
+                        )
+                        db.rollback()
+
+        # Deliver once after every connector and alias has contributed to the
+        # database-backed outbox. If the poll is canceled or APNs raises, the
+        # pending row survives and is retried at the start of the next poll.
+        catchup_count = _queue_recent_unnotified_match_notifications(
+            db,
+            term,
+            datetime.now(timezone.utc),
+        )
+        if catchup_count:
+            db.flush()
+            db.commit()
+            log.info(
+                "queued catch-up notifications term=%r count=%d",
+                term.keyword,
+                catchup_count,
+            )
+        if term.id not in flushed_pending_term_ids:
+            await _deliver_pending_notification(db, term)
+
+    return total_new, failed_connectors
+
+
 async def _poll_once_unlocked() -> None:
     db = SessionLocal()
     try:
@@ -1136,11 +1426,11 @@ async def _poll_once_unlocked() -> None:
         # term while its device is absent. Device registration makes the term
         # eligible again on the next poll.
         inactive_term_ids = _inactive_owner_term_ids(db, active_terms)
-        all_terms = [
+        eligible_terms = [
             term for term in active_terms
             if term.id not in orphaned_term_ids and term.id not in inactive_term_ids
         ]
-        due_terms = [term for term in all_terms if _term_is_due(term, datetime.now(timezone.utc))]
+        due_terms = [term for term in eligible_terms if _term_is_due(term, datetime.now(timezone.utc))]
         if not due_terms:
             flushed_pending_term_ids = await _flush_pending_notifications(
                 db,
@@ -1166,29 +1456,31 @@ async def _poll_once_unlocked() -> None:
             return
 
         connectors = _build_connectors(db)
-        # Process each due term so failed fetches retain their retry behavior and
-        # duplicate-term notification propagation remains unchanged. Successful
-        # connector results are deduplicated by fetch_cache below within this run.
-        representative_terms = due_terms
-        duplicate_groups = {term.id: [term] for term in due_terms}
-        terms, term_offset, next_term_offset = _poll_term_window(db, representative_terms)
-        processed_term_ids = {
-            duplicate.id
-            for representative in terms
-            for duplicate in duplicate_groups[representative.id]
-        }
+
+        # Notification lane: notify-enabled owner terms processed first so that
+        # a large backlog of silent/feed-only terms cannot delay APNs checks.
+        notify_terms = _notify_lane_terms(due_terms, orphaned_term_ids)
+        notify_term_ids = {t.id for t in notify_terms}
+
+        # Regular feed lane: remaining due terms through the LRU window.
+        remaining_due = [t for t in due_terms if t.id not in notify_term_ids]
+        regular_terms, term_offset, next_term_offset = _poll_term_window(db, remaining_due)
+
+        all_terms = notify_terms + regular_terms
         total_new = 0
         failed_connectors = 0
+
         record_backend_event(
             db,
             "poll",
             "started",
             "Scheduled/backend poll started",
             {
-                "terms": len(terms),
+                "terms": len(all_terms),
                 "total_terms": len(active_terms),
                 "due_terms": len(due_terms),
-                "unique_due_terms": len(representative_terms),
+                "notification_lane_terms": len(notify_terms),
+                "regular_lane_terms": len(regular_terms),
                 "connectors": len(connectors),
                 "term_offset": term_offset,
                 "next_term_offset": next_term_offset,
@@ -1201,269 +1493,31 @@ async def _poll_once_unlocked() -> None:
         )
         fetch_cache: dict[tuple[str, str, str], list] = {}
 
-        for term in terms:
-            term_connectors = _connectors_for_term(term, connectors)
-            for search_term in _search_terms_for(term):
-                # Keep I/O parallel without retaining every connector's response,
-                # parser tree, and result list until the slowest request finishes.
-                # Small batches materially reduce peak RSS on memory-limited hosts.
-                for connector_batch in _connector_batches(term_connectors):
-                    mode = CollectionMode(term.collection_mode or "all_info")
-                    batch_results: list[list | None] = [None] * len(connector_batch)
-                    uncached: list[tuple[int, BaseConnector, tuple[str, str, str]]] = []
-                    for idx, connector in enumerate(connector_batch):
-                        cache_key = (connector.PLATFORM, search_term, mode.value)
-                        if cache_key in fetch_cache:
-                            batch_results[idx] = fetch_cache[cache_key]
-                        else:
-                            uncached.append((idx, connector, cache_key))
-
-                    if uncached:
-                        fetched = await asyncio.gather(
-                            *[
-                                _fetch_one_result(connector, search_term, mode)
-                                for _, connector, _ in uncached
-                            ]
-                        )
-                        for (idx, _, cache_key), (items, fetch_succeeded) in zip(uncached, fetched):
-                            _cache_successful_fetch(
-                                fetch_cache,
-                                cache_key,
-                                items,
-                                fetch_succeeded=fetch_succeeded,
-                            )
-                            batch_results[idx] = items
-
-                    for connector, items in zip(connector_batch, batch_results):
-                        if not items:
-                            continue
-                        try:
-                            new_count = 0
-                            notification_candidates: list[_NotificationCandidate] = []
-                            discussion_reply_source_ids: set[str] = set()
-                            ids = [raw.composite_id for raw in items]
-                            now = datetime.now(timezone.utc)
-
-                            # Fetch existing ids AND their stored published_at so we can
-                            # fix bad dates (fetch-time placeholders) when the connector
-                            # now returns a real publication date.
-                            existing_items: dict[str, datetime] = {
-                                r[0]: r[1]
-                                for r in db.query(SourceItem.id, SourceItem.published_at)
-                                .filter(SourceItem.id.in_(ids))
-                                .all()
-                            }
-                            existing_source_ids = set(existing_items.keys())
-                            existing_match_ids = {
-                                r[0]: r[1]
-                                for r in db.query(Match.source_item_id, Match.id)
-                                .filter(
-                                    Match.watch_term_id == term.id,
-                                    Match.source_item_id.in_(ids),
-                                )
-                                .all()
-                            }
-                            muted_source_ids = {
-                                r[0]
-                                for r in db.query(MutedFeedItem.source_item_id)
-                                .filter(
-                                    MutedFeedItem.watch_term_id == term.id,
-                                    MutedFeedItem.source_item_id.in_(ids),
-                                )
-                                .all()
-                            }
-                            for raw in items:
-                                if raw.composite_id in muted_source_ids:
-                                    continue
-                                published_at = raw.published_at
-                                if published_at.tzinfo is None:
-                                    published_at = published_at.replace(tzinfo=timezone.utc)
-                                discussion_reply_match_id: int | None = None
-                                if raw.composite_id not in existing_source_ids:
-                                    db.add(
-                                        SourceItem(
-                                            id=raw.composite_id,
-                                            platform=raw.platform,
-                                            item_id=raw.item_id,
-                                            url=raw.url,
-                                            published_at=published_at,
-                                            media_type=raw.media_type,
-                                            author=raw.author,
-                                            title=raw.title,
-                                            content_text=raw.content_text,
-                                            thumbnail_url=raw.thumbnail_url,
-                                            raw_payload=raw.raw_payload,
-                                        )
-                                    )
-                                    existing_source_ids.add(raw.composite_id)
-                                    existing_items[raw.composite_id] = published_at
-                                else:
-                                    # Update published_at when the connector returns a better date.
-                                    # Discussion platforms: always update toward newer dates so
-                                    # threads with recent replies sort above stale ones.
-                                    # Other platforms: only heal when dates differ significantly
-                                    # (avoids spurious updates from fetch-time placeholders).
-                                    stored = existing_items.get(raw.composite_id)
-                                    if stored is not None:
-                                        stored_aware = stored if stored.tzinfo else stored.replace(tzinfo=timezone.utc)
-                                        if raw.platform in _DISCUSSION_PLATFORMS:
-                                            # Only heal toward a newer date when the connector
-                                            # actually parsed a real timestamp. A fetch-time
-                                            # placeholder (date_parsed=False) is always ~now and
-                                            # would otherwise re-pin the thread to the top every poll.
-                                            date_parsed = (raw.raw_payload or {}).get("date_parsed", True)
-                                            should_update = date_parsed and published_at > stored_aware
-                                        else:
-                                            new_age = (now - published_at).total_seconds()
-                                            diff = abs((published_at - stored_aware).total_seconds())
-                                            should_update = new_age > 300 and diff > 300
-                                        if should_update:
-                                            source_item = db.get(SourceItem, raw.composite_id)
-                                            if source_item is not None:
-                                                source_item.published_at = published_at
-                                                if raw.platform in _DISCUSSION_PLATFORMS:
-                                                    source_item.url = raw.url or source_item.url
-                                                    source_item.media_type = raw.media_type or source_item.media_type
-                                                    source_item.author = raw.author or source_item.author
-                                                    source_item.title = raw.title or source_item.title
-                                                    source_item.content_text = raw.content_text or source_item.content_text
-                                                    source_item.thumbnail_url = raw.thumbnail_url or source_item.thumbnail_url
-                                                healed_payload = {
-                                                    **(source_item.raw_payload or {}),
-                                                    **(raw.raw_payload or {}),
-                                                }
-                                                if raw.platform in _DISCUSSION_PLATFORMS:
-                                                    healed_payload["date_parsed"] = True
-                                                source_item.raw_payload = healed_payload
-                                            existing_items[raw.composite_id] = published_at
-                                            log.info(
-                                                "healed published_at for %s: %s → %s",
-                                                raw.composite_id,
-                                                stored_aware.isoformat(),
-                                                published_at.isoformat(),
-                                            )
-                                            if (
-                                                raw.platform in _DISCUSSION_PLATFORMS
-                                                and raw.composite_id in existing_match_ids
-                                            ):
-                                                discussion_reply_match_id = existing_match_ids[raw.composite_id]
-                                                discussion_reply_source_ids.add(raw.composite_id)
-
-                                if discussion_reply_match_id is not None:
-                                    db.flush()
-                                    source_item = db.get(SourceItem, raw.composite_id)
-                                    match = db.get(Match, discussion_reply_match_id)
-                                    if source_item is not None and match is not None:
-                                        notification_candidates.append(_newest_notification_candidate(
-                                            None,
-                                            source_item=source_item,
-                                            match=match,
-                                            observed_at=now,
-                                            preview_source=_PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE,
-                                        ))
-
-                            # Flush source_items before inserting matches so that
-                            # SQLite's FOREIGN KEY enforcement (PRAGMA foreign_keys=ON)
-                            # can verify the source_item_id reference exists.
-                            db.flush()
-
-                            new_matches: list[tuple[Match, SourceItemCreate]] = []
-                            for raw in items:
-                                if raw.composite_id in muted_source_ids:
-                                    continue
-                                if raw.composite_id not in existing_match_ids:
-                                    match = Match(watch_term_id=term.id, source_item_id=raw.composite_id)
-                                    db.add(match)
-                                    existing_match_ids[raw.composite_id] = match.id
-                                    new_count += 1
-                                    new_matches.append((match, raw))
-
-                            # Single flush assigns autoincrement IDs to all new matches at once.
-                            if new_matches:
-                                db.flush()
-
-                            for match, raw in new_matches:
-                                source_item = db.get(SourceItem, raw.composite_id)
-                                if source_item is None:
-                                    raise RuntimeError(
-                                        f"source item disappeared before notification preview: {raw.composite_id}"
-                                    )
-                                if not _is_notification_eligible(
-                                    term=term,
-                                    source_item=source_item,
-                                    observed_at=now,
-                                ):
-                                    continue
-                                notification_candidates.append(_newest_notification_candidate(
-                                    None,
-                                    source_item=source_item,
-                                    match=match,
-                                    observed_at=now,
-                                ))
-
-                            _queue_pending_notification(
-                                db,
-                                term,
-                                notification_candidates,
-                            )
-                            _queue_duplicate_term_notifications(
-                                db,
-                                term,
-                                items,
-                                now,
-                                discussion_reply_source_ids=discussion_reply_source_ids,
-                            )
-                            db.flush()
-                            db.commit()
-                            if new_count:
-                                total_new += new_count
-                            log.info(
-                                "term=%r search=%r connector=%s fetched=%d new=%d",
-                                term.keyword,
-                                search_term,
-                                connector.PLATFORM,
-                                len(items),
-                                new_count,
-                            )
-                        except Exception as exc:
-                            failed_connectors += 1
-                            log.warning(
-                                "poll failed term=%r search=%r connector=%s: %s",
-                                term.keyword,
-                                search_term,
-                                connector.PLATFORM,
-                                exc,
-                                exc_info=True,
-                            )
-                            db.rollback()
-
-            # Deliver once after every connector and alias has contributed to the
-            # database-backed outbox. If the poll is canceled or APNs raises, the
-            # pending row survives and is retried at the start of the next poll.
-            catchup_count = _queue_recent_unnotified_match_notifications(
-                db,
-                term,
-                datetime.now(timezone.utc),
+        if notify_terms:
+            lane_new, lane_failed = await _poll_terms_batch(
+                db, notify_terms, connectors, fetch_cache, flushed_pending_term_ids,
             )
-            if catchup_count:
-                db.flush()
-                db.commit()
-                log.info(
-                    "queued catch-up notifications term=%r count=%d",
-                    term.keyword,
-                    catchup_count,
-                )
-            if term.id not in flushed_pending_term_ids:
-                await _deliver_pending_notification(db, term)
+            total_new += lane_new
+            failed_connectors += lane_failed
+            log.info(
+                "notification lane: polled %d term(s), %d new match(es)",
+                len(notify_terms),
+                lane_new,
+            )
 
-        await _flush_pending_notifications(db, exclude_term_ids=processed_term_ids | orphaned_term_ids)
+        if regular_terms:
+            lane_new, lane_failed = await _poll_terms_batch(
+                db, regular_terms, connectors, fetch_cache, flushed_pending_term_ids,
+            )
+            total_new += lane_new
+            failed_connectors += lane_failed
 
-        expanded_terms = [
-            duplicate
-            for representative in terms
-            for duplicate in duplicate_groups[representative.id]
-        ]
-        _prune_irrelevant_matches(db, expanded_terms)
+        await _flush_pending_notifications(
+            db,
+            exclude_term_ids={t.id for t in all_terms} | orphaned_term_ids,
+        )
+
+        _prune_irrelevant_matches(db, all_terms)
 
         # Prune: keep at most 200 items per (platform, watch_term) to
         # prevent unbounded DB growth.  Community platforms (5ch, girlschannel)
@@ -1475,10 +1529,11 @@ async def _poll_once_unlocked() -> None:
             "completed" if failed_connectors == 0 else "completed_with_errors",
             "Scheduled/backend poll completed",
             {
-                "terms": len(terms),
+                "terms": len(all_terms),
                 "total_terms": len(active_terms),
                 "due_terms": len(due_terms),
-                "unique_due_terms": len(representative_terms),
+                "notification_lane_terms": len(notify_terms),
+                "regular_lane_terms": len(regular_terms),
                 "connectors": len(connectors),
                 "new_matches": total_new,
                 "failed_connectors": failed_connectors,
@@ -1488,11 +1543,10 @@ async def _poll_once_unlocked() -> None:
         )
         prune_backend_events(db)
         polled_at = datetime.now(timezone.utc)
-        for representative in terms:
-            for term in duplicate_groups[representative.id]:
-                term.last_polled_at = polled_at
+        for term in all_terms:
+            term.last_polled_at = polled_at
             try:
-                db.expunge(representative)
+                db.expunge(term)
             except Exception:
                 pass
         db.commit()

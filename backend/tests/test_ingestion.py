@@ -1173,7 +1173,7 @@ class TestIngestionNotifications:
              patch.object(settings, "poll_terms_per_run", 1):
             await _poll_once_unlocked()
 
-        assert notified_term_ids == [global_term_id, owner_term_id]
+        assert set(notified_term_ids) == {global_term_id, owner_term_id}
         db_session.expire_all()
         assert db_session.query(Match).count() == 2
 
