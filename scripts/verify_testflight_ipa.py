@@ -65,6 +65,7 @@ def verify_ipa(
         version = str(info.get("CFBundleShortVersionString", ""))
         build = str(info.get("CFBundleVersion", ""))
         bundle_id = str(info.get("CFBundleIdentifier", ""))
+        configured_apns_environment = info.get("OshiReaderAPNSEnvironment")
         aps_environment = entitlements.get("aps-environment")
         get_task_allow = entitlements.get("get-task-allow")
 
@@ -77,6 +78,11 @@ def verify_ipa(
             failures.append(f"build {build!r} != expected {expected_build!r}")
         if aps_environment != "production":
             failures.append(f"aps-environment {aps_environment!r} != 'production'")
+        if configured_apns_environment != "production":
+            failures.append(
+                "OshiReaderAPNSEnvironment "
+                f"{configured_apns_environment!r} != 'production'"
+            )
         if get_task_allow is not False:
             failures.append(f"get-task-allow {get_task_allow!r} != false")
         if failures:
@@ -89,6 +95,7 @@ def verify_ipa(
             "version": version,
             "build": build,
             "aps_environment": aps_environment,
+            "configured_apns_environment": configured_apns_environment,
             "get_task_allow": get_task_allow,
         }
 
