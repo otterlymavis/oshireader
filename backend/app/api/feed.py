@@ -22,10 +22,10 @@ _MAX_FEED_SCAN_ROWS = 2000
 # These platforms host long-lived community content. Keep old threads out of the
 # unfiltered "all" feed, but let them remain reachable when the user explicitly
 # opens that source's filter.
-_TIMELESS_PLATFORMS = ("5ch", "girlschannel", "togetter")
+_TIMELESS_PLATFORMS = ("5ch", "girlschannel")
 
 # Sort key: every platform by its real published / last-updated date, never by fetch
-# (match-discovery) time — girlschannel/togetter scrapers heal published_at to the real
+# (match-discovery) time — discussion-source scrapers heal published_at to the real
 # last-reply date, and other connectors carry real publication dates.
 _FEED_SORT_KEY = SourceItem.published_at
 
@@ -114,7 +114,7 @@ def get_feed(
     )
     if not auth.is_admin:
         q = q.filter(WatchTerm.owner_device_secret == auth.device_secret)
-    # Timeless forum platforms (5ch/girlschannel/togetter) host long-lived threads
+    # Timeless forum platforms (5ch/girlschannel) host long-lived threads
     # and are exempt from pruning, so they accumulate for months. Only let them
     # bypass the date window when the user explicitly opens that source's filter —
     # in the unfiltered "all" feed apply the normal window to them too, otherwise

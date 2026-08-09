@@ -177,12 +177,12 @@ class TestPruneOldItems:
         db.add(term)
         db.commit()
 
-        for platform in ("5ch", "girlschannel", "togetter"):
+        for platform in ("5ch", "girlschannel"):
             _add_items(db, term, platform, 250)
 
         _prune_old_items(db)
 
-        for platform in ("5ch", "girlschannel", "togetter"):
+        for platform in ("5ch", "girlschannel"):
             count = (
                 db.query(Match)
                 .join(SourceItem, SourceItem.id == Match.source_item_id)
@@ -190,6 +190,23 @@ class TestPruneOldItems:
                 .count()
             )
             assert count == 250, f"{platform} should not be pruned"
+
+    def test_prune_no_longer_preserves_removed_togetter_source(self, db):
+        term = WatchTerm(keyword="k3", aliases=[])
+        db.add(term)
+        db.commit()
+
+        _add_items(db, term, "togetter", 250)
+
+        _prune_old_items(db)
+
+        count = (
+            db.query(Match)
+            .join(SourceItem, SourceItem.id == Match.source_item_id)
+            .filter(SourceItem.platform == "togetter")
+            .count()
+        )
+        assert count == 200
 
     def test_prune_is_idempotent(self, db):
         term = WatchTerm(keyword="k4", aliases=[])
@@ -1703,6 +1720,15 @@ class TestPruneExceptionHandling:
 
 
 class TestBuildConnectors:
+    def test_removed_togetter_source_is_not_registered(self, db):
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.youtube_api_key = ""
+            s.twitter_bearer_token = ""
+            connectors = _build_connectors(db)
+
+        registered = {connector.PLATFORM for connector in connectors}
+        assert "togetter" not in registered
+
     def test_all_google_news_site_connectors_are_registered(self, db):
         with patch("app.ingestion.scheduler.settings") as s:
             s.youtube_api_key = ""

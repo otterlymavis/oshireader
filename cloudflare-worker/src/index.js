@@ -684,7 +684,7 @@ export async function triggerBackendPoll(env, options = {}) {
       diagnostics,
       Number(env.MIN_POLL_INTERVAL_MINUTES ?? DEFAULT_MIN_POLL_INTERVAL_MINUTES),
       Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
-      Number(env.ACTIVE_POLL_TIMEOUT_MINUTES || DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
+      Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
     );
     if (!decision.due) {
       return {
@@ -749,10 +749,10 @@ export default {
           const health = pollHealth(
             result.diagnostics,
             Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
-            Number(env.ACTIVE_POLL_TIMEOUT_MINUTES || DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
+            Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
           );
           const notifications = notificationHealth(result.diagnostics);
-          if (!health.healthy && !health.in_progress) {
+          if (!health.healthy) {
             await notifyWatchdog(
               env,
               watchdogSummary(health.reason || "unknown", result.diagnostics),
@@ -799,7 +799,7 @@ export default {
         const health = pollHealth(
           diagnostics,
           Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
-          Number(env.ACTIVE_POLL_TIMEOUT_MINUTES || DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
+          Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
         );
         const notifications = notificationHealth(diagnostics);
         // Feed freshness and notification readiness are separate operational

@@ -55,7 +55,6 @@ OshiReader utilizes custom scraping and API connectors to aggregate content from
 | **Note** | RSS Feed | Reads public tags and creator feeds |
 | **5channel** | Web Scraper | Scrapes thread indexes for keyword activity |
 | **Girls Channel** | Web Scraper | Scrapes community forum topics |
-| **Togetter** | Web Scraper | Monitors curation pages and compiling logs |
 | **ModelPress** | Search Scraper | Tracks entertainment articles |
 | **Oricon** | RSS & Search | Parses Oricon article feeds and search results |
 | **Yahoo News** | Web Scraper | Uses mirror sites to ensure EEA-safe access |

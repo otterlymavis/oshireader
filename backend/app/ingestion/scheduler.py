@@ -35,7 +35,6 @@ from app.connectors.news_sites import (
 )
 from app.connectors.rss import RSSConnector
 from app.connectors.smartnews import SmartNewsConnector
-from app.connectors.togetter import TogetterConnector
 from app.connectors.twitter import TwitterConnector
 from app.connectors.tver import TVERConnector
 from app.connectors.yahoonews import YahooNewsConnector
@@ -62,7 +61,7 @@ _queued_task: asyncio.Task | None = None
 
 # Platforms where published_at should reflect "last reply/activity" rather than original
 # post date. We update published_at whenever we see a more recent date from the connector.
-_DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel", "togetter"})
+_DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel"})
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
@@ -102,7 +101,6 @@ def _build_connectors(db) -> list[BaseConnector]:
         SoompiConnector(),
         SponichiConnector(),
         TheTVConnector(),
-        TogetterConnector(),
         TVERConnector(),
         YahooNewsConnector(),
     ]
@@ -1018,10 +1016,7 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
         db.delete(pending)
         db.commit()
         return True
-    queued_at = pending.updated_at
-    if queued_at is not None and queued_at.tzinfo is None:
-        queued_at = queued_at.replace(tzinfo=timezone.utc)
-    observed_at = queued_at if queued_at is not None else datetime.now(timezone.utc)
+    observed_at = datetime.now(timezone.utc)
     try:
         pending_items = _pending_notification_items(pending)
         if not pending_items:
@@ -1566,7 +1561,7 @@ def _prune_old_items_with_limit(
 ) -> dict[str, int]:
     try:
         discussion_filter = "" if include_discussion_platforms else (
-            "WHERE si.platform NOT IN ('5ch', 'girlschannel', 'togetter')"
+            "WHERE si.platform NOT IN ('5ch', 'girlschannel')"
         )
         result = db.execute(sa_text(f"""
             DELETE FROM matches WHERE id IN (

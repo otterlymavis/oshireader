@@ -2523,12 +2523,12 @@ class TestIngestionPruning:
         assert db_session.query(Match).count() == 200
 
     def test_skip_platforms_never_pruned(self, db_session):
-        """5ch, girlschannel, togetter must be skipped regardless of count."""
+        """5ch and girlschannel must be skipped regardless of count."""
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)
         db_session.commit()
 
-        for platform in ("5ch", "girlschannel", "togetter"):
+        for platform in ("5ch", "girlschannel"):
             self._seed_items(db_session, term, platform, 205)
 
         total_before = db_session.query(Match).count()
