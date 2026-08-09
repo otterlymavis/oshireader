@@ -57,6 +57,16 @@ jobs:
             fi
             CODE=${STATUS%% *}
             if [ "$CODE" != "200" ] && [ "$CODE" != "202" ]; then
+              if [ "$CODE" -ge 500 ] && [ "$CODE" -lt 600 ]; then
+                rm -f "$BODY"
+                if [ "$attempt" -eq 18 ]; then
+                  echo "Poll request kept returning backend 5xx after $attempt attempts"
+                  exit 1
+                fi
+                echo "Poll request hit transient backend status $CODE; retrying."
+                sleep 20
+                continue
+              fi
               rm -f "$BODY"
               echo "Poll request failed with status $CODE"
               exit 1
