@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     refresh_premium_interval_minutes: int = 180
     inactive_poll_after_days: int = 30
     retention_days: int = 30
-    notification_freshness_window_minutes: int = 120
+    notification_freshness_window_minutes: int = 1440
     orphaned_notification_grace_minutes: int = 60
     admin_api_token: str = ""
     allow_unauthenticated_admin: bool = False

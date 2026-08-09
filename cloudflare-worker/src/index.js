@@ -621,9 +621,10 @@ function scheduledPollDecision(
   const activePollAgeMinutes = activeBackendPollAgeMinutes(diagnostics, completedAt);
   if (Number.isFinite(activePollAgeMinutes) && activePollAgeMinutes > activePollTimeoutMinutes) {
     return {
-      due: true,
+      due: false,
       reason: `active backend poll exceeded ${activePollTimeoutMinutes} minutes (${Math.max(0, Math.floor(activePollAgeMinutes))} minutes old)`,
       in_progress: true,
+      stuck: true,
       age_minutes: Math.max(0, Math.floor(activePollAgeMinutes)),
       ...inputs,
     };
@@ -683,7 +684,7 @@ export async function triggerBackendPoll(env, options = {}) {
       diagnostics,
       Number(env.MIN_POLL_INTERVAL_MINUTES ?? DEFAULT_MIN_POLL_INTERVAL_MINUTES),
       Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
-      Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
+      Number(env.ACTIVE_POLL_TIMEOUT_MINUTES || DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
     );
     if (!decision.due) {
       return {
@@ -748,10 +749,10 @@ export default {
           const health = pollHealth(
             result.diagnostics,
             Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
-            Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
+            Number(env.ACTIVE_POLL_TIMEOUT_MINUTES || DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
           );
           const notifications = notificationHealth(result.diagnostics);
-          if (!health.healthy) {
+          if (!health.healthy && !health.in_progress) {
             await notifyWatchdog(
               env,
               watchdogSummary(health.reason || "unknown", result.diagnostics),
@@ -798,7 +799,7 @@ export default {
         const health = pollHealth(
           diagnostics,
           Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES),
-          Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
+          Number(env.ACTIVE_POLL_TIMEOUT_MINUTES || DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
         );
         const notifications = notificationHealth(diagnostics);
         // Feed freshness and notification readiness are separate operational

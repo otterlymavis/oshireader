@@ -73,7 +73,7 @@ def _owner_grace_elapsed(term: WatchTerm) -> bool:
     if not term.owner_device_secret:
         return True
     if not term.created_at:
-        return True
+        return False
     created_at = term.created_at
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
