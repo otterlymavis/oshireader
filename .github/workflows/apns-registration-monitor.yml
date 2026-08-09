@@ -189,8 +189,8 @@ jobs:
           missing = health_count(health, "active_notify_terms_without_verified_devices")
           if missing:
               failures.append(
-                  f"{missing} active notification term(s) have no verified APNs device "
-                  f"for the backend APNs environment; term_ids={notify_ids}"
+                  f"{missing} active notification term(s) have no verified APNs device; "
+                  f"term_ids={notify_ids}"
               )
           repeated = {reason: count for reason, count in reasons.items() if count >= 3}
           if repeated:

@@ -572,7 +572,7 @@ class TestAdminStats:
         assert health["active_notify_terms_without_verified_devices"] == 25
         assert health["active_notify_term_ids_without_verified_devices"] == expected_ids
 
-    def test_poller_health_requires_verified_device_for_server_apns_environment(self, client, db_session):
+    def test_poller_health_accepts_verified_device_from_its_own_apns_environment(self, client, db_session):
         term = WatchTerm(
             keyword="Sandbox only",
             is_active=True,
@@ -597,9 +597,9 @@ class TestAdminStats:
 
         assert terms["Sandbox only"]["notification_verified_devices"] == 1
         assert terms["Sandbox only"]["notification_verified_devices_for_server_environment"] == 0
-        assert health["healthy"] is False
-        assert health["active_notify_terms_without_verified_devices"] == 1
-        assert health["active_notify_term_ids_without_verified_devices"] == [term.id]
+        assert health["healthy"] is True
+        assert health["active_notify_terms_without_verified_devices"] == 0
+        assert health["active_notify_term_ids_without_verified_devices"] == []
 
     def test_stats_includes_recent_backend_events(self, client, db_session):
         db_session.add(BackendEvent(
@@ -968,7 +968,7 @@ class TestAdminMaintenance:
         assert event.payload["action"] == "mute-notify"
         assert event.payload["term_ids"] == [orphan.id]
 
-    def test_orphaned_term_maintenance_requires_verified_device_for_server_apns_environment(
+    def test_orphaned_term_maintenance_protects_verified_device_from_any_apns_environment(
         self,
         client,
         db_session,
@@ -1002,9 +1002,12 @@ class TestAdminMaintenance:
         finally:
             settings.apns_use_sandbox = original_apns_use_sandbox
 
-        assert r.status_code == 200
+        assert r.status_code == 409
         db_session.refresh(term)
-        assert term.notify_on_new is False
+        assert term.notify_on_new is True
+        assert r.json()["detail"]["failures"] == [
+            {"term_id": term.id, "reason": "has_verified_apns_device"}
+        ]
 
     def test_deactivate_orphaned_terms_requires_silent_orphan(self, client, db_session):
         old = datetime.now(timezone.utc) - timedelta(hours=2)
@@ -1253,7 +1256,7 @@ class TestAdminNotificationCanary:
         assert event.payload["should_clear"] is True
         assert isinstance(event.payload["apns_event"]["created_at"], str)
 
-    def test_canary_requires_verified_device_for_server_apns_environment(self, client, db_session):
+    def test_canary_accepts_verified_device_from_its_own_apns_environment(self, client, db_session):
         term = WatchTerm(keyword="Sandbox only", is_active=True, notify_on_new=True)
         db_session.add_all([
             term,
@@ -1265,19 +1268,34 @@ class TestAdminNotificationCanary:
         ])
         db_session.commit()
 
+        async def fake_send(db, sent_term, count, preview):
+            db.add(BackendEvent(
+                kind="apns",
+                status="attempted",
+                message="APNs notification attempted",
+                payload={
+                    "term_id": sent_term.id,
+                    "preview_item_id": preview["id"],
+                    "delivered_count": 1,
+                },
+            ))
+            db.commit()
+            return True
+
         with patch("app.apns.apns_configured", return_value=True), \
-             patch("app.apns.send_new_match_notifications", new=AsyncMock()) as mock_send:
+             patch("app.apns.send_new_match_notifications", new=AsyncMock(side_effect=fake_send)) as mock_send:
             r = client.post("/api/admin/notification-canary")
 
-        assert r.status_code == 503
-        assert r.json()["detail"] == "No active notification term has a verified APNs device"
-        mock_send.assert_not_called()
+        assert r.status_code == 200
+        assert r.json()["term_id"] == term.id
+        assert r.json()["delivered"] is True
+        mock_send.assert_awaited_once()
 
         event = db_session.query(BackendEvent).filter_by(
             kind="notification_canary",
-            status="failed",
+            status="passed",
         ).one()
-        assert event.message == "No active notification term has a verified APNs device"
+        assert event.message == "Synthetic notification canary completed"
 
     def test_canary_all_terms_sends_every_active_term_with_verified_device(self, client, db_session):
         owner_secret = "owner-secret"

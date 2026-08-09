@@ -307,7 +307,6 @@ def _notification_device_counts(db: Session, term: WatchTerm) -> dict:
 
 def _term_verified_device_count(db: Session, term: WatchTerm) -> int:
     query = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == True)  # noqa: E712
-    query = query.filter(APNSDeviceToken.environment == _server_apns_environment())
     if term.owner_device_secret:
         query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
     return query.count()
@@ -677,7 +676,6 @@ def _owner_has_verified_apns_device(db: Session, term: WatchTerm) -> bool:
         .filter(
             APNSDeviceToken.device_secret == term.owner_device_secret,
             APNSDeviceToken.is_verified == True,  # noqa: E712
-            APNSDeviceToken.environment == _server_apns_environment(),
         )
         .first()
         is not None
@@ -1253,13 +1251,13 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
         if term.notify_on_new:
             active_notify_terms += 1
             if (
-                device_counts["notification_verified_devices_for_server_environment"] == 0
+                device_counts["notification_verified_devices"] == 0
                 and _orphaned_owner_grace_elapsed(term)
             ):
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
-            and device_counts["notification_verified_devices_for_server_environment"] == 0
+            and device_counts["notification_verified_devices"] == 0
             and _orphaned_owner_grace_elapsed(term)
         ):
             active_silent_orphans.append(row)
@@ -1414,13 +1412,13 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
             continue
         if term.notify_on_new:
             active_notify_terms += 1
-            if device_counts["notification_verified_devices_for_server_environment"] == 0 and (
+            if device_counts["notification_verified_devices"] == 0 and (
                 _orphaned_owner_grace_elapsed(term)
             ):
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
-            and device_counts["notification_verified_devices_for_server_environment"] == 0
+            and device_counts["notification_verified_devices"] == 0
             and _orphaned_owner_grace_elapsed(term)
         ):
             active_silent_orphans.append(row)

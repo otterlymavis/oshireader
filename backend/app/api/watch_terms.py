@@ -42,10 +42,6 @@ def _term_with_keyword_exists(
     return db.query(query.exists()).scalar()
 
 
-def _server_apns_environment() -> str:
-    return "sandbox" if settings.apns_use_sandbox else "production"
-
-
 def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> bool:
     if owner_device_secret is None:
         return False
@@ -54,7 +50,6 @@ def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> 
         .filter(
             APNSDeviceToken.device_secret == owner_device_secret,
             APNSDeviceToken.is_verified == True,  # noqa: E712
-            APNSDeviceToken.environment == _server_apns_environment(),
         )
         .first()
         is not None

@@ -1072,7 +1072,7 @@ class TestReportOrphanedNotificationTerms:
         assert orphaned == set()
         assert term.notify_on_new is True
 
-    def test_reports_term_with_only_wrong_environment_owner_device(self, db):
+    def test_keeps_term_with_verified_owner_device_from_another_environment(self, db):
         old = datetime.now(timezone.utc) - timedelta(hours=2)
         db.add(APNSDeviceToken(
             token="s" * 64,
@@ -1096,7 +1096,7 @@ class TestReportOrphanedNotificationTerms:
             orphaned = _report_orphaned_notification_terms(db)
 
         db.refresh(term)
-        assert orphaned == {term.id}
+        assert orphaned == set()
         assert term.notify_on_new is True
 
     def test_reports_term_with_unverified_owner_device(self, db):
@@ -1250,7 +1250,7 @@ class TestReportOrphanedDuplicateTerms:
         assert orphaned == set()
         assert term.is_active is True
 
-    def test_keeps_duplicate_when_replacement_only_has_wrong_environment_device(self, db):
+    def test_reports_duplicate_when_replacement_has_verified_device_from_another_environment(self, db):
         old = datetime.now(timezone.utc) - timedelta(hours=2)
         stale = WatchTerm(
             keyword="Aiko",
@@ -1285,7 +1285,7 @@ class TestReportOrphanedDuplicateTerms:
 
         db.refresh(stale)
         db.refresh(replacement)
-        assert orphaned == set()
+        assert orphaned == {stale.id}
         assert stale.is_active is True
         assert replacement.is_active is True
 
@@ -1390,7 +1390,7 @@ class TestReportOrphanedSilentTerms:
         assert orphaned == {term.id}
         assert term.is_active is True
 
-    def test_reports_silent_term_with_only_wrong_environment_owner_device(self, db):
+    def test_keeps_silent_term_with_verified_owner_device_from_another_environment(self, db):
         old = datetime.now(timezone.utc) - timedelta(hours=2)
         db.add(APNSDeviceToken(
             token="s" * 64,
@@ -1414,7 +1414,7 @@ class TestReportOrphanedSilentTerms:
             orphaned = _report_orphaned_silent_terms(db)
 
         db.refresh(term)
-        assert orphaned == {term.id}
+        assert orphaned == set()
         assert term.is_active is True
 
     def test_reports_silent_term_with_missing_created_at(self, db):
