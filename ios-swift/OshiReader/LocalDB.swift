@@ -152,7 +152,10 @@ class LocalDB: ObservableObject {
         self.subscribedPlatforms = normalizedKnownPlatformList(loadedPlatforms)
         self.wallpaper = UserDefaults.standard.string(forKey: "wallpaper_url")
         let loadedSourcesOrder = UserDefaults.standard.stringArray(forKey: "sources_order")
-        self.sourcesOrder = loadedSourcesOrder.map(normalizedKnownPlatformList)
+        self.sourcesOrder = loadedSourcesOrder.flatMap {
+            let n = normalizedKnownPlatformList($0)
+            return n.isEmpty ? nil : n
+        }
         self.oshiAvatars = loadFromFile(name: "oshi_avatars", defaultValue: [:])
         self.compositions = loadFromFile(name: "oshi_compositions", defaultValue: [:])
         let hiddenArray: [String] = loadFromFile(name: "hidden_items", defaultValue: [])
@@ -1096,7 +1099,7 @@ class LocalDB: ObservableObject {
         let originalPlatforms = Set(subscribedPlatforms)
         subscribedPlatforms = normalizedKnownPlatformList(platforms)
         saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
-        if Set(subscribedPlatforms) != originalPlatforms {
+        if Set(platforms) != originalPlatforms {
             BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         }
     }

@@ -232,7 +232,7 @@ jobs:
               term = terms.get(term_id)
               if term is None:
                   failures.append({"term_id": term_id, "reason": "not_found"})
-              elif int(term.get("notification_verified_devices") or 0) <= 0:
+              elif int(term.get("notification_verified_devices_for_server_environment") or 0) <= 0:
                   failures.append({"term_id": term_id, "reason": "no_verified_apns_device"})
           if failures:
               raise SystemExit(f"Refusing to enable notification term(s): {failures}")
