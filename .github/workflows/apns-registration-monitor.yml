@@ -136,11 +136,19 @@ jobs:
                   raise SystemExit("apns_registration field missing from backend diagnostics response")
               if not isinstance(registration, dict):
                   raise SystemExit(f"apns_registration diagnostics must be an object: {registration!r}")
-              reasons = registration.get("reasons")
+              apns = object_field(payload, "apns")
+              server_environment = str(apns.get("server_environment") or "")
+              reasons_by_environment = registration.get("reasons_by_environment")
+              if isinstance(reasons_by_environment, dict) and server_environment:
+                  reasons = reasons_by_environment.get(server_environment)
+                  if reasons is None:
+                      reasons = {}
+              else:
+                  reasons = registration.get("reasons")
               if reasons is None:
                   reasons = {}
               if not isinstance(reasons, dict):
-                  raise SystemExit(f"apns_registration.reasons must be an object: {reasons!r}")
+                  raise SystemExit(f"apns_registration reasons must be an object: {reasons!r}")
               parsed = {}
               for reason, raw_count in reasons.items():
                   try:

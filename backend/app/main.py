@@ -240,14 +240,19 @@ def _recent_apns_registration_failures(db: Session, *, hours: int = 24) -> dict:
         .all()
     )
     reasons: dict[str, int] = {}
+    reasons_by_environment: dict[str, dict[str, int]] = {}
     for event in events:
         payload = event.payload if isinstance(event.payload, dict) else {}
         reason = str(payload.get("verification_error") or "unknown")
+        environment = str(payload.get("environment") or "unknown")
         reasons[reason] = reasons.get(reason, 0) + 1
+        environment_reasons = reasons_by_environment.setdefault(environment, {})
+        environment_reasons[reason] = environment_reasons.get(reason, 0) + 1
     return {
         "window_hours": hours,
         "count": len(events),
         "reasons": reasons,
+        "reasons_by_environment": reasons_by_environment,
         "latest": _backend_event_payload(events[0]) if events else None,
     }
 
