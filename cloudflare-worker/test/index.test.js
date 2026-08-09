@@ -995,7 +995,7 @@ test("scheduled poll skips backend poll when poll is already in progress", async
   ]);
 });
 
-test("scheduled poll retries when an active poll exceeds the timeout", async (context) => {
+test("scheduled poll skips when an active poll exceeds the timeout", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => {
     globalThis.fetch = originalFetch;
@@ -1006,9 +1006,6 @@ test("scheduled poll retries when an active poll exceeds the timeout", async (co
     requestedURLs.push(String(url));
     if (String(url).endsWith("/api/health")) {
       return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
-    }
-    if (String(url).endsWith("/api/admin/poll")) {
-      return new Response(JSON.stringify({ status: "poll already running" }), { status: 200 });
     }
     assert.equal(url, "https://backend.example/api/admin/poller-health");
     diagnosticsCalls += 1;
@@ -1039,13 +1036,11 @@ test("scheduled poll retries when an active poll exceeds the timeout", async (co
   }, { respectDueWindow: true });
 
   assert.equal(result.ok, true);
-  assert.equal(result.skipped, undefined);
-  assert.equal(result.backend_status, "poll already running");
-  assert.equal(diagnosticsCalls, 2);
+  assert.equal(result.skipped, true);
+  assert.equal(result.backend_status, "poll skipped");
+  assert.equal(diagnosticsCalls, 1);
   assert.deepEqual(requestedURLs, [
     "https://backend.example/api/health",
-    "https://backend.example/api/admin/poller-health",
-    "https://backend.example/api/admin/poll",
     "https://backend.example/api/admin/poller-health",
   ]);
 });

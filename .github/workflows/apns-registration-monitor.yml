@@ -133,7 +133,7 @@ jobs:
           def registration_reasons(payload):
               registration = payload.get("apns_registration")
               if registration is None:
-                  registration = {}
+                  raise SystemExit("apns_registration field missing from backend diagnostics response")
               if not isinstance(registration, dict):
                   raise SystemExit(f"apns_registration diagnostics must be an object: {registration!r}")
               reasons = registration.get("reasons")

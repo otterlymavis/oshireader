@@ -307,13 +307,10 @@ final class NotificationManager: ObservableObject {
             resetRegistrationRetryState()
             lastRegisteredDeviceToken = token
             lastRemoteRegistrationError = nil
-            let hadWaiters = !tokenRegistrationWaiters.isEmpty
-            let shouldSync = completeTokenRegistrationWaiters(success: true)
-            if !hadWaiters || shouldSync {
-                _ = await NetworkManager.shared.syncWatchTermsToBackend(
-                    localTerms: LocalDB.shared.terms
-                )
-            }
+            completeTokenRegistrationWaiters(success: true)
+            _ = await NetworkManager.shared.syncWatchTermsToBackend(
+                localTerms: LocalDB.shared.terms
+            )
         } catch {
             AppLogger.notifications.error("APNs device token registration failed: \(error.localizedDescription)")
             lastRemoteRegistrationError = error.localizedDescription
