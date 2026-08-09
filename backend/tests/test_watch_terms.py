@@ -394,7 +394,7 @@ class TestCreateWatchTerm:
         assert db_session.query(WatchTerm).count() == 0
         mock_poll.assert_not_called()
 
-    def test_device_create_notify_term_requires_verified_device_for_server_environment(self, client, db_session):
+    def test_device_create_notify_term_accepts_sandbox_verified_device_in_production_mode(self, client, db_session):
         token = "a" * 64
         secret = "device-secret-value"
         db_session.add(APNSDeviceToken(
@@ -414,10 +414,10 @@ class TestCreateWatchTerm:
                 headers={"X-Device-Token": token, "X-Device-Secret": secret},
             )
 
-        assert resp.status_code == 409
-        assert resp.json()["detail"]["code"] == "notification_device_required"
-        assert db_session.query(WatchTerm).count() == 0
-        mock_poll.assert_not_called()
+        assert resp.status_code == 201
+        assert resp.json()["notify_on_new"] is True
+        assert db_session.query(WatchTerm).count() == 1
+        mock_poll.assert_called_once()
 
     def test_device_can_create_muted_term_without_verified_device(self, client, db_session):
         with patch.object(settings, "admin_api_token", "admin-secret"), \
@@ -456,7 +456,7 @@ class TestCreateWatchTerm:
         assert term.notify_on_new is False
         mock_poll.assert_not_called()
 
-    def test_device_update_notify_term_requires_verified_device_for_server_environment(self, client, db_session):
+    def test_device_update_notify_term_accepts_sandbox_verified_device_in_production_mode(self, client, db_session):
         token = "a" * 64
         secret = "device-secret-value"
         owner_secret = hashlib.sha256(secret.encode()).hexdigest()
@@ -485,10 +485,9 @@ class TestCreateWatchTerm:
                 headers={"X-Device-Token": token, "X-Device-Secret": secret},
             )
 
-        assert resp.status_code == 409
+        assert resp.status_code == 200
         db_session.refresh(term)
-        assert term.notify_on_new is False
-        mock_poll.assert_not_called()
+        assert term.notify_on_new is True
 
     def test_registered_device_does_not_adopt_same_keyword_with_existing_owner_device(self, client, db_session):
         current_token = "a" * 64
