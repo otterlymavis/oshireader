@@ -576,10 +576,11 @@ async def send_new_match_notifications(
             },
         )
         db.commit()
-        # An owner-scoped device can become verified after registration or a
-        # temporary APNs/configuration failure. Keep its outbox entry so the next
-        # poll can retry instead of permanently discarding the alert.
-        return not bool(term.owner_device_secret and owner_devices)
+        # Keep the pending row regardless of owner-scoping. A non-owner-scoped
+        # term can receive devices after reinstall; an owner-scoped term with
+        # no verified devices may gain one after re-registration. Let the next
+        # poll retry rather than silently discarding the accumulated count.
+        return False
     async with httpx.AsyncClient(timeout=10.0, http2=True) as client:
         results = await asyncio.gather(
             *[_send_one(client, device, term, count, preview_item) for device in devices]

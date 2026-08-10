@@ -452,7 +452,18 @@ struct FeedView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 // "All" button
-                                Button(action: { selectedPlatform = nil }) {
+                                Button(action: {
+                                    selectedPlatform = nil
+                                    foregroundRefreshTask?.cancel()
+                                    refreshTask?.cancel()
+                                    let prevForeground = foregroundRefreshTask
+                                    let prevRefresh = refreshTask
+                                    refreshTask = Task {
+                                        await prevForeground?.value
+                                        await prevRefresh?.value
+                                        await refreshFeed()
+                                    }
+                                }) {
                                     VStack(spacing: 3) {
                                         Text("🌐")
                                             .font(.system(size: 18))
@@ -478,8 +489,13 @@ struct FeedView: View {
                                         : (isSelected ? Color.white : meta.fg)
                                     Button(action: {
                                         selectedPlatform = isSelected ? nil : platformId
+                                        foregroundRefreshTask?.cancel()
                                         refreshTask?.cancel()
+                                        let prevForeground = foregroundRefreshTask
+                                        let prevRefresh = refreshTask
                                         refreshTask = Task {
+                                            await prevForeground?.value
+                                            await prevRefresh?.value
                                             if isSelected {
                                                 await refreshFeed()
                                             } else {
