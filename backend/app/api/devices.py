@@ -348,6 +348,23 @@ def list_apns_tokens(_: None = Depends(require_admin_auth), db: Session = Depend
     return db.query(APNSDeviceToken).order_by(APNSDeviceToken.last_seen_at.desc()).all()
 
 
+@router.delete("/apns-tokens/unverified", status_code=200)
+def prune_unverified_apns_tokens(
+    dry_run: bool = Query(True),
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Delete all unverified APNs device tokens. Safe to run anytime — they will
+    re-register and be immediately verified when APNS_TRUST_REGISTERED_TOKENS is set."""
+    rows = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == False).all()  # noqa: E712
+    count = len(rows)
+    if not dry_run:
+        for row in rows:
+            db.delete(row)
+        db.commit()
+    return {"deleted": count, "dry_run": dry_run}
+
+
 @router.post("/apns-tokens/prune-superseded")
 def prune_superseded_apns_tokens(
     dry_run: bool = Query(True),
