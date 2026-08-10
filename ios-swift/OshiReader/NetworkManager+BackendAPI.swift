@@ -663,7 +663,13 @@ extension NetworkManager {
             guard let storedToken else { throw APIClientError.httpStatus(404, detail: detail) }
             AppLogger.network.notice("Background refresh credential rejected; re-registering APNs token and retrying once")
             try await registerAPNSDeviceToken(storedToken)
-            try await sendDeviceBackgroundRefresh(bodyData: bodyData, timeout: timeout)
+            do {
+                try await sendDeviceBackgroundRefresh(bodyData: bodyData, timeout: timeout)
+            } catch APIClientError.httpStatus(404, _) {
+                AppLogger.network.warning("Background refresh still rejected after re-registration — clearing stale APNs token")
+                clearRegisteredAPNSDeviceToken()
+                throw APIClientError.httpStatus(404, detail: detail)
+            }
         }
     }
 

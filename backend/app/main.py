@@ -1107,9 +1107,11 @@ async def admin_trigger_notification(
     pending = db.get(PendingNotification, term_id)
     count = pending.new_count if pending else 1
     preview = pending.preview_item if pending else None
+    if count <= 0:
+        raise HTTPException(409, {"code": "no_pending_content", "message": "No pending notification content to deliver"})
 
     cleared = await send_new_match_notifications(db, term, count, preview)
-    if pending is not None:
+    if pending is not None and cleared is not False:
         db.delete(pending)
     db.commit()
     return {"term_id": term_id, "keyword": term.keyword, "count": count, "cleared": cleared}
@@ -1173,6 +1175,9 @@ async def notification_canary(
         )
         preview = _notification_canary_preview(uuid.uuid4().hex)
         should_clear = await send_new_match_notifications(db, term, 1, preview)
+        pending = db.get(PendingNotification, term.id)
+        if pending is not None and should_clear is not False:
+            db.delete(pending)
         apns_event = _latest_canary_apns_event(
             db,
             term_id=term.id,

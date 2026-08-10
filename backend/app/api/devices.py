@@ -356,10 +356,11 @@ def prune_unverified_apns_tokens(
 ) -> dict:
     """Delete all unverified APNs device tokens. Safe to run anytime — they will
     re-register and be immediately verified when APNS_TRUST_REGISTERED_TOKENS is set."""
-    count = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == False).count()  # noqa: E712
     if not dry_run:
-        db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == False).delete(synchronize_session=False)  # noqa: E712
+        count = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == False).delete(synchronize_session=False)  # noqa: E712
         db.commit()
+    else:
+        count = db.query(APNSDeviceToken).filter(APNSDeviceToken.is_verified == False).count()  # noqa: E712
     return {"deleted": count, "dry_run": dry_run}
 
 

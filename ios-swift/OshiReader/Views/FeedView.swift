@@ -478,8 +478,11 @@ struct FeedView: View {
                                         : (isSelected ? Color.white : meta.fg)
                                     Button(action: {
                                         selectedPlatform = isSelected ? nil : platformId
-                                        if !isSelected {
-                                            Task {
+                                        refreshTask?.cancel()
+                                        refreshTask = Task {
+                                            if isSelected {
+                                                await refreshFeed()
+                                            } else {
                                                 await refreshFeed(selectedPlatformOverride: platformId)
                                             }
                                         }

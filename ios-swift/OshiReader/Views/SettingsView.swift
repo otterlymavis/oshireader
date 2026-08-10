@@ -18,7 +18,7 @@ struct SettingsView: View {
     @State private var settingsErrorMessage: String? = nil
     @State private var notificationUpdateIDs = Set<String>()
     @State private var avatarEditorKeyword: String? = nil
-    @State private var appearanceSectionExpanded = false
+    @AppStorage("settings.appearanceSectionExpanded") private var appearanceSectionExpanded = false
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
     
     var allPlatforms: [(String, String)] {
@@ -115,6 +115,14 @@ struct SettingsView: View {
                                 .foregroundColor(theme.colors.primary)
                         }
                         .accessibilityIdentifier("settings.openSettingsButton")
+                    }
+
+                    if let registrationError = notifications.lastRemoteRegistrationError {
+                        Text(registrationError)
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("settings.notificationRegistrationError")
                     }
                 }
 
