@@ -1109,6 +1109,8 @@ async def admin_trigger_notification(
     preview = pending.preview_item if pending else None
 
     cleared = await send_new_match_notifications(db, term, count, preview)
+    if pending is not None:
+        db.delete(pending)
     db.commit()
     return {"term_id": term_id, "keyword": term.keyword, "count": count, "cleared": cleared}
 
@@ -1120,6 +1122,9 @@ def admin_clear_notification(
     db: Session = Depends(get_db),
 ) -> None:
     """Clear a pending notification for any watch term without delivering it."""
+    term = db.get(WatchTerm, term_id)
+    if not term:
+        raise HTTPException(404, "Watch term not found")
     pending = db.get(PendingNotification, term_id)
     if pending is not None:
         db.delete(pending)

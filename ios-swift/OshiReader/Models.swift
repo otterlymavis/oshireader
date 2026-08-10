@@ -261,23 +261,6 @@ struct Credential: Codable, Hashable {
     let updated_at: String?
 }
 
-// MARK: - APNs Diagnostics
-struct APNSTestPushResult: Codable, Hashable {
-    let token: String?
-    let environment: String?
-    let host: String?
-    let status: Int?
-    let reason: String?
-    let error: String?
-}
-
-struct APNSTestPushReport: Codable, Hashable {
-    let configured: Bool
-    let results: [APNSTestPushResult]
-    let note: String?
-    let pruned_tokens: Int?
-}
-
 struct APNSDeviceRegistrationResponse: Codable, Hashable {
     let token: String
     let environment: String

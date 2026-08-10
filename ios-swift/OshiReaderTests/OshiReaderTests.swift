@@ -637,25 +637,6 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.feedItems.first?.content_text, "Aiko latest reply")
     }
 
-    @MainActor
-    func testNotificationManagerSchedulesTestNotificationAfterAuthorization() async throws {
-        let center = MockNotificationCenter(status: .notDetermined, grantsAuthorization: true)
-        let manager = NotificationManager(center: center)
-
-        try await manager.sendTestNotification()
-
-        XCTAssertEqual(center.authorizationRequestCount, 1)
-        XCTAssertEqual(center.requests.count, 1)
-        XCTAssertEqual(center.requests.first?.content.title, I18nManager.shared.tFormat("notifNewItemsTitle", "OshiReader"))
-        XCTAssertEqual(center.requests.first?.content.body, I18nManager.shared.t("notifTestBody"))
-        XCTAssertEqual(center.requests.first?.content.categoryIdentifier, NotificationManager.resultPreviewCategoryIdentifier)
-        XCTAssertEqual(center.requests.first?.content.targetContentIdentifier, "oshireader-test-preview")
-        let previewItem = center.requests.first?.content.userInfo["preview_item"] as? [String: Any]
-        XCTAssertEqual(previewItem?["id"] as? String, "oshireader-test-preview")
-        XCTAssertEqual(previewItem?["title"] as? String, I18nManager.shared.t("notifTestBody"))
-        XCTAssertNotNil(center.requests.first?.trigger)
-    }
-
     func testAPNSDeviceTokenStringUsesLowercaseHex() throws {
         let data = Data([0x00, 0x0f, 0xa1, 0xff])
         XCTAssertEqual(NotificationManager.deviceTokenString(data), "000fa1ff")
@@ -7513,84 +7494,6 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertFalse(capturedPaths.contains("/api/watch-terms"))
     }
 
-    func testSendRemoteTestPushUsesDeviceScopedEndpointWhenTokenStored() async throws {
-        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
-        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
-        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
-        var capturedMethod: String?
-        var capturedPath: String?
-        var capturedAuthHeader: String?
-        var capturedBody: [String: Any]?
-        let body = Data(#"{"configured":true,"results":[{"token":"abcd1234","environment":"production","host":"https://api.push.apple.com","status":200}],"pruned_tokens":0}"#.utf8)
-        MockURLProtocol.handler = { req in
-            capturedMethod = req.httpMethod
-            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
-            capturedPath = req.url?.path
-            if let body = req.httpBody {
-                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-            }
-            return (body, Self.response(status: 200))
-        }
-
-        let report = try await NetworkManager.shared.sendRemoteTestPush()
-
-        XCTAssertEqual(capturedMethod, "POST")
-        XCTAssertNil(capturedAuthHeader)
-        XCTAssertEqual(capturedPath, "/api/devices/apns-test-push")
-        XCTAssertEqual(capturedBody?["token"] as? String, String(repeating: "a", count: 64))
-        XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
-        XCTAssertTrue(report.configured)
-        XCTAssertEqual(report.results.first?.status, 200)
-    }
-
-    func testSendRemoteTestPushDecodesQueuedAcceptance() async throws {
-        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
-        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
-        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
-        let body = Data(#"{"configured":true,"results":[{"token":"abcd1234","environment":"sandbox","status":202,"reason":"queued"}],"pruned_tokens":0,"note":"queued"}"#.utf8)
-        MockURLProtocol.handler = { _ in
-            (body, Self.response(status: 200))
-        }
-
-        let report = try await NetworkManager.shared.sendRemoteTestPush()
-
-        XCTAssertTrue(report.configured)
-        XCTAssertEqual(report.results.first?.status, 202)
-        XCTAssertEqual(report.results.first?.reason, "queued")
-        XCTAssertEqual(report.note, "queued")
-    }
-
-    func testSendRemoteTestPushUsesDeviceScopedFallbackWhenEnvironmentChanged() async throws {
-        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
-        KeychainHelper.write(
-            key: "apns_device_environment",
-            value: NetworkManager.shared.apnsEnvironment == "sandbox" ? "production" : "sandbox"
-        )
-        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
-
-        var capturedPath: String?
-        var capturedAuthHeader: String?
-        var capturedBody: [String: Any]?
-        let body = Data(#"{"configured":true,"results":[],"pruned_tokens":0}"#.utf8)
-        MockURLProtocol.handler = { req in
-            capturedPath = req.url?.path
-            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
-            if let body = req.httpBody {
-                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-            }
-            return (body, Self.response(status: 200))
-        }
-
-        _ = try await NetworkManager.shared.sendRemoteTestPush()
-
-        XCTAssertEqual(capturedPath, "/api/devices/apns-test-push")
-        XCTAssertNil(capturedAuthHeader)
-        XCTAssertNil(capturedBody?["token"])
-        XCTAssertNotNil(capturedBody?["device_id"] as? String)
-        XCTAssertEqual(capturedBody?["environment"] as? String, NetworkManager.shared.apnsEnvironment)
-        XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
-    }
-
     func testUnregisterAPNSDeviceTokenUsesDeviceSecret() async throws {
         let token = String(repeating: "a", count: 64)
         KeychainHelper.write(key: "apns_device_token", value: token)
@@ -7613,77 +7516,6 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertEqual(capturedSecret, "device-secret")
         XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceToken)
         XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceEnvironment)
-    }
-
-    func testSendRemoteTestPushClearsStoredTokenOnDeviceScopedNotFound() async throws {
-        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
-        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
-        MockURLProtocol.handler = { _ in
-            (Data(#"{"detail":"APNs device token not registered"}"#.utf8), Self.response(status: 404))
-        }
-
-        do {
-            _ = try await NetworkManager.shared.sendRemoteTestPush()
-            XCTFail("Expected APIClientError not thrown")
-        } catch APIClientError.httpStatus(let status, _) {
-            XCTAssertEqual(status, 404)
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
-        XCTAssertNil(NetworkManager.shared.registeredAPNSDeviceToken)
-    }
-
-    func testSendRemoteTestPushPreservesBackendErrorDetail() async throws {
-        KeychainHelper.write(key: "apns_device_token", value: String(repeating: "a", count: 64))
-        KeychainHelper.write(key: "apns_device_environment", value: NetworkManager.shared.apnsEnvironment)
-        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
-        MockURLProtocol.handler = { _ in
-            (
-                Data(#"{"detail":"APNs provider quota exceeded"}"#.utf8),
-                Self.response(status: 500)
-            )
-        }
-
-        do {
-            _ = try await NetworkManager.shared.sendRemoteTestPush()
-            XCTFail("Expected APIClientError not thrown")
-        } catch APIClientError.httpStatus(let status, let detail) {
-            XCTAssertEqual(status, 500)
-            XCTAssertEqual(detail, "APNs provider quota exceeded")
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-    }
-
-    func testSendRemoteTestPushFallsBackToDeviceScopedEndpointWithoutStoredToken() async throws {
-        KeychainHelper.write(key: "apns_device_secret", value: "device-secret")
-        var capturedMethod: String?
-        var capturedAuthHeader: String?
-        var capturedPath: String?
-        var capturedBody: [String: Any]?
-        let body = Data(#"{"configured":true,"results":[{"token":"abcd1234","environment":"production","host":"https://api.push.apple.com","status":200}],"pruned_tokens":0}"#.utf8)
-        MockURLProtocol.handler = { req in
-            capturedMethod = req.httpMethod
-            capturedAuthHeader = req.value(forHTTPHeaderField: "Authorization")
-            capturedPath = req.url?.path
-            if let body = req.httpBody {
-                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-            }
-            return (body, Self.response(status: 200))
-        }
-
-        let report = try await NetworkManager.shared.sendRemoteTestPush()
-
-        XCTAssertEqual(capturedMethod, "POST")
-        XCTAssertNil(capturedAuthHeader)
-        XCTAssertEqual(capturedPath, "/api/devices/apns-test-push")
-        XCTAssertNil(capturedBody?["token"])
-        XCTAssertNotNil(capturedBody?["device_id"] as? String)
-        XCTAssertEqual(capturedBody?["environment"] as? String, NetworkManager.shared.apnsEnvironment)
-        XCTAssertEqual(capturedBody?["device_secret"] as? String, "device-secret")
-        XCTAssertTrue(report.configured)
-        XCTAssertEqual(report.results.first?.status, 200)
     }
 
     // checkHealth returns true when backend says {"status":"ok"}

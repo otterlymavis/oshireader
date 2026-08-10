@@ -308,6 +308,8 @@ async def trigger_notification(
     preview = pending.preview_item if pending else None
 
     cleared = await send_new_match_notifications(db, term, count, preview)
+    if pending is not None:
+        db.delete(pending)
     db.commit()
     return {"term_id": term_id, "keyword": term.keyword, "count": count, "cleared": cleared}
 

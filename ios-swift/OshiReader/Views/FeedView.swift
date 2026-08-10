@@ -478,7 +478,7 @@ struct FeedView: View {
                                         : (isSelected ? Color.white : meta.fg)
                                     Button(action: {
                                         selectedPlatform = isSelected ? nil : platformId
-                                        if !isSelected, !hasItems(for: platformId) {
+                                        if !isSelected {
                                             Task {
                                                 await refreshFeed(selectedPlatformOverride: platformId)
                                             }

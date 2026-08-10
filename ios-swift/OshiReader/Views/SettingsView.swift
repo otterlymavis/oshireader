@@ -15,14 +15,11 @@ struct SettingsView: View {
     @State private var newSelectedPlatforms: Set<String> = []
     @State private var addingAliasForId: String? = nil
     @State private var newAliasText = ""
-    @State private var notificationTestMessage: String? = nil
-    @State private var notificationTestSucceeded = false
-    @State private var isSendingNotificationTest = false
     @State private var settingsErrorMessage: String? = nil
     @State private var notificationUpdateIDs = Set<String>()
     @State private var avatarEditorKeyword: String? = nil
+    @State private var appearanceSectionExpanded = false
     @AppStorage("auto_translate_reader") private var autoTranslateReader = false
-    @AppStorage(BackgroundRefreshLiveTestProbe.resultKey) private var liveBackgroundRefreshResult = ""
     
     var allPlatforms: [(String, String)] {
         Platform.all.map { ($0.id, "\($0.icon) \($0.name)") }
@@ -100,8 +97,7 @@ struct SettingsView: View {
                         .foregroundColor(theme.colors.textMuted)
                         .accessibilityIdentifier("settings.notificationSetupHint")
 
-                    switch notifications.authorizationStatus {
-                    case .notDetermined:
+                    if notifications.authorizationStatus == .notDetermined {
                         Button {
                             Task { _ = await notifications.requestAuthorization() }
                         } label: {
@@ -109,7 +105,7 @@ struct SettingsView: View {
                                 .foregroundColor(theme.colors.primary)
                         }
                         .accessibilityIdentifier("settings.enableNotificationsButton")
-                    case .denied:
+                    } else if notifications.authorizationStatus == .denied {
                         Button {
                             if let url = URL(string: UIApplication.openSettingsURLString) {
                                 UIApplication.shared.open(url)
@@ -119,43 +115,6 @@ struct SettingsView: View {
                                 .foregroundColor(theme.colors.primary)
                         }
                         .accessibilityIdentifier("settings.openSettingsButton")
-                    default:
-                        Button {
-                            Task { await sendTestNotification() }
-                        } label: {
-                            Label(
-                                isSendingNotificationTest ? i18n.t("notifRemoteChecking") : i18n.t("sendTestNotification"),
-                                systemImage: isSendingNotificationTest ? "antenna.radiowaves.left.and.right" : "paperplane.fill"
-                            )
-                                .foregroundColor(theme.colors.primary)
-                        }
-                        .disabled(isSendingNotificationTest)
-                        .accessibilityIdentifier("settings.testNotificationButton")
-                    }
-
-                    if let notificationTestMessage {
-                        Label(
-                            notificationTestMessage,
-                            systemImage: notificationTestSucceeded ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-                        )
-                        .font(.caption)
-                        .foregroundColor(notificationTestSucceeded ? theme.colors.primary : .orange)
-                        .accessibilityIdentifier("settings.notificationTestResult")
-                    }
-
-                    if let registrationError = notifications.lastRemoteRegistrationError {
-                        Text(registrationError)
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("settings.notificationRegistrationError")
-                    }
-
-                    if NetworkManager.shared.isLiveBackgroundPushTesting,
-                       !liveBackgroundRefreshResult.isEmpty {
-                        Text(liveBackgroundRefreshResult)
-                            .font(.caption)
-                            .accessibilityIdentifier("settings.liveBackgroundRefreshResult")
                     }
                 }
 
@@ -165,57 +124,63 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings.autoTranslateToggle")
                 }
 
-                // Section: Customizations
-                Section(header: Text(i18n.t("appearanceSection"))) {
-                    Picker(i18n.t("appTheme"), selection: $theme.mode) {
-                        Text(i18n.t("themeLight")).tag(AppThemeMode.light)
-                        Text(i18n.t("themeDark")).tag(AppThemeMode.dark)
-                        Text(i18n.t("themeSepia")).tag(AppThemeMode.sepia)
-                    }
-                    .pickerStyle(.segmented)
+                Section {
+                    DisclosureGroup(
+                        isExpanded: $appearanceSectionExpanded,
+                        content: {
+                            Picker(i18n.t("appTheme"), selection: $theme.mode) {
+                                Text(i18n.t("themeLight")).tag(AppThemeMode.light)
+                                Text(i18n.t("themeDark")).tag(AppThemeMode.dark)
+                                Text(i18n.t("themeSepia")).tag(AppThemeMode.sepia)
+                            }
+                            .pickerStyle(.segmented)
 
-                    Picker(i18n.t("themeStyle"), selection: $theme.style) {
-                        ForEach(AppColorStyle.allCases) { style in
-                            Text(style.displayName).tag(style)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("settings.colorStylePicker")
-                    
-                    // Language selection
-                    Picker(i18n.t("language"), selection: Binding(
-                        get: { i18n.lang },
-                        set: { i18n.setLanguage($0) }
-                    )) {
-                        Text("日本語").tag("ja")
-                        Text("English").tag("en")
-                        Text("繁體中文").tag("zh-TW")
-                        Text("简体中文").tag("zh-CN")
-                    }
+                            Picker(i18n.t("themeStyle"), selection: $theme.style) {
+                                ForEach(AppColorStyle.allCases) { style in
+                                    Text(style.displayName).tag(style)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("settings.colorStylePicker")
 
-                    Picker(i18n.t("font"), selection: $appearance.fontChoice) {
-                        ForEach(AppFontChoice.allCases) { choice in
-                            Text(choice.displayName).tag(choice)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("settings.fontPicker")
+                            Picker(i18n.t("language"), selection: Binding(
+                                get: { i18n.lang },
+                                set: { i18n.setLanguage($0) }
+                            )) {
+                                Text("日本語").tag("ja")
+                                Text("English").tag("en")
+                                Text("繁體中文").tag("zh-TW")
+                                Text("简体中文").tag("zh-CN")
+                            }
 
-                    Picker(i18n.t("fontSize"), selection: $appearance.fontSizeChoice) {
-                        ForEach(AppFontSizeChoice.allCases) { choice in
-                            Text(choice.displayName).tag(choice)
+                            Picker(i18n.t("font"), selection: $appearance.fontChoice) {
+                                ForEach(AppFontChoice.allCases) { choice in
+                                    Text(choice.displayName).tag(choice)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("settings.fontPicker")
+
+                            Picker(i18n.t("fontSize"), selection: $appearance.fontSizeChoice) {
+                                ForEach(AppFontSizeChoice.allCases) { choice in
+                                    Text(choice.displayName).tag(choice)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("settings.fontSizePicker")
+
+                            if db.wallpaper != nil {
+                                Button(action: { db.setWallpaper(url: nil) }) {
+                                    Text(i18n.t("clearWallpaper"))
+                                        .foregroundColor(.red)
+                                }
+                            }
+                        },
+                        label: {
+                            Label(i18n.t("appearanceSection"), systemImage: "paintbrush")
+                                .foregroundColor(theme.colors.text)
                         }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("settings.fontSizePicker")
-                    
-                    // Wallpaper reset
-                    if db.wallpaper != nil {
-                        Button(action: { db.setWallpaper(url: nil) }) {
-                            Text(i18n.t("clearWallpaper"))
-                                .foregroundColor(.red)
-                        }
-                    }
+                    )
                 }
 
 
@@ -729,64 +694,6 @@ struct SettingsView: View {
         }
     }
 
-    private func sendTestNotification() async {
-        guard !isSendingNotificationTest else { return }
-        isSendingNotificationTest = true
-        defer { isSendingNotificationTest = false }
-
-        notificationTestMessage = i18n.t("notifRemoteChecking")
-        notificationTestSucceeded = false
-
-        if !notifications.canScheduleNotifications {
-            _ = await notifications.requestAuthorization()
-        }
-
-        if !NetworkManager.shared.isLiveBackgroundPushTesting {
-            do {
-                try await notifications.sendTestNotification()
-                notificationTestSucceeded = true
-            } catch {
-                AppLogger.notifications.warning("Local notification test failed: \(error.localizedDescription)")
-                notificationTestMessage = i18n.t("notifLocalTestFailed")
-                return
-            }
-        }
-
-        var remoteRegistrationReady = await notifications.ensureRemoteNotificationsRegisteredIfAllowed(timeout: 4)
-        if !remoteRegistrationReady {
-            // A freshly installed build can receive the APNs callback just after
-            // the first wait expires. Retry once, but do not block the UI for
-            // too long: the backend can also test a device-scoped stored token.
-            remoteRegistrationReady = await notifications.ensureRemoteNotificationsRegisteredIfAllowed(timeout: 8)
-        }
-
-        do {
-            let report = try await NetworkManager.shared.sendRemoteTestPush()
-            let result = notificationTestResult(for: report)
-            notificationTestMessage = result.message
-            notificationTestSucceeded = result.succeeded
-            if result.succeeded {
-                return
-            }
-        } catch {
-            if case APIClientError.httpStatus(404, _) = error {
-                if remoteRegistrationReady, await retryRemoteTestAfterTokenRefresh() {
-                    return
-                }
-                notificationTestMessage = i18n.t("notifRemoteNoDevices")
-                return
-            }
-            AppLogger.notifications.warning("Remote APNs test failed: \(error.localizedDescription)")
-            if NetworkManager.shared.isLiveBackgroundPushTesting {
-                notificationTestMessage = "live remote error: \(remoteTestDiagnostic(error))"
-                return
-            }
-            notificationTestMessage = remoteRegistrationReady
-                ? i18n.t("notifRemoteTestRequestFailed")
-                : i18n.t("notifRemoteTokenMissing")
-        }
-    }
-
     private func updateNotificationPreference(for term: WatchTerm, enabled: Bool) {
         guard !notificationUpdateIDs.contains(term.id) else { return }
         notificationUpdateIDs.insert(term.id)
@@ -856,30 +763,6 @@ struct SettingsView: View {
         return i18n.t("notificationUpdateFailed")
     }
 
-    private func remoteTestDiagnostic(_ error: Error) -> String {
-        if let apiError = error as? APIClientError {
-            return apiError.localizedDescription
-        }
-        return String(describing: error)
-    }
-
-    private func retryRemoteTestAfterTokenRefresh() async -> Bool {
-        notifications.resetRemoteNotificationRegistrationCache()
-        guard await notifications.ensureRemoteNotificationsRegisteredIfAllowed() else {
-            return false
-        }
-        do {
-            let report = try await NetworkManager.shared.sendRemoteTestPush()
-            let result = notificationTestResult(for: report)
-            notificationTestMessage = result.message
-            notificationTestSucceeded = result.succeeded
-            return result.succeeded
-        } catch {
-            AppLogger.notifications.warning("Remote APNs retry failed: \(error.localizedDescription)")
-            return false
-        }
-    }
-
     private func setPlatformSubscription(_ key: String, isSubscribed: Bool) {
         var platforms = db.subscribedPlatforms
         if isSubscribed {
@@ -892,32 +775,6 @@ struct SettingsView: View {
         db.setSubscribedPlatforms(platforms: platforms)
     }
 
-    private func notificationTestResult(for report: APNSTestPushReport) -> (succeeded: Bool, message: String) {
-        guard report.configured else {
-            return (false, i18n.t("notifRemoteNotConfigured"))
-        }
-        guard !report.results.isEmpty else {
-            return (false, i18n.t("notifRemoteNoDevices"))
-        }
-        if report.results.contains(where: { $0.status == 200 || $0.status == 201 || $0.status == 202 }) {
-            return (true, i18n.t("notifRemoteTestSent"))
-        }
-
-        let firstFailure = report.results.first { ($0.status ?? 200) >= 300 || $0.reason != nil || $0.error != nil }
-        if let reason = firstFailure?.reason, !reason.isEmpty {
-            if reason == "BadEnvironmentKeyInToken" {
-                return (false, i18n.t("notifRemoteEnvironmentKeyMismatch"))
-            }
-            return (false, i18n.tFormat("notifRemoteRejectedFmt", reason))
-        }
-        if let error = firstFailure?.error, !error.isEmpty {
-            return (false, i18n.tFormat("notifRemoteErrorFmt", error))
-        }
-        if let status = firstFailure?.status {
-            return (false, i18n.tFormat("notifRemoteStatusFmt", status))
-        }
-        return (false, i18n.t("notifRemoteUnknownFailure"))
-    }
 }
 
 struct PrivacyPolicyView: View {
@@ -944,7 +801,7 @@ struct PrivacyPolicyView: View {
 
                 policySection(
                     title: "Permissions",
-                    body: "Notifications: requested when you enable keyword alerts or send a test notification.\n\nPhoto Library: requested when you save an image from the article reader to your Photos.\n\nThis app does not request access to location, contacts, camera, microphone, Bluetooth, health data, or motion sensors."
+                    body: "Notifications: requested when you enable keyword alerts.\n\nPhoto Library: requested when you save an image from the article reader to your Photos.\n\nThis app does not request access to location, contacts, camera, microphone, Bluetooth, health data, or motion sensors."
                 )
             }
             .padding(18)

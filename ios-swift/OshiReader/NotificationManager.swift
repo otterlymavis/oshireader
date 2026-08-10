@@ -125,44 +125,6 @@ final class NotificationManager: ObservableObject {
         }
     }
 
-    func sendTestNotification() async throws {
-        if !canScheduleNotifications {
-            _ = await requestAuthorization()
-        }
-        guard canScheduleNotifications else { return }
-
-        let i18n = I18nManager.shared
-        let now = _ISO8601Cache.withoutFractional.string(from: Date())
-        let previewItem = FeedItem(
-            id: "oshireader-test-preview",
-            platform: "web",
-            url: NetworkManager.shared.apiBase,
-            title: i18n.t("notifTestBody"),
-            content_text: nil,
-            author: "OshiReader",
-            thumbnail_url: nil,
-            media_type: "article",
-            published_at: now,
-            watch_term_keyword: "OshiReader",
-            fetched_at: now
-        )
-        let content = UNMutableNotificationContent()
-        content.title = i18n.tFormat("notifNewItemsTitle", "OshiReader")
-        content.body = notificationBody(for: previewItem, count: 1)
-        content.sound = .default
-        content.categoryIdentifier = Self.resultPreviewCategoryIdentifier
-        content.userInfo = notificationUserInfo(for: previewItem, keyword: "OshiReader", count: 1)
-        content.threadIdentifier = notificationThreadIdentifier(for: "OshiReader")
-        content.targetContentIdentifier = previewItem.id
-
-        let request = UNNotificationRequest(
-            identifier: "oshireader-test-\(UUID().uuidString)",
-            content: content,
-            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)
-        )
-        try await center.add(request)
-    }
-
     func registerForRemoteNotificationsIfAllowed() async {
         await refreshAuthorizationStatus()
         guard canScheduleNotifications else { return }

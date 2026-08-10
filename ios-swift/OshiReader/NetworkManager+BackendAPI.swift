@@ -603,69 +603,6 @@ extension NetworkManager {
         KeychainHelper.write(key: "apns_device_environment", value: apnsEnvironment)
     }
 
-    func sendRemoteTestPush() async throws -> APNSTestPushReport {
-        if isUITesting {
-            return APNSTestPushReport(configured: false, results: [], note: "ui testing", pruned_tokens: 0)
-        }
-        if hasRegisteredAPNSDeviceForCurrentEnvironment,
-           let token = registeredAPNSDeviceToken,
-           !token.isEmpty {
-            var body: [String: Any] = [
-                "token": token,
-                "device_secret": apnsDeviceSecret,
-            ]
-            if isLiveBackgroundPushTesting {
-                body["delivery_delay_seconds"] = 4
-                body["return_before_delivery"] = true
-            }
-            let bodyData = try JSONSerialization.data(withJSONObject: body)
-            return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)
-        }
-        let deviceId = await apnsDeviceId()
-        var body: [String: Any] = [
-            "device_id": deviceId,
-            "environment": apnsEnvironment,
-            "device_secret": apnsDeviceSecret,
-        ]
-        if isLiveBackgroundPushTesting {
-            body["delivery_delay_seconds"] = 4
-            body["return_before_delivery"] = true
-        }
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        return try await sendDeviceScopedRemoteTestPush(bodyData: bodyData)
-    }
-
-    private func sendDeviceScopedRemoteTestPush(bodyData: Data) async throws -> APNSTestPushReport {
-        let url = URL(string: "\(apiBase)/api/devices/apns-test-push")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.httpBody = bodyData
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        do {
-            let (data, response) = try await session.data(for: request)
-            return try handleDeviceScopedResponse(data: data, response: response)
-        } catch let error as URLError where error.code == .networkConnectionLost {
-            AppLogger.network.warning("Connection lost for apns-test-push, retrying request once...")
-            let (data, response) = try await session.data(for: request)
-            return try handleDeviceScopedResponse(data: data, response: response)
-        }
-    }
-
-    private func handleDeviceScopedResponse(data: Data, response: URLResponse) throws -> APNSTestPushReport {
-        guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        guard http.statusCode == 200 else {
-            if http.statusCode == 404 {
-                clearRegisteredAPNSDeviceToken()
-            }
-            throw APIClientError.httpStatus(http.statusCode, detail: backendErrorDetail(from: data))
-        }
-        return try JSONDecoder().decode(APNSTestPushReport.self, from: data)
-    }
-
     // MARK: - Health & Admin
 
     func checkHealth() async throws -> Bool {
