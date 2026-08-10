@@ -1087,6 +1087,45 @@ async def test_push(_: None = Depends(require_admin_auth), db: Session = Depends
     return await send_test_push(db)
 
 
+@app.post("/api/admin/notify/{term_id}")
+async def admin_trigger_notification(
+    term_id: int,
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Immediately push a notification for any watch term, bypassing the poll cycle."""
+    from app.apns import apns_configured, send_new_match_notifications
+
+    term = db.get(WatchTerm, term_id)
+    if not term:
+        raise HTTPException(404, "Watch term not found")
+    if not term.notify_on_new:
+        raise HTTPException(409, "Watch term does not have notifications enabled")
+    if not apns_configured():
+        raise HTTPException(503, "APNs is not configured")
+
+    pending = db.get(PendingNotification, term_id)
+    count = pending.new_count if pending else 1
+    preview = pending.preview_item if pending else None
+
+    cleared = await send_new_match_notifications(db, term, count, preview)
+    db.commit()
+    return {"term_id": term_id, "keyword": term.keyword, "count": count, "cleared": cleared}
+
+
+@app.delete("/api/admin/notify/{term_id}", status_code=204)
+def admin_clear_notification(
+    term_id: int,
+    _: None = Depends(require_admin_auth),
+    db: Session = Depends(get_db),
+) -> None:
+    """Clear a pending notification for any watch term without delivering it."""
+    pending = db.get(PendingNotification, term_id)
+    if pending is not None:
+        db.delete(pending)
+        db.commit()
+
+
 @app.post("/api/admin/notification-canary")
 async def notification_canary(
     all_terms: bool = Query(False),
