@@ -825,7 +825,7 @@ struct SettingsView: View {
                     settingsErrorMessage = i18n.t("notificationUpdateFailed")
                 }
             }
-            await MainActor.run { notificationUpdateIDs.remove(term.id) }
+            await MainActor.run { _ = notificationUpdateIDs.remove(term.id) }
         }
     }
 
@@ -840,7 +840,7 @@ struct SettingsView: View {
                     settingsErrorMessage = i18n.t("notificationUpdateFailed")
                 }
             }
-            await MainActor.run { notificationUpdateIDs.remove(term.id) }
+            await MainActor.run { _ = notificationUpdateIDs.remove(term.id) }
         }
     }
 
