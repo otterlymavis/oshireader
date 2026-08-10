@@ -120,6 +120,7 @@ class PendingNotification(Base):
     preview_item = Column(JSON)
     preview_published_at = Column(DateTime)
     preview_is_estimated = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 

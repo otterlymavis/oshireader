@@ -101,6 +101,7 @@ def _backfill_missing_defaults(engine: Engine) -> None:
         conn.execute(text("UPDATE watch_terms SET notify_on_new = TRUE WHERE notify_on_new IS NULL"))
         conn.execute(text("UPDATE watch_terms SET refresh_tier = 'free' WHERE refresh_tier IS NULL"))
         conn.execute(text("UPDATE watch_terms SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+        conn.execute(text("UPDATE pending_notifications SET created_at = COALESCE(updated_at, CURRENT_TIMESTAMP) WHERE created_at IS NULL"))
         conn.execute(text("UPDATE matches SET confidence = 1.0 WHERE confidence IS NULL"))
         conn.execute(text("""
             UPDATE matches
@@ -317,6 +318,13 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
         "platform_credentials",
         {
             "updated_at": "TIMESTAMP",
+        },
+    )
+    _add_missing_columns(
+        engine,
+        "pending_notifications",
+        {
+            "created_at": "TIMESTAMP",
         },
     )
     _backfill_missing_defaults(engine)

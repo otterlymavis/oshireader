@@ -752,7 +752,8 @@ export default {
             Number(env.ACTIVE_POLL_TIMEOUT_MINUTES ?? DEFAULT_ACTIVE_POLL_TIMEOUT_MINUTES),
           );
           const notifications = notificationHealth(result.diagnostics);
-          if (!health.healthy && !health.in_progress) {
+          const staleAfterMinutes = Number(env.STALE_AFTER_MINUTES ?? DEFAULT_STALE_AFTER_MINUTES);
+          if (!health.healthy && (!health.in_progress || health.age_minutes > staleAfterMinutes)) {
             await notifyWatchdog(
               env,
               watchdogSummary(health.reason || "unknown", result.diagnostics),

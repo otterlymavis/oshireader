@@ -1034,17 +1034,17 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
         db.delete(pending)
         db.commit()
         return True
-    # Anchor freshness to when the notification was queued so that items
-    # within the window at queue time are still delivered even if APNs
-    # retries span multiple poll cycles.  updated_at is set on creation
-    # (default=_utcnow) and updated when a better preview is written, so
-    # it closely tracks the time the match was first or last observed.
-    queued_at = pending.updated_at
-    if queued_at is None:
-        queued_at = datetime.now(timezone.utc)
-    elif queued_at.tzinfo is None:
-        queued_at = queued_at.replace(tzinfo=timezone.utc)
-    observed_at = queued_at
+    # Anchor freshness to when the notification was first queued so that
+    # APNs retry delays do not shift the eligibility window forward.
+    # created_at is immutable (set once on row creation); updated_at would
+    # advance on every preview refresh and defeat this purpose.
+    _created_at = pending.created_at or pending.updated_at
+    if _created_at is None:
+        observed_at = datetime.now(timezone.utc)
+    elif _created_at.tzinfo is None:
+        observed_at = _created_at.replace(tzinfo=timezone.utc)
+    else:
+        observed_at = _created_at
     try:
         pending_items = _pending_notification_items(pending)
         if not pending_items:
