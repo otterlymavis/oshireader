@@ -478,11 +478,9 @@ struct FeedView: View {
                                         : (isSelected ? Color.white : meta.fg)
                                     Button(action: {
                                         selectedPlatform = isSelected ? nil : platformId
-                                        if !isSelected,
-                                           !hasItems(for: platformId),
-                                           Platform.shouldFetchFromBackend(platformId) {
+                                        if !isSelected, !hasItems(for: platformId) {
                                             Task {
-                                                await fetchBackendPlatform(platformId)
+                                                await refreshFeed(selectedPlatformOverride: platformId)
                                             }
                                         }
                                     }) {
@@ -872,20 +870,25 @@ struct FeedView: View {
         )
     }
 
-    private func fallbackPlatformsNeedingDevice() -> Set<String> {
+    private func fallbackPlatformsNeedingDevice(selectedPlatform: String?) -> Set<String> {
         // Backend feed responses are stored rows, not proof that a fallback source
         // was freshly reachable from the backend, so subscribed fallback platforms
         // stay eligible for the device-side pass.
-        BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(in: db.subscribedPlatforms)
+        BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(
+            selectedPlatform: selectedPlatform,
+            subscribedPlatforms: db.subscribedPlatforms
+        )
     }
     
     private func refreshFeed(
         skipTermSync: Bool = false,
-        feedScopeRevision: Int? = nil
+        feedScopeRevision: Int? = nil,
+        selectedPlatformOverride: String? = nil
     ) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         refreshErrorMessage = nil
+        let refreshPlatform = selectedPlatformOverride ?? selectedPlatform
         defer {
             db.flushPendingFeedItemsSave()
             isRefreshing = false
@@ -894,12 +897,13 @@ struct FeedView: View {
 
         var report = await quickRefresh(
             skipTermSync: skipTermSync,
-            feedScopeRevision: feedScopeRevision
+            feedScopeRevision: feedScopeRevision,
+            selectedPlatform: refreshPlatform
         )
 
         guard !Task.isCancelled else { return }
         let feedScopeRevision = report.feedScopeRevision ?? BackgroundRefreshPolicy.currentFeedScopeRevision
-        let fallbackPlatformsNeedingDevice = fallbackPlatformsNeedingDevice()
+        let fallbackPlatformsNeedingDevice = fallbackPlatformsNeedingDevice(selectedPlatform: refreshPlatform)
         guard !report.backendReturnedItems || !fallbackPlatformsNeedingDevice.isEmpty else {
             recordCompletedRefreshCheckIfNeeded(report, feedScopeRevision: feedScopeRevision)
             await sendNoResultsDiagnosticIfNeeded(report)
@@ -921,7 +925,8 @@ struct FeedView: View {
         guard BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
             cacheIsEmpty: cacheIsEmpty,
             elapsedSinceLastDeviceScrape: elapsed,
-            throttle: Self.deviceScrapeThrottle
+            throttle: Self.deviceScrapeThrottle,
+            forceRefresh: refreshPlatform != nil && !fallbackPlatformsNeedingDevice.isEmpty
         ) else {
             report.record(strategy: "device_scrape", status: "throttled", detail: "\(Int(elapsed))s since last run")
             recordCompletedRefreshCheckIfNeeded(report, feedScopeRevision: feedScopeRevision)
@@ -930,7 +935,7 @@ struct FeedView: View {
         }
         isScrapingFallback = true
         report.append(await deepFallback(
-            triggerBackendPoll: !report.backendReturnedItems && !report.backendConnectivityFailed,
+            triggerBackendPoll: refreshPlatform == nil && !report.backendReturnedItems && !report.backendConnectivityFailed,
             fallbackPlatforms: fallbackPlatformsNeedingDevice
         ))
         guard !Task.isCancelled else { return }
@@ -959,7 +964,8 @@ struct FeedView: View {
     // Syncs terms, fetches backend feed + per-platform items, and scrapes custom URLs.
     private func quickRefresh(
         skipTermSync: Bool = false,
-        feedScopeRevision: Int? = nil
+        feedScopeRevision: Int? = nil,
+        selectedPlatform: String? = nil
     ) async -> FeedRefreshReport {
         var report = FeedRefreshReport()
 
@@ -1001,52 +1007,55 @@ struct FeedView: View {
         let fetchDays = wantsFullHistory ? 0 : (db.feedItems.isEmpty ? 90 : 30)
         let backendTimeout = BackgroundRefreshPolicy.foregroundBackendTimeout
         var shouldSkipBackendRetries = false
+        let focusedPlatform = selectedPlatform.map(Platform.normalize)
 
         // 2. Main backend feed fetch. If the incremental fetch is empty, retry with
         // broader windows before declaring "no results".
-        do {
-            let freshItems: [FeedItem]
-            if let since = latestSince {
-                freshItems = try await NetworkManager.shared.fetchFeed(
-                    limit: 200,
-                    since: since,
-                    timeout: backendTimeout
-                )
-                let added = db.mergeItems(newItems: freshItems)
+        if focusedPlatform == nil {
+            do {
+                let freshItems: [FeedItem]
+                if let since = latestSince {
+                    freshItems = try await NetworkManager.shared.fetchFeed(
+                        limit: 200,
+                        since: since,
+                        timeout: backendTimeout
+                    )
+                    let added = db.mergeItems(newItems: freshItems)
+                    report.record(
+                        strategy: "backend_feed_since",
+                        status: freshItems.isEmpty ? "empty" : "items",
+                        itemCount: freshItems.count,
+                        addedCount: added,
+                        detail: since
+                    )
+                } else {
+                    freshItems = try await NetworkManager.shared.fetchFeed(
+                        limit: 120,
+                        days: fetchDays,
+                        timeout: backendTimeout
+                    )
+                    let added = db.mergeItems(newItems: freshItems)
+                    report.record(
+                        strategy: "backend_feed_days_\(fetchDays)",
+                        status: freshItems.isEmpty ? "empty" : "items",
+                        itemCount: freshItems.count,
+                        addedCount: added
+                    )
+                }
+            } catch {
+                AppLogger.network.error("fetchFeed failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
+                refreshErrorMessage = Self.refreshErrorLabel(error)
+                shouldSkipBackendRetries = BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(error)
+                report.backendConnectivityFailed = shouldSkipBackendRetries
                 report.record(
-                    strategy: "backend_feed_since",
-                    status: freshItems.isEmpty ? "empty" : "items",
-                    itemCount: freshItems.count,
-                    addedCount: added,
-                    detail: since
-                )
-            } else {
-                freshItems = try await NetworkManager.shared.fetchFeed(
-                    limit: 120,
-                    days: fetchDays,
-                    timeout: backendTimeout
-                )
-                let added = db.mergeItems(newItems: freshItems)
-                report.record(
-                    strategy: "backend_feed_days_\(fetchDays)",
-                    status: freshItems.isEmpty ? "empty" : "items",
-                    itemCount: freshItems.count,
-                    addedCount: added
+                    strategy: latestSince == nil ? "backend_feed_days_\(fetchDays)" : "backend_feed_since",
+                    status: "failed",
+                    detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
                 )
             }
-        } catch {
-            AppLogger.network.error("fetchFeed failed [\(Self.refreshErrorKind(error))]: \(error.localizedDescription)")
-            refreshErrorMessage = Self.refreshErrorLabel(error)
-            shouldSkipBackendRetries = BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(error)
-            report.backendConnectivityFailed = shouldSkipBackendRetries
-            report.record(
-                strategy: latestSince == nil ? "backend_feed_days_\(fetchDays)" : "backend_feed_since",
-                status: "failed",
-                detail: "\(Self.refreshErrorKind(error)): \(error.localizedDescription)"
-            )
         }
 
-        if !report.backendReturnedItems, !shouldSkipBackendRetries {
+        if focusedPlatform == nil, !report.backendReturnedItems, !shouldSkipBackendRetries {
             let retryDays = [fetchDays, 90, 180, 0].reduce(into: [Int]()) { values, days in
                 if !values.contains(days) { values.append(days) }
             }
@@ -1077,9 +1086,18 @@ struct FeedView: View {
         guard !Task.isCancelled else { return report }
 
         // 3. Per-platform fetches in parallel
-        let platformsToFetch = shouldSkipBackendRetries ? [] : Array(Set(db.subscribedPlatforms.filter {
-            Platform.shouldFetchFromBackend($0)
-        }))
+        let platformsToFetch: [String] = {
+            guard !shouldSkipBackendRetries else { return [] }
+            if let focusedPlatform {
+                if Platform.shouldRunDeviceFallback(focusedPlatform) {
+                    return []
+                }
+                return Platform.shouldFetchFromBackend(focusedPlatform) ? [focusedPlatform] : []
+            }
+            return Array(Set(db.subscribedPlatforms.filter {
+                Platform.shouldFetchFromBackend($0)
+            }))
+        }()
         await withTaskGroup(of: FeedRefreshAttempt.self) { group in
             for platform in platformsToFetch {
                 let platformSince = BackgroundRefreshPolicy.shouldUseDateWindowForPlatformRefresh(platform)

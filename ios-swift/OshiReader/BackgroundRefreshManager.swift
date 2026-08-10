@@ -394,6 +394,16 @@ enum BackgroundRefreshPolicy {
         })
     }
 
+    static func fallbackPlatformsNeedingDevice(
+        selectedPlatform: String?,
+        subscribedPlatforms: [String]
+    ) -> Set<String> {
+        let fallbackPlatforms = fallbackPlatformsNeedingDevice(in: subscribedPlatforms)
+        guard let selectedPlatform else { return fallbackPlatforms }
+        let normalized = Platform.normalize(selectedPlatform)
+        return fallbackPlatforms.contains(normalized) ? [normalized] : []
+    }
+
     static func deviceFallbackPlatforms(
         for term: WatchTerm,
         subscribedPlatforms: [String]
@@ -529,9 +539,11 @@ enum BackgroundRefreshPolicy {
     static func shouldStartForegroundDeviceRefresh(
         cacheIsEmpty: Bool,
         elapsedSinceLastDeviceScrape: TimeInterval,
-        throttle: TimeInterval
+        throttle: TimeInterval,
+        forceRefresh: Bool = false
     ) -> Bool {
-        cacheIsEmpty ||
+        forceRefresh ||
+            cacheIsEmpty ||
             UserDefaults.standard.bool(forKey: feedScopeNeedsRefreshKey) ||
             elapsedSinceLastDeviceScrape > throttle
     }

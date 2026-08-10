@@ -1053,6 +1053,48 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testSelectedPlatformLimitsDeviceFallbackScope() {
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(
+                selectedPlatform: "youtube",
+                subscribedPlatforms: ["youtube", "note", "custom"]
+            ),
+            ["youtube"]
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(
+                selectedPlatform: "custom",
+                subscribedPlatforms: ["youtube", "custom"]
+            ),
+            []
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(
+                selectedPlatform: nil,
+                subscribedPlatforms: ["youtube", "note", "custom"]
+            ),
+            ["youtube", "note"]
+        )
+    }
+
+    func testFocusedDeviceRefreshBypassesBroadScrapeThrottle() {
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+                cacheIsEmpty: false,
+                elapsedSinceLastDeviceScrape: 30,
+                throttle: 30 * 60
+            )
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+                cacheIsEmpty: false,
+                elapsedSinceLastDeviceScrape: 30,
+                throttle: 30 * 60,
+                forceRefresh: true
+            )
+        )
+    }
+
     func testSourceScopeAllowsMediaOnlyDeviceFallbackForMediaPlatforms() {
         let mediaOnly = WatchTerm(keyword: "Aiko", collection_mode: .mediaOnly)
         let allInfo = WatchTerm(keyword: "Haruka", collection_mode: .allInfo)
