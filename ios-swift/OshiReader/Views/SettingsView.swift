@@ -618,6 +618,20 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings.keywordBell.\(term.keyword)")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(isEnabled ? "Notifications on" : "Notifications off")
+        .contextMenu {
+            if isEnabled {
+                Button {
+                    triggerNotificationNow(for: term)
+                } label: {
+                    Label(i18n.t("notifyNow"), systemImage: "bell.and.waves.left.and.right")
+                }
+                Button(role: .destructive) {
+                    clearNotificationNow(for: term)
+                } label: {
+                    Label(i18n.t("clearNotification"), systemImage: "bell.slash")
+                }
+            }
+        }
     }
 
     private func updateSourceSelection(for term: WatchTerm, mode: SourceMode, platforms: [String]) {
@@ -797,6 +811,36 @@ struct SettingsView: View {
                     )
                 }
             }
+        }
+    }
+
+    private func triggerNotificationNow(for term: WatchTerm) {
+        guard !notificationUpdateIDs.contains(term.id) else { return }
+        notificationUpdateIDs.insert(term.id)
+        Task {
+            do {
+                try await NetworkManager.shared.triggerWatchTermNotification(id: term.id)
+            } catch {
+                await MainActor.run {
+                    settingsErrorMessage = i18n.t("notificationUpdateFailed")
+                }
+            }
+            await MainActor.run { notificationUpdateIDs.remove(term.id) }
+        }
+    }
+
+    private func clearNotificationNow(for term: WatchTerm) {
+        guard !notificationUpdateIDs.contains(term.id) else { return }
+        notificationUpdateIDs.insert(term.id)
+        Task {
+            do {
+                try await NetworkManager.shared.clearWatchTermNotification(id: term.id)
+            } catch {
+                await MainActor.run {
+                    settingsErrorMessage = i18n.t("notificationUpdateFailed")
+                }
+            }
+            await MainActor.run { notificationUpdateIDs.remove(term.id) }
         }
     }
 

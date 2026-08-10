@@ -422,6 +422,28 @@ extension NetworkManager {
         }
     }
 
+    func triggerWatchTermNotification(id: String, timeout: TimeInterval = 30) async throws {
+        if isUITesting { return }
+        try await apiVoid(
+            URL(string: "\(apiBase)/api/watch-terms/\(id)/notify")!,
+            method: "POST",
+            authorized: true,
+            deviceAuthorized: true,
+            timeout: timeout
+        )
+    }
+
+    func clearWatchTermNotification(id: String, timeout: TimeInterval = 30) async throws {
+        if isUITesting { return }
+        try await apiVoid(
+            URL(string: "\(apiBase)/api/watch-terms/\(id)/notify")!,
+            method: "DELETE",
+            authorized: true,
+            deviceAuthorized: true,
+            timeout: timeout
+        )
+    }
+
     func deleteWatchTerm(id: String) async throws {
         if isUITesting { return }
         try await apiVoid(

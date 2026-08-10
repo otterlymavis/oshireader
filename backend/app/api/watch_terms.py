@@ -286,6 +286,48 @@ async def update_term(
     return term
 
 
+@router.post("/{term_id}/notify")
+async def trigger_notification(
+    term_id: int,
+    auth: AuthContext = Depends(require_admin_or_device_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Immediately push a notification for this term to the owner's devices."""
+    from app.apns import apns_configured, send_new_match_notifications
+
+    term = db.get(WatchTerm, term_id)
+    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
+        raise HTTPException(404, "Watch term not found")
+    if not term.notify_on_new:
+        raise HTTPException(409, {"code": "notifications_disabled", "message": "Enable notifications for this term first"})
+    if not apns_configured():
+        raise HTTPException(503, "APNs is not configured")
+
+    pending = db.get(PendingNotification, term_id)
+    count = pending.new_count if pending else 1
+    preview = pending.preview_item if pending else None
+
+    cleared = await send_new_match_notifications(db, term, count, preview)
+    db.commit()
+    return {"term_id": term_id, "keyword": term.keyword, "count": count, "cleared": cleared}
+
+
+@router.delete("/{term_id}/notify", status_code=204)
+def clear_notification(
+    term_id: int,
+    auth: AuthContext = Depends(require_admin_or_device_auth),
+    db: Session = Depends(get_db),
+) -> None:
+    """Clear a pending notification for this term without delivering it."""
+    term = db.get(WatchTerm, term_id)
+    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
+        raise HTTPException(404, "Watch term not found")
+    pending = db.get(PendingNotification, term_id)
+    if pending is not None:
+        db.delete(pending)
+        db.commit()
+
+
 @router.delete("/{term_id}", status_code=204)
 def delete_term(
     term_id: int,

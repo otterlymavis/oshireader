@@ -515,6 +515,18 @@ class I18nManager: ObservableObject {
             "zh-TW": "無法更新通知設定，請再試一次。",
             "zh-CN": "无法更新通知设置，请重试。"
         ],
+        "notifyNow": [
+            "en": "Notify Now",
+            "ja": "今すぐ通知",
+            "zh-TW": "立即通知",
+            "zh-CN": "立即通知"
+        ],
+        "clearNotification": [
+            "en": "Clear Notification",
+            "ja": "通知をクリア",
+            "zh-TW": "清除通知",
+            "zh-CN": "清除通知"
+        ],
         "settingsSyncFailed": [
             "en": "This setting could not be synced. Please try again.",
             "ja": "この設定を同期できませんでした。もう一度お試しください。",
