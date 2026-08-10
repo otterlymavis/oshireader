@@ -42,6 +42,9 @@ def _term_with_keyword_exists(
     return db.query(query.exists()).scalar()
 
 
+_INLINE_REVERIFY_WINDOW = timedelta(minutes=5)
+
+
 def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> bool:
     if owner_device_secret is None:
         return False
@@ -56,15 +59,57 @@ def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> 
     )
 
 
-def _require_verified_notification_device(db: Session, term: WatchTerm) -> None:
-    if term.notify_on_new and term.owner_device_secret and not _owner_has_verified_device(db, term.owner_device_secret):
-        raise HTTPException(
-            409,
-            {
-                "code": "notification_device_required",
-                "message": "Notification-enabled watch terms require a verified APNs device",
-            },
+def _recently_registered_unverified_devices(
+    db: Session, owner_device_secret: str
+) -> list[APNSDeviceToken]:
+    cutoff = datetime.now(timezone.utc) - _INLINE_REVERIFY_WINDOW
+    return (
+        db.query(APNSDeviceToken)
+        .filter(
+            APNSDeviceToken.device_secret == owner_device_secret,
+            APNSDeviceToken.is_verified == False,  # noqa: E712
+            APNSDeviceToken.last_seen_at >= cutoff,
         )
+        .all()
+    )
+
+
+async def _require_verified_notification_device(db: Session, term: WatchTerm) -> None:
+    if not (term.notify_on_new and term.owner_device_secret):
+        return
+    if _owner_has_verified_device(db, term.owner_device_secret):
+        return
+
+    # Attempt inline re-verification of any recently-registered unverified tokens.
+    # This recovers from transient APNs failures during device registration that
+    # leave a valid token stuck in the unverified state.
+    candidates = _recently_registered_unverified_devices(db, term.owner_device_secret)
+    if candidates:
+        from app.apns import validate_device_registration_result
+        import asyncio
+        results = await asyncio.gather(
+            *[validate_device_registration_result(d) for d in candidates],
+            return_exceptions=True,
+        )
+        now = datetime.now(timezone.utc)
+        for device, result in zip(candidates, results):
+            if isinstance(result, Exception):
+                continue
+            verified, _ = result
+            device.verification_attempted_at = now
+            if verified:
+                device.is_verified = True
+                device.verified_at = now
+                db.commit()
+                return
+
+    raise HTTPException(
+        409,
+        {
+            "code": "notification_device_required",
+            "message": "Notification-enabled watch terms require a verified APNs device",
+        },
+    )
 
 
 def _owner_grace_elapsed(term: WatchTerm) -> bool:
@@ -163,7 +208,7 @@ async def create_term(
     term = WatchTerm(**body.model_dump())
     if not auth.is_admin:
         term.owner_device_secret = auth.device_secret
-        _require_verified_notification_device(db, term)
+        await _require_verified_notification_device(db, term)
     if _term_with_keyword_exists(
         db,
         keyword=term.keyword,
@@ -218,7 +263,7 @@ async def update_term(
     for k, v in updates.items():
         setattr(term, k, v)
     if not auth.is_admin:
-        _require_verified_notification_device(db, term)
+        await _require_verified_notification_device(db, term)
     if updates.get("notify_on_new") is False or updates.get("is_active") is False:
         pending = db.get(PendingNotification, term.id)
         if pending is not None:

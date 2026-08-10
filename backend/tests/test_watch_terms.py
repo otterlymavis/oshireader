@@ -860,6 +860,99 @@ class TestUpdateWatchTerm:
             resp = client.patch("/api/watch-terms/999999", json={"is_active": False})
         assert resp.status_code == 404
 
+    def test_device_update_notify_term_recovers_via_inline_reverification(self, client, db_session):
+        secret = "device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        token = "c" * 64
+        term = WatchTerm(keyword="Aiko", notify_on_new=False, owner_device_secret=owner_secret)
+        unverified_device = APNSDeviceToken(
+            token=token,
+            environment="sandbox",
+            device_secret=owner_secret,
+            is_verified=False,
+            last_seen_at=datetime.now(timezone.utc),
+        )
+        db_session.add_all([term, unverified_device])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"), \
+             patch(
+                 "app.apns.validate_device_registration_result",
+                 return_value=(True, None),
+             ):
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"notify_on_new": True},
+                headers={"X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["notify_on_new"] is True
+        db_session.refresh(unverified_device)
+        assert unverified_device.is_verified is True
+
+    def test_device_update_notify_term_inline_reverification_fails_returns_409(self, client, db_session):
+        secret = "device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        token = "d" * 64
+        term = WatchTerm(keyword="Aiko", notify_on_new=False, owner_device_secret=owner_secret)
+        unverified_device = APNSDeviceToken(
+            token=token,
+            environment="sandbox",
+            device_secret=owner_secret,
+            is_verified=False,
+            last_seen_at=datetime.now(timezone.utc),
+        )
+        db_session.add_all([term, unverified_device])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"), \
+             patch(
+                 "app.apns.validate_device_registration_result",
+                 return_value=(False, "BadDeviceToken"),
+             ):
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"notify_on_new": True},
+                headers={"X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "notification_device_required"
+        db_session.refresh(term)
+        assert term.notify_on_new is False
+
+    def test_device_update_notify_term_stale_unverified_token_skipped(self, client, db_session):
+        secret = "device-secret-value"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        token = "e" * 64
+        term = WatchTerm(keyword="Aiko", notify_on_new=False, owner_device_secret=owner_secret)
+        stale_device = APNSDeviceToken(
+            token=token,
+            environment="sandbox",
+            device_secret=owner_secret,
+            is_verified=False,
+            last_seen_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        db_session.add_all([term, stale_device])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"), \
+             patch(
+                 "app.apns.validate_device_registration_result",
+             ) as mock_verify:
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"notify_on_new": True},
+                headers={"X-Device-Secret": secret},
+            )
+
+        assert resp.status_code == 409
+        mock_verify.assert_not_called()
+
 
 class TestDeleteWatchTerm:
     def test_delete_existing_returns_204(self, client, db_session):
