@@ -1099,7 +1099,7 @@ class LocalDB: ObservableObject {
         let originalPlatforms = Set(subscribedPlatforms)
         subscribedPlatforms = normalizedKnownPlatformList(platforms)
         saveToFile(name: "subscribed_platforms", value: subscribedPlatforms)
-        if Set(platforms) != originalPlatforms {
+        if Set(subscribedPlatforms) != originalPlatforms {
             BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
         }
     }
