@@ -233,7 +233,7 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
     if (
         settings.allow_unauthenticated_admin
         and not settings.admin_api_token
-    ):
+    ) or settings.apns_trust_registered_tokens:
         verified = True
     else:
         verified, verification_error = await validate_device_registration_result(stored)
