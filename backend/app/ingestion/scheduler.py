@@ -902,12 +902,34 @@ def _parse_pending_preview_published_at(preview_item: dict) -> datetime | None:
     return parsed
 
 
+def _parse_pending_preview_queued_at(preview_item: dict) -> datetime | None:
+    value = preview_item.get("queued_at")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def _pending_preview_is_notification_eligible(
     db,
     term: WatchTerm,
     preview_item: dict,
     observed_at: datetime,
 ) -> bool:
+    # Prefer the timestamp this specific item was queued at over the pending
+    # row's shared anchor. A pending row can accumulate items queued at
+    # different times (e.g. a discussion reply arrives after an earlier item
+    # on the same term was deferred); using the row-wide anchor for all of
+    # them would judge a fresh item's own published_at against a stale
+    # reference point and reject it as implausibly "too new". Older rows
+    # queued before this field existed fall back to the row-level anchor.
+    item_observed_at = _parse_pending_preview_queued_at(preview_item) or observed_at
+
     is_reply_update = (
         preview_item.get("notification_preview_source")
         == _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE
@@ -921,18 +943,18 @@ def _pending_preview_is_notification_eligible(
         return False
 
     if is_reply_update:
-        if _published_at_is_estimated(source_item, observed_at):
+        if _published_at_is_estimated(source_item, item_observed_at):
             return False
         return _is_notification_eligible(
             term=term,
             source_item=source_item,
-            observed_at=observed_at,
+            observed_at=item_observed_at,
         )
 
     return _is_notification_eligible(
         term=term,
         source_item=source_item,
-        observed_at=observed_at,
+        observed_at=item_observed_at,
     )
 
 
@@ -952,6 +974,8 @@ def _preview_for_match(
     match: Match,
     source_item: SourceItem,
     preview_source: str = _PREVIEW_SOURCE_NEW_MATCH,
+    *,
+    queued_at: datetime,
 ) -> dict:
     public_base_url = settings.backend_public_url.rstrip("/")
     return {
@@ -968,6 +992,14 @@ def _preview_for_match(
         "media_type": source_item.media_type,
         "published_at": source_item.published_at.isoformat(),
         "source": source_item.source,
+        # Frozen at queue time so a later delivery retry can't make this item
+        # look stale (matches the intent of anchoring eligibility checks to
+        # when an item was queued rather than to "now" at delivery time).
+        # Read back per-item in _pending_preview_is_notification_eligible
+        # instead of the whole pending row's created_at, so a fresh item
+        # appended to an already-queued row isn't judged against a stale
+        # anchor left over from an earlier, unrelated item on that same row.
+        "queued_at": queued_at.isoformat(),
     }
 
 
@@ -999,7 +1031,7 @@ def _newest_notification_candidate(
         return (
             published_at_is_estimated,
             published_at,
-            _preview_for_match(match, source_item, preview_source),
+            _preview_for_match(match, source_item, preview_source, queued_at=observed_at),
         )
     return newest_candidate
 

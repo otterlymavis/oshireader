@@ -1090,6 +1090,67 @@ class TestDeliverPendingNotification:
         mock_send.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_sends_fresh_item_appended_to_a_stale_pending_row(self, db):
+        # Reproduces: an earlier item on this term was deferred (e.g. APNs
+        # transiently unavailable), leaving a PendingNotification row with an
+        # old created_at. A new discussion reply then gets appended to that
+        # same row. Without a per-item queued_at, eligibility at delivery
+        # time would be checked against the row's stale created_at instead
+        # of when the reply actually arrived, and the fresh reply's
+        # published_at would look implausibly "too new" and get dropped.
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=5),
+        )
+        now = datetime.now(timezone.utc)
+        fresh_reply = SourceItem(
+            id="girlschannel:reply1",
+            platform="girlschannel",
+            item_id="reply1",
+            url="https://girlschannel.net/topics/reply1/",
+            published_at=now - timedelta(minutes=1),
+            media_type="text",
+            title="Aiko discussion",
+            raw_payload={"date_parsed": True},
+        )
+        db.add_all([term, fresh_reply])
+        db.flush()
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=fresh_reply.id),
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=1,
+                # Row created hours ago for an earlier, unrelated deferred item.
+                created_at=now - timedelta(hours=3),
+                preview_item={
+                    "items": [
+                        {
+                            "id": fresh_reply.id,
+                            "url": fresh_reply.url,
+                            "published_at": fresh_reply.published_at.isoformat(),
+                            "notification_preview_source": "discussion_reply_update",
+                            "queued_at": (now - timedelta(minutes=1)).isoformat(),
+                        },
+                    ],
+                },
+            ),
+        ])
+        db.commit()
+        term_id = term.id
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.notification_freshness_window_minutes = 120
+            mock_send = AsyncMock(return_value=True)
+            with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_send):
+                delivered = await _deliver_pending_notification(db, term)
+
+        assert delivered is True
+        mock_send.assert_called_once()
+        assert db.get(PendingNotification, term_id) is None
+
+    @pytest.mark.asyncio
     async def test_reloads_deactivated_term_before_delivery(self, db):
         term = WatchTerm(
             keyword="Aiko",
