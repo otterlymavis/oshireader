@@ -851,6 +851,12 @@ class I18nManager: ObservableObject {
             "zh-TW": "尚無來源狀態，請於下次更新後查看。",
             "zh-CN": "暂无来源状态，请在下次更新后查看。"
         ],
+        "sourceStatusLoadError": [
+            "en": "Couldn't load source status. Pull to refresh to try again.",
+            "ja": "ソースの状態を読み込めませんでした。下に引っ張って再試行してください。",
+            "zh-TW": "無法載入來源狀態，請下拉重新整理再試一次。",
+            "zh-CN": "无法加载来源状态，请下拉刷新重试。"
+        ],
         "clearAllDataAlert": [
             "en": "Clear All Data?",
             "ja": "データをすべて削除しますか？",

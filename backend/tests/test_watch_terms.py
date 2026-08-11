@@ -233,7 +233,7 @@ class TestCreateWatchTerm:
         assert second.status_code == 201
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
 
-    def test_registered_device_adopts_orphaned_same_keyword_without_device(self, client, db_session):
+    def test_registered_device_does_not_adopt_orphaned_same_keyword_without_device(self, client, db_session):
         token = "a" * 64
         secret = "current-device-secret"
         owner_secret = hashlib.sha256(secret.encode()).hexdigest()
@@ -277,18 +277,16 @@ class TestCreateWatchTerm:
             )
 
         assert resp.status_code == 201
-        assert resp.json()["id"] == stale.id
+        assert resp.json()["id"] != stale.id
         db_session.refresh(stale)
-        assert stale.owner_device_secret == owner_secret
-        assert stale.collection_mode == "all_info"
-        assert stale.source_mode == "selected"
-        assert stale.selected_platforms == ["youtube"]
-        assert stale.notify_on_new is True
-        assert stale.aliases == ["new"]
-        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
+        assert stale.owner_device_secret == stale_owner_secret
+        assert stale.collection_mode == "media_only"
+        assert stale.notify_on_new is False
+        assert stale.aliases == ["old"]
+        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
         mock_poll.assert_called_once()
 
-    def test_registered_device_adopts_same_keyword_when_old_owner_has_only_unverified_device(
+    def test_registered_device_does_not_adopt_same_keyword_when_old_owner_has_only_unverified_device(
         self,
         client,
         db_session,
@@ -332,11 +330,11 @@ class TestCreateWatchTerm:
             )
 
         assert resp.status_code == 201
-        assert resp.json()["id"] == stale.id
+        assert resp.json()["id"] != stale.id
         db_session.refresh(stale)
-        assert stale.owner_device_secret == owner_secret
-        assert stale.notify_on_new is True
-        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 1
+        assert stale.owner_device_secret == stale_owner_secret
+        assert stale.notify_on_new is False
+        assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
         mock_poll.assert_called_once()
 
     def test_registered_device_does_not_adopt_recent_orphaned_same_keyword(self, client, db_session):

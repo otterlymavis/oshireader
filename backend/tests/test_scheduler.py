@@ -26,6 +26,7 @@ from app.ingestion.scheduler import (
     _deliver_pending_notification,
     _report_orphaned_notification_terms,
     _fetch_one,
+    _fetch_one_result,
     _is_notification_eligible,
     _notification_freshness_window,
     _prune_irrelevant_matches,
@@ -318,15 +319,59 @@ class TestFetchCache:
 
 
 class TestFetchOne:
-    def _connector(self, side_effect=None, return_value=None):
+    def _connector(self, side_effect=None, return_value=None, reports_status_to_client=True):
         c = MagicMock()
         c.PLATFORM = "mock"
         c.SUPPORTS_MEDIA_FILTER = True
+        c.REPORTS_STATUS_TO_CLIENT = reports_status_to_client
         if side_effect is not None:
             c.fetch = AsyncMock(side_effect=side_effect)
         else:
             c.fetch = AsyncMock(return_value=return_value or [])
         return c
+
+    @pytest.mark.asyncio
+    async def test_connector_opted_out_of_status_reporting_skips_record_on_failure(self):
+        connector = self._connector(
+            side_effect=RuntimeError("boom"),
+            reports_status_to_client=False,
+        )
+        with patch("app.ingestion.scheduler.record_fetch_result") as mock_record:
+            items, succeeded = await _fetch_one_result(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert succeeded is False
+        assert items == []
+        mock_record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connector_opted_out_of_status_reporting_skips_record_on_success(self):
+        from app.connectors.base import SourceItemCreate
+        item = SourceItemCreate(
+            platform="mock", item_id="x1",
+            url="https://example.com/x1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="Aiko news",
+        )
+        connector = self._connector(return_value=[item], reports_status_to_client=False)
+        with patch("app.ingestion.scheduler.record_fetch_result") as mock_record:
+            items, succeeded = await _fetch_one_result(connector, "Aiko", CollectionMode.ALL_INFO)
+        assert succeeded is True
+        assert len(items) == 1
+        mock_record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_error_records_exception_type_not_message(self):
+        # str(exc) often embeds the search term (e.g. a request URL or a
+        # connector's own error message); /api/source-health is public and
+        # cross-user, so only the exception type name should be recorded.
+        connector = self._connector(
+            side_effect=RuntimeError("feed unavailable for keyword 'a-secret-watched-keyword'")
+        )
+        with patch("app.ingestion.scheduler.record_fetch_result") as mock_record:
+            items, succeeded = await _fetch_one_result(connector, "a-secret-watched-keyword", CollectionMode.ALL_INFO)
+        assert succeeded is False
+        assert items == []
+        mock_record.assert_called_once_with("mock", succeeded=False, error="RuntimeError")
 
     @pytest.mark.asyncio
     async def test_returns_connector_results_on_success(self):
@@ -581,6 +626,125 @@ class TestMutedFeedItems:
         )
 
         assert db.get(PendingNotification, duplicate.id) is None
+
+
+class TestDuplicateTermFiltering:
+    def _source_item(self, db, platform: str = "twitter", media_type: str = "text") -> SourceItem:
+        item = SourceItem(
+            id=f"{platform}:thread1",
+            platform=platform,
+            item_id="thread1",
+            url=f"https://example.com/{platform}/thread1",
+            published_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            media_type=media_type,
+            title="Aiko update",
+        )
+        db.add(item)
+        db.commit()
+        return item
+
+    def _raw_item(self, item: SourceItem) -> SourceItemCreate:
+        return SourceItemCreate(
+            platform=item.platform,
+            item_id=item.item_id,
+            url=item.url,
+            published_at=datetime.now(timezone.utc),
+            media_type=item.media_type,
+            title=item.title,
+            raw_payload={"date_parsed": True},
+        )
+
+    def test_duplicate_term_scoped_to_other_platform_is_not_notified(self, db):
+        primary = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        duplicate = WatchTerm(
+            keyword="Aiko",
+            aliases=[],
+            notify_on_new=True,
+            is_active=True,
+            source_mode="selected",
+            selected_platforms=["youtube"],
+        )
+        item = self._source_item(db, platform="twitter")
+        db.add_all([primary, duplicate])
+        db.commit()
+
+        _queue_duplicate_term_notifications(
+            db,
+            primary,
+            [self._raw_item(item)],
+            datetime.now(timezone.utc),
+        )
+
+        assert db.query(Match).filter_by(watch_term_id=duplicate.id, source_item_id=item.id).count() == 0
+        assert db.get(PendingNotification, duplicate.id) is None
+
+    def test_duplicate_term_scoped_to_matching_platform_is_notified(self, db):
+        primary = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        duplicate = WatchTerm(
+            keyword="Aiko",
+            aliases=[],
+            notify_on_new=True,
+            is_active=True,
+            source_mode="selected",
+            selected_platforms=["twitter"],
+        )
+        item = self._source_item(db, platform="twitter")
+        db.add_all([primary, duplicate])
+        db.commit()
+
+        _queue_duplicate_term_notifications(
+            db,
+            primary,
+            [self._raw_item(item)],
+            datetime.now(timezone.utc),
+        )
+
+        assert db.query(Match).filter_by(watch_term_id=duplicate.id, source_item_id=item.id).count() == 1
+
+    def test_duplicate_term_scoped_to_media_only_ignores_text_item(self, db):
+        primary = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        duplicate = WatchTerm(
+            keyword="Aiko",
+            aliases=[],
+            notify_on_new=True,
+            is_active=True,
+            collection_mode="media_only",
+        )
+        item = self._source_item(db, platform="twitter", media_type="text")
+        db.add_all([primary, duplicate])
+        db.commit()
+
+        _queue_duplicate_term_notifications(
+            db,
+            primary,
+            [self._raw_item(item)],
+            datetime.now(timezone.utc),
+        )
+
+        assert db.query(Match).filter_by(watch_term_id=duplicate.id, source_item_id=item.id).count() == 0
+        assert db.get(PendingNotification, duplicate.id) is None
+
+    def test_duplicate_term_scoped_to_media_only_allows_image_item(self, db):
+        primary = WatchTerm(keyword="Aiko", aliases=[], notify_on_new=True, is_active=True)
+        duplicate = WatchTerm(
+            keyword="Aiko",
+            aliases=[],
+            notify_on_new=True,
+            is_active=True,
+            collection_mode="media_only",
+        )
+        item = self._source_item(db, platform="twitter", media_type="image")
+        db.add_all([primary, duplicate])
+        db.commit()
+
+        _queue_duplicate_term_notifications(
+            db,
+            primary,
+            [self._raw_item(item)],
+            datetime.now(timezone.utc),
+        )
+
+        assert db.query(Match).filter_by(watch_term_id=duplicate.id, source_item_id=item.id).count() == 1
 
 
 class TestPollTermWindow:

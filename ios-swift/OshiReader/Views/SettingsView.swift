@@ -799,6 +799,7 @@ struct SourceStatusView: View {
     @StateObject private var i18n = I18nManager.shared
     @State private var entries: [SourceHealthEntry] = []
     @State private var isLoading = true
+    @State private var loadFailed = false
 
     var body: some View {
         List {
@@ -809,7 +810,7 @@ struct SourceStatusView: View {
                     Spacer()
                 }
             } else if entries.isEmpty {
-                Text(i18n.t("sourceStatusEmpty"))
+                Text(i18n.t(loadFailed ? "sourceStatusLoadError" : "sourceStatusEmpty"))
                     .foregroundColor(theme.colors.textSub)
             } else {
                 ForEach(entries) { entry in
@@ -826,7 +827,7 @@ struct SourceStatusView: View {
     }
 
     private func row(for entry: SourceHealthEntry) -> some View {
-        let platform = Platform.find(Platform.normalize(entry.platform))
+        let platform = Platform.forRawValue(entry.platform)
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(platform?.name ?? entry.platform)
@@ -868,8 +869,14 @@ struct SourceStatusView: View {
         // A failed request returns nil — keep showing whatever was already
         // loaded rather than replacing it with an empty "nothing polled yet"
         // state, which would misrepresent a network failure as fresh data.
+        // On a first load with nothing cached yet, track the failure so the
+        // empty state can say "couldn't load" instead of implying there's
+        // simply nothing to show.
         if let fetched = await NetworkManager.shared.fetchSourceHealth() {
             entries = fetched
+            loadFailed = false
+        } else {
+            loadFailed = true
         }
         isLoading = false
     }

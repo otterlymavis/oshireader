@@ -550,13 +550,25 @@ extension NetworkManager {
 
     // MARK: - APNs Registration
 
+    private static var cachedAPNSDeviceSecret: String?
+
     var apnsDeviceSecret: String {
         let key = "apns_device_secret"
         if let existing = KeychainHelper.read(key: key), !existing.isEmpty {
             return existing
         }
+        if let cached = NetworkManager.cachedAPNSDeviceSecret {
+            return cached
+        }
         let generated = UUID().uuidString
-        KeychainHelper.write(key: key, value: generated)
+        if !KeychainHelper.write(key: key, value: generated) {
+            // Keychain write can fail transiently (e.g. before first unlock after
+            // reboot). Cache in memory so every call this session returns the same
+            // secret instead of minting a new one each time and desyncing device
+            // identity between calls (e.g. token registration vs. background refresh).
+            AppLogger.network.warning("Failed to persist APNs device secret to Keychain; using in-memory value for this session")
+        }
+        NetworkManager.cachedAPNSDeviceSecret = generated
         return generated
     }
 
@@ -621,8 +633,17 @@ extension NetworkManager {
                 registration.verification_error ?? "The server could not verify this device token"
             )
         }
-        KeychainHelper.write(key: "apns_device_token", value: token)
-        KeychainHelper.write(key: "apns_device_environment", value: apnsEnvironment)
+        // If either write fails (e.g. Keychain unavailable before first unlock),
+        // the backend now has a verified device but this device won't know it —
+        // hasRegisteredAPNSDeviceForCurrentEnvironment will keep reporting false
+        // until a later successful write. Logging makes that state visible;
+        // subsequent registration attempts (launch, background refresh) retry it.
+        if !KeychainHelper.write(key: "apns_device_token", value: token) {
+            AppLogger.network.warning("Failed to persist verified APNs device token to Keychain")
+        }
+        if !KeychainHelper.write(key: "apns_device_environment", value: apnsEnvironment) {
+            AppLogger.network.warning("Failed to persist APNs device environment to Keychain")
+        }
     }
 
     // MARK: - Health & Admin
@@ -633,6 +654,7 @@ extension NetworkManager {
     func fetchSourceHealth(timeout: TimeInterval = 15) async -> [SourceHealthEntry]? {
         guard let response: SourceHealthResponse = try? await apiRequest(
             URL(string: "\(apiBase)/api/source-health")!,
+            deviceAuthorized: true,
             acceptRange: 200...200,
             timeout: timeout
         ) else { return nil }

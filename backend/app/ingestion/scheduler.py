@@ -179,7 +179,8 @@ async def _fetch_one_result(
     # for MEDIA_ONLY terms. Avoid opening the network request at all while
     # preserving the successful-empty-result semantics used by the poller.
     if mode == CollectionMode.MEDIA_ONLY and not connector.SUPPORTS_MEDIA_FILTER:
-        record_filtered(connector.PLATFORM)
+        if connector.REPORTS_STATUS_TO_CLIENT:
+            record_filtered(connector.PLATFORM)
         return [], True
     timeout_seconds = connector_fetch_timeout_seconds(connector)
     try:
@@ -194,11 +195,17 @@ async def _fetch_one_result(
             search_term,
             timeout_seconds,
         )
-        record_fetch_result(connector.PLATFORM, succeeded=False, error=f"timeout after {timeout_seconds}s")
+        if connector.REPORTS_STATUS_TO_CLIENT:
+            record_fetch_result(connector.PLATFORM, succeeded=False, error=f"timeout after {timeout_seconds}s")
         return [], False
     except Exception as exc:
         log.warning("fetch error connector=%s term=%r: %s", connector.PLATFORM, search_term, exc)
-        record_fetch_result(connector.PLATFORM, succeeded=False, error=str(exc)[:200])
+        if connector.REPORTS_STATUS_TO_CLIENT:
+            # Only the exception type is exposed via /api/source-health (a public,
+            # cross-user diagnostic). str(exc) often embeds the search term itself
+            # (e.g. in a request URL or a connector's own error message), which
+            # would otherwise leak other users' watched keywords.
+            record_fetch_result(connector.PLATFORM, succeeded=False, error=type(exc).__name__)
         return [], False
     filtered = [item for item in items if primary_text_matches(search_term, item)]
     dropped = len(items) - len(filtered)
@@ -210,7 +217,8 @@ async def _fetch_one_result(
             dropped,
             len(items),
         )
-    record_fetch_result(connector.PLATFORM, succeeded=True, item_count=len(filtered))
+    if connector.REPORTS_STATUS_TO_CLIENT:
+        record_fetch_result(connector.PLATFORM, succeeded=True, item_count=len(filtered))
     return filtered, True
 
 
@@ -258,6 +266,30 @@ def _connectors_for_term(term: WatchTerm, connectors: list[BaseConnector]) -> li
         return connectors
     selected = {p.strip().casefold() for p in (term.selected_platforms or []) if isinstance(p, str) and p.strip()}
     return [connector for connector in connectors if connector.PLATFORM.casefold() in selected]
+
+
+_MEDIA_TYPES = {"video", "image"}
+
+
+def _term_allows_source_item(term: WatchTerm, source_item: SourceItem) -> bool:
+    """Whether `term`'s own platform/collection-mode filters admit this item.
+
+    Used when fanning a match found under one term's filters out to other
+    terms sharing the same keyword: each recipient term must still pass its
+    own filters, since it may be scoped to different platforms/media.
+    """
+    if (term.source_mode or "all").casefold() == "selected":
+        selected = {
+            p.strip().casefold()
+            for p in (term.selected_platforms or [])
+            if isinstance(p, str) and p.strip()
+        }
+        if source_item.platform.casefold() not in selected:
+            return False
+    if (term.collection_mode or "all_info") == CollectionMode.MEDIA_ONLY.value:
+        if source_item.media_type not in _MEDIA_TYPES:
+            return False
+    return True
 
 
 def _poll_term_window(db, terms: list[WatchTerm]) -> tuple[list[WatchTerm], int, int]:
@@ -1013,6 +1045,8 @@ def _queue_duplicate_term_notifications(
                 continue
             source_item = db.get(SourceItem, source_item_id)
             if source_item is None:
+                continue
+            if not _term_allows_source_item(duplicate_term, source_item):
                 continue
             match = Match(watch_term_id=duplicate_term.id, source_item_id=source_item_id)
             db.add(match)

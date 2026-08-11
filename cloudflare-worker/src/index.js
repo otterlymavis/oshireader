@@ -154,10 +154,21 @@ function hasDefaultCache() {
   return typeof caches !== "undefined" && caches.default;
 }
 
+function timingSafeEqual(a, b) {
+  const aBytes = new TextEncoder().encode(a);
+  const bBytes = new TextEncoder().encode(b);
+  if (aBytes.length !== bBytes.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i += 1) {
+    diff |= aBytes[i] ^ bBytes[i];
+  }
+  return diff === 0;
+}
+
 function requireBearer(request, env) {
   const expected = normalizeBearerToken(requireAdminToken(env));
   const actual = normalizeBearerToken(request.headers.get("authorization") || "");
-  return actual !== "" && actual === expected;
+  return actual !== "" && timingSafeEqual(actual, expected);
 }
 
 function normalizeBearerToken(value) {
@@ -808,16 +819,21 @@ export default {
         // scheduled polling still reports notification degradation through the
         // watchdog and this response's `notifications` field.
         const healthy = health.healthy;
-        return json(
-          {
-            status: healthy ? "ok" : "degraded",
-            scheduler: "cloudflare-cron",
-            ...health,
-            notifications,
-            diagnostics,
-          },
-          healthy ? 200 : 503,
-        );
+        const body = {
+          status: healthy ? "ok" : "degraded",
+          scheduler: "cloudflare-cron",
+          ...health,
+        };
+        // /health is intentionally reachable without the admin bearer token
+        // (uptime monitors hit it directly), but `notifications`/`diagnostics`
+        // embed other users' watched keywords (e.g. notifications.at_risk_keywords,
+        // diagnostics.watch_terms[].keyword, diagnostics.pending_notifications).
+        // Only include them for callers that present the admin token.
+        if (requireBearer(request, env)) {
+          body.notifications = notifications;
+          body.diagnostics = diagnostics;
+        }
+        return json(body, healthy ? 200 : 503);
       } catch (error) {
         await notifyWatchdog(env, error);
         return json({ status: "degraded", scheduler: "cloudflare-cron", reason: String(error) }, 503);

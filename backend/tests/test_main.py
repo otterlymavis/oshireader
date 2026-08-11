@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -43,6 +44,31 @@ class TestHealth:
         r = client.head("/api/health")
         assert r.status_code == 200
         assert r.content == b""
+
+
+class TestSourceHealth:
+    def test_rejects_unauthenticated_requests(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            r = client.get("/api/source-health")
+        assert r.status_code == 401
+
+    def test_accepts_admin_token(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            r = client.get(
+                "/api/source-health",
+                headers={"Authorization": "Bearer admin-secret"},
+            )
+        assert r.status_code == 200
+        assert "sources" in r.json()
+
+    def test_accepts_device_secret(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            r = client.get(
+                "/api/source-health",
+                headers={"X-Device-Secret": "some-device-secret"},
+            )
+        assert r.status_code == 200
+        assert "sources" in r.json()
 
 
 class TestDatabaseOperationalErrorHandler:

@@ -36,6 +36,11 @@ _HEADERS = {
 class NicoNicoConnector(BaseConnector):
     PLATFORM = "niconico"
     SUPPORTS_MEDIA_FILTER = True
+    # Render's outbound IP gets a permanent 403 from NicoNico (see CLAUDE.md);
+    # real matches for this platform arrive via a separate client-side scrape,
+    # so this connector's backend poll result would just show as permanently
+    # "failed" without reflecting whether the source actually works.
+    REPORTS_STATUS_TO_CLIENT = False
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         items = await self._fetch_rss(keyword)

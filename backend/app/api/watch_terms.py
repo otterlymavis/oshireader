@@ -8,7 +8,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, require_admin_or_device_auth
-from app.config import settings
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll
 from app.models import APNSDeviceToken, Match, PendingNotification, WatchTerm
@@ -112,50 +111,6 @@ async def _require_verified_notification_device(db: Session, term: WatchTerm) ->
     )
 
 
-def _owner_grace_elapsed(term: WatchTerm) -> bool:
-    if not term.owner_device_secret:
-        return True
-    if not term.created_at:
-        return True
-    created_at = term.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=max(0, settings.orphaned_notification_grace_minutes)
-    )
-    return created_at <= cutoff
-
-
-def _adopt_orphaned_same_keyword_term(db: Session, incoming: WatchTerm) -> WatchTerm | None:
-    if incoming.owner_device_secret is None:
-        return None
-    candidates = (
-        db.query(WatchTerm)
-        .filter(
-            WatchTerm.keyword == incoming.keyword,
-            WatchTerm.owner_device_secret.isnot(None),
-            WatchTerm.owner_device_secret != incoming.owner_device_secret,
-            WatchTerm.is_active == True,  # noqa: E712
-        )
-        .order_by(WatchTerm.created_at.desc(), WatchTerm.id.desc())
-        .all()
-    )
-    for candidate in candidates:
-        if not _owner_grace_elapsed(candidate):
-            continue
-        if _owner_has_verified_device(db, candidate.owner_device_secret):
-            continue
-        candidate.owner_device_secret = incoming.owner_device_secret
-        candidate.collection_mode = incoming.collection_mode
-        candidate.source_mode = incoming.source_mode
-        candidate.selected_platforms = incoming.selected_platforms
-        candidate.is_active = incoming.is_active
-        candidate.notify_on_new = incoming.notify_on_new
-        candidate.aliases = incoming.aliases
-        return candidate
-    return None
-
-
 def _seed_matches_from_global_term(db: Session, term: WatchTerm) -> None:
     if term.owner_device_secret is None:
         return
@@ -215,16 +170,6 @@ async def create_term(
         owner_device_secret=term.owner_device_secret,
     ):
         raise HTTPException(409, "A watch term with this keyword already exists")
-    adopted = None if auth.is_admin else _adopt_orphaned_same_keyword_term(db, term)
-    if adopted is not None:
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            raise HTTPException(409, "A watch term with this keyword already exists")
-        db.refresh(adopted)
-        queue_poll()
-        return adopted
     db.add(term)
     try:
         db.flush()

@@ -184,6 +184,12 @@ class SourceItemCreate:
 class BaseConnector(ABC):
     PLATFORM: str = ""
     SUPPORTS_MEDIA_FILTER: bool = False
+    # Whether this connector's own fetch success/failure should be surfaced via
+    # /api/source-health. False for connectors that are structurally unable to
+    # be fetched from the backend's host (see CLAUDE.md) but still deliver
+    # matches through a separate client-side path — their backend poll result
+    # says nothing about whether the source is actually working for the user.
+    REPORTS_STATUS_TO_CLIENT: bool = True
 
     @abstractmethod
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:

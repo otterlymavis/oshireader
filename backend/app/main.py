@@ -26,7 +26,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.api import credentials, devices, feed, watch_terms
-from app.auth import require_admin_auth
+from app.auth import require_admin_auth, require_admin_or_device_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.diagnostics import record_backend_event
@@ -489,7 +489,7 @@ def health_head() -> Response:
 
 
 @app.get("/api/source-health")
-def source_health() -> dict:
+def source_health(auth=Depends(require_admin_or_device_auth)) -> dict:
     """Per-platform poll status, for the client to explain why a source looks stale."""
     return {"sources": source_health_snapshot()}
 

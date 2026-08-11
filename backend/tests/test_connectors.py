@@ -2559,7 +2559,7 @@ class TestNicoNicoFetch:
         assert result[0].item_id == "sm42"
 
     @pytest.mark.asyncio
-    async def test_both_rss_fail_returns_empty_without_gnews_fallback(self):
+    async def test_both_rss_fail_raises_without_gnews_fallback(self):
         call_count = [0]
         fail_resp = MagicMock(is_success=False, status_code=403)
         ok_resp = MagicMock(is_success=True, content=b"<rss/>")
@@ -2572,19 +2572,19 @@ class TestNicoNicoFetch:
         fake_feed = _FakeFeed([gnews_entry])
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
-            result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert result == []
+            with pytest.raises(RuntimeError):
+                await NicoNicoConnector().fetch("Aiko", "all_info")
 
     @pytest.mark.asyncio
-    async def test_all_sources_fail_returns_empty(self):
+    async def test_all_sources_fail_raises(self):
         fail_resp = MagicMock(is_success=False, status_code=503)
 
         async def _side(url, **kw):
             return fail_resp
 
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
-            result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert result == []
+            with pytest.raises(RuntimeError):
+                await NicoNicoConnector().fetch("Aiko", "all_info")
 
     @pytest.mark.asyncio
     async def test_skips_entries_without_title(self):
@@ -2611,11 +2611,11 @@ class TestNicoNicoFetch:
         assert len(result) == 1
 
     @pytest.mark.asyncio
-    async def test_feedparser_exception_returns_empty(self):
+    async def test_feedparser_exception_raises(self):
         with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
              patch("app.connectors.niconico.feedparser.parse", side_effect=ValueError("bad")):
-            result = await NicoNicoConnector().fetch("Aiko", "all_info")
-        assert result == []
+            with pytest.raises(RuntimeError):
+                await NicoNicoConnector().fetch("Aiko", "all_info")
 
     @pytest.mark.asyncio
     async def test_rss_filters_items_without_keyword(self):

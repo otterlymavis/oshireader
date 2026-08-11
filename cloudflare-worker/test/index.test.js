@@ -47,9 +47,67 @@ test("health endpoint does not require the admin token", async () => {
   assert.equal(body.healthy, true);
 });
 
+test("health endpoint omits diagnostics and notifications without the admin token", async () => {
+  const originalFetch = globalThis.fetch;
+  const now = new Date().toISOString();
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    items_total: 10,
+    matches_total: 12,
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true, notify_on_new: true, notification_verified_devices: 0 }],
+    pending_notifications: [],
+    recent_events: [{ id: 1, kind: "poll", status: "completed", created_at: now }],
+  }), { status: 200 });
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+  globalThis.fetch = originalFetch;
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status, "ok");
+  assert.equal(body.diagnostics, undefined);
+  assert.equal(body.notifications, undefined);
+  assert.equal(JSON.stringify(body).includes("Aiko"), false);
+});
+
+test("health endpoint includes diagnostics and notifications with the admin token", async () => {
+  const originalFetch = globalThis.fetch;
+  const now = new Date().toISOString();
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    items_total: 10,
+    matches_total: 12,
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true, notify_on_new: true, notification_verified_devices: 0 }],
+    pending_notifications: [],
+    recent_events: [{ id: 1, kind: "poll", status: "completed", created_at: now }],
+  }), { status: 200 });
+  const response = await worker.fetch(
+    new Request("https://worker.example/health", { headers: { authorization: "Bearer secret" } }),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+  globalThis.fetch = originalFetch;
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.status, "ok");
+  assert.ok(body.diagnostics);
+  assert.ok(body.notifications);
+});
+
 test("rss proxy requires the admin token", async () => {
   const response = await worker.fetch(
     new Request("https://worker.example/rss-proxy?target=google&query=Aiko"),
+    { ADMIN_API_TOKEN: "secret" },
+  );
+
+  assert.equal(response.status, 401);
+});
+
+test("rss proxy rejects a same-length near-miss token", async () => {
+  const response = await worker.fetch(
+    new Request("https://worker.example/rss-proxy?target=google&query=Aiko", {
+      headers: { authorization: "Bearer secreu" },
+    }),
     { ADMIN_API_TOKEN: "secret" },
   );
 
@@ -454,7 +512,7 @@ test("health uses dedicated latest successful poll outside recent events", async
   }), { status: 200 });
 
   const response = await worker.fetch(
-    new Request("https://worker.example/health"),
+    new Request("https://worker.example/health", { headers: { authorization: "Bearer secret" } }),
     { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
   );
 
@@ -494,7 +552,7 @@ test("health exposes latest relevant APNs separately from stale history", async 
   }), { status: 200 });
 
   const response = await worker.fetch(
-    new Request("https://worker.example/health"),
+    new Request("https://worker.example/health", { headers: { authorization: "Bearer secret" } }),
     { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
   );
 
@@ -622,7 +680,7 @@ test("health keeps polling healthy when active notification terms lack devices",
   }), { status: 200 });
 
   const response = await worker.fetch(
-    new Request("https://worker.example/health"),
+    new Request("https://worker.example/health", { headers: { authorization: "Bearer secret" } }),
     { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
   );
 
@@ -673,7 +731,7 @@ test("health trusts backend notification grace period", async (context) => {
   }), { status: 200 });
 
   const response = await worker.fetch(
-    new Request("https://worker.example/health"),
+    new Request("https://worker.example/health", { headers: { authorization: "Bearer secret" } }),
     { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
   );
 
@@ -722,7 +780,7 @@ test("health keeps polling healthy when APNs is missing", async (context) => {
   }), { status: 200 });
 
   const response = await worker.fetch(
-    new Request("https://worker.example/health"),
+    new Request("https://worker.example/health", { headers: { authorization: "Bearer secret" } }),
     { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
   );
 
