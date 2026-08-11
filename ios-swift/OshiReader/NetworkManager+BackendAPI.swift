@@ -176,7 +176,11 @@ extension NetworkManager {
         guard let backendTerms = try? await fetchWatchTerms(timeout: timeout) else {
             return BackendTermSyncResult(succeeded: false, changed: false)
         }
-        let localByKeyword = await MainActor.run {
+        // Mutated as backend terms are processed (not just seeded once) so that
+        // multiple backend rows sharing a keyword — e.g. leftover server-side
+        // duplicates from a prior device-identity reset — merge into the same
+        // local term instead of each spawning its own local row.
+        var localByKeyword = await MainActor.run {
             firstTermByKeyword(LocalDB.shared.terms)
         }
         var changed = false
@@ -198,8 +202,10 @@ extension NetworkManager {
                     }
                     changed = changed || replaced
                 }
+                localByKeyword[term.keyword] = mergedTerm
             } else {
                 await MainActor.run { LocalDB.shared.addTermFromBackend(term) }
+                localByKeyword[term.keyword] = term
                 changed = true
             }
         }
