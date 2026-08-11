@@ -2189,6 +2189,17 @@ class TestYahooNewsFetch:
         assert result[0].url == "https://news.google.com/rss/articles/abc123"
 
     @pytest.mark.asyncio
+    async def test_gnews_jina_filters_stale_items(self):
+        markdown = (
+            "### [アイコの古い記事 - Yahoo!ニュース](https://news.google.com/rss/articles/old123)\n\n"
+            "[アイコの古い記事 - Yahoo!ニュース](https://news.google.com/rss/articles/old123)\n\n"
+            "Fri, 04 Aug 2023 07:00:00 GMT\n"
+        )
+        with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(text=markdown)):
+            result = await YahooNewsConnector().fetch("アイコ", "all_info")
+        assert result == []
+
+    @pytest.mark.asyncio
     async def test_gnews_filters_keyword_found_only_in_summary(self):
         entry = _FeedEntry(
             id="https://news.yahoo.co.jp/articles/abc123",

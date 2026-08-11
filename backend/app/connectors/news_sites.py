@@ -156,7 +156,7 @@ class _GNewsSiteConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=self._headers()) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=self._headers()) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)

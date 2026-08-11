@@ -1294,6 +1294,9 @@ final class BackgroundRefreshManager {
         await withTaskGroup(
             of: (termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
         ) { group in
+            // Tracks every (term, searchTerm) submitted below so a deadline cutoff can
+            // still tell which ones never reported back, keyed by "termKeyword\u{1F}searchTerm".
+            var pendingSearches: [String: Set<String>] = [:]
             for term in fallbackTerms {
                 let platformsForTerm = BackgroundRefreshPolicy.deviceFallbackPlatforms(
                     for: term,
@@ -1302,6 +1305,7 @@ final class BackgroundRefreshManager {
                 guard !platformsForTerm.isEmpty else { continue }
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
+                    pendingSearches["\(term.keyword)\u{1F}\(searchTerm)"] = platformsForTerm
                     group.addTask {
                         let scrapeResult = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
                             keyword: searchTerm,
@@ -1319,6 +1323,7 @@ final class BackgroundRefreshManager {
                     group.cancelAll()
                     break
                 }
+                pendingSearches.removeValue(forKey: "\(scrape.termKeyword)\u{1F}\(scrape.searchTerm)")
                 guard let currentTerm = db.term(matchingKeyword: scrape.termKeyword) else { continue }
                 let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
                     for: currentTerm,
@@ -1344,6 +1349,14 @@ final class BackgroundRefreshManager {
                     _ = db.mergeItems(newItems: mergeableItems, notifyOnNew: false)
                 }
                 scrapeResults.append((scrape.result, scrape.expectedPlatforms.intersection(currentFallbackPlatforms)))
+            }
+            // Any search that never reported back (cancelled before finishing) still
+            // needs to count toward its platforms' expected total as not-completed —
+            // otherwise a term with an alias whose search never ran could look fully
+            // covered from just its keyword search completing, and the alias search
+            // would silently never get retried.
+            for expectedPlatforms in pendingSearches.values {
+                scrapeResults.append((LocalFallbackScrapeResult(), expectedPlatforms))
             }
             completion.completedDevicePlatforms.formUnion(
                 BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(

@@ -117,7 +117,7 @@ class RSSConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     return []
