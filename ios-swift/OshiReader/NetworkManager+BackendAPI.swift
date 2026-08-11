@@ -6,6 +6,22 @@ struct BackendTermSyncResult {
     let changed: Bool
 }
 
+struct SourceHealthEntry: Decodable, Identifiable {
+    let platform: String
+    let status: String?
+    let last_checked_at: String?
+    let last_success_at: String?
+    let last_item_count: Int?
+    let last_error: String?
+    let consecutive_failures: Int
+
+    var id: String { platform }
+}
+
+struct SourceHealthResponse: Decodable {
+    let sources: [SourceHealthEntry]
+}
+
 extension NetworkManager {
 
     // MARK: - Watch Terms
@@ -610,6 +626,18 @@ extension NetworkManager {
     }
 
     // MARK: - Health & Admin
+
+    // Returns nil on a failed request so callers can keep showing previously
+    // loaded data instead of mistaking a network failure for "nothing polled
+    // yet" — [] from the backend (a real empty snapshot) stays distinct.
+    func fetchSourceHealth(timeout: TimeInterval = 15) async -> [SourceHealthEntry]? {
+        guard let response: SourceHealthResponse = try? await apiRequest(
+            URL(string: "\(apiBase)/api/source-health")!,
+            acceptRange: 200...200,
+            timeout: timeout
+        ) else { return nil }
+        return response.sources
+    }
 
     func checkHealth() async throws -> Bool {
         let url = URL(string: "\(apiBase)/api/health")!

@@ -57,6 +57,16 @@ func parseISO8601Date(_ value: String) -> Date? {
     _ISO8601Cache.cachedDate(from: value)
 }
 
+private let _relativeDateTimeFormatter: RelativeDateTimeFormatter = {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .abbreviated
+    return formatter
+}()
+
+func relativeTimeString(from date: Date, relativeTo reference: Date = Date()) -> String {
+    _relativeDateTimeFormatter.localizedString(for: date, relativeTo: reference)
+}
+
 private enum _DisplayTextRegex {
     static let htmlTags  = try! NSRegularExpression(pattern: "<[^>]+>")
     static let whitespace = try! NSRegularExpression(pattern: "\\s+")

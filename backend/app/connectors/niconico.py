@@ -41,9 +41,14 @@ class NicoNicoConnector(BaseConnector):
         items = await self._fetch_rss(keyword)
         if items is None:
             items = await self._fetch_tag_rss(keyword)
-        # Google News timestamps describe discovery, not NicoNico upload time.
-        # Keep the source empty when NicoNico's own feeds are unavailable.
-        return items or []
+        if items is None:
+            # Both of NicoNico's own feeds failed to fetch (e.g. the 403 Render's
+            # outbound IP gets — see CLAUDE.md). Raise rather than returning []
+            # so the scheduler's existing failure path records this as a real
+            # failure instead of a misleading "success, zero results" — actual
+            # matches for this source arrive via the separate client-side scrape.
+            raise RuntimeError(f"NicoNico feeds unavailable for keyword {keyword!r}")
+        return items
 
     async def _fetch_rss(self, keyword: str) -> list[SourceItemCreate] | None:
         """NicoNico keyword search RSS feed (newest first)."""

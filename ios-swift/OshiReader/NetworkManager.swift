@@ -6,11 +6,19 @@ enum APIClientError: LocalizedError {
 
     var requiresVerifiedNotificationDevice: Bool {
         if case .apnsRegistrationUnverified = self { return true }
+        return httpErrorCode == "notification_device_required"
+    }
+
+    var hasNoPendingNotificationContent: Bool {
+        httpErrorCode == "no_pending_content"
+    }
+
+    private var httpErrorCode: String? {
         guard case .httpStatus(409, let detail) = self,
               let data = detail?.data(using: .utf8),
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return false }
-        return payload["code"] as? String == "notification_device_required"
+        else { return nil }
+        return payload["code"] as? String
     }
 
     var errorDescription: String? {

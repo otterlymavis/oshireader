@@ -41,6 +41,7 @@ from app.connectors.yahoonews import YahooNewsConnector
 from app.connectors.youtube import YouTubeConnector
 from app.database import SessionLocal
 from app.diagnostics import prune_backend_events, record_backend_event
+from app.source_health import begin_poll_cycle, record_fetch_result, record_filtered
 from app.models import (
     APNSDeviceToken,
     BackendEvent,
@@ -178,6 +179,7 @@ async def _fetch_one_result(
     # for MEDIA_ONLY terms. Avoid opening the network request at all while
     # preserving the successful-empty-result semantics used by the poller.
     if mode == CollectionMode.MEDIA_ONLY and not connector.SUPPORTS_MEDIA_FILTER:
+        record_filtered(connector.PLATFORM)
         return [], True
     timeout_seconds = connector_fetch_timeout_seconds(connector)
     try:
@@ -192,9 +194,11 @@ async def _fetch_one_result(
             search_term,
             timeout_seconds,
         )
+        record_fetch_result(connector.PLATFORM, succeeded=False, error=f"timeout after {timeout_seconds}s")
         return [], False
     except Exception as exc:
         log.warning("fetch error connector=%s term=%r: %s", connector.PLATFORM, search_term, exc)
+        record_fetch_result(connector.PLATFORM, succeeded=False, error=str(exc)[:200])
         return [], False
     filtered = [item for item in items if primary_text_matches(search_term, item)]
     dropped = len(items) - len(filtered)
@@ -206,6 +210,7 @@ async def _fetch_one_result(
             dropped,
             len(items),
         )
+    record_fetch_result(connector.PLATFORM, succeeded=True, item_count=len(filtered))
     return filtered, True
 
 
@@ -382,6 +387,54 @@ def _report_orphaned_notification_terms(db) -> set[int]:
         )
         db.commit()
     return orphaned_ids
+
+
+def _prune_stale_orphaned_pending_notifications(db, orphaned_notify_term_ids: set[int]) -> None:
+    """Clear pending counts that have sat behind a missing device too long.
+
+    _report_orphaned_notification_terms intentionally never disables
+    notify_on_new, so a transient registration gap can't look like an
+    intentional opt-out. But if the owner never reconnects a device, the
+    associated PendingNotification would otherwise grow without bound
+    forever. Filtered on created_at rather than updated_at: a term sharing
+    a keyword with an actively-polled term keeps getting its pending row
+    refreshed via duplicate-term fan-out (_queue_duplicate_term_notifications)
+    even while orphaned, which would keep updated_at fresh indefinitely and
+    defeat this entirely. created_at is a fixed anchor set once when the row
+    is first created, so a term still orphaned pending_notification_stale_
+    after_days after that point gets pruned regardless of how many times it
+    was subsequently touched. The preference stays on, and a fresh row is
+    queued from scratch as soon as new content next arrives.
+    """
+    if not orphaned_notify_term_ids:
+        return
+    days = max(0, settings.pending_notification_stale_after_days)
+    if days <= 0:
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    stale = (
+        db.query(PendingNotification)
+        .filter(PendingNotification.watch_term_id.in_(orphaned_notify_term_ids))
+        .filter(PendingNotification.created_at <= cutoff)
+        .all()
+    )
+    if not stale:
+        return
+    pruned_term_ids = [pending.watch_term_id for pending in stale]
+    for pending in stale:
+        db.delete(pending)
+    # Commit the deletes before recording the diagnostic event: record_backend_event
+    # swallows its own failures with an internal rollback, which would otherwise
+    # silently undo these deletes too if it ran first in the same transaction.
+    db.commit()
+    record_backend_event(
+        db,
+        "notification_maintenance",
+        "stale_pending_pruned",
+        "Cleared pending notification counts stuck behind a missing device",
+        {"term_ids": pruned_term_ids, "stale_after_days": days},
+    )
+    db.commit()
 
 
 def _term_has_verified_device(db, term: WatchTerm) -> bool:
@@ -1418,14 +1471,24 @@ async def _poll_terms_batch(
 
 
 async def _poll_once_unlocked() -> None:
+    begin_poll_cycle()
     db = SessionLocal()
     try:
         await revalidate_unverified_devices(db)
+        notify_orphaned_term_ids = _report_orphaned_notification_terms(db)
         orphaned_term_ids = (
-            _report_orphaned_notification_terms(db)
+            notify_orphaned_term_ids
             | _report_orphaned_duplicate_terms(db)
             | _report_orphaned_silent_terms(db)
         )
+        try:
+            _prune_stale_orphaned_pending_notifications(db, notify_orphaned_term_ids)
+        except Exception:
+            # Isolated so a transient DB error while pruning doesn't abort the
+            # rest of this poll cycle — connector fetches and notification
+            # delivery below matter far more than this maintenance step.
+            db.rollback()
+            log.warning("stale pending notification pruning failed", exc_info=True)
         active_terms = (
             db.query(WatchTerm)
             .filter(WatchTerm.is_active == True)  # noqa: E712

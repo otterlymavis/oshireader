@@ -200,6 +200,11 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text(i18n.t("dataSection"))) {
+                    NavigationLink(destination: SourceStatusView(theme: theme)) {
+                        Label(i18n.t("sourceStatus"), systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .accessibilityIdentifier("settings.sourceStatusLink")
+
                     Button(role: .destructive) {
                         showingClearAllAlert = true
                     } label: {
@@ -737,7 +742,11 @@ struct SettingsView: View {
                 try await NetworkManager.shared.triggerWatchTermNotification(id: term.id)
             } catch {
                 await MainActor.run {
-                    settingsErrorMessage = i18n.t("notificationUpdateFailed")
+                    if let apiError = error as? APIClientError, apiError.hasNoPendingNotificationContent {
+                        settingsErrorMessage = i18n.t("notifyNowNothingPending")
+                    } else {
+                        settingsErrorMessage = i18n.t("notificationUpdateFailed")
+                    }
                 }
             }
             await MainActor.run { _ = notificationUpdateIDs.remove(term.id) }
@@ -783,6 +792,87 @@ struct SettingsView: View {
         db.setSubscribedPlatforms(platforms: platforms)
     }
 
+}
+
+struct SourceStatusView: View {
+    let theme: ThemeManager
+    @StateObject private var i18n = I18nManager.shared
+    @State private var entries: [SourceHealthEntry] = []
+    @State private var isLoading = true
+
+    var body: some View {
+        List {
+            if isLoading && entries.isEmpty {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+            } else if entries.isEmpty {
+                Text(i18n.t("sourceStatusEmpty"))
+                    .foregroundColor(theme.colors.textSub)
+            } else {
+                ForEach(entries) { entry in
+                    row(for: entry)
+                }
+            }
+        }
+        .accessibilityIdentifier("settings.sourceStatus.screen")
+        .background(theme.colors.bg)
+        .navigationTitle(i18n.t("sourceStatus"))
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    private func row(for entry: SourceHealthEntry) -> some View {
+        let platform = Platform.find(Platform.normalize(entry.platform))
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(platform?.name ?? entry.platform)
+                    .foregroundColor(theme.colors.text)
+                Spacer()
+                statusBadge(for: entry)
+            }
+            if let checkedAt = entry.last_checked_at, let date = parseISO8601Date(checkedAt) {
+                Text(relativeTimeString(from: date))
+                    .font(.caption)
+                    .foregroundColor(theme.colors.textSub)
+            }
+            if entry.status == "failure", let error = entry.last_error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(theme.colors.textSub)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityIdentifier("settings.sourceStatus.row.\(entry.platform)")
+    }
+
+    private func statusBadge(for entry: SourceHealthEntry) -> some View {
+        let (symbol, color): (String, Color) = {
+            switch entry.status {
+            case "success": return ("checkmark.circle.fill", .green)
+            case "empty": return ("circle.dashed", theme.colors.textSub)
+            case "filtered": return ("line.diagonal", theme.colors.textSub)
+            case "failure": return ("exclamationmark.triangle.fill", .red)
+            default: return ("questionmark.circle", theme.colors.textSub)
+            }
+        }()
+        return Image(systemName: symbol).foregroundColor(color)
+    }
+
+    private func load() async {
+        isLoading = true
+        // A failed request returns nil — keep showing whatever was already
+        // loaded rather than replacing it with an empty "nothing polled yet"
+        // state, which would misrepresent a network failure as fresh data.
+        if let fetched = await NetworkManager.shared.fetchSourceHealth() {
+            entries = fetched
+        }
+        isLoading = false
+    }
 }
 
 struct PrivacyPolicyView: View {

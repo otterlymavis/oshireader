@@ -34,6 +34,8 @@ services:
         value: "120"
       - key: ORPHANED_NOTIFICATION_GRACE_MINUTES
         value: "60"
+      - key: PENDING_NOTIFICATION_STALE_AFTER_DAYS
+        value: "7"
       - key: BACKEND_PUBLIC_URL
         value: https://oshireader.onrender.com
       - key: YOUTUBE_API_KEY

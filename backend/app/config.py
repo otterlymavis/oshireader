@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     retention_days: int = 30
     notification_freshness_window_minutes: int = 120
     orphaned_notification_grace_minutes: int = 60
+    pending_notification_stale_after_days: int = 7
     admin_api_token: str = ""
     allow_unauthenticated_admin: bool = False
     cors_allow_origins: str = ""

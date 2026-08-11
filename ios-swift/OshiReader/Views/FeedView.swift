@@ -428,7 +428,7 @@ struct FeedView: View {
                         if mediaFilter == .mediaOnly {
                             PillView(text: "📹 " + i18n.t("mediaOnly"), theme: theme)
                         }
-                        
+
                         Spacer()
                         Image(systemName: showFilterSheet ? "chevron.up" : "chevron.down")
                             .foregroundColor(theme.colors.textMuted)
@@ -1606,15 +1606,9 @@ struct FeedCard: View {
         .accessibilityIdentifier("feed.card.\(item.id)")
     }
     
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
-
     private func relativeTime(from isoDate: String) -> String {
         guard let date = parseISO8601Date(isoDate) else { return "" }
-        return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+        return relativeTimeString(from: date)
     }
 }
 
@@ -1627,7 +1621,7 @@ struct FilterPanel: View {
     let theme: ThemeManager
     let i18n: I18nManager
     let timeRanges: [(label: String, days: Int)]
-    
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -1635,7 +1629,7 @@ struct FilterPanel: View {
                     .font(.headline)
                     .foregroundColor(theme.colors.text)
                     .padding(.top, 8)
-                
+
                 // All / Media Only
                 VStack(alignment: .leading, spacing: 8) {
                     Text(i18n.t("allInfo") + " / " + i18n.t("mediaOnly"))
@@ -1643,7 +1637,7 @@ struct FilterPanel: View {
                         .fontWeight(.bold)
                         .foregroundColor(theme.colors.textMuted)
                         .textCase(.uppercase)
-                    
+
                     HStack(spacing: 8) {
                         FilterButton(
                             text: "📄 " + i18n.t("allInfo"),
@@ -1663,7 +1657,7 @@ struct FilterPanel: View {
                         }
                     }
                 }
-                
+
                 // Period
                 VStack(alignment: .leading, spacing: 8) {
                     Text(i18n.t("period"))

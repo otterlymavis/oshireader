@@ -515,6 +515,12 @@ class I18nManager: ObservableObject {
             "zh-TW": "無法更新通知設定，請再試一次。",
             "zh-CN": "无法更新通知设置，请重试。"
         ],
+        "notifyNowNothingPending": [
+            "en": "No new items to notify about yet.",
+            "ja": "まだ通知する新しい項目はありません。",
+            "zh-TW": "目前沒有新項目可通知。",
+            "zh-CN": "目前没有新内容可通知。"
+        ],
         "notifyNow": [
             "en": "Notify Now",
             "ja": "今すぐ通知",
@@ -832,6 +838,18 @@ class I18nManager: ObservableObject {
             "ja": "データをすべて削除",
             "zh-TW": "清除所有資料",
             "zh-CN": "清除所有数据"
+        ],
+        "sourceStatus": [
+            "en": "Source Status",
+            "ja": "ソースの状態",
+            "zh-TW": "來源狀態",
+            "zh-CN": "来源状态"
+        ],
+        "sourceStatusEmpty": [
+            "en": "No source status yet — check back after the next refresh.",
+            "ja": "まだソースの状態がありません。次回の更新後に確認してください。",
+            "zh-TW": "尚無來源狀態，請於下次更新後查看。",
+            "zh-CN": "暂无来源状态，请在下次更新后查看。"
         ],
         "clearAllDataAlert": [
             "en": "Clear All Data?",

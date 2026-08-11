@@ -30,6 +30,7 @@ from app.auth import require_admin_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.diagnostics import record_backend_event
+from app.source_health import snapshot as source_health_snapshot
 from app.connectors.base import (
     GOOGLE_NEWS_HEADERS,
     fetch_search_rss_via_proxy,
@@ -485,6 +486,12 @@ def health() -> dict:
 @app.head("/api/health")
 def health_head() -> Response:
     return Response(status_code=200)
+
+
+@app.get("/api/source-health")
+def source_health() -> dict:
+    """Per-platform poll status, for the client to explain why a source looks stale."""
+    return {"sources": source_health_snapshot()}
 
 
 @app.get("/api/notification-preview.png")
