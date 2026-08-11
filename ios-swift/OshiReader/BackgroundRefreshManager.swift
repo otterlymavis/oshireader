@@ -1314,7 +1314,6 @@ final class BackgroundRefreshManager {
             }
 
             var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
-            var scrapeAttempts = [[FeedItem]]()
             for await scrape in group {
                 if Task.isCancelled {
                     group.cancelAll()
@@ -1334,14 +1333,17 @@ final class BackgroundRefreshManager {
                     item.watch_term_keyword == currentTerm.keyword &&
                         currentFallbackPlatforms.contains(Platform.normalize(item.platform))
                 }
+                // Merge each search's results as soon as they're available instead of
+                // batching every concurrent scrape until the whole group finishes. The
+                // outer caller (refreshLocalDeviceSourcesForBackground) races this whole
+                // function against a shared deadline and cancels it outright if the
+                // budget runs out — batching until the end meant a single slow site
+                // among dozens could discard every other search's results too, even
+                // ones that had already completed successfully.
+                if !mergeableItems.isEmpty {
+                    _ = db.mergeItems(newItems: mergeableItems, notifyOnNew: false)
+                }
                 scrapeResults.append((scrape.result, scrape.expectedPlatforms.intersection(currentFallbackPlatforms)))
-                scrapeAttempts.append(mergeableItems)
-            }
-            if !scrapeAttempts.isEmpty {
-                _ = db.mergeItemsBatched(
-                    newItemsBatches: scrapeAttempts,
-                    notifyOnNew: false
-                )
             }
             completion.completedDevicePlatforms.formUnion(
                 BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
@@ -1349,7 +1351,7 @@ final class BackgroundRefreshManager {
                 )
             )
         }
-        return Task.isCancelled ? LocalSourceRefreshCompletion() : completion
+        return completion
     }
 
     private func sendLiveTestFailureDiagnostic(reason: String, detail: String, db: LocalDB) async {
