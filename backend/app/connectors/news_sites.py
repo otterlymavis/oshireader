@@ -139,62 +139,11 @@ class _GNewsSiteConnector(BaseConnector):
             f"&gl={quote(self.GNEWS_GL)}"
             f"&ceid={quote(self.GNEWS_CEID)}"
         )
-        feed = None
-        try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=self._headers()) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("%s Google News returned %d", self.PLATFORM, resp.status_code)
-                else:
-                    feed = await asyncio.to_thread(feedparser.parse, resp.content)
-        except Exception as exc:
-            log.warning("%s Google News error: %s", self.PLATFORM, exc)
-
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in (feed.entries if feed else [])[:25]:
-            link = entry.get("link", "")
-            if not link:
-                continue
-            item_id = entry.get("id") or link
-            if item_id in seen:
-                continue
-            seen.add(item_id)
-            title = (entry.get("title") or "").strip()
-            if self.TITLE_SUFFIX_RE:
-                title = self.TITLE_SUFFIX_RE.sub("", title).strip()
-            summary = entry.get("summary") or ""
-            if not title:
-                continue
-            if not title_contains_keyword(keyword, title):
-                continue
-            published = parse_feed_date(entry)
-            if published is None:
-                continue
-            if not is_recent_search_result(published):
-                continue
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=item_id,
-                    url=link,
-                    published_at=published,
-                    media_type="article",
-                    title=title,
-                    content_text=summary or None,
-                    raw_payload={
-                        "site": self.SITE,
-                        "keyword": keyword,
-                        "history_years": history_years,
-                    },
-                )
-            )
-        if items:
-            return items
+        # Google News is unreachable directly from Render's outbound IP (see
+        # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
+        # Google from Cloudflare's IP ranges, so neither is worth the timeout
+        # budget: go straight to the jina.ai reader proxy, then Bing.
         items = await self._fetch_gnews_jina(keyword, url, history_years)
-        if items:
-            return items
-        items = await self._fetch_proxy_google_news(keyword, history_years)
         if items:
             return items
         return await self._fetch_bing_news(keyword, history_years)
@@ -239,61 +188,6 @@ class _GNewsSiteConnector(BaseConnector):
                         "keyword": keyword,
                         "history_years": history_years,
                         "source": "google_news_jina",
-                    },
-                )
-            )
-        return items
-
-    async def _fetch_proxy_google_news(
-        self,
-        keyword: str,
-        history_years: int | None,
-    ) -> list[SourceItemCreate]:
-        history = f" when:{history_years}y" if history_years else ""
-        query = f"{keyword} site:{self.SITE}{history}"
-        content = await fetch_search_rss_via_proxy(
-            query,
-            target="google",
-            hl=self.GNEWS_HL,
-            gl=self.GNEWS_GL,
-            ceid=self.GNEWS_CEID,
-            accept_language=self.ACCEPT_LANGUAGE,
-        )
-        if not content:
-            return []
-        feed = await asyncio.to_thread(feedparser.parse, content)
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in feed.entries[:25]:
-            title = (entry.get("title") or "").strip()
-            link = entry.get("link", "")
-            item_id = entry.get("id") or link
-            if self.TITLE_SUFFIX_RE:
-                title = self.TITLE_SUFFIX_RE.sub("", title).strip()
-            if not link or not title or item_id in seen:
-                continue
-            if not title_contains_keyword(keyword, title):
-                continue
-            seen.add(item_id)
-            published = parse_feed_date(entry)
-            if published is None:
-                continue
-            if not is_recent_search_result(published):
-                continue
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=item_id,
-                    url=link,
-                    published_at=published,
-                    media_type="article",
-                    title=title,
-                    content_text=entry.get("summary") or None,
-                    raw_payload={
-                        "site": self.SITE,
-                        "keyword": keyword,
-                        "history_years": history_years,
-                        "source": "google_news_proxy",
                     },
                 )
             )

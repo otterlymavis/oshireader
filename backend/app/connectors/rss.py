@@ -101,48 +101,11 @@ class RSSConnector(BaseConnector):
     async def _fetch_google_news_history(self, keyword: str) -> list[SourceItemCreate]:
         encoded = quote(f"{keyword} when:10y")
         url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
-        feed = None
-        try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("Google News history fallback returned status %d", resp.status_code)
-                else:
-                    feed = await asyncio.to_thread(feedparser.parse, resp.content)
-        except Exception as exc:
-            log.warning("Google News history fallback failed: %s", exc)
-
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in (feed.entries if feed else [])[:25]:
-            title = (entry.get("title") or "").strip()
-            link = entry.get("link", "")
-            item_id = entry.get("id") or link
-            if not link or not title_contains_keyword(keyword, title) or item_id in seen:
-                continue
-            published = parse_feed_date(entry)
-            if published is None:
-                continue
-            if not _is_recent(published):
-                continue
-            seen.add(item_id)
-            items.append(SourceItemCreate(
-                platform=self.PLATFORM,
-                item_id=item_id,
-                url=link,
-                published_at=published,
-                media_type="article",
-                title=title,
-                content_text=entry.get("summary") or None,
-                author="Google News",
-                raw_payload={"source": "google_news_history", "keyword": keyword},
-            ))
-        if items:
-            return items
+        # Google News is unreachable directly from Render's outbound IP (see
+        # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
+        # Google from Cloudflare's IP ranges, so neither is worth the timeout
+        # budget: go straight to the jina.ai reader proxy, then Bing.
         items = await self._fetch_google_news_history_jina(keyword, url)
-        if items:
-            return items
-        items = await self._fetch_google_news_history_proxy(keyword)
         if items:
             return items
         return await self._fetch_bing_news(keyword)
@@ -179,38 +142,6 @@ class RSSConnector(BaseConnector):
                 content_text=None,
                 author="Google News",
                 raw_payload={"source": "google_news_jina", "keyword": keyword},
-            ))
-        return items
-
-    async def _fetch_google_news_history_proxy(self, keyword: str) -> list[SourceItemCreate]:
-        content = await fetch_search_rss_via_proxy(f"{keyword} when:10y", target="google")
-        if not content:
-            return []
-        feed = await asyncio.to_thread(feedparser.parse, content)
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in feed.entries[:25]:
-            title = (entry.get("title") or "").strip()
-            link = entry.get("link", "")
-            item_id = entry.get("id") or link
-            if not link or not title_contains_keyword(keyword, title) or item_id in seen:
-                continue
-            published = parse_feed_date(entry)
-            if published is None:
-                continue
-            if not _is_recent(published):
-                continue
-            seen.add(item_id)
-            items.append(SourceItemCreate(
-                platform=self.PLATFORM,
-                item_id=item_id,
-                url=link,
-                published_at=published,
-                media_type="article",
-                title=title,
-                content_text=entry.get("summary") or None,
-                author="Google News",
-                raw_payload={"source": "google_news_proxy", "keyword": keyword},
             ))
         return items
 

@@ -3,10 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from urllib.parse import quote
 
 import feedparser
-import httpx
 
 from app.connectors.base import (
     BaseConnector,
@@ -35,34 +33,16 @@ class OriconConnector(BaseConnector):
         if mode == CollectionMode.MEDIA_ONLY:
             return []
 
-        encoded = quote(f"{keyword} site:oricon.co.jp")
-        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
-
-        feed = None
-        try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("Oricon via Google News returned status %d", resp.status_code)
-                else:
-                    feed = await asyncio.to_thread(feedparser.parse, resp.content)
-        except Exception as exc:
-            log.warning("Oricon Google News fetch error: %s", exc)
-
-        items = await self._items_from_feed(feed, keyword, "google_news")
-        if items:
-            return items
-
+        # Google News is unreachable directly from Render's outbound IP (see
+        # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
+        # Google from Cloudflare's IP ranges, so go straight to Bing, the
+        # only fallback here that actually works.
         query = f"{keyword} site:oricon.co.jp"
-        for target, source in (("google", "google_news_proxy"), ("bing", "bing_news_proxy")):
-            content = await fetch_search_rss_via_proxy(query, target=target)
-            if not content:
-                continue
-            feed = await asyncio.to_thread(feedparser.parse, content)
-            items = await self._items_from_feed(feed, keyword, source)
-            if items:
-                return items
-        return []
+        content = await fetch_search_rss_via_proxy(query, target="bing")
+        if not content:
+            return []
+        feed = await asyncio.to_thread(feedparser.parse, content)
+        return await self._items_from_feed(feed, keyword, "bing_news_proxy")
 
     async def _items_from_feed(
         self,

@@ -8,9 +8,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import urlencode, urlparse
 
-import feedparser
 import httpx
 
 from app.connectors.base import (
@@ -18,9 +17,6 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
-    fetch_search_rss_via_proxy,
-    parse_feed_date,
-    parse_google_news_markdown,
     title_contains_keyword,
 )
 from app.config import settings
@@ -918,134 +914,3 @@ class FiveChConnector(BaseConnector):
             except Exception as exc:
                 log.debug("5ch proxy fetch error for %s %s via %s: %s", board_url, resource, proxy_url, exc)
         return None
-
-    async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
-        encoded = quote(f"{keyword} site:5ch.io")
-        url = f"https://news.google.com/rss/search?q={encoded}&hl=ja&gl=JP&ceid=JP%3Aja"
-
-        feed = None
-        try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-                resp = await client.get(url)
-                if not resp.is_success:
-                    log.warning("5ch via Google News returned status %d", resp.status_code)
-                else:
-                    feed = await asyncio.to_thread(feedparser.parse, resp.content)
-        except Exception as exc:
-            log.warning("5ch Google News fetch error: %s", exc)
-
-        items: list[SourceItemCreate] = []
-        seen: set[str] = set()
-        for entry in (feed.entries if feed else [])[:25]:
-            link = entry.get("link", "")
-            if not link:
-                continue
-            item_id = entry.get("id") or link
-            if item_id in seen:
-                continue
-            seen.add(item_id)
-            title = (entry.get("title") or "").strip()
-            summary = entry.get("summary") or ""
-            if not title:
-                continue
-            if not title_contains_keyword(keyword, title):
-                continue
-            published = parse_feed_date(entry)
-            if published is None:
-                continue
-            if not _is_recent_index_result(published):
-                continue
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=item_id,
-                    url=link,
-                    published_at=published,
-                    media_type="text",
-                    title=title,
-                    content_text=summary or None,
-                    thumbnail_url=None,
-                    raw_payload={"source": "google_news", "keyword": keyword},
-                )
-            )
-
-        if items:
-            return items
-        items = await self._fetch_gnews_jina(keyword, url)
-        if items:
-            return items
-        return await self._fetch_gnews_proxy(keyword)
-
-    async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
-        proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
-        try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
-                resp = await client.get(proxy_url)
-                if not resp.is_success:
-                    log.warning("5ch Google News Jina fallback returned status %d", resp.status_code)
-                    return []
-        except Exception as exc:
-            log.warning("5ch Google News Jina fallback error: %s", exc)
-            return []
-
-        items: list[SourceItemCreate] = []
-        for entry in parse_google_news_markdown(resp.text)[:25]:
-            title = entry["title"]
-            if not title_contains_keyword(keyword, title):
-                continue
-            if not _is_recent_index_result(entry["published_at"]):
-                continue
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=entry["url"],
-                    url=entry["url"],
-                    published_at=entry["published_at"],
-                    media_type="text",
-                    title=title,
-                    content_text=None,
-                    thumbnail_url=None,
-                    raw_payload={"source": "google_news_jina", "keyword": keyword},
-                )
-            )
-        return items
-
-    async def _fetch_gnews_proxy(self, keyword: str) -> list[SourceItemCreate]:
-        query = f"{keyword} site:5ch.io"
-        for target, source in (("google", "google_news_proxy"), ("bing", "bing_news_proxy")):
-            content = await fetch_search_rss_via_proxy(query, target=target)
-            if not content:
-                continue
-            feed = await asyncio.to_thread(feedparser.parse, content)
-            items: list[SourceItemCreate] = []
-            seen: set[str] = set()
-            for entry in feed.entries[:25]:
-                link = entry.get("link", "")
-                item_id = entry.get("id") or link
-                title = (entry.get("title") or "").strip()
-                if not link or not title or item_id in seen:
-                    continue
-                if not title_contains_keyword(keyword, title):
-                    continue
-                published = parse_feed_date(entry)
-                if published is None:
-                    continue
-                if not _is_recent_index_result(published):
-                    continue
-                seen.add(item_id)
-                items.append(
-                    SourceItemCreate(
-                        platform=self.PLATFORM,
-                        item_id=item_id,
-                        url=link,
-                        published_at=published,
-                        media_type="text",
-                        title=title,
-                        content_text=entry.get("summary") or None,
-                        thumbnail_url=None,
-                        raw_payload={"source": source, "keyword": keyword},
-                    )
-                )
-            if items:
-                return items
-        return []

@@ -656,11 +656,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=True, status_code=200, text=dat, content=dat.encode())
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_not_called()
         assert len(result) == 1
         assert result[0].item_id == "5ch:mevius:nogizaka:1782410369"
         assert result[0].url == "https://itest.5ch.io/mevius/test/read.cgi/nogizaka/1782410369"
@@ -689,11 +687,9 @@ class TestFiveChFetch:
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()) as sleep, \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()) as sleep:
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_not_called()
         sleep.assert_awaited_once()
         assert attempts == 2
         assert len(result) == 1
@@ -714,11 +710,9 @@ class TestFiveChFetch:
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()):
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_not_called()
         assert result == []
 
     @pytest.mark.asyncio
@@ -745,11 +739,9 @@ class TestFiveChFetch:
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.fivech.settings.admin_api_token", "secret"), \
              patch("app.connectors.fivech.settings.source_5ch_proxy_url", "https://worker.example/fivech-proxy"), \
-             patch("app.connectors.fivech._DEFAULT_5CH_PROXY_URL", "https://worker.example/fivech-proxy"), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+             patch("app.connectors.fivech._DEFAULT_5CH_PROXY_URL", "https://worker.example/fivech-proxy"):
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_not_called()
         assert len(result) == 1
         assert result[0].raw_payload["source"] == "5ch_itest"
 
@@ -777,11 +769,9 @@ class TestFiveChFetch:
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()) as sleep, \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+             patch("app.connectors.fivech.asyncio.sleep", new=AsyncMock()) as sleep:
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_not_called()
         sleep.assert_awaited_once()
         assert dat_attempts == 2
         assert len(result) == 1
@@ -813,11 +803,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=True, status_code=200, text=new_dat, content=new_dat.encode())
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_not_called()
         assert [item.raw_payload["board"] for item in result] == ["akbsaloon", "nogizaka"]
         assert [item.published_at for item in result] == [
             datetime(2026, 7, 26, 12, 30, tzinfo=timezone.utc),
@@ -845,11 +833,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=False, status_code=404, text="", content=b"")
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector().fetch("乃木坂46", "all_info")
 
-        parse.assert_not_called()
         assert len(result) == 2
         assert result[0].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1778433981"
         assert result[0].published_at == datetime(2026, 7, 25, 2, 26, 55, tzinfo=timezone.utc)
@@ -885,11 +871,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=True, status_code=200, content=cinema_dat.encode("shift_jis"))
             return MagicMock(is_success=True, status_code=200, text="", content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector().fetch("吉沢亮", "all_info")
 
-        parse.assert_not_called()
         assert [item.raw_payload["source"] for item in result[:3]] == [
             "2ch.sc_subject",
             "2ch.sc_subject",
@@ -1049,11 +1033,9 @@ class TestFiveChFetch:
                 resp.content = b""
             return resp
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector()._fetch_direct("乃木坂46")
 
-        parse.assert_not_called()
         assert len(result) == 1
         assert result[0].platform == "5ch"
         assert result[0].item_id == "2ch.sc:toro.2ch.sc:nogizaka:1778433981"
@@ -1080,11 +1062,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=True, status_code=200, content=dat.encode("shift_jis"))
             return MagicMock(is_success=True, status_code=200, content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector()._fetch_direct("吉沢亮")
 
-        parse.assert_not_called()
         assert any(item.raw_payload["board"] == "rareboard" for item in result)
         rare = next(item for item in result if item.raw_payload["board"] == "rareboard")
         assert rare.item_id == "2ch.sc:dynamic.2ch.sc:rareboard:1778433981"
@@ -1114,11 +1094,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=True, status_code=200, content=dat.encode("shift_jis"))
             return MagicMock(is_success=True, status_code=200, content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector()._fetch_direct("吉沢亮")
 
-        parse.assert_not_called()
         assert any(item.raw_payload["board"] == "rareboard" for item in result)
 
     @pytest.mark.asyncio
@@ -1232,11 +1210,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=True, status_code=200, content=cm_dat.encode("shift_jis"))
             return MagicMock(is_success=True, status_code=200, content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector()._fetch_direct("吉沢亮")
 
-        parse.assert_not_called()
         assert [item.raw_payload["board"] for item in result[:3]] == ["actor", "cinema", "cm"]
         assert [item.published_at for item in result[:3]] == [
             datetime(2026, 7, 26, 18, 6, 1, tzinfo=timezone.utc),
@@ -1256,11 +1232,9 @@ class TestFiveChFetch:
                 return MagicMock(is_success=False, status_code=404, content=b"")
             return MagicMock(is_success=True, status_code=200, content=b"")
 
-        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+        with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)):
             result = await FiveChConnector()._fetch_direct("Aiko")
 
-        parse.assert_not_called()
         assert len(result) == 1
         assert result[0].published_at == datetime.fromtimestamp(1717200000, tz=timezone.utc)
         assert result[0].raw_payload["date_parsed"] is False
@@ -1310,11 +1284,9 @@ class TestFiveChFetch:
             connector,
             "_fetch_direct",
             new=AsyncMock(return_value=[subject_fallback, parsed_old, parsed_recent]),
-        ), patch.object(connector, "_fetch_real_itest", new=AsyncMock(return_value=[])), \
-             patch.object(connector, "_fetch_gnews", new=AsyncMock()) as gnews:
+        ), patch.object(connector, "_fetch_real_itest", new=AsyncMock(return_value=[])):
             result = await connector.fetch("吉沢亮", "all_info")
 
-        gnews.assert_not_awaited()
         assert result == [parsed_recent, parsed_old, subject_fallback]
 
     @pytest.mark.asyncio
@@ -1340,74 +1312,12 @@ class TestFiveChFetch:
         with patch("app.connectors.fivech.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.fivech.settings.admin_api_token", "secret"), \
              patch("app.connectors.fivech.settings.source_5ch_proxy_url", "https://worker.example/fivech-proxy"), \
-             patch("app.connectors.fivech._DEFAULT_5CH_PROXY_URL", "https://worker.example/fivech-proxy"), \
-             patch("app.connectors.fivech.feedparser.parse") as parse:
+             patch("app.connectors.fivech._DEFAULT_5CH_PROXY_URL", "https://worker.example/fivech-proxy"):
             result = await FiveChConnector()._fetch_direct("Aiko")
 
-        parse.assert_not_called()
         assert len(result) == 1
         assert result[0].published_at == datetime(2026, 7, 25, 2, 26, 55, tzinfo=timezone.utc)
         assert result[0].raw_payload["date_parsed"] is True
-
-    @pytest.mark.asyncio
-    async def test_filters_keyword_found_only_in_google_news_summary(self):
-        entry = _rss_entry(
-            link="https://5ch.net/test/read.cgi/news/1",
-            title="unrelated thread",
-            summary="Aiko appears elsewhere in the Google News cluster",
-        )
-        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.fivech.feedparser.parse", return_value=_FakeFeed([entry])):
-            result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_returns_items_on_success(self):
-        valid = _rss_entry(link="https://5ch.net/t1", title="Aiko thread")
-        no_link = _FeedEntry(id="nl", link="", title="skip me")
-        no_title = _rss_entry(link="https://5ch.net/t3", title="")
-        fake_feed = _FakeFeed([valid, no_link, no_title])
-        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
-            result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_http_error(self):
-        with patch("app.connectors.fivech.httpx.AsyncClient",
-                   _http_mock(status_code=503, is_success=False)):
-            result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_network_exception(self):
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("timeout"))
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.fivech.httpx.AsyncClient", MagicMock(return_value=ctx)):
-            result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_deduplicates_by_item_id(self):
-        e1 = _rss_entry(link="https://5ch.net/t1", item_id="dup_id", title="Aiko A")
-        e2 = _rss_entry(link="https://5ch.net/t2", item_id="dup_id", title="Aiko B")
-        fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
-            result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_filters_google_news_items_without_keyword(self):
-        fake_feed = _FakeFeed([_rss_entry(link="https://5ch.net/t1", title="unrelated thread")])
-        with patch("app.connectors.fivech.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.fivech.feedparser.parse", return_value=fake_feed):
-            result = await FiveChConnector().fetch("Aiko", "all_info")
-        assert result == []
-
 
 class TestGirlsChannelFetch:
     # Minimal HTML mimicking a GirlsChannel search results page
@@ -1537,33 +1447,25 @@ class TestGirlsChannelFetch:
 
 
 class TestMdprFetch:
+    # Google News is unreachable directly from Render's outbound IP, and the
+    # Cloudflare Worker proxy is now also blocked by Google, so mdpr goes
+    # straight to Bing via the worker proxy (fetch_search_rss_via_proxy).
+
     @pytest.mark.asyncio
     async def test_returns_items_with_title_cleaned(self):
         valid = _rss_entry(link="https://mdpr.jp/a1", title="Aiko - モデルプレス")
         no_link = _FeedEntry(id="nl", link="", title="skip")
         no_title = _rss_entry(link="https://mdpr.jp/a2", title="   ")
         fake_feed = _FakeFeed([valid, no_link, no_title])
-        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
         assert result[0].title == "Aiko"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_http_error(self):
-        with patch("app.connectors.mdpr.httpx.AsyncClient",
-                   _http_mock(status_code=403, is_success=False)):
-            result = await ModelPressConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_exception(self):
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("x"))
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.mdpr.httpx.AsyncClient", MagicMock(return_value=ctx)):
+    async def test_returns_empty_when_proxy_unavailable(self):
+        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1572,7 +1474,7 @@ class TestMdprFetch:
         e1 = _rss_entry(link="https://mdpr.jp/a1", item_id="dup", title="Aiko A")
         e2 = _rss_entry(link="https://mdpr.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
@@ -1580,7 +1482,7 @@ class TestMdprFetch:
     @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
         fake_feed = _FakeFeed([_rss_entry(link="https://mdpr.jp/a1", title="unrelated - モデルプレス")])
-        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
@@ -1592,20 +1494,24 @@ class TestMdprFetch:
             title="unrelated - モデルプレス",
             summary="Aiko appears elsewhere in the Google News cluster",
         )
-        with patch("app.connectors.mdpr.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
 
 
 class TestOriconFetch:
+    # Google News is unreachable directly from Render's outbound IP, and the
+    # Cloudflare Worker proxy is now also blocked by Google, so oricon goes
+    # straight to Bing via the worker proxy (fetch_search_rss_via_proxy).
+
     @pytest.mark.asyncio
     async def test_returns_items_with_title_cleaned_and_author_set(self):
         valid = _rss_entry(link="https://oricon.co.jp/a1", title="Aiko 受賞 - ORICON NEWS")
         no_link = _FeedEntry(id="nl", link="", title="skip")
         empty_title = _rss_entry(link="https://oricon.co.jp/a2", title="  - ORICON NEWS")
         fake_feed = _FakeFeed([valid, no_link, empty_title])
-        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
@@ -1619,7 +1525,7 @@ class TestOriconFetch:
             title="unrelated - ORICON NEWS",
             summary="Aiko appears elsewhere in the Google News cluster",
         )
-        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
@@ -1628,26 +1534,14 @@ class TestOriconFetch:
     async def test_filters_stale_google_news_items(self):
         entry = _rss_entry(link="https://oricon.co.jp/old", title="Aiko old - ORICON NEWS")
         entry.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
-        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_http_error(self):
-        with patch("app.connectors.oricon.httpx.AsyncClient",
-                   _http_mock(status_code=500, is_success=False)):
-            result = await OriconConnector().fetch("Aiko", "all_info")
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_exception(self):
-        client_mock = AsyncMock()
-        client_mock.get = AsyncMock(side_effect=_httpx_mod.ConnectError("x"))
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=client_mock)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.oricon.httpx.AsyncClient", MagicMock(return_value=ctx)):
+    async def test_returns_empty_when_proxy_unavailable(self):
+        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1656,7 +1550,7 @@ class TestOriconFetch:
         e1 = _rss_entry(link="https://oricon.co.jp/a1", item_id="dup", title="Aiko A")
         e2 = _rss_entry(link="https://oricon.co.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
@@ -1664,7 +1558,7 @@ class TestOriconFetch:
     @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
         fake_feed = _FakeFeed([_rss_entry(link="https://oricon.co.jp/a1", title="受賞 - ORICON NEWS")])
-        with patch("app.connectors.oricon.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
@@ -1969,15 +1863,15 @@ class TestNewsSiteFetch:
 
     @pytest.mark.asyncio
     async def test_english_sites_use_english_google_news_locale(self):
-        fake_feed = _FakeFeed([
-            _rss_entry(
-                link="https://www.allkpop.com/article/1",
-                title="BLACKPINK Announces New Concert",
-                item_id="allkpop-1",
-            )
-        ])
-        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(content=b"<rss/>")) as client_cls, \
-             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
+        # Direct-to-Google-News fetches always 503 from Render, and the
+        # Cloudflare Worker proxy is now also blocked by Google, so the
+        # jina.ai reader proxy is the first hop actually attempted.
+        markdown = (
+            "### [BLACKPINK Announces New Concert](https://news.google.com/rss/articles/allkpop-1)\n\n"
+            "[BLACKPINK Announces New Concert](https://news.google.com/rss/articles/allkpop-1)\n\n"
+            "Wed, 24 Jul 2026 02:07:03 GMT\n"
+        )
+        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=markdown)) as client_cls:
             result = await AllkpopConnector().fetch("BLACKPINK", "all_info")
 
         assert len(result) == 1
@@ -1985,25 +1879,6 @@ class TestNewsSiteFetch:
         assert "hl=en" in request_url
         assert "gl=US" in request_url
         assert "ceid=US%3Aen" in request_url
-
-    @pytest.mark.asyncio
-    async def test_english_sites_pass_locale_to_google_news_proxy(self):
-        fake_feed = _FakeFeed([
-            _rss_entry(
-                link="https://www.allkpop.com/article/1",
-                title="BLACKPINK Announces New Concert",
-                item_id="allkpop-1",
-            )
-        ])
-        with patch("app.connectors.news_sites.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")) as proxy, \
-             patch("app.connectors.news_sites.feedparser.parse", return_value=fake_feed):
-            result = await AllkpopConnector()._fetch_proxy_google_news("BLACKPINK", None)
-
-        assert len(result) == 1
-        assert proxy.await_args.kwargs["hl"] == "en"
-        assert proxy.await_args.kwargs["gl"] == "US"
-        assert proxy.await_args.kwargs["ceid"] == "US:en"
-        assert proxy.await_args.kwargs["accept_language"] == "en,ko;q=0.9,ja;q=0.7"
 
     @pytest.mark.asyncio
     async def test_english_sites_pass_market_to_bing_news_proxy(self):
@@ -2298,24 +2173,20 @@ class TestYahooNewsFetch:
 
     @pytest.mark.asyncio
     async def test_gnews_rss_returns_items(self):
-        entry = _FeedEntry(
-            id="https://news.yahoo.co.jp/articles/abc123",
-            link="https://news.yahoo.co.jp/articles/abc123",
-            title="アイコの最新情報",
-            summary=(
-                '<a href="https://news.google.com/rss/articles/abc123">'
-                "アイコの最新情報</a> Yahoo!ニュース"
-            ),
-            published_parsed=(2026, 7, 29, 10, 0, 0, 2, 210, 0),
+        # Direct-to-Google-News fetches always 503 from Render, and the
+        # Cloudflare Worker proxy is now also blocked by Google, so the
+        # jina.ai reader proxy is the first hop actually attempted.
+        markdown = (
+            "### [アイコの最新情報 - Yahoo!ニュース](https://news.google.com/rss/articles/abc123)\n\n"
+            "[アイコの最新情報 - Yahoo!ニュース](https://news.google.com/rss/articles/abc123)\n\n"
+            "Wed, 29 Jul 2026 10:00:00 GMT\n"
         )
-        fake_feed = _FakeFeed([entry])
-        with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(content=b"<rss/>")), \
-             patch("app.connectors.yahoonews.feedparser.parse", return_value=fake_feed):
+        with patch("app.connectors.yahoonews.httpx.AsyncClient", _http_mock(text=markdown)):
             result = await YahooNewsConnector().fetch("アイコ", "all_info")
         assert len(result) == 1
         assert result[0].platform == "yahoonews"
-        assert result[0].content_text == "アイコの最新情報 Yahoo!ニュース"
-        assert "https://" not in result[0].content_text
+        assert result[0].title == "アイコの最新情報 - Yahoo!ニュース"
+        assert result[0].url == "https://news.google.com/rss/articles/abc123"
 
     @pytest.mark.asyncio
     async def test_gnews_filters_keyword_found_only_in_summary(self):
@@ -2494,18 +2365,6 @@ def _nico_ctx(side_effect=None, rss_content=b"<rss/>"):
 
 
 class TestNicoNicoFetch:
-    @pytest.mark.asyncio
-    async def test_gnews_filters_keyword_found_only_in_summary(self):
-        entry = _rss_entry(
-            link="https://www.nicovideo.jp/watch/sm12345",
-            title="unrelated video",
-            summary="Aiko appears elsewhere in the Google News cluster",
-        )
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx()), \
-             patch("app.connectors.niconico.feedparser.parse", return_value=_FakeFeed([entry])):
-            result = await NicoNicoConnector()._fetch_gnews("Aiko")
-        assert result == []
-
     @pytest.mark.asyncio
     async def test_rss_returns_items_on_success(self):
         entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm12345", title="Aiko cover")

@@ -15,7 +15,7 @@ services:
       - key: POLL_INTERVAL_MINUTES
         value: "15"
       - key: CONNECTOR_FETCH_TIMEOUT_SECONDS
-        value: "8"
+        value: "15"
       - key: CONNECTOR_CONCURRENCY
         value: "1"
       - key: POLL_TERMS_PER_RUN
