@@ -1437,43 +1437,23 @@ final class BackgroundRefreshManager {
                 // Most refreshes happen here, in the background, not via FeedView's
                 // foreground path — so this is where the diagnostic actually needs to
                 // reach real users, not just the isLiveBackgroundPushTesting harness.
-                // Fired detached (not awaited) so a slow diagnostic POST can't eat into
-                // the tight, already-shared background deadline this function races
-                // against; best-effort delivery is an acceptable tradeoff for telemetry.
-                Task {
-                    await self.sendDeviceFallbackFailureDiagnostic(missingPlatforms: duePlatforms, db: db)
-                }
+                // Awaited inline rather than fired as a detached, unawaited Task: this
+                // function's caller (refreshLocalDeviceSourcesForBackground) races the
+                // whole thing against a shared deadline and cancels it cleanly if time
+                // runs out, and handle(task:) calls task.setTaskCompleted(success:)
+                // right after this function returns — a detached Task here could get
+                // killed by iOS before its POST ever left, silently dropping the
+                // diagnostic on effectively every background run. Awaiting it puts the
+                // send under the same graceful-cancellation umbrella as the scrape
+                // itself, so it gets an honest chance to complete when there's slack
+                // left, instead of no chance at all.
+                await sendDeviceFallbackFailureDiagnostic(missingPlatforms: duePlatforms, db: db)
             }
         }
         return completion
     }
 
-    private func sendDeviceFallbackFailureDiagnostic(missingPlatforms: Set<String>, db: LocalDB) async {
-        let info = Bundle.main.infoDictionary
-        let diagnostic = ClientDiagnosticReport(
-            reason: "device_fallback_partial_failure",
-            environment: NetworkManager.shared.environmentName,
-            api_base: NetworkManager.shared.apiBase,
-            app_version: info?["CFBundleShortVersionString"] as? String,
-            build: info?["CFBundleVersion"] as? String,
-            active_terms_count: db.terms.filter(\.is_active).count,
-            subscribed_platforms: db.subscribedPlatforms,
-            cached_feed_count: db.feedItems.count,
-            events: [
-                ClientDiagnosticEvent(
-                    strategy: "device_local_scrapers",
-                    status: "failed",
-                    item_count: 0,
-                    added_count: 0,
-                    detail: "did not complete: \(missingPlatforms.sorted().joined(separator: ","))"
-                )
-            ]
-        )
-        await NetworkManager.shared.sendClientDiagnostic(diagnostic)
-    }
-
-    private func sendLiveTestFailureDiagnostic(reason: String, detail: String, db: LocalDB) async {
-        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+    private func sendFailureDiagnostic(reason: String, strategy: String, detail: String, db: LocalDB) async {
         let info = Bundle.main.infoDictionary
         let diagnostic = ClientDiagnosticReport(
             reason: reason,
@@ -1486,7 +1466,7 @@ final class BackgroundRefreshManager {
             cached_feed_count: db.feedItems.count,
             events: [
                 ClientDiagnosticEvent(
-                    strategy: "background_refresh",
+                    strategy: strategy,
                     status: "failed",
                     item_count: 0,
                     added_count: 0,
@@ -1495,6 +1475,20 @@ final class BackgroundRefreshManager {
             ]
         )
         await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+    }
+
+    private func sendDeviceFallbackFailureDiagnostic(missingPlatforms: Set<String>, db: LocalDB) async {
+        await sendFailureDiagnostic(
+            reason: "device_fallback_partial_failure",
+            strategy: "device_local_scrapers",
+            detail: "did not complete: \(missingPlatforms.sorted().joined(separator: ","))",
+            db: db
+        )
+    }
+
+    private func sendLiveTestFailureDiagnostic(reason: String, detail: String, db: LocalDB) async {
+        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        await sendFailureDiagnostic(reason: reason, strategy: "background_refresh", detail: detail, db: db)
     }
 
     private static func refreshErrorKind(_ error: Error) -> String {

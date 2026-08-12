@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -39,7 +40,10 @@ def jina_reader_headers(accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Langu
     return headers
 
 
-async def fetch_google_news_via_public_proxy(google_news_url: str) -> bytes | None:
+async def fetch_google_news_via_public_proxy(
+    google_news_url: str,
+    accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Language"],
+) -> bytes | None:
     """Fetch a Google News RSS URL through allorigins.win, a free public
     read-through proxy, as a second, independent hop between jina.ai and Bing.
 
@@ -50,8 +54,9 @@ async def fetch_google_news_via_public_proxy(google_news_url: str) -> bytes | No
     feedparser, same as the Bing fallback) or None on any failure.
     """
     proxy_url = "https://api.allorigins.win/raw?url=" + quote(google_news_url, safe="")
+    headers = {**GOOGLE_NEWS_HEADERS, "Accept-Language": accept_language}
     try:
-        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers) as client:
             resp = await client.get(proxy_url)
             if not resp.is_success:
                 return None
@@ -258,6 +263,61 @@ def build_google_news_jina_items(
                 title=title,
                 content_text=None,
                 author=author,
+                raw_payload=raw_payload,
+            )
+        )
+    return items
+
+
+async def build_google_news_public_proxy_items(
+    content: bytes,
+    keyword: str,
+    *,
+    platform: str,
+    title_suffix_re: Optional[re.Pattern] = None,
+    raw_payload_extra: Optional[dict] = None,
+) -> list[SourceItemCreate]:
+    """Parse a Google News RSS response fetched via the public-proxy fallback
+    (allorigins.win) into matching, recent SourceItemCreates.
+
+    Shared by every connector that uses the public-proxy hop, same reasoning
+    as build_google_news_jina_items above: a per-connector copy of this
+    parsing previously drifted (one added a link to the dedup set before the
+    recency check, another after) and centralizing it removes that class of
+    bug entirely instead of relying on both copies staying in sync by hand.
+    """
+    try:
+        feed = await asyncio.to_thread(feedparser.parse, content)
+    except Exception:
+        return []
+
+    items: list[SourceItemCreate] = []
+    seen: set[str] = set()
+    for entry in feed.entries[:25]:
+        title = (entry.get("title") or "").strip()
+        link = entry.get("link", "")
+        if title_suffix_re:
+            title = title_suffix_re.sub("", title).strip()
+        if not link or not title or link in seen:
+            continue
+        if not title_contains_keyword(keyword, title):
+            continue
+        published = parse_feed_date(entry)
+        if published is None or not is_recent_search_result(published):
+            continue
+        seen.add(link)
+        raw_payload = {"keyword": keyword, "source": "google_news_public_proxy"}
+        if raw_payload_extra:
+            raw_payload.update(raw_payload_extra)
+        items.append(
+            SourceItemCreate(
+                platform=platform,
+                item_id=link,
+                url=link,
+                published_at=published,
+                media_type="article",
+                title=title,
+                content_text=entry.get("summary") or None,
                 raw_payload=raw_payload,
             )
         )

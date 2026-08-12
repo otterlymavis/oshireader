@@ -1245,8 +1245,16 @@ struct FeedView: View {
             return report
         }
         await withTaskGroup(
-            of: (termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
+            of: (searchID: Int, termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
         ) { group in
+            // Tracks every search submitted below, keyed by a unique index rather than
+            // keyword text — a term whose alias duplicates its own keyword (or two terms
+            // sharing a keyword) would otherwise collide on a string key. Matches
+            // BackgroundRefreshManager's equivalent loop so a search still in flight when
+            // this whole group is cancelled counts toward its platforms' expected total
+            // as not-completed, instead of vanishing from missingPlatforms entirely.
+            var pendingSearches: [Int: Set<String>] = [:]
+            var nextSearchID = 0
             for term in fallbackTerms {
                 let platformsForTerm = platformsToScrape.intersection(
                     BackgroundRefreshPolicy.deviceFallbackPlatforms(
@@ -1257,13 +1265,16 @@ struct FeedView: View {
                 guard !platformsForTerm.isEmpty else { continue }
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
+                    let searchID = nextSearchID
+                    nextSearchID += 1
+                    pendingSearches[searchID] = platformsForTerm
                     group.addTask {
                         let scrapeResult = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
                             keyword: searchTerm,
                             tagKeyword: term.keyword,
                             platformIds: platformsForTerm
                         )
-                        return (term.keyword, searchTerm, scrapeResult, platformsForTerm)
+                        return (searchID, term.keyword, searchTerm, scrapeResult, platformsForTerm)
                     }
                 }
             }
@@ -1271,16 +1282,10 @@ struct FeedView: View {
             var scrapeAttempts = [[FeedItem]]()
             for await scrape in group {
                 if Task.isCancelled {
-                    // Unlike BackgroundRefreshManager's equivalent loop, in-flight searches
-                    // at cancellation time are dropped here rather than added to
-                    // scrapeResults as not-completed, so missingPlatforms below would
-                    // undercount if this ever ran to completion after being cancelled.
-                    // Currently safe only because refreshFeed() returns before calling
-                    // sendNoResultsDiagnosticIfNeeded whenever Task.isCancelled — don't
-                    // remove that early-return without also fixing this loop.
                     group.cancelAll()
                     break
                 }
+                pendingSearches.removeValue(forKey: scrape.searchID)
                 guard let currentTerm = db.term(matchingKeyword: scrape.termKeyword) else { continue }
                 let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
                     for: currentTerm,
@@ -1312,6 +1317,14 @@ struct FeedView: View {
                         addedCount: added
                     )
                 }
+            }
+            // Any search that never reported back (cancelled before finishing) still
+            // needs to count toward its platforms' expected total as not-completed —
+            // otherwise a term with an alias whose search never ran could look fully
+            // covered from just its keyword search completing, and the alias search
+            // would silently never get retried.
+            for expectedPlatforms in pendingSearches.values {
+                scrapeResults.append((LocalFallbackScrapeResult(), expectedPlatforms))
             }
             let completedPlatforms = BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
                 scrapeResults
