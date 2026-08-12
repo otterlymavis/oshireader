@@ -5,6 +5,7 @@ BARKS also tries its direct RSS feed first.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -150,17 +151,21 @@ class _GNewsSiteConnector(BaseConnector):
         # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
         # Google from Cloudflare's IP ranges, so neither is worth the timeout
         # budget: go straight to the jina.ai reader proxy and a second,
-        # independent public proxy. Run those two concurrently rather than
+        # independent public proxy. Start those two concurrently rather than
         # sequentially — trying them one after another could stack up to
         # 10s + 12s + 12s (Bing) of worst-case timeouts, overrunning the
-        # connector's overall fetch budget (25s); concurrently, the pair
-        # costs only as much as the slower of the two.
-        jina_items, proxy_items = await asyncio.gather(
-            self._fetch_gnews_jina(keyword, url, history_years=10),
-            self._fetch_gnews_public_proxy(keyword, url),
-        )
+        # connector's overall fetch budget (25s). But don't block the common
+        # case (jina succeeds) on the slower proxy finishing too — cancel it
+        # once jina already has a usable result instead.
+        jina_task = asyncio.ensure_future(self._fetch_gnews_jina(keyword, url, history_years=10))
+        proxy_task = asyncio.ensure_future(self._fetch_gnews_public_proxy(keyword, url))
+        jina_items = await jina_task
         if jina_items:
+            proxy_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await proxy_task
             return jina_items
+        proxy_items = await proxy_task
         if proxy_items:
             return proxy_items
         return await self._fetch_bing_news(keyword, history_years=10)

@@ -86,12 +86,17 @@ def record_filtered(platform: str) -> None:
         entry = _health.get(platform)
         if entry is not None and entry.get("cycle") == _cycle and entry.get("status") != "filtered":
             return
-        _health[platform] = {
+        # Update in place rather than replacing the dict outright — a full replace would
+        # silently drop jina_ok/jina_error/jina_checked_at (and last_success_at etc.) set
+        # by an earlier real fetch this platform had before it started being filtered.
+        entry = dict(entry) if entry is not None else {}
+        entry.update({
             "consecutive_failures": 0,
             "status": "filtered",
             "last_checked_at": now,
             "cycle": _cycle,
-        }
+        })
+        _health[platform] = entry
 
 
 def snapshot() -> list[dict]:

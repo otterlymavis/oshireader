@@ -513,6 +513,12 @@ enum BackgroundRefreshPolicy {
 
     private static let deviceFallbackFailureDiagnosticThrottleKey = "feed.device_fallback_failure_diagnostic_last_sent_by_platform"
     private static let deviceFallbackFailureDiagnosticThrottle: TimeInterval = 60 * 60
+    // Foreground (FeedView) and background (BackgroundRefreshManager) refreshes can run
+    // concurrently on different tasks and both call devicePlatformsDueForFailureDiagnostic;
+    // without serializing the read-modify-write below, both could read the same stale
+    // UserDefaults snapshot and independently decide the same platform is "due", double-
+    // sending the diagnostic the throttle exists to prevent.
+    private static let deviceFallbackFailureDiagnosticLock = NSLock()
 
     // Returns the subset of `missingPlatforms` that haven't had a failure diagnostic sent
     // within the throttle window, and records them as sent. Keyed per platform — not a
@@ -521,6 +527,8 @@ enum BackgroundRefreshPolicy {
     // (FeedView) and background (BackgroundRefreshManager) device-fallback paths.
     static func devicePlatformsDueForFailureDiagnostic(_ missingPlatforms: Set<String>) -> Set<String> {
         guard !missingPlatforms.isEmpty else { return [] }
+        deviceFallbackFailureDiagnosticLock.lock()
+        defer { deviceFallbackFailureDiagnosticLock.unlock() }
         var lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
         let now = Date().timeIntervalSince1970
         var due = Set<String>()
@@ -1370,8 +1378,10 @@ final class BackgroundRefreshManager {
             }
 
             var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
+            var wasCancelled = false
             for await scrape in group {
                 if Task.isCancelled {
+                    wasCancelled = true
                     group.cancelAll()
                     break
                 }
@@ -1416,7 +1426,13 @@ final class BackgroundRefreshManager {
             completion.completedDevicePlatforms.formUnion(completedPlatforms)
             let expectedPlatforms = BackgroundRefreshPolicy.expectedDeviceFallbackPlatforms(scrapeResults)
             let missingPlatforms = expectedPlatforms.subtracting(completedPlatforms)
-            let duePlatforms = BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic(missingPlatforms)
+            // Hitting the shared background deadline (wasCancelled) is a routine, expected
+            // occurrence given ~20 platforms polled within a tight BGAppRefreshTask budget —
+            // not a per-platform failure. Reporting it as one would flood the diagnostic
+            // with false positives on every ordinary deadline cutoff.
+            let duePlatforms = wasCancelled
+                ? []
+                : BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic(missingPlatforms)
             if !duePlatforms.isEmpty {
                 // Most refreshes happen here, in the background, not via FeedView's
                 // foreground path — so this is where the diagnostic actually needs to

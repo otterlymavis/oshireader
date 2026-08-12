@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from urllib.parse import quote, quote_plus
@@ -17,6 +18,7 @@ from app.connectors.base import (
     build_google_news_jina_items,
     fetch_google_news_via_public_proxy,
     fetch_search_rss_via_proxy,
+    is_recent_search_result,
     jina_reader_headers,
     parse_feed_date,
     title_contains_keyword,
@@ -60,17 +62,21 @@ class YahooNewsConnector(BaseConnector):
         # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
         # Google from Cloudflare's IP ranges, so neither is worth the timeout
         # budget: go straight to the jina.ai reader proxy and a second,
-        # independent public proxy. Run those two concurrently rather than
+        # independent public proxy. Start those two concurrently rather than
         # sequentially — trying them one after another could stack up to
         # 10s + 12s + 12s (Bing) of worst-case timeouts, overrunning the
-        # connector's overall fetch budget (25s); concurrently, the pair
-        # costs only as much as the slower of the two.
-        jina_items, proxy_items = await asyncio.gather(
-            self._fetch_gnews_jina(keyword, url),
-            self._fetch_gnews_public_proxy(keyword, url),
-        )
+        # connector's overall fetch budget (25s). But don't block the common
+        # case (jina succeeds) on the slower proxy finishing too — cancel it
+        # once jina already has a usable result instead.
+        jina_task = asyncio.ensure_future(self._fetch_gnews_jina(keyword, url))
+        proxy_task = asyncio.ensure_future(self._fetch_gnews_public_proxy(keyword, url))
+        jina_items = await jina_task
         if jina_items:
+            proxy_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await proxy_task
             return jina_items
+        proxy_items = await proxy_task
         if proxy_items:
             return proxy_items
         return await self._fetch_bing_news(keyword)
@@ -112,7 +118,7 @@ class YahooNewsConnector(BaseConnector):
             if not title_contains_keyword(keyword, title):
                 continue
             published = parse_feed_date(entry)
-            if published is None:
+            if published is None or not is_recent_search_result(published):
                 continue
             seen.add(link)
             items.append(
