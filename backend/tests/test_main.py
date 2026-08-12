@@ -1203,13 +1203,61 @@ class TestAdminPoll:
 
         with patch("app.main.create_poll_task", side_effect=create_task), \
              patch("app.main._poll_lock", mock_lock), \
-             patch("app.main.asyncio.wait_for", new=timeout_without_canceling):
+             patch("app.main.asyncio.wait_for", new=timeout_without_canceling), \
+             patch("app.main._record_poll_request_timeout") as mock_record_timeout:
             r = client.post("/api/admin/poll")
 
         assert r.status_code == 200
         assert r.json() == {"status": "poll still running (request timed out)"}
         assert created_tasks
         assert not created_tasks[0].cancelled()
+        mock_record_timeout.assert_called_once_with(210.0)
+
+    def test_poll_completion_at_timeout_boundary_does_not_record_timeout(self, client):
+        mock_lock = MagicMock()
+        mock_lock.locked.return_value = False
+
+        async def noop_poll():
+            return None
+
+        async def timeout_after_completion(awaitable, timeout):
+            await awaitable
+            raise asyncio.TimeoutError
+
+        with patch("app.main.create_poll_task", side_effect=lambda: asyncio.create_task(noop_poll())), \
+             patch("app.main._poll_lock", mock_lock), \
+             patch("app.main.asyncio.wait_for", new=timeout_after_completion), \
+             patch("app.main._record_poll_request_timeout") as mock_record_timeout:
+            r = client.post("/api/admin/poll")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll completed"}
+        mock_record_timeout.assert_not_called()
+
+    def test_poll_failure_at_timeout_boundary_reports_failure(self, client):
+        mock_lock = MagicMock()
+        mock_lock.locked.return_value = False
+
+        async def failed_poll():
+            raise RuntimeError("boundary poll failure")
+
+        async def timeout_after_failure(awaitable, timeout):
+            try:
+                await awaitable
+            except RuntimeError:
+                pass
+            raise asyncio.TimeoutError
+
+        with patch("app.main.create_poll_task", side_effect=lambda: asyncio.create_task(failed_poll())), \
+             patch("app.main._poll_lock", mock_lock), \
+             patch("app.main.asyncio.wait_for", new=timeout_after_failure), \
+             patch("app.main._record_poll_request_timeout") as mock_record_timeout:
+            r = client.post("/api/admin/poll")
+
+        assert r.status_code == 500
+        assert r.json()["detail"]["status"] == "poll failed"
+        assert r.json()["detail"]["error"] == "boundary poll failure"
+        mock_record_timeout.assert_not_called()
 
     def test_poll_returns_already_running_when_busy(self, client):
         mock_lock = MagicMock()

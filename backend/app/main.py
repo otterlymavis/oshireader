@@ -579,14 +579,23 @@ async def trigger_poll(_: None = Depends(require_admin_auth)) -> dict:
         return {"status": "poll already running"}
     poll_task = create_poll_task()
     try:
-        await asyncio.wait_for(
-            asyncio.shield(poll_task),
-            timeout=_ADMIN_POLL_TIMEOUT_SECONDS,
-        )
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(poll_task),
+                timeout=_ADMIN_POLL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            # The poll can finish on the same event-loop turn that wait_for's
+            # deadline expires. In that boundary race, the completed event has
+            # already been persisted and a later timeout event would falsely
+            # make the poll look stuck. Consume the completed task's result so
+            # success and failure follow their normal response paths.
+            if poll_task.done():
+                poll_task.result()
+            else:
+                _record_poll_request_timeout(_ADMIN_POLL_TIMEOUT_SECONDS)
+                return {"status": "poll still running (request timed out)"}
         return {"status": "poll completed"}
-    except asyncio.TimeoutError:
-        _record_poll_request_timeout(_ADMIN_POLL_TIMEOUT_SECONDS)
-        return {"status": "poll still running (request timed out)"}
     except Exception as exc:
         trace = traceback.format_exc(limit=8)
         log.exception("Admin poll failed")
