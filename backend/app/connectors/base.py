@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import re
-from typing import Optional
+from typing import Coroutine, Optional
 from urllib.parse import quote, urlencode
 import unicodedata
 
@@ -52,17 +52,59 @@ async def fetch_google_news_via_public_proxy(
     fetches — see CLAUDE.md), so a block on either of those shouldn't
     correlate with a block here. Returns raw RSS bytes (parse with
     feedparser, same as the Bing fallback) or None on any failure.
+
+    Timeout matches jina_reader_headers' hop (10s) rather than Bing's (12s):
+    this hop runs concurrently with jina, not after it, so its timeout sets
+    the floor for how long that concurrent pair can take before falling
+    through to Bing — keeping it at parity with jina avoids adding extra
+    worst-case latency to a connector fetch budget that's already tight
+    once Bing's own hop is added on top.
     """
     proxy_url = "https://api.allorigins.win/raw?url=" + quote(google_news_url, safe="")
     headers = {**GOOGLE_NEWS_HEADERS, "Accept-Language": accept_language}
     try:
-        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=headers) as client:
             resp = await client.get(proxy_url)
             if not resp.is_success:
                 return None
             return resp.content
     except Exception:
         return None
+
+
+async def race_jina_and_public_proxy(
+    jina_coro: Coroutine[object, object, list["SourceItemCreate"]],
+    proxy_coro: Coroutine[object, object, list["SourceItemCreate"]],
+) -> list["SourceItemCreate"]:
+    """Run the jina.ai and public-proxy Google News fallback hops concurrently and
+    return whichever succeeds first (jina preferred), or an empty list if both
+    come up empty.
+
+    Starting them together instead of sequentially avoids stacking each hop's
+    own timeout on top of the other's before Bing even gets a chance to run —
+    trying jina (10s) then the public proxy (10s) then Bing (up to 12s) one
+    after another could approach or exceed the connector's overall fetch
+    budget (25s) on its own. But don't block the common case (jina succeeds)
+    on the slower hop finishing too — cancel it as soon as jina has a usable
+    result. The finally block also covers the caller itself getting cancelled
+    from outside (the scheduler's own connector-level timeout): proxy_task is
+    a separate task, not part of the awaited chain, so cancelling the
+    caller's own coroutine wouldn't otherwise cascade to it, and it would
+    keep running detached past the connector's own timeout.
+
+    Shared by every connector with this fallback chain, so a future change to
+    the cancellation/retry logic can't drift between per-connector copies.
+    """
+    jina_task = asyncio.ensure_future(jina_coro)
+    proxy_task = asyncio.ensure_future(proxy_coro)
+    try:
+        jina_items = await jina_task
+        if jina_items:
+            return jina_items
+        return await proxy_task
+    finally:
+        if not proxy_task.done():
+            proxy_task.cancel()
 
 
 SEARCH_RESULT_MAX_AGE = timedelta(days=31)

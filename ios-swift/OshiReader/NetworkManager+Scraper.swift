@@ -136,6 +136,13 @@ extension NetworkManager {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     }
 
+    // A cancelled Task (background-refresh deadline cutoff, a task group calling
+    // cancelAll() once another search already succeeded, a dismissed view, etc.)
+    // is an intentional abort, not a network failure — don't log it as one.
+    private func isCancellationError(_ error: Error) -> Bool {
+        (error as? URLError)?.code == .cancelled || error is CancellationError
+    }
+
     // MARK: - RSS Fallback (NHK + Google News)
 
     func scrapeRSSFallback(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
@@ -169,7 +176,9 @@ extension NetworkManager {
                     ))
                 }
             } catch {
-                AppLogger.scraping.error("NHK RSS fallback failed: \(error.localizedDescription)")
+                if !isCancellationError(error) {
+                    AppLogger.scraping.error("NHK RSS fallback failed: \(error.localizedDescription)")
+                }
             }
         }
 
@@ -195,7 +204,9 @@ extension NetworkManager {
                     ))
                 }
             } catch {
-                AppLogger.scraping.error("Google News general fallback failed: \(error.localizedDescription)")
+                if !isCancellationError(error) {
+                    AppLogger.scraping.error("Google News general fallback failed: \(error.localizedDescription)")
+                }
             }
         }
 
@@ -682,7 +693,9 @@ extension NetworkManager {
                 entries = try await parseRss(url: url)
                 completed = true
             } catch {
-                AppLogger.scraping.error("Note RSS fallback failed for tag \(noteTag): \(error.localizedDescription)")
+                if !isCancellationError(error) {
+                    AppLogger.scraping.error("Note RSS fallback failed for tag \(noteTag): \(error.localizedDescription)")
+                }
                 continue
             }
             if !entries.isEmpty { break }
@@ -772,7 +785,9 @@ extension NetworkManager {
         do {
             initialItems = try await parseRss(url: url, acceptLanguage: locale.acceptLanguage)
         } catch {
-            AppLogger.scraping.error("Google News fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+            if !isCancellationError(error) {
+                AppLogger.scraping.error("Google News fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+            }
             return LocalFallbackScrapeResult()
         }
         var items = initialItems
@@ -785,7 +800,9 @@ extension NetworkManager {
             do {
                 items = try await parseRss(url: historicalURL, acceptLanguage: locale.acceptLanguage)
             } catch {
-                AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+                if !isCancellationError(error) {
+                    AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+                }
                 return LocalFallbackScrapeResult()
             }
         }
@@ -847,6 +864,13 @@ extension NetworkManager {
             ],
             timeout: 12
         ) else {
+            // httpGET collapses every failure reason to nil, including a cancelled Task —
+            // preserve that distinction here (instead of always throwing the generic
+            // badServerResponse below) so callers can tell a routine abort apart from a
+            // real fetch failure and skip logging it as one.
+            if Task.isCancelled {
+                throw CancellationError()
+            }
             throw URLError(.badServerResponse)
         }
         let parser = XMLParser(data: data)
@@ -896,7 +920,9 @@ extension NetworkManager {
             }
             return (data, http)
         } catch {
-            AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: \(error.localizedDescription)")
+            if !isCancellationError(error) {
+                AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: \(error.localizedDescription)")
+            }
             return nil
         }
     }

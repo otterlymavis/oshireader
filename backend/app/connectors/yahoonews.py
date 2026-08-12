@@ -20,6 +20,7 @@ from app.connectors.base import (
     fetch_search_rss_via_proxy,
     jina_reader_headers,
     parse_feed_date,
+    race_jina_and_public_proxy,
     title_contains_keyword,
 )
 from app.source_health import record_jina_result
@@ -61,31 +62,14 @@ class YahooNewsConnector(BaseConnector):
         # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
         # Google from Cloudflare's IP ranges, so neither is worth the timeout
         # budget: go straight to the jina.ai reader proxy and a second,
-        # independent public proxy. Start those two concurrently rather than
-        # sequentially — trying them one after another could stack up to
-        # 10s + 12s + 12s (Bing) of worst-case timeouts, overrunning the
-        # connector's overall fetch budget (25s). But don't block the common
-        # case (jina succeeds) on the slower proxy finishing too — cancel it
-        # once jina already has a usable result instead. The finally block
-        # also cancels it if this whole call gets cancelled from outside (the
-        # scheduler's own connector-level timeout) — proxy_task is a separate
-        # task, not part of the awaited chain, so cancellation of this
-        # coroutine wouldn't otherwise cascade to it and it would keep running
-        # detached, still hitting the proxy after the connector already
-        # timed out.
-        jina_task = asyncio.ensure_future(self._fetch_gnews_jina(keyword, url))
-        proxy_task = asyncio.ensure_future(self._fetch_gnews_public_proxy(keyword, url))
-        try:
-            jina_items = await jina_task
-            if jina_items:
-                return jina_items
-            proxy_items = await proxy_task
-            if proxy_items:
-                return proxy_items
-            return await self._fetch_bing_news(keyword)
-        finally:
-            if not proxy_task.done():
-                proxy_task.cancel()
+        # independent public proxy (see race_jina_and_public_proxy), then Bing.
+        items = await race_jina_and_public_proxy(
+            self._fetch_gnews_jina(keyword, url),
+            self._fetch_gnews_public_proxy(keyword, url),
+        )
+        if items:
+            return items
+        return await self._fetch_bing_news(keyword)
 
     async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
