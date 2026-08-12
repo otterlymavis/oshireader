@@ -1805,7 +1805,7 @@ class TestNewsSiteFetch:
             result = await connector.fetch("吉沢亮", "all_info")
 
         assert result == []
-        assert gnews.await_count == 2
+        gnews.assert_awaited_once_with("吉沢亮")
 
     @pytest.mark.asyncio
     async def test_livedoor_filters_google_news_summary_only_matches(self):

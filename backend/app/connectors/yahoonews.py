@@ -20,6 +20,7 @@ from app.connectors.base import (
     parse_feed_date,
     title_contains_keyword,
 )
+from app.source_health import record_jina_result
 
 log = logging.getLogger(__name__)
 
@@ -70,11 +71,14 @@ class YahooNewsConnector(BaseConnector):
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("YahooNews Google News Jina fallback returned status %d", resp.status_code)
+                    record_jina_result(self.PLATFORM, succeeded=False, error=f"http_{resp.status_code}")
                     return []
         except Exception as exc:
             log.warning("YahooNews Google News Jina fallback error: %s", exc)
+            record_jina_result(self.PLATFORM, succeeded=False, error=type(exc).__name__)
             return []
 
+        record_jina_result(self.PLATFORM, succeeded=True)
         return build_google_news_jina_items(resp.text, keyword, platform=self.PLATFORM)
 
     async def _fetch_bing_news(self, keyword: str) -> list[SourceItemCreate]:

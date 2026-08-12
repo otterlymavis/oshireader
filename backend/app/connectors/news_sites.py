@@ -29,6 +29,7 @@ from app.connectors.base import (
     parse_feed_date,
     title_contains_keyword,
 )
+from app.source_health import record_jina_result
 
 log = logging.getLogger(__name__)
 
@@ -126,14 +127,18 @@ class _GNewsSiteConnector(BaseConnector):
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
             return []
-        items = await self._fetch_gnews(keyword)
-        if not items:
-            items = await self._fetch_gnews(keyword, history_years=10)
-        return items
+        return await self._fetch_gnews(keyword)
 
-    async def _fetch_gnews(self, keyword: str, history_years: int | None = None) -> list[SourceItemCreate]:
-        history = f" when:{history_years}y" if history_years else ""
-        encoded = quote(f"{keyword} site:{self.SITE}{history}")
+    async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
+        # Always query with when:10y rather than trying an unscoped query first and
+        # retrying with when:10y only on an empty result. when:10y is a superset of
+        # the unscoped query (Google's default ranking can omit matches that
+        # when:10y surfaces) and every result is filtered to the last 31 days
+        # downstream regardless (is_recent_search_result), so the two-step retry
+        # bought no extra recall — only a second jina.ai request on every poll that
+        # found nothing on the first try, which is the common case across ~20
+        # platforms every 15 minutes and the scarcest resource in this chain.
+        encoded = quote(f"{keyword} site:{self.SITE} when:10y")
         url = (
             f"https://news.google.com/rss/search?q={encoded}"
             f"&hl={quote(self.GNEWS_HL)}"
@@ -144,10 +149,10 @@ class _GNewsSiteConnector(BaseConnector):
         # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
         # Google from Cloudflare's IP ranges, so neither is worth the timeout
         # budget: go straight to the jina.ai reader proxy, then Bing.
-        items = await self._fetch_gnews_jina(keyword, url, history_years)
+        items = await self._fetch_gnews_jina(keyword, url, history_years=10)
         if items:
             return items
-        return await self._fetch_bing_news(keyword, history_years)
+        return await self._fetch_bing_news(keyword, history_years=10)
 
     async def _fetch_gnews_jina(
         self,
@@ -163,11 +168,14 @@ class _GNewsSiteConnector(BaseConnector):
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)
+                    record_jina_result(self.PLATFORM, succeeded=False, error=f"http_{resp.status_code}")
                     return []
         except Exception as exc:
             log.warning("%s Google News Jina fallback error: %s", self.PLATFORM, exc)
+            record_jina_result(self.PLATFORM, succeeded=False, error=type(exc).__name__)
             return []
 
+        record_jina_result(self.PLATFORM, succeeded=True)
         return build_google_news_jina_items(
             resp.text,
             keyword,
@@ -328,8 +336,6 @@ class AmebloConnector(_GNewsSiteConnector):
         items = await self._fetch_ameba_search(stripped)
         if not items:
             items = await self._fetch_gnews(stripped)
-        if not items:
-            items = await self._fetch_gnews(stripped, history_years=10)
         return items
 
     async def _fetch_ameba_search(self, keyword: str) -> list[SourceItemCreate]:
@@ -600,6 +606,4 @@ class BARKSConnector(_GNewsSiteConnector):
         items = await self._fetch_direct_rss("https://www.barks.jp/news/rss/", keyword)
         if not items:
             items = await self._fetch_gnews(keyword)
-        if not items:
-            items = await self._fetch_gnews(keyword, history_years=10)
         return items
