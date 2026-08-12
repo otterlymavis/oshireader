@@ -865,18 +865,7 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                let status = (response as? HTTPURLResponse)?.statusCode
-                AppLogger.scraping.error("GET \(url.host ?? url.absoluteString) failed: status=\(status.map(String.init) ?? "unknown")")
-                return nil
-            }
-            return (data, http)
-        } catch {
-            AppLogger.scraping.error("GET \(url.host ?? url.absoluteString) failed: \(error.localizedDescription)")
-            return nil
-        }
+        return await perform(request, method: "GET")
     }
 
     private func httpPOST(
@@ -892,16 +881,21 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
+        return await perform(request, method: "POST")
+    }
+
+    private func perform(_ request: URLRequest, method: String) async -> (Data, HTTPURLResponse)? {
+        let url = request.url
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 let status = (response as? HTTPURLResponse)?.statusCode
-                AppLogger.scraping.error("POST \(url.host ?? url.absoluteString) failed: status=\(status.map(String.init) ?? "unknown")")
+                AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: status=\(status.map(String.init) ?? "unknown")")
                 return nil
             }
             return (data, http)
         } catch {
-            AppLogger.scraping.error("POST \(url.host ?? url.absoluteString) failed: \(error.localizedDescription)")
+            AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: \(error.localizedDescription)")
             return nil
         }
     }
