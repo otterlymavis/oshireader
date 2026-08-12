@@ -24,6 +24,7 @@ from app.connectors.base import (
     contains_keyword,
     fetch_search_rss_via_proxy,
     is_recent_search_result,
+    jina_reader_headers,
     mark_date_provenance,
     parse_feed_date,
     title_contains_keyword,
@@ -156,7 +157,9 @@ class _GNewsSiteConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=self._headers()) as client:
+            async with httpx.AsyncClient(
+                timeout=10.0, follow_redirects=True, headers=jina_reader_headers(self.ACCEPT_LANGUAGE)
+            ) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)

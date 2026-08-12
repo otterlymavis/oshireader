@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     youtube_api_key: str = ""
     twitter_bearer_token: str = ""
+    jina_api_key: str = ""
     database_url: str = "sqlite:///./otterpia.db"
     internal_scheduler_enabled: bool = False
     poll_interval_minutes: int = 60

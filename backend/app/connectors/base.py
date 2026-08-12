@@ -24,6 +24,21 @@ GOOGLE_NEWS_HEADERS = {
     "Accept-Language": "ja,en;q=0.9",
 }
 
+def jina_reader_headers(accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Language"]) -> dict[str, str]:
+    """Headers for requests to r.jina.ai's reader proxy.
+
+    Anonymous r.jina.ai traffic to news.google.com is subject to a shared,
+    rolling abuse block ("AbuseAlleviationError") once Google flags the
+    proxy's IP pool — unrelated to this app's own request volume. An API
+    key moves the request onto jina's authenticated quota, which isn't
+    subject to that shared block.
+    """
+    headers = {**GOOGLE_NEWS_HEADERS, "Accept-Language": accept_language}
+    if settings.jina_api_key:
+        headers["Authorization"] = f"Bearer {settings.jina_api_key}"
+    return headers
+
+
 SEARCH_RESULT_MAX_AGE = timedelta(days=31)
 SEARCH_RESULT_FUTURE_GRACE = timedelta(days=1)
 

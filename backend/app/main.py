@@ -34,6 +34,7 @@ from app.source_health import snapshot as source_health_snapshot
 from app.connectors.base import (
     GOOGLE_NEWS_HEADERS,
     fetch_search_rss_via_proxy,
+    jina_reader_headers,
     parse_google_news_markdown,
     title_contains_keyword,
 )
@@ -948,7 +949,7 @@ async def source_probe(
         jina_matches = 0
         jina_error = None
         try:
-            jina_resp = await client.get(proxy_url)
+            jina_resp = await client.get(proxy_url, headers=jina_reader_headers(locale["accept_language"]))
             jina_status = jina_resp.status_code
             jina_len = len(jina_resp.text)
             jina_items = parse_google_news_markdown(jina_resp.text)
