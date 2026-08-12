@@ -1248,7 +1248,7 @@ final class BackgroundRefreshManager {
     }
 
     private func refreshLocalDeviceSourcesForBackground(timeout: TimeInterval) async -> LocalSourceRefreshCompletion {
-        await withTaskGroup(of: LocalSourceRefreshCompletion.self) { group in
+        await withTaskGroup(of: LocalSourceRefreshCompletion?.self) { group in
             group.addTask { @MainActor in
                 await self.performLocalDeviceSourcesRefreshForBackground()
             }
@@ -1256,15 +1256,28 @@ final class BackgroundRefreshManager {
                 do {
                     try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 } catch {
-                    return LocalSourceRefreshCompletion()
+                    return nil
                 }
                 BackgroundRefreshLiveTestProbe.recordCompleted(success: false, detail: "local_deadline")
-                return LocalSourceRefreshCompletion()
+                return nil
             }
 
-            let result = await group.next() ?? LocalSourceRefreshCompletion()
-            group.cancelAll()
-            return result
+            // The deadline task returns nil to signal "time's up" — that's a cue
+            // to cancel the still-running work task, not an answer to return.
+            // Racing group.next() and returning whichever finished first would
+            // let the deadline's near-instant nil beat the work task's own
+            // graceful, cancellation-aware return, discarding whatever it had
+            // already completed and merged even though it reports back with an
+            // accurate (if partial) result moments later.
+            while let next = await group.next() {
+                guard let completion = next else {
+                    group.cancelAll()
+                    continue
+                }
+                group.cancelAll()
+                return completion
+            }
+            return LocalSourceRefreshCompletion()
         }
     }
 
@@ -1292,11 +1305,15 @@ final class BackgroundRefreshManager {
         }
 
         await withTaskGroup(
-            of: (termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
+            of: (searchID: Int, termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
         ) { group in
-            // Tracks every (term, searchTerm) submitted below so a deadline cutoff can
-            // still tell which ones never reported back, keyed by "termKeyword\u{1F}searchTerm".
-            var pendingSearches: [String: Set<String>] = [:]
+            // Tracks every search submitted below, keyed by a unique index rather
+            // than keyword text — a term whose alias duplicates its own keyword
+            // (or two terms sharing a keyword) would otherwise collide on a
+            // string key, so a deadline cutoff can reliably tell which ones
+            // never reported back regardless of duplicate text.
+            var pendingSearches: [Int: Set<String>] = [:]
+            var nextSearchID = 0
             for term in fallbackTerms {
                 let platformsForTerm = BackgroundRefreshPolicy.deviceFallbackPlatforms(
                     for: term,
@@ -1305,14 +1322,16 @@ final class BackgroundRefreshManager {
                 guard !platformsForTerm.isEmpty else { continue }
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
-                    pendingSearches["\(term.keyword)\u{1F}\(searchTerm)"] = platformsForTerm
+                    let searchID = nextSearchID
+                    nextSearchID += 1
+                    pendingSearches[searchID] = platformsForTerm
                     group.addTask {
                         let scrapeResult = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
                             keyword: searchTerm,
                             tagKeyword: term.keyword,
                             platformIds: platformsForTerm
                         )
-                        return (term.keyword, searchTerm, scrapeResult, platformsForTerm)
+                        return (searchID, term.keyword, searchTerm, scrapeResult, platformsForTerm)
                     }
                 }
             }
@@ -1323,7 +1342,7 @@ final class BackgroundRefreshManager {
                     group.cancelAll()
                     break
                 }
-                pendingSearches.removeValue(forKey: "\(scrape.termKeyword)\u{1F}\(scrape.searchTerm)")
+                pendingSearches.removeValue(forKey: scrape.searchID)
                 guard let currentTerm = db.term(matchingKeyword: scrape.termKeyword) else { continue }
                 let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
                     for: currentTerm,
