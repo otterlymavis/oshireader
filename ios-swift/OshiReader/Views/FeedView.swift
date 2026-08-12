@@ -1300,11 +1300,23 @@ struct FeedView: View {
                     )
                 }
             }
-            report.markCompletedDevicePlatforms(
-                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
-                    scrapeResults
-                )
+            let completedPlatforms = BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
+                scrapeResults
             )
+            report.markCompletedDevicePlatforms(completedPlatforms)
+            let missingPlatforms = platformsToScrape.subtracting(completedPlatforms)
+            if !missingPlatforms.isEmpty {
+                // A platform can silently drop out of a request (network error, timeout,
+                // bad response — see NetworkManager+Scraper.swift's httpGET logging) without
+                // any single strategy attempt above reporting "failed", since a scrape that
+                // never completes just contributes nothing to scrapeResults. Surface that gap
+                // explicitly so it isn't indistinguishable from "this platform had no news".
+                report.record(
+                    strategy: "device_local_scrapers",
+                    status: "failed",
+                    detail: "did not complete: \(missingPlatforms.sorted().joined(separator: ","))"
+                )
+            }
         }
         if !report.attempts.contains(where: { $0.strategy == "device_local_scrapers" }) {
             report.record(strategy: "device_local_scrapers", status: "empty")
@@ -1361,10 +1373,30 @@ struct FeedView: View {
     private func sendNoResultsDiagnosticIfNeeded(_ report: FeedRefreshReport) async {
         guard !report.backendConnectivityFailed else { return }
         let activeTermsCount = db.terms.filter { $0.is_active }.count
-        guard activeTermsCount > 0, db.feedItems.isEmpty, report.addedCount == 0 else { return }
+        guard activeTermsCount > 0 else { return }
+
+        let feedIsEmpty = db.feedItems.isEmpty && report.addedCount == 0
+        let devicePlatformsIncomplete = report.attempts.contains {
+            $0.strategy == "device_local_scrapers" && $0.status == "failed"
+        }
+        guard feedIsEmpty || devicePlatformsIncomplete else { return }
+
+        // The empty-feed case is rare and always worth reporting. A partial device-fallback
+        // failure alongside an otherwise-populated feed is comparatively common (a single
+        // slow/blocked site among ~25) and would spam a diagnostic on every such refresh
+        // without a throttle.
+        if !feedIsEmpty {
+            let now = Date()
+            if let last = Self.lastDeviceFallbackFailureDiagnosticAt,
+               now.timeIntervalSince(last) < Self.deviceFallbackFailureDiagnosticThrottle {
+                return
+            }
+            Self.lastDeviceFallbackFailureDiagnosticAt = now
+        }
+
         let info = Bundle.main.infoDictionary
         let diagnostic = ClientDiagnosticReport(
-            reason: "feed_refresh_no_results_after_fallbacks",
+            reason: feedIsEmpty ? "feed_refresh_no_results_after_fallbacks" : "device_fallback_partial_failure",
             environment: NetworkManager.shared.environmentName,
             api_base: NetworkManager.shared.apiBase,
             app_version: info?["CFBundleShortVersionString"] as? String,
@@ -1374,9 +1406,27 @@ struct FeedView: View {
             cached_feed_count: db.feedItems.count,
             events: report.attempts.map(\.diagnosticEvent)
         )
-        AppLogger.network.error("No feed results after \(report.attempts.count) strategies; sending diagnostic")
+        AppLogger.network.error("\(feedIsEmpty ? "No feed results" : "Device fallback incomplete") after \(report.attempts.count) strategies; sending diagnostic")
         await NetworkManager.shared.sendClientDiagnostic(diagnostic)
     }
+
+    // Throttles the partial-device-fallback-failure diagnostic — shared across FeedView
+    // instances for the session, same pattern as lastDeviceScrapeAt below.
+    private static let lastDeviceFallbackFailureDiagnosticAtKey = "feed.last_device_fallback_failure_diagnostic_at"
+    private static var lastDeviceFallbackFailureDiagnosticAt: Date? {
+        get {
+            let timestamp = UserDefaults.standard.double(forKey: lastDeviceFallbackFailureDiagnosticAtKey)
+            return timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : nil
+        }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: lastDeviceFallbackFailureDiagnosticAtKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: lastDeviceFallbackFailureDiagnosticAtKey)
+            }
+        }
+    }
+    private static let deviceFallbackFailureDiagnosticThrottle: TimeInterval = 60 * 60
 
     private func clearRefreshErrorIfLocalFeedIsUsable(_ report: FeedRefreshReport) {
         guard refreshErrorMessage != nil else { return }

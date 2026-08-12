@@ -149,45 +149,53 @@ extension NetworkManager {
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
-        if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml"),
-           let nhkItems = try? await parseRss(url: nhkUrl) {
-            nhkCompleted = true
-            for item in nhkItems where titleMatchesKeyword(item.title, keyword: keyword) {
-                results.append(FeedItem(
-                    id: "news:nhk:\(stableIdHash(item.link))",
-                    platform: "news",
-                    url: item.link,
-                    title: cleanNewsTitle(item.title),
-                    content_text: item.description.isEmpty ? nil : item.description,
-                    author: "NHK",
-                    thumbnail_url: nil,
-                    media_type: "article",
-                    published_at: item.pubDate ?? nowString,
-                    watch_term_keyword: tag,
-                    fetched_at: nowString
-                ))
+        if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml") {
+            do {
+                let nhkItems = try await parseRss(url: nhkUrl)
+                nhkCompleted = true
+                for item in nhkItems where titleMatchesKeyword(item.title, keyword: keyword) {
+                    results.append(FeedItem(
+                        id: "news:nhk:\(stableIdHash(item.link))",
+                        platform: "news",
+                        url: item.link,
+                        title: cleanNewsTitle(item.title),
+                        content_text: item.description.isEmpty ? nil : item.description,
+                        author: "NHK",
+                        thumbnail_url: nil,
+                        media_type: "article",
+                        published_at: item.pubDate ?? nowString,
+                        watch_term_keyword: tag,
+                        fetched_at: nowString
+                    ))
+                }
+            } catch {
+                AppLogger.scraping.error("NHK RSS fallback failed: \(error.localizedDescription)")
             }
         }
 
-        if let gnewsUrl = googleNewsSearchURL(query: keyword),
-           let gnewsItems = try? await parseRss(url: gnewsUrl) {
-            googleNewsCompleted = true
-            for item in gnewsItems {
-                let cleanedTitle = cleanNewsTitle(item.title)
-                guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { continue }
-                results.append(FeedItem(
-                    id: "news:gnews:\(stableIdHash(item.link))",
-                    platform: "news",
-                    url: item.link,
-                    title: cleanedTitle,
-                    content_text: item.description.isEmpty ? nil : item.description,
-                    author: "Google News",
-                    thumbnail_url: nil,
-                    media_type: "article",
-                    published_at: item.pubDate ?? nowString,
-                    watch_term_keyword: tag,
-                    fetched_at: nowString
-                ))
+        if let gnewsUrl = googleNewsSearchURL(query: keyword) {
+            do {
+                let gnewsItems = try await parseRss(url: gnewsUrl)
+                googleNewsCompleted = true
+                for item in gnewsItems {
+                    let cleanedTitle = cleanNewsTitle(item.title)
+                    guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { continue }
+                    results.append(FeedItem(
+                        id: "news:gnews:\(stableIdHash(item.link))",
+                        platform: "news",
+                        url: item.link,
+                        title: cleanedTitle,
+                        content_text: item.description.isEmpty ? nil : item.description,
+                        author: "Google News",
+                        thumbnail_url: nil,
+                        media_type: "article",
+                        published_at: item.pubDate ?? nowString,
+                        watch_term_keyword: tag,
+                        fetched_at: nowString
+                    ))
+                }
+            } catch {
+                AppLogger.scraping.error("Google News general fallback failed: \(error.localizedDescription)")
             }
         }
 
@@ -670,11 +678,13 @@ extension NetworkManager {
                   let url = URL(string: "https://note.com/hashtag/\(encoded)/rss") else {
                 continue
             }
-            guard let parsed = try? await parseRss(url: url) else {
+            do {
+                entries = try await parseRss(url: url)
+                completed = true
+            } catch {
+                AppLogger.scraping.error("Note RSS fallback failed for tag \(noteTag): \(error.localizedDescription)")
                 continue
             }
-            completed = true
-            entries = parsed
             if !entries.isEmpty { break }
         }
 
@@ -751,26 +761,32 @@ extension NetworkManager {
     ) async -> LocalFallbackScrapeResult {
         let query = "\(keyword) site:\(site)"
         guard let url = googleNewsSearchURL(query: query, locale: locale) else {
+            AppLogger.scraping.error("Google News fallback failed platform=\(platform) site=\(site): could not build search URL")
             return LocalFallbackScrapeResult()
         }
 
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
-        guard let initialItems = try? await parseRss(url: url, acceptLanguage: locale.acceptLanguage) else {
+        let initialItems: [RssItem]
+        do {
+            initialItems = try await parseRss(url: url, acceptLanguage: locale.acceptLanguage)
+        } catch {
+            AppLogger.scraping.error("Google News fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
             return LocalFallbackScrapeResult()
         }
         var items = initialItems
         if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
             let historicalQuery = "\(query) when:10y"
-            guard let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale),
-                  let historicalItems = try? await parseRss(
-                    url: historicalURL,
-                    acceptLanguage: locale.acceptLanguage
-                  ) else {
+            guard let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale) else {
                 return LocalFallbackScrapeResult()
             }
-            items = historicalItems
+            do {
+                items = try await parseRss(url: historicalURL, acceptLanguage: locale.acceptLanguage)
+            } catch {
+                AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+                return LocalFallbackScrapeResult()
+            }
         }
 
         let feedItems: [FeedItem] = items.compactMap { item in
@@ -849,12 +865,18 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else {
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                let status = (response as? HTTPURLResponse)?.statusCode
+                AppLogger.scraping.error("GET \(url.host ?? url.absoluteString) failed: status=\(status.map(String.init) ?? "unknown")")
+                return nil
+            }
+            return (data, http)
+        } catch {
+            AppLogger.scraping.error("GET \(url.host ?? url.absoluteString) failed: \(error.localizedDescription)")
             return nil
         }
-        return (data, http)
     }
 
     private func httpPOST(
@@ -870,12 +892,18 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else {
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                let status = (response as? HTTPURLResponse)?.statusCode
+                AppLogger.scraping.error("POST \(url.host ?? url.absoluteString) failed: status=\(status.map(String.init) ?? "unknown")")
+                return nil
+            }
+            return (data, http)
+        } catch {
+            AppLogger.scraping.error("POST \(url.host ?? url.absoluteString) failed: \(error.localizedDescription)")
             return nil
         }
-        return (data, http)
     }
 
     private func cleanNewsTitle(_ title: String) -> String {
