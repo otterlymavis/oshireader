@@ -11,9 +11,9 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    build_google_news_jina_items,
     fetch_search_rss_via_proxy,
     parse_feed_date,
-    parse_google_news_markdown,
     title_contains_keyword,
 )
 
@@ -125,25 +125,12 @@ class RSSConnector(BaseConnector):
             log.warning("Google News Jina history fallback failed: %s", exc)
             return []
 
-        items: list[SourceItemCreate] = []
-        for entry in parse_google_news_markdown(resp.text)[:25]:
-            title = entry["title"]
-            if not title_contains_keyword(keyword, title):
-                continue
-            if not _is_recent(entry["published_at"]):
-                continue
-            items.append(SourceItemCreate(
-                platform=self.PLATFORM,
-                item_id=entry["url"],
-                url=entry["url"],
-                published_at=entry["published_at"],
-                media_type="article",
-                title=title,
-                content_text=None,
-                author="Google News",
-                raw_payload={"source": "google_news_jina", "keyword": keyword},
-            ))
-        return items
+        return build_google_news_jina_items(
+            resp.text,
+            keyword,
+            platform=self.PLATFORM,
+            author="Google News",
+        )
 
     async def _fetch_bing_news(self, keyword: str) -> list[SourceItemCreate]:
         url = f"https://www.bing.com/news/search?q={quote_plus(keyword)}&format=rss&mkt=ja-JP"

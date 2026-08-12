@@ -550,6 +550,7 @@ extension NetworkManager {
 
     // MARK: - APNs Registration
 
+    private static let cachedAPNSDeviceSecretLock = NSLock()
     private static var cachedAPNSDeviceSecret: String?
 
     var apnsDeviceSecret: String {
@@ -557,15 +558,21 @@ extension NetworkManager {
         if let existing = KeychainHelper.read(key: key), !existing.isEmpty {
             return existing
         }
+        // Keychain write can fail transiently (e.g. before first unlock after
+        // reboot). Cache the generated value in memory so every call this session
+        // returns the same secret instead of minting a new one each time and
+        // desyncing device identity between calls (e.g. token registration vs.
+        // background refresh). Locked because this property is read from
+        // concurrent tasks (background refresh, foreground requests) — without
+        // it, two callers hitting the Keychain miss at once could each mint and
+        // cache a different UUID before either write completes.
+        NetworkManager.cachedAPNSDeviceSecretLock.lock()
+        defer { NetworkManager.cachedAPNSDeviceSecretLock.unlock() }
         if let cached = NetworkManager.cachedAPNSDeviceSecret {
             return cached
         }
         let generated = UUID().uuidString
         if !KeychainHelper.write(key: key, value: generated) {
-            // Keychain write can fail transiently (e.g. before first unlock after
-            // reboot). Cache in memory so every call this session returns the same
-            // secret instead of minting a new one each time and desyncing device
-            // identity between calls (e.g. token registration vs. background refresh).
             AppLogger.network.warning("Failed to persist APNs device secret to Keychain; using in-memory value for this session")
         }
         NetworkManager.cachedAPNSDeviceSecret = generated

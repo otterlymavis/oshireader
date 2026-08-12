@@ -181,6 +181,53 @@ class SourceItemCreate:
         return f"{self.platform}:{self.item_id}"
 
 
+def build_google_news_jina_items(
+    markdown_text: str,
+    keyword: str,
+    *,
+    platform: str,
+    title_suffix_re: Optional[re.Pattern] = None,
+    author: Optional[str] = None,
+    raw_payload_extra: Optional[dict] = None,
+) -> list[SourceItemCreate]:
+    """Parse r.jina.ai's Google News markdown into matching, recent SourceItemCreates.
+
+    Shared by every connector that falls back to Google News via the jina.ai
+    reader proxy (direct-to-Google-News fetches 503 from Render's outbound
+    IP; see CLAUDE.md). Centralizing this — instead of each connector
+    reimplementing it — is what the title/recency filtering lives in one
+    place: a per-connector copy previously drifted and shipped without the
+    recency check, admitting stale articles as if they were fresh matches.
+    """
+    items: list[SourceItemCreate] = []
+    for entry in parse_google_news_markdown(markdown_text)[:25]:
+        title = entry["title"]
+        if title_suffix_re:
+            title = title_suffix_re.sub("", title).strip()
+        if not title or not title_contains_keyword(keyword, title):
+            continue
+        published = entry.get("published_at")
+        if published is None or not is_recent_search_result(published):
+            continue
+        raw_payload = {"keyword": keyword, "source": "google_news_jina"}
+        if raw_payload_extra:
+            raw_payload.update(raw_payload_extra)
+        items.append(
+            SourceItemCreate(
+                platform=platform,
+                item_id=entry["url"],
+                url=entry["url"],
+                published_at=published,
+                media_type="article",
+                title=title,
+                content_text=None,
+                author=author,
+                raw_payload=raw_payload,
+            )
+        )
+    return items
+
+
 class BaseConnector(ABC):
     PLATFORM: str = ""
     SUPPORTS_MEDIA_FILTER: bool = False

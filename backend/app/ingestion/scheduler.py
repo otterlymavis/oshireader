@@ -264,26 +264,37 @@ def _connector_batches(connectors: list[BaseConnector]) -> list[list[BaseConnect
 def _connectors_for_term(term: WatchTerm, connectors: list[BaseConnector]) -> list[BaseConnector]:
     if (term.source_mode or "all").casefold() != "selected":
         return connectors
-    selected = {p.strip().casefold() for p in (term.selected_platforms or []) if isinstance(p, str) and p.strip()}
+    selected = _selected_platforms(term)
     return [connector for connector in connectors if connector.PLATFORM.casefold() in selected]
 
 
 _MEDIA_TYPES = {"video", "image"}
 
 
-def _term_allows_source_item(term: WatchTerm, source_item: SourceItem) -> bool:
+def _selected_platforms(term: WatchTerm) -> set[str]:
+    return {
+        p.strip().casefold()
+        for p in (term.selected_platforms or [])
+        if isinstance(p, str) and p.strip()
+    }
+
+
+def _term_allows_source_item(
+    term: WatchTerm,
+    source_item: SourceItem,
+    *,
+    selected_platforms: set[str] | None = None,
+) -> bool:
     """Whether `term`'s own platform/collection-mode filters admit this item.
 
     Used when fanning a match found under one term's filters out to other
     terms sharing the same keyword: each recipient term must still pass its
     own filters, since it may be scoped to different platforms/media.
+    `selected_platforms` lets a caller iterating many items for the same
+    term precompute the set once instead of rebuilding it per item.
     """
     if (term.source_mode or "all").casefold() == "selected":
-        selected = {
-            p.strip().casefold()
-            for p in (term.selected_platforms or [])
-            if isinstance(p, str) and p.strip()
-        }
+        selected = selected_platforms if selected_platforms is not None else _selected_platforms(term)
         if source_item.platform.casefold() not in selected:
             return False
     if (term.collection_mode or "all_info") == CollectionMode.MEDIA_ONLY.value:
@@ -1051,6 +1062,7 @@ def _queue_duplicate_term_notifications(
     source_item_ids = list(dict.fromkeys(raw.composite_id for raw in raw_items))
 
     for duplicate_term in duplicate_terms:
+        duplicate_term_selected_platforms = _selected_platforms(duplicate_term)
         existing_match_ids = {
             r[0]: r[1]
             for r in db.query(Match.source_item_id, Match.id)
@@ -1078,7 +1090,9 @@ def _queue_duplicate_term_notifications(
             source_item = db.get(SourceItem, source_item_id)
             if source_item is None:
                 continue
-            if not _term_allows_source_item(duplicate_term, source_item):
+            if not _term_allows_source_item(
+                duplicate_term, source_item, selected_platforms=duplicate_term_selected_platforms
+            ):
                 continue
             match = Match(watch_term_id=duplicate_term.id, source_item_id=source_item_id)
             db.add(match)

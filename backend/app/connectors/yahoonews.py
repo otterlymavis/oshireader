@@ -14,10 +14,9 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    build_google_news_jina_items,
     fetch_search_rss_via_proxy,
-    is_recent_search_result,
     parse_feed_date,
-    parse_google_news_markdown,
     title_contains_keyword,
 )
 
@@ -75,29 +74,7 @@ class YahooNewsConnector(BaseConnector):
             log.warning("YahooNews Google News Jina fallback error: %s", exc)
             return []
 
-        items: list[SourceItemCreate] = []
-        for entry in parse_google_news_markdown(resp.text)[:25]:
-            title = entry["title"]
-            if not title_contains_keyword(keyword, title):
-                continue
-            published = entry.get("published_at")
-            if published is None:
-                continue
-            if not is_recent_search_result(published):
-                continue
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=entry["url"],
-                    url=entry["url"],
-                    published_at=published,
-                    media_type="article",
-                    title=title,
-                    content_text=None,
-                    raw_payload={"keyword": keyword, "source": "google_news_jina"},
-                )
-            )
-        return items
+        return build_google_news_jina_items(resp.text, keyword, platform=self.PLATFORM)
 
     async def _fetch_bing_news(self, keyword: str) -> list[SourceItemCreate]:
         query = f"{keyword} site:news.yahoo.co.jp"

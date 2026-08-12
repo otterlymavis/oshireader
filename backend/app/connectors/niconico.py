@@ -38,9 +38,16 @@ class NicoNicoConnector(BaseConnector):
     REPORTS_STATUS_TO_CLIENT = False
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
-        items = await self._fetch_rss(keyword)
+        # Both feeds are unconditionally unreachable from Render's IP (see
+        # CLAUDE.md), so run them concurrently rather than sequentially —
+        # otherwise every poll pays up to the sum of both feeds' timeouts
+        # before failing instead of just the slower of the two.
+        items, tag_items = await asyncio.gather(
+            self._fetch_rss(keyword),
+            self._fetch_tag_rss(keyword),
+        )
         if items is None:
-            items = await self._fetch_tag_rss(keyword)
+            items = tag_items
         if items is None:
             # Both of NicoNico's own feeds failed to fetch (e.g. the 403 Render's
             # outbound IP gets — see CLAUDE.md). Raise rather than returning []

@@ -2412,13 +2412,13 @@ class TestNicoNicoFetch:
 
     @pytest.mark.asyncio
     async def test_search_rss_fails_falls_back_to_tag_rss(self):
-        call_count = [0]
+        # Both feeds are fetched concurrently, so dispatch on URL rather than
+        # call order (which is not guaranteed between concurrent requests).
         fail_resp = MagicMock(is_success=False, status_code=403)
         ok_resp = MagicMock(is_success=True, content=b"<rss/>")
 
         async def _side(url, **kw):
-            call_count[0] += 1
-            return fail_resp if call_count[0] == 1 else ok_resp
+            return fail_resp if "/search/" in str(url) else ok_resp
 
         entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm42", title="Aiko Tag video")
         fake_feed = _FakeFeed([entry])

@@ -20,12 +20,12 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    build_google_news_jina_items,
     contains_keyword,
     fetch_search_rss_via_proxy,
     is_recent_search_result,
     mark_date_provenance,
     parse_feed_date,
-    parse_google_news_markdown,
     title_contains_keyword,
 )
 
@@ -165,33 +165,13 @@ class _GNewsSiteConnector(BaseConnector):
             log.warning("%s Google News Jina fallback error: %s", self.PLATFORM, exc)
             return []
 
-        items: list[SourceItemCreate] = []
-        for entry in parse_google_news_markdown(resp.text)[:25]:
-            title = entry["title"]
-            if self.TITLE_SUFFIX_RE:
-                title = self.TITLE_SUFFIX_RE.sub("", title).strip()
-            if not title or not title_contains_keyword(keyword, title):
-                continue
-            if not is_recent_search_result(entry["published_at"]):
-                continue
-            items.append(
-                SourceItemCreate(
-                    platform=self.PLATFORM,
-                    item_id=entry["url"],
-                    url=entry["url"],
-                    published_at=entry["published_at"],
-                    media_type="article",
-                    title=title,
-                    content_text=None,
-                    raw_payload={
-                        "site": self.SITE,
-                        "keyword": keyword,
-                        "history_years": history_years,
-                        "source": "google_news_jina",
-                    },
-                )
-            )
-        return items
+        return build_google_news_jina_items(
+            resp.text,
+            keyword,
+            platform=self.PLATFORM,
+            title_suffix_re=self.TITLE_SUFFIX_RE,
+            raw_payload_extra={"site": self.SITE, "history_years": history_years},
+        )
 
     async def _fetch_bing_news(
         self,
