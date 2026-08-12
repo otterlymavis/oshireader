@@ -1,0 +1,82 @@
+name: Attribution policy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  attribution-guard:
+    name: Attribution guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject automated co-author attribution
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          zero_sha = "0" * 40
+          event_name = os.environ["EVENT_NAME"]
+          if event_name == "pull_request":
+              revision_range = f"{os.environ['PR_BASE_SHA']}..{os.environ['PR_HEAD_SHA']}"
+          elif event_name == "push" and os.environ.get("BEFORE_SHA") not in {None, "", zero_sha}:
+              revision_range = f"{os.environ['BEFORE_SHA']}..{os.environ['AFTER_SHA']}"
+          else:
+              revision_range = os.environ["AFTER_SHA"]
+
+          commit_ids = subprocess.check_output(
+              ["git", "rev-list", revision_range],
+              text=True,
+          ).splitlines()
+          identity_pattern = re.compile(r"claude|anthropic", re.IGNORECASE)
+          trailer_pattern = re.compile(
+              r"^\s*(?:co-authored-by|assisted-by):.*(?:claude|anthropic).*$",
+              re.IGNORECASE | re.MULTILINE,
+          )
+          generated_pattern = re.compile(
+              r"^\s*generated with\s+claude(?:\s+code)?\s*$",
+              re.IGNORECASE | re.MULTILINE,
+          )
+          failures = []
+
+          for commit_id in commit_ids:
+              fields = subprocess.check_output(
+                  [
+                      "git",
+                      "show",
+                      "-s",
+                      "--format=%an%x1f%ae%x1f%cn%x1f%ce%x1f%B",
+                      commit_id,
+                  ],
+                  text=True,
+              ).split("\x1f", 4)
+              author_name, author_email, committer_name, committer_email, message = fields
+              identities = (author_name, author_email, committer_name, committer_email)
+              if any(identity_pattern.search(value) for value in identities):
+                  failures.append(f"{commit_id}: prohibited author or committer identity")
+              if trailer_pattern.search(message) or generated_pattern.search(message):
+                  failures.append(f"{commit_id}: prohibited automated attribution in commit message")
+
+          if failures:
+              raise SystemExit("\n".join(failures))
+          print(f"Checked {len(commit_ids)} commit(s); no prohibited attribution found.")
+          PY

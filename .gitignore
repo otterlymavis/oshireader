@@ -31,7 +31,8 @@ mobile/tmp_*.json
 *.pyc
 .DS_Store
 .env
-.claude/
+.claude/*
+!.claude/settings.json
 settings.local.json
 
 # Cloudflare Worker
