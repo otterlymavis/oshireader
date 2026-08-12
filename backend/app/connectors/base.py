@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import re
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 import unicodedata
 
 import feedparser
@@ -37,6 +37,27 @@ def jina_reader_headers(accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Langu
     if settings.jina_api_key:
         headers["Authorization"] = f"Bearer {settings.jina_api_key}"
     return headers
+
+
+async def fetch_google_news_via_public_proxy(google_news_url: str) -> bytes | None:
+    """Fetch a Google News RSS URL through allorigins.win, a free public
+    read-through proxy, as a second, independent hop between jina.ai and Bing.
+
+    Different infrastructure and IP space than both jina.ai and our own
+    Cloudflare Worker (which Google already blocks for direct Google News
+    fetches — see CLAUDE.md), so a block on either of those shouldn't
+    correlate with a block here. Returns raw RSS bytes (parse with
+    feedparser, same as the Bing fallback) or None on any failure.
+    """
+    proxy_url = "https://api.allorigins.win/raw?url=" + quote(google_news_url, safe="")
+    try:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
+            resp = await client.get(proxy_url)
+            if not resp.is_success:
+                return None
+            return resp.content
+    except Exception:
+        return None
 
 
 SEARCH_RESULT_MAX_AGE = timedelta(days=31)

@@ -1875,10 +1875,13 @@ class TestNewsSiteFetch:
             result = await AllkpopConnector().fetch("BLACKPINK", "all_info")
 
         assert len(result) == 1
-        request_url = client_cls.return_value.__aenter__.return_value.get.await_args.args[0]
-        assert "hl=en" in request_url
-        assert "gl=US" in request_url
-        assert "ceid=US%3Aen" in request_url
+        # The jina and public-proxy fallback hops now run concurrently, so the last
+        # recorded call isn't reliably jina's — search every call made instead.
+        request_urls = [
+            call.args[0]
+            for call in client_cls.return_value.__aenter__.return_value.get.await_args_list
+        ]
+        assert any("hl=en" in url and "gl=US" in url and "ceid=US%3Aen" in url for url in request_urls)
 
     @pytest.mark.asyncio
     async def test_english_sites_pass_market_to_bing_news_proxy(self):

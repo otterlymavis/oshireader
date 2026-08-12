@@ -22,6 +22,7 @@ from app.connectors.base import (
     SourceItemCreate,
     build_google_news_jina_items,
     contains_keyword,
+    fetch_google_news_via_public_proxy,
     fetch_search_rss_via_proxy,
     is_recent_search_result,
     jina_reader_headers,
@@ -148,10 +149,20 @@ class _GNewsSiteConnector(BaseConnector):
         # Google News is unreachable directly from Render's outbound IP (see
         # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
         # Google from Cloudflare's IP ranges, so neither is worth the timeout
-        # budget: go straight to the jina.ai reader proxy, then Bing.
-        items = await self._fetch_gnews_jina(keyword, url, history_years=10)
-        if items:
-            return items
+        # budget: go straight to the jina.ai reader proxy and a second,
+        # independent public proxy. Run those two concurrently rather than
+        # sequentially — trying them one after another could stack up to
+        # 10s + 12s + 12s (Bing) of worst-case timeouts, overrunning the
+        # connector's overall fetch budget (25s); concurrently, the pair
+        # costs only as much as the slower of the two.
+        jina_items, proxy_items = await asyncio.gather(
+            self._fetch_gnews_jina(keyword, url, history_years=10),
+            self._fetch_gnews_public_proxy(keyword, url),
+        )
+        if jina_items:
+            return jina_items
+        if proxy_items:
+            return proxy_items
         return await self._fetch_bing_news(keyword, history_years=10)
 
     async def _fetch_gnews_jina(
@@ -183,6 +194,53 @@ class _GNewsSiteConnector(BaseConnector):
             title_suffix_re=self.TITLE_SUFFIX_RE,
             raw_payload_extra={"site": self.SITE, "history_years": history_years},
         )
+
+    async def _fetch_gnews_public_proxy(
+        self,
+        keyword: str,
+        google_news_url: str,
+    ) -> list[SourceItemCreate]:
+        content = await fetch_google_news_via_public_proxy(google_news_url)
+        if not content:
+            return []
+        try:
+            feed = await asyncio.to_thread(feedparser.parse, content)
+        except Exception as exc:
+            log.warning("%s Google News public-proxy parse error: %s", self.PLATFORM, exc)
+            return []
+
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in feed.entries[:25]:
+            title = (entry.get("title") or "").strip()
+            link = entry.get("link", "")
+            if self.TITLE_SUFFIX_RE:
+                title = self.TITLE_SUFFIX_RE.sub("", title).strip()
+            if not link or not title or link in seen:
+                continue
+            if not title_contains_keyword(keyword, title):
+                continue
+            seen.add(link)
+            published = parse_feed_date(entry)
+            if published is None or not is_recent_search_result(published):
+                continue
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=link,
+                    url=link,
+                    published_at=published,
+                    media_type="article",
+                    title=title,
+                    content_text=entry.get("summary") or None,
+                    raw_payload={
+                        "site": self.SITE,
+                        "keyword": keyword,
+                        "source": "google_news_public_proxy",
+                    },
+                )
+            )
+        return items
 
     async def _fetch_bing_news(
         self,
