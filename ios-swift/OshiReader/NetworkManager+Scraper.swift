@@ -779,6 +779,7 @@ extension NetworkManager {
         if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
             let historicalQuery = "\(query) when:10y"
             guard let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale) else {
+                AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): could not build search URL")
                 return LocalFallbackScrapeResult()
             }
             do {

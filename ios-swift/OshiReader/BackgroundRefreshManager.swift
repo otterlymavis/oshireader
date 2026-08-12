@@ -503,6 +503,39 @@ enum BackgroundRefreshPolicy {
         })
     }
 
+    static func expectedDeviceFallbackPlatforms(
+        _ scrapeResults: [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]
+    ) -> Set<String> {
+        scrapeResults.reduce(into: Set<String>()) { result, scrapeResult in
+            result.formUnion(scrapeResult.expectedPlatforms.map { Platform.normalize($0) })
+        }
+    }
+
+    private static let deviceFallbackFailureDiagnosticThrottleKey = "feed.device_fallback_failure_diagnostic_last_sent_by_platform"
+    private static let deviceFallbackFailureDiagnosticThrottle: TimeInterval = 60 * 60
+
+    // Returns the subset of `missingPlatforms` that haven't had a failure diagnostic sent
+    // within the throttle window, and records them as sent. Keyed per platform — not a
+    // single global timestamp — so a failure on one platform doesn't suppress the alert
+    // for an unrelated platform failing soon after. Shared by both the foreground
+    // (FeedView) and background (BackgroundRefreshManager) device-fallback paths.
+    static func devicePlatformsDueForFailureDiagnostic(_ missingPlatforms: Set<String>) -> Set<String> {
+        guard !missingPlatforms.isEmpty else { return [] }
+        var lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
+        let now = Date().timeIntervalSince1970
+        var due = Set<String>()
+        for platform in missingPlatforms {
+            if now - (lastSent[platform] ?? 0) >= deviceFallbackFailureDiagnosticThrottle {
+                due.insert(platform)
+                lastSent[platform] = now
+            }
+        }
+        if !due.isEmpty {
+            UserDefaults.standard.set(lastSent, forKey: deviceFallbackFailureDiagnosticThrottleKey)
+        }
+        return due
+    }
+
     static func sourceScope(
         activeTerms: [WatchTerm],
         customUrls: [CustomUrl],
@@ -1377,13 +1410,50 @@ final class BackgroundRefreshManager {
             for expectedPlatforms in pendingSearches.values {
                 scrapeResults.append((LocalFallbackScrapeResult(), expectedPlatforms))
             }
-            completion.completedDevicePlatforms.formUnion(
-                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
-                    scrapeResults
-                )
+            let completedPlatforms = BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
+                scrapeResults
             )
+            completion.completedDevicePlatforms.formUnion(completedPlatforms)
+            let expectedPlatforms = BackgroundRefreshPolicy.expectedDeviceFallbackPlatforms(scrapeResults)
+            let missingPlatforms = expectedPlatforms.subtracting(completedPlatforms)
+            let duePlatforms = BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic(missingPlatforms)
+            if !duePlatforms.isEmpty {
+                // Most refreshes happen here, in the background, not via FeedView's
+                // foreground path — so this is where the diagnostic actually needs to
+                // reach real users, not just the isLiveBackgroundPushTesting harness.
+                // Fired detached (not awaited) so a slow diagnostic POST can't eat into
+                // the tight, already-shared background deadline this function races
+                // against; best-effort delivery is an acceptable tradeoff for telemetry.
+                Task {
+                    await self.sendDeviceFallbackFailureDiagnostic(missingPlatforms: duePlatforms, db: db)
+                }
+            }
         }
         return completion
+    }
+
+    private func sendDeviceFallbackFailureDiagnostic(missingPlatforms: Set<String>, db: LocalDB) async {
+        let info = Bundle.main.infoDictionary
+        let diagnostic = ClientDiagnosticReport(
+            reason: "device_fallback_partial_failure",
+            environment: NetworkManager.shared.environmentName,
+            api_base: NetworkManager.shared.apiBase,
+            app_version: info?["CFBundleShortVersionString"] as? String,
+            build: info?["CFBundleVersion"] as? String,
+            active_terms_count: db.terms.filter(\.is_active).count,
+            subscribed_platforms: db.subscribedPlatforms,
+            cached_feed_count: db.feedItems.count,
+            events: [
+                ClientDiagnosticEvent(
+                    strategy: "device_local_scrapers",
+                    status: "failed",
+                    item_count: 0,
+                    added_count: 0,
+                    detail: "did not complete: \(missingPlatforms.sorted().joined(separator: ","))"
+                )
+            ]
+        )
+        await NetworkManager.shared.sendClientDiagnostic(diagnostic)
     }
 
     private func sendLiveTestFailureDiagnostic(reason: String, detail: String, db: LocalDB) async {
