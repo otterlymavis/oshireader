@@ -7922,7 +7922,7 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertTrue(items.isEmpty)
     }
 
-    func testScrapeGoogleNewsSiteCompletionRequiresHistoricalQueryWhenInitialHasNoMatch() async {
+    func testScrapeGoogleNewsSiteCompletionStillCompletesWhenHistoricalQueryFails() async {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <rss version="2.0">
@@ -7948,9 +7948,9 @@ final class NetworkManagerTests: XCTestCase {
         )
 
         XCTAssertTrue(result.items.isEmpty)
-        XCTAssertTrue(
-            result.completedPlatforms.isEmpty,
-            "A failed historical query must not mark the site fallback as complete."
+        XCTAssertEqual(
+            result.completedPlatforms, ["realsound"],
+            "The historical query is a best-effort widening of a successful initial fetch, not a required step — its failure shouldn't discard the initial fetch's own success and falsely mark this platform as incomplete."
         )
     }
 

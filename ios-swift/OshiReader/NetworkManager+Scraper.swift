@@ -793,17 +793,22 @@ extension NetworkManager {
         var items = initialItems
         if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
             let historicalQuery = "\(query) when:10y"
-            guard let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale) else {
-                AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): could not build search URL")
-                return LocalFallbackScrapeResult()
-            }
-            do {
-                items = try await parseRss(url: historicalURL, acceptLanguage: locale.acceptLanguage)
-            } catch {
-                if !isCancellationError(error) {
-                    AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+            if let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale) {
+                do {
+                    items = try await parseRss(url: historicalURL, acceptLanguage: locale.acceptLanguage)
+                } catch {
+                    if !isCancellationError(error) {
+                        AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+                    }
+                    // The historical widening pass is best-effort, not required — on
+                    // failure, fall through with the initial fetch's (successful, if
+                    // empty) result rather than discarding it. Returning empty here
+                    // would erase a genuinely successful check and falsely mark this
+                    // platform as "did not complete" in the missing-platform diagnostic,
+                    // even though the site was actually checked and just had no matches.
                 }
-                return LocalFallbackScrapeResult()
+            } else {
+                AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): could not build search URL")
             }
         }
 

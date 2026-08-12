@@ -71,7 +71,7 @@ class YahooNewsConnector(BaseConnector):
             return items
         return await self._fetch_bing_news(keyword)
 
-    async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
+    async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> tuple[list[SourceItemCreate], bool]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=jina_reader_headers()) as client:
@@ -79,14 +79,15 @@ class YahooNewsConnector(BaseConnector):
                 if not resp.is_success:
                     log.warning("YahooNews Google News Jina fallback returned status %d", resp.status_code)
                     record_jina_result(self.PLATFORM, succeeded=False, error=f"http_{resp.status_code}")
-                    return []
+                    return [], False
         except Exception as exc:
             log.warning("YahooNews Google News Jina fallback error: %s", exc)
             record_jina_result(self.PLATFORM, succeeded=False, error=type(exc).__name__)
-            return []
+            return [], False
 
         record_jina_result(self.PLATFORM, succeeded=True)
-        return build_google_news_jina_items(resp.text, keyword, platform=self.PLATFORM)
+        items = build_google_news_jina_items(resp.text, keyword, platform=self.PLATFORM)
+        return items, True
 
     async def _fetch_gnews_public_proxy(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
         content = await fetch_google_news_via_public_proxy(google_news_url)

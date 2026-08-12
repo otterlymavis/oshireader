@@ -166,7 +166,7 @@ class _GNewsSiteConnector(BaseConnector):
         keyword: str,
         google_news_url: str,
         history_years: int | None,
-    ) -> list[SourceItemCreate]:
+    ) -> tuple[list[SourceItemCreate], bool]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
             async with httpx.AsyncClient(
@@ -176,20 +176,21 @@ class _GNewsSiteConnector(BaseConnector):
                 if not resp.is_success:
                     log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)
                     record_jina_result(self.PLATFORM, succeeded=False, error=f"http_{resp.status_code}")
-                    return []
+                    return [], False
         except Exception as exc:
             log.warning("%s Google News Jina fallback error: %s", self.PLATFORM, exc)
             record_jina_result(self.PLATFORM, succeeded=False, error=type(exc).__name__)
-            return []
+            return [], False
 
         record_jina_result(self.PLATFORM, succeeded=True)
-        return build_google_news_jina_items(
+        items = build_google_news_jina_items(
             resp.text,
             keyword,
             platform=self.PLATFORM,
             title_suffix_re=self.TITLE_SUFFIX_RE,
             raw_payload_extra={"site": self.SITE, "history_years": history_years},
         )
+        return items, True
 
     async def _fetch_gnews_public_proxy(
         self,

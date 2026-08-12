@@ -1326,16 +1326,12 @@ struct FeedView: View {
             for expectedPlatforms in pendingSearches.values {
                 scrapeResults.append((LocalFallbackScrapeResult(), expectedPlatforms))
             }
-            let completedPlatforms = BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
-                scrapeResults
-            )
-            report.markCompletedDevicePlatforms(completedPlatforms)
             // Diff against platforms actually expected by this round's searches, not the
             // user's full subscribed set — a platform can be subscribed but excluded from
             // every active term this round (e.g. a media-only term), in which case it was
             // never attempted and shouldn't be reported as having failed to complete.
-            let expectedPlatformsThisRound = BackgroundRefreshPolicy.expectedDeviceFallbackPlatforms(scrapeResults)
-            let missingPlatforms = expectedPlatformsThisRound.subtracting(completedPlatforms)
+            let (completedPlatforms, missingPlatforms) = BackgroundRefreshPolicy.deviceFallbackCompletionStatus(scrapeResults)
+            report.markCompletedDevicePlatforms(completedPlatforms)
             if !missingPlatforms.isEmpty {
                 // A platform can silently drop out of a request (network error, timeout,
                 // bad response — see NetworkManager+Scraper.swift's httpGET logging) without

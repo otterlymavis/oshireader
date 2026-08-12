@@ -511,6 +511,19 @@ enum BackgroundRefreshPolicy {
         }
     }
 
+    // Combines the two functions above into the pair both FeedView's foreground
+    // deepFallback and BackgroundRefreshManager's background equivalent actually need
+    // from a completed scrapeResults array, so that computation can't drift between
+    // the two independent task-group loops that build scrapeResults in the first
+    // place.
+    static func deviceFallbackCompletionStatus(
+        _ scrapeResults: [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]
+    ) -> (completed: Set<String>, missing: Set<String>) {
+        let completed = completedDeviceFallbackPlatformsForEligibleSearches(scrapeResults)
+        let expected = expectedDeviceFallbackPlatforms(scrapeResults)
+        return (completed, expected.subtracting(completed))
+    }
+
     private static let deviceFallbackFailureDiagnosticThrottleKey = "feed.device_fallback_failure_diagnostic_last_sent_by_platform"
     private static let deviceFallbackFailureDiagnosticThrottle: TimeInterval = 60 * 60
     // Foreground (FeedView) and background (BackgroundRefreshManager) refreshes can run
@@ -1420,12 +1433,8 @@ final class BackgroundRefreshManager {
             for expectedPlatforms in pendingSearches.values {
                 scrapeResults.append((LocalFallbackScrapeResult(), expectedPlatforms))
             }
-            let completedPlatforms = BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
-                scrapeResults
-            )
+            let (completedPlatforms, missingPlatforms) = BackgroundRefreshPolicy.deviceFallbackCompletionStatus(scrapeResults)
             completion.completedDevicePlatforms.formUnion(completedPlatforms)
-            let expectedPlatforms = BackgroundRefreshPolicy.expectedDeviceFallbackPlatforms(scrapeResults)
-            let missingPlatforms = expectedPlatforms.subtracting(completedPlatforms)
             // Hitting the shared background deadline (wasCancelled) is a routine, expected
             // occurrence given ~20 platforms polled within a tight BGAppRefreshTask budget —
             // not a per-platform failure. Reporting it as one would flood the diagnostic
