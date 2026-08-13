@@ -40,71 +40,138 @@ struct LocalFallbackScrapeResult {
 }
 
 class RSSParserDelegate: NSObject, XMLParserDelegate {
+    private static let atomNamespace = "http://www.w3.org/2005/atom"
+    private static let dublinCoreNamespace = "http://purl.org/dc/elements/1.1/"
+    private static let mediaRSSNamespace = "http://search.yahoo.com/mrss/"
+    private static let rdfNamespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    private static let rssOneNamespace = "http://purl.org/rss/1.0/"
+    private static let rssContentNamespace = "http://purl.org/rss/1.0/modules/content/"
+
+    private let sourceURL: URL?
+
     var items = [RssItem]()
     private(set) var recognizedFeedRoot = false
     private var sawDocumentRoot = false
     private var elementStack = [String]()
+    private var baseURLStack = [URL?]()
     private var currentItem: RssItem? = nil
     private var currentItemDepth: Int? = nil
 
     private var currentTitle = ""
     private var currentLink = ""
+    private var currentLinkBaseURL: URL?
+    private var currentRDFAboutLink = ""
+    private var currentRDFAboutBaseURL: URL?
+    private var currentPermalinkGuid = ""
+    private var currentGuidBaseURL: URL?
+    private var currentGuidCanBePermalink = false
     private var currentDescription = ""
     private var currentSummary = ""
     private var currentContent = ""
     private var currentPublishedDate = ""
     private var currentUpdatedDate = ""
     private var currentThumbnailUrl: String? = nil
+    private var currentThumbnailBaseURL: URL?
+    private var currentThumbnailPriority = 0
     private var currentAtomLinkPriority = 0
+
+    init(sourceURL: URL? = nil) {
+        self.sourceURL = sourceURL
+        super.init()
+    }
 
     private let _dateFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
         df.timeZone = TimeZone(secondsFromGMT: 0)
+        df.twoDigitStartDate = Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: 1950, month: 1, day: 1)
+        )
         return df
     }()
     private static let _dateFormats = [
+        "E, d MMM yy HH:mm:ss z",
+        "E, d MMM yy HH:mm z",
+        "d MMM yy HH:mm:ss z",
+        "d MMM yy HH:mm z",
         "E, d MMM yyyy HH:mm:ss Z",
         "E, d MMM yyyy HH:mm Z",
         "d MMM yyyy HH:mm:ss Z",
         "d MMM yyyy HH:mm Z",
         "yyyy-MM-dd'T'HH:mm:ssZ",
         "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-        "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        "yyyy-MM-dd'T'HH:mm:ss'Z'",
+        "yyyy-MM-dd"
     ]
     private let _iso8601Out = ISO8601DateFormatter()
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
         let rawElementName = (qName ?? elementName).lowercased()
-        let localElementName = Self.localElementName(rawElementName)
+        let localElementName = Self.feedElementName(
+            elementName,
+            namespaceURI: namespaceURI,
+            qualifiedName: qName
+        )
         elementStack.append(localElementName)
+        let inheritedBaseURL = baseURLStack.last.flatMap { $0 } ?? sourceURL
+        let xmlBase = attributeDict.first { $0.key.lowercased() == "xml:base" }?.value
+        let elementBaseURL = xmlBase.flatMap {
+            URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines), relativeTo: inheritedBaseURL)?.absoluteURL
+        } ?? inheritedBaseURL
+        baseURLStack.append(elementBaseURL)
         if !sawDocumentRoot {
             sawDocumentRoot = true
-            let rootNames = [elementName, qName]
-                .compactMap { $0?.lowercased() }
-            recognizedFeedRoot = rootNames.contains { name in
-                name == "rdf:rdf" || ["rss", "feed"].contains(Self.localElementName(name))
-            }
+            recognizedFeedRoot = ["rss", "feed"].contains(localElementName) ||
+                (localElementName == "rdf" && namespaceURI?.lowercased() == Self.rdfNamespace) ||
+                rawElementName == "rdf:rdf"
         }
         if currentItem == nil && (localElementName == "item" || localElementName == "entry") {
             currentItem = RssItem()
             currentItemDepth = elementStack.count
             currentTitle = ""
             currentLink = ""
+            currentLinkBaseURL = nil
+            currentRDFAboutLink = ""
+            currentRDFAboutBaseURL = nil
+            currentPermalinkGuid = ""
+            currentGuidBaseURL = nil
+            currentGuidCanBePermalink = false
             currentDescription = ""
             currentSummary = ""
             currentContent = ""
             currentPublishedDate = ""
             currentUpdatedDate = ""
             currentThumbnailUrl = nil
+            currentThumbnailBaseURL = nil
+            currentThumbnailPriority = 0
             currentAtomLinkPriority = 0
+            if localElementName == "item",
+               namespaceURI?.lowercased() == Self.rssOneNamespace {
+                currentRDFAboutLink = attributeDict.first { $0.key.lowercased() == "rdf:about" }?.value ?? ""
+                currentRDFAboutBaseURL = elementBaseURL
+            }
         }
         if currentItem != nil {
             let isDirectItemChild = elementStack.dropLast().last.map { $0 == "item" || $0 == "entry" } == true
             if isDirectItemChild,
+                elementStack.dropLast().last == "item",
+               localElementName == "guid" {
+                let isPermaLink = attributeDict.first { $0.key.lowercased() == "ispermalink" }?.value
+                currentGuidCanBePermalink = isPermaLink?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased() != "false"
+                currentGuidBaseURL = elementBaseURL
+            }
+            if isDirectItemChild,
+               localElementName == "link",
+               attributeDict["href"] == nil {
+                currentLinkBaseURL = elementBaseURL
+            }
+            if isDirectItemChild,
                localElementName == "link",
                let href = attributeDict["href"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !href.isEmpty {
+               !href.isEmpty,
+               resolveWebURLString(href, baseURL: elementBaseURL) != nil {
                 let rel = attributeDict["rel"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let priority: Int
                 switch rel {
@@ -114,24 +181,52 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
                 }
                 if priority > currentAtomLinkPriority {
                     currentLink = href
+                    currentLinkBaseURL = elementBaseURL
                     currentAtomLinkPriority = priority
                 }
             }
-            if rawElementName == "media:thumbnail" || rawElementName == "media:content" {
-                if let url = attributeDict["url"], currentThumbnailUrl == nil {
-                    currentThumbnailUrl = url
-                }
+            if localElementName == "media:thumbnail",
+               let url = attributeDict["url"],
+               resolveWebURLString(url, baseURL: elementBaseURL) != nil,
+               currentThumbnailPriority < 2 {
+                currentThumbnailUrl = url
+                currentThumbnailBaseURL = elementBaseURL
+                currentThumbnailPriority = 2
+            }
+            if localElementName == "media:content",
+               let url = attributeDict["url"],
+               resolveWebURLString(url, baseURL: elementBaseURL) != nil,
+               currentThumbnailPriority < 1,
+               Self.mediaContentCanBeThumbnail(attributeDict) {
+                currentThumbnailUrl = url
+                currentThumbnailBaseURL = elementBaseURL
+                currentThumbnailPriority = 1
             }
             if localElementName == "enclosure",
                let url = attributeDict["url"],
-               attributeDict["type"]?.hasPrefix("image") == true,
-               currentThumbnailUrl == nil {
+               resolveWebURLString(url, baseURL: elementBaseURL) != nil,
+               attributeDict["type"]?
+                   .trimmingCharacters(in: .whitespacesAndNewlines)
+                   .lowercased()
+                   .hasPrefix("image/") == true,
+               currentThumbnailPriority < 1 {
                 currentThumbnailUrl = url
+                currentThumbnailBaseURL = elementBaseURL
+                currentThumbnailPriority = 1
             }
         }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
+        appendText(string)
+    }
+
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let string = String(data: CDATABlock, encoding: .utf8) else { return }
+        appendText(string)
+    }
+
+    private func appendText(_ string: String) {
         let cleaned = string.trimmingCharacters(in: .newlines)
         guard currentItem != nil, !cleaned.isEmpty else { return }
 
@@ -144,6 +239,7 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
         switch contentElement {
         case "title":       currentTitle += string
         case "link":        currentLink += cleaned
+        case "guid" where currentGuidCanBePermalink: currentPermalinkGuid += cleaned
         case "description": currentDescription += string
         case "summary": currentSummary += string
         case "content": currentContent += string
@@ -158,17 +254,33 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
             if !elementStack.isEmpty {
                 elementStack.removeLast()
             }
+            if !baseURLStack.isEmpty {
+                baseURLStack.removeLast()
+            }
         }
-        let localElementName = Self.localElementName(qName ?? elementName)
+        let localElementName = Self.feedElementName(
+            elementName,
+            namespaceURI: namespaceURI,
+            qualifiedName: qName
+        )
         guard (localElementName == "item" || localElementName == "entry"),
               currentItemDepth == elementStack.count,
               var item = currentItem else { return }
         item.title = normalizedText(currentTitle)
-        item.link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        let explicitLink = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.link = [
+            (explicitLink, currentLinkBaseURL),
+            (currentPermalinkGuid, currentGuidBaseURL),
+            (currentRDFAboutLink, currentRDFAboutBaseURL)
+        ]
+            .compactMap { resolveWebURLString($0.0, baseURL: $0.1) }
+            .first ?? ""
         item.description = [currentDescription, currentSummary, currentContent]
             .map(normalizedText)
             .first { !$0.isEmpty } ?? ""
-        item.thumbnailUrl = currentThumbnailUrl
+        item.thumbnailUrl = currentThumbnailUrl.flatMap {
+            resolveWebURLString($0, baseURL: currentThumbnailBaseURL)
+        }
 
         let dateStrings = [currentPublishedDate, currentUpdatedDate]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -181,8 +293,54 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
         currentItemDepth = nil
     }
 
-    private static func localElementName(_ name: String) -> String {
-        name.lowercased().split(separator: ":", omittingEmptySubsequences: false).last.map(String.init) ?? name.lowercased()
+    private static func feedElementName(
+        _ elementName: String,
+        namespaceURI: String?,
+        qualifiedName: String?
+    ) -> String {
+        let localName = elementName.lowercased()
+        let namespace = namespaceURI?.lowercased()
+        if namespace == atomNamespace { return localName }
+        if namespace == dublinCoreNamespace, localName == "date" { return "date" }
+        if namespace == mediaRSSNamespace { return "media:\(localName)" }
+        if namespace == rssContentNamespace, localName == "encoded" { return "content" }
+
+        let normalized = (qualifiedName ?? elementName).lowercased()
+        let parts = normalized.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return normalized }
+        switch (parts[0], parts[1]) {
+        case ("atom", let localName), ("rss", let localName):
+            return localName
+        case ("dc", "date"):
+            return "date"
+        default:
+            return normalized
+        }
+    }
+
+    private static func mediaContentCanBeThumbnail(_ attributes: [String: String]) -> Bool {
+        let medium = attributes["medium"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let type = attributes["type"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let hasExplicitNonImageMedium = medium.map { $0 != "image" } ?? false
+        let hasExplicitNonImageType = type.map { !$0.hasPrefix("image/") } ?? false
+        return !hasExplicitNonImageMedium && !hasExplicitNonImageType
+    }
+
+    private func resolveWebURLString(_ rawValue: String, baseURL: URL? = nil) -> String? {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              let url = URL(string: value, relativeTo: baseURL ?? sourceURL)?.absoluteURL,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false else {
+            return nil
+        }
+        return url.absoluteString
     }
 
     private func parseDate(_ value: String) -> Date? {
@@ -966,9 +1124,10 @@ extension NetworkManager {
         request.timeoutInterval = 12
         request.setValue(scraperBrowserUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
-        let (data, _) = try await perform(request, method: "GET", logFailure: false)
+        let (data, response) = try await perform(request, method: "GET", logFailure: false)
         let parser = XMLParser(data: data)
-        let delegate = RSSParserDelegate()
+        parser.shouldProcessNamespaces = true
+        let delegate = RSSParserDelegate(sourceURL: response.url ?? url)
         parser.delegate = delegate
         guard parser.parse(), delegate.recognizedFeedRoot else {
             throw parser.parserError ?? URLError(.cannotParseResponse)
