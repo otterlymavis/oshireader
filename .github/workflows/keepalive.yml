@@ -1,6 +1,9 @@
 name: Backend keep-alive
 
 on:
+  schedule:
+    # Run away from quarter-hour boundaries and before Render's 15-minute idle cutoff.
+    - cron: "3-59/10 * * * *"
   workflow_dispatch:
 
 concurrency:
