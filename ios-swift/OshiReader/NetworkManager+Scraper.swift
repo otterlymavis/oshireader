@@ -45,6 +45,7 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
     private var sawDocumentRoot = false
     private var elementStack = [String]()
     private var currentItem: RssItem? = nil
+    private var currentItemDepth: Int? = nil
 
     private var currentTitle = ""
     private var currentLink = ""
@@ -74,15 +75,20 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
     private let _iso8601Out = ISO8601DateFormatter()
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
-        elementStack.append(elementName.lowercased())
+        let rawElementName = (qName ?? elementName).lowercased()
+        let localElementName = Self.localElementName(rawElementName)
+        elementStack.append(localElementName)
         if !sawDocumentRoot {
             sawDocumentRoot = true
             let rootNames = [elementName, qName]
                 .compactMap { $0?.lowercased() }
-            recognizedFeedRoot = rootNames.contains(where: { ["rss", "feed", "rdf:rdf"].contains($0) })
+            recognizedFeedRoot = rootNames.contains { name in
+                name == "rdf:rdf" || ["rss", "feed"].contains(Self.localElementName(name))
+            }
         }
-        if elementName == "item" || elementName == "entry" {
+        if currentItem == nil && (localElementName == "item" || localElementName == "entry") {
             currentItem = RssItem()
+            currentItemDepth = elementStack.count
             currentTitle = ""
             currentLink = ""
             currentDescription = ""
@@ -96,7 +102,7 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
         if currentItem != nil {
             let isDirectItemChild = elementStack.dropLast().last.map { $0 == "item" || $0 == "entry" } == true
             if isDirectItemChild,
-               elementName == "link",
+               localElementName == "link",
                let href = attributeDict["href"]?.trimmingCharacters(in: .whitespacesAndNewlines),
                !href.isEmpty {
                 let rel = attributeDict["rel"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -111,12 +117,12 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
                     currentAtomLinkPriority = priority
                 }
             }
-            if elementName == "media:thumbnail" || elementName == "media:content" {
+            if rawElementName == "media:thumbnail" || rawElementName == "media:content" {
                 if let url = attributeDict["url"], currentThumbnailUrl == nil {
                     currentThumbnailUrl = url
                 }
             }
-            if elementName == "enclosure",
+            if localElementName == "enclosure",
                let url = attributeDict["url"],
                attributeDict["type"]?.hasPrefix("image") == true,
                currentThumbnailUrl == nil {
@@ -129,7 +135,7 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
         let cleaned = string.trimmingCharacters(in: .newlines)
         guard currentItem != nil, !cleaned.isEmpty else { return }
 
-        let itemIndex = elementStack.lastIndex { $0 == "item" || $0 == "entry" }
+        let itemIndex = currentItemDepth.map { $0 - 1 }
         let contentElement = itemIndex.flatMap { index in
             elementStack.index(after: index) < elementStack.endIndex
                 ? elementStack[elementStack.index(after: index)]
@@ -141,7 +147,7 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
         case "description": currentDescription += string
         case "summary": currentSummary += string
         case "content": currentContent += string
-        case "pubdate", "published", "dc:date": currentPublishedDate += cleaned
+        case "pubdate", "published", "date": currentPublishedDate += cleaned
         case "updated": currentUpdatedDate += cleaned
         default: break
         }
@@ -153,7 +159,10 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
                 elementStack.removeLast()
             }
         }
-        guard elementName == "item" || elementName == "entry", var item = currentItem else { return }
+        let localElementName = Self.localElementName(qName ?? elementName)
+        guard (localElementName == "item" || localElementName == "entry"),
+              currentItemDepth == elementStack.count,
+              var item = currentItem else { return }
         item.title = normalizedText(currentTitle)
         item.link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
         item.description = [currentDescription, currentSummary, currentContent]
@@ -169,6 +178,11 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
 
         items.append(item)
         currentItem = nil
+        currentItemDepth = nil
+    }
+
+    private static func localElementName(_ name: String) -> String {
+        name.lowercased().split(separator: ":", omittingEmptySubsequences: false).last.map(String.init) ?? name.lowercased()
     }
 
     private func parseDate(_ value: String) -> Date? {

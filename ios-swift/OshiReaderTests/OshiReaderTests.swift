@@ -8565,6 +8565,28 @@ final class RSSParserDelegateTests: XCTestCase {
         XCTAssertEqual(items[0].link, "https://example.com/atom")
     }
 
+    func testParsesExplicitlyPrefixedAtomFeed() {
+        let xml = """
+        <?xml version="1.0"?>
+        <atom:feed xmlns:atom="http://www.w3.org/2005/Atom">
+          <atom:entry>
+            <atom:title>Prefixed Atom Entry</atom:title>
+            <atom:link rel="alternate" href="https://example.com/prefixed"/>
+            <atom:summary>Prefixed summary</atom:summary>
+            <atom:updated>2024-06-03T12:00:00Z</atom:updated>
+          </atom:entry>
+        </atom:feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.title, "Prefixed Atom Entry")
+        XCTAssertEqual(items.first?.link, "https://example.com/prefixed")
+        XCTAssertEqual(items.first?.description, "Prefixed summary")
+        XCTAssertEqual(items.first?.pubDate, "2024-06-03T12:00:00Z")
+    }
+
     func testAtomEntryPrefersAlternateLinkOverSelfLink() {
         let xml = """
         <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
@@ -8651,6 +8673,27 @@ final class RSSParserDelegateTests: XCTestCase {
         XCTAssertEqual(items.first?.title, "Canonical title")
         XCTAssertEqual(items.first?.link, "https://example.com/canonical")
         XCTAssertEqual(items.first?.description, "Embedded document title Body text")
+    }
+
+    func testNestedEntryElementDoesNotResetOrPrematurelyFinishOuterAtomEntry() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Canonical title</title>
+            <link href="https://example.com/canonical"/>
+            <content type="xhtml">
+                <div><entry><title>Nested title</title></entry> <p>Body tail</p></div>
+            </content>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.title, "Canonical title")
+        XCTAssertEqual(items.first?.link, "https://example.com/canonical")
+        XCTAssertEqual(items.first?.description, "Nested title Body tail")
     }
 
     func testUndatedEntryLeavesDateNilForCallerFallback() {
