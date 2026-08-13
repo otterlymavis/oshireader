@@ -878,6 +878,35 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testDeviceFallbackFailureDiagnosticReservationPreventsConcurrentDuplicateSend() {
+        let platform = "diagnostic-test-\(UUID().uuidString)"
+        defer {
+            BackgroundRefreshPolicy.resetDeviceFallbackFailureDiagnosticStateForTesting([platform])
+        }
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic([platform]),
+            [platform]
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic([platform]).isEmpty,
+            "An in-flight send should reserve its platforms from concurrent refreshes."
+        )
+
+        BackgroundRefreshPolicy.finishDeviceFallbackFailureDiagnostic([platform], sent: false)
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic([platform]),
+            [platform],
+            "A failed send should release its reservation for an immediate retry."
+        )
+
+        BackgroundRefreshPolicy.finishDeviceFallbackFailureDiagnostic([platform], sent: true)
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic([platform]).isEmpty,
+            "A confirmed send should start the persisted throttle window."
+        )
+    }
+
     func testBackendConnectivityFailureSkipsForegroundBackendRetries() {
         XCTAssertTrue(
             BackgroundRefreshPolicy.shouldSkipBackendRetriesAfterFailure(
@@ -5333,6 +5362,28 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testReaderRejectsNonWebFeedItemURLs() throws {
+        for unsafeURL in ["javascript:alert(1)", "data:text/html,<h1>unsafe</h1>", "file:///etc/hosts"] {
+            let item = FeedItem(
+                id: "unsafe:\(unsafeURL)",
+                platform: "news",
+                url: unsafeURL,
+                title: "Unsafe item",
+                content_text: nil,
+                author: nil,
+                thumbnail_url: nil,
+                media_type: "article",
+                published_at: "2026-06-15T00:00:00Z",
+                watch_term_keyword: "Aiko",
+                fetched_at: "2026-06-15T00:00:00Z"
+            )
+
+            let view = ReaderView(feedItem: item)
+            XCTAssertNil(view.originalPageUrl, "Reader must reject \(unsafeURL)")
+            XCTAssertNil(view.targetUrl, "Reader must not wrap an unsafe URL in Google Translate")
+        }
+    }
+
     // MARK: - Persistence: malformed JSON file is silently ignored
     func testMalformedPersistenceFileLoadsEmpty() throws {
         // Write garbage to terms.json before creating a LocalDB from the same directory.
@@ -7899,6 +7950,34 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertTrue(items.isEmpty)
     }
 
+    func testScrapeRSSFallbackRejectsMissingAndUnsafeLinksWithoutLosingCompletion() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko item without a link</title>
+              <description>This must not become a stored feed item.</description>
+            </item>
+            <item>
+              <title>Aiko item with an unsafe link</title>
+              <link>javascript:alert(1)</link>
+              <description>This must not become a stored feed item.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { _ in (Data(xml.utf8), Self.response(status: 200)) }
+
+        let result = await NetworkManager.shared.scrapeRSSFallbackWithCompletion(keyword: "Aiko")
+
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertEqual(
+            result.completedPlatforms, ["news"],
+            "Invalid item links should be discarded without misreporting two successful feed fetches as incomplete."
+        )
+    }
+
     func testScrapeGoogleNewsSiteRejectsSummaryOnlyMatch() async {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -7920,6 +7999,27 @@ final class NetworkManagerTests: XCTestCase {
             platform: "realsound"
         )
         XCTAssertTrue(items.isEmpty)
+    }
+
+    func testScrapeGoogleNewsSiteDoesNotCompleteMalformedResponse() async {
+        let malformedResponse = """
+        <html><body>Automated requests are temporarily blocked<feed></feed></body></html>
+        """
+        MockURLProtocol.handler = { _ in
+            (Data(malformedResponse.utf8), Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.scrapeGoogleNewsSiteWithCompletion(
+            keyword: "吉沢亮",
+            site: "realsound.jp",
+            platform: "realsound"
+        )
+
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertTrue(
+            result.completedPlatforms.isEmpty,
+            "A 200 response that is not valid RSS must remain incomplete and retryable."
+        )
     }
 
     func testScrapeGoogleNewsSiteCompletionStillCompletesWhenHistoricalQueryFails() async {
@@ -7976,6 +8076,31 @@ final class NetworkManagerTests: XCTestCase {
             let xml = decodedURL.contains("when:10y") ? historicalXml : initialXml
             return (Data(xml.utf8), Self.response(status: 200))
         }
+
+        let result = await NetworkManager.shared.scrapeGoogleNewsSiteWithCompletion(
+            keyword: "吉沢亮",
+            site: "realsound.jp",
+            platform: "realsound"
+        )
+
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertEqual(result.completedPlatforms, ["realsound"])
+    }
+
+    func testScrapeGoogleNewsSiteRejectsUnsafeLinkWithoutLosingCompletion() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>吉沢亮の最新インタビュー - Real Sound</title>
+              <link>data:text/html,unsafe</link>
+              <description>Unsafe URL schemes must not reach stored feed items.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { _ in (Data(xml.utf8), Self.response(status: 200)) }
 
         let result = await NetworkManager.shared.scrapeGoogleNewsSiteWithCompletion(
             keyword: "吉沢亮",
@@ -8182,6 +8307,26 @@ final class NetworkManagerTests: XCTestCase {
 
         XCTAssertEqual(result.completedPlatforms, ["note"])
         XCTAssertTrue(result.items.isEmpty)
+    }
+
+    func testNoteHashtagRSSRejectsUnsafeEntryLinkWithoutLosingCompletion() async {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Aiko essay</title>
+              <link>javascript:alert(1)</link>
+            </item>
+          </channel>
+        </rss>
+        """
+        MockURLProtocol.handler = { _ in (Data(xml.utf8), Self.response(status: 200)) }
+
+        let result = await NetworkManager.shared.scrapeNoteWithCompletion(keyword: "Aiko")
+
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertEqual(result.completedPlatforms, ["note"])
     }
 
     func testScrapeLocalFallbackDefaultSkipsGenericGoogleNewsForSourceSpecificPlatforms() async {
@@ -8417,6 +8562,190 @@ final class RSSParserDelegateTests: XCTestCase {
         let items = parse(xml)
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items[0].title, "Atom Entry")
+        XCTAssertEqual(items[0].link, "https://example.com/atom")
+    }
+
+    func testAtomEntryPrefersAlternateLinkOverSelfLink() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Atom Entry</title>
+            <link rel="self" href="https://example.com/feed/entry/1"/>
+            <link rel="alternate" href="https://example.com/articles/1"/>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.link, "https://example.com/articles/1")
+    }
+
+    func testAtomEntryDoesNotUseEnclosureAsArticleLink() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Atom Entry</title>
+            <link rel="enclosure" href="https://example.com/audio.mp3"/>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.link, "")
+    }
+
+    func testAtomContentIsUsedWhenSummaryIsAbsent() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Atom Content</title>
+            <link href="https://example.com/content"/>
+            <content type="xhtml"><div><p>Full <strong>entry</strong> text</p></div></content>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.description, "Full entry text")
+    }
+
+    func testAtomSummaryTakesPrecedenceWithoutDuplicatingContent() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Atom Summary</title>
+            <link href="https://example.com/summary"/>
+            <summary>Concise summary</summary>
+            <content>Concise summary followed by the full article body</content>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.description, "Concise summary")
+    }
+
+    func testNestedAtomBodyMetadataDoesNotOverwriteEntryTitleOrLink() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Canonical title</title>
+            <link href="https://example.com/canonical"/>
+            <content type="xhtml">
+                <div>
+                    <title>Embedded document title</title>
+                    <link href="https://example.com/embedded-stylesheet"/>
+                    <p>Body text</p>
+                </div>
+            </content>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.title, "Canonical title")
+        XCTAssertEqual(items.first?.link, "https://example.com/canonical")
+        XCTAssertEqual(items.first?.description, "Embedded document title Body text")
+    }
+
+    func testUndatedEntryLeavesDateNilForCallerFallback() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item><title>Undated item</title><link>https://example.com/undated</link></item>
+        </channel></rss>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertNil(items.first?.pubDate)
+    }
+
+    func testInvalidEntryDateLeavesDateNilForCallerFallback() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item>
+            <title>Invalid date item</title>
+            <link>https://example.com/invalid-date</link>
+            <pubDate>not a real date</pubDate>
+        </item>
+        </channel></rss>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertNil(items.first?.pubDate)
+    }
+
+    func testParsesRfc822DateWithoutSeconds() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item>
+            <title>Minute precision</title>
+            <link>https://example.com/minute</link>
+            <pubDate>Mon, 01 Jan 2024 12:34 +0000</pubDate>
+        </item>
+        </channel></rss>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.pubDate, "2024-01-01T12:34:00Z")
+    }
+
+    func testParsesRfc822DateWithoutWeekday() {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel>
+        <item>
+            <title>No weekday</title>
+            <link>https://example.com/no-weekday</link>
+            <pubDate>01 Jan 2024 12:34:56 +0000</pubDate>
+        </item>
+        </channel></rss>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.pubDate, "2024-01-01T12:34:56Z")
+    }
+
+    func testAtomUpdatedDateAndNestedSummaryAreParsed() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Atom Entry</title>
+            <link href="https://example.com/atom"/>
+            <summary><p>Nested <strong>summary</strong> text</p></summary>
+            <updated>2024-06-01T10:00:00Z</updated>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.description, "Nested summary text")
+        XCTAssertEqual(items.first?.pubDate, "2024-06-01T10:00:00Z")
+    }
+
+    func testAtomPublishedAndUpdatedDatesUseNewestValidTimestamp() {
+        let xml = """
+        <?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Updated Atom Entry</title>
+            <link href="https://example.com/updated-atom"/>
+            <published>2024-06-01T10:00:00Z</published>
+            <updated>2024-06-02T11:30:00Z</updated>
+        </entry>
+        </feed>
+        """
+
+        let items = parse(xml)
+
+        XCTAssertEqual(items.first?.pubDate, "2024-06-02T11:30:00Z")
     }
 
     func testParsesMultipleItems() {

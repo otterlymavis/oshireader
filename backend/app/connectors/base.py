@@ -110,20 +110,31 @@ async def race_jina_and_public_proxy(
     """
     jina_task = asyncio.ensure_future(jina_coro)
     proxy_task = asyncio.ensure_future(proxy_coro)
+    proxy_was_awaited = False
     try:
         jina_items, jina_succeeded = await jina_task
         if jina_items or jina_succeeded:
             return jina_items
+        proxy_was_awaited = True
         return await proxy_task
     finally:
-        if proxy_task.done():
+        if not proxy_task.done():
+            proxy_task.cancel()
+            try:
+                await proxy_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # The public proxy is a best-effort hedge. If it failed while
+                # being cancelled because jina already answered (or the caller
+                # itself timed out), its error must not replace that outcome.
+                pass
+        elif not proxy_was_awaited:
             # Retrieve (and discard) any exception so it isn't logged as "never
             # retrieved" at garbage-collection time — the proxy hop is best-effort
             # and we no longer care why it failed once it's not going to be used.
             if not proxy_task.cancelled():
                 proxy_task.exception()
-        else:
-            proxy_task.cancel()
 
 
 SEARCH_RESULT_MAX_AGE = timedelta(days=31)

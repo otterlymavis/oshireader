@@ -1439,8 +1439,8 @@ struct FeedView: View {
         // Only start the throttle window on a confirmed send — marking eagerly would let a
         // failed POST (plausible on the same flaky connection that's often the actual
         // cause of the scrape failures being reported) silence real retries for an hour.
-        if sent, !duePlatforms.isEmpty {
-            BackgroundRefreshPolicy.markDeviceFallbackFailureDiagnosticSent(duePlatforms)
+        if !duePlatforms.isEmpty {
+            BackgroundRefreshPolicy.finishDeviceFallbackFailureDiagnostic(duePlatforms, sent: sent)
         }
     }
 

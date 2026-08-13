@@ -1133,6 +1133,12 @@ private enum _ReaderRegex {
 
 private func normalizedReaderUrl(_ rawUrl: String, platform: String) -> String? {
     let stripped = stripTrackingParams(rawUrl)
+    guard let components = URLComponents(string: stripped),
+          let scheme = components.scheme?.lowercased(),
+          scheme == "http" || scheme == "https",
+          components.host?.isEmpty == false else {
+        return nil
+    }
     if platform == "5ch" {
         return normalize5chReaderUrl(stripped)
     }

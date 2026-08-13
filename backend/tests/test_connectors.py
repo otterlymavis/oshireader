@@ -256,6 +256,31 @@ class TestSearchRssProxy:
         assert client.get.await_args.kwargs["headers"]["Authorization"] == "Bearer secret"
 
 
+class TestGoogleNewsProxyRace:
+    @pytest.mark.asyncio
+    async def test_awaits_cancelled_proxy_cleanup_before_returning_jina_result(self):
+        proxy_cleaned_up = asyncio.Event()
+
+        async def jina_fetch():
+            await asyncio.sleep(0)
+            return [], True
+
+        async def proxy_fetch():
+            try:
+                await asyncio.Event().wait()
+                return []
+            finally:
+                proxy_cleaned_up.set()
+
+        result = await base_module.race_jina_and_public_proxy(
+            jina_fetch(),
+            proxy_fetch(),
+        )
+
+        assert result == []
+        assert proxy_cleaned_up.is_set()
+
+
 class TestSourceItemCreateCompositeId:
     def test_composite_id_is_platform_colon_item_id(self):
         item = SourceItemCreate(

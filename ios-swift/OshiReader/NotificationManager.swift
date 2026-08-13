@@ -269,10 +269,18 @@ final class NotificationManager: ObservableObject {
             resetRegistrationRetryState()
             lastRegisteredDeviceToken = token
             lastRemoteRegistrationError = nil
-            completeTokenRegistrationWaiters(success: true)
-            _ = await NetworkManager.shared.syncWatchTermsToBackend(
-                localTerms: LocalDB.shared.terms
-            )
+            let hadRegistrationWaiters = !tokenRegistrationWaiters.isEmpty
+            let shouldSyncWaiters = completeTokenRegistrationWaiters(success: true)
+            // An unsolicited AppDelegate callback should keep the normal automatic
+            // ownership sync. When the callback is satisfying explicit preflight
+            // waiters, however, honor their syncAfterVerification flags: notification
+            // preference writes pass false because they immediately perform their own
+            // targeted PATCH/create recovery and a nested full sync can race it.
+            if !hadRegistrationWaiters || shouldSyncWaiters {
+                _ = await NetworkManager.shared.syncWatchTermsToBackend(
+                    localTerms: LocalDB.shared.terms
+                )
+            }
         } catch {
             AppLogger.notifications.error("APNs device token registration failed: \(error.localizedDescription)")
             lastRemoteRegistrationError = error.localizedDescription

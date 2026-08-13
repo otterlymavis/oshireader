@@ -41,22 +41,32 @@ struct LocalFallbackScrapeResult {
 
 class RSSParserDelegate: NSObject, XMLParserDelegate {
     var items = [RssItem]()
-    private var currentElement = ""
+    private(set) var recognizedFeedRoot = false
+    private var sawDocumentRoot = false
+    private var elementStack = [String]()
     private var currentItem: RssItem? = nil
 
     private var currentTitle = ""
     private var currentLink = ""
     private var currentDescription = ""
-    private var currentPubDate = ""
+    private var currentSummary = ""
+    private var currentContent = ""
+    private var currentPublishedDate = ""
+    private var currentUpdatedDate = ""
     private var currentThumbnailUrl: String? = nil
+    private var currentAtomLinkPriority = 0
 
     private let _dateFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(secondsFromGMT: 0)
         return df
     }()
     private static let _dateFormats = [
         "E, d MMM yyyy HH:mm:ss Z",
+        "E, d MMM yyyy HH:mm Z",
+        "d MMM yyyy HH:mm:ss Z",
+        "d MMM yyyy HH:mm Z",
         "yyyy-MM-dd'T'HH:mm:ssZ",
         "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
         "yyyy-MM-dd'T'HH:mm:ss'Z'"
@@ -64,16 +74,43 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
     private let _iso8601Out = ISO8601DateFormatter()
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
-        currentElement = elementName
+        elementStack.append(elementName.lowercased())
+        if !sawDocumentRoot {
+            sawDocumentRoot = true
+            let rootNames = [elementName, qName]
+                .compactMap { $0?.lowercased() }
+            recognizedFeedRoot = rootNames.contains(where: { ["rss", "feed", "rdf:rdf"].contains($0) })
+        }
         if elementName == "item" || elementName == "entry" {
             currentItem = RssItem()
             currentTitle = ""
             currentLink = ""
             currentDescription = ""
-            currentPubDate = ""
+            currentSummary = ""
+            currentContent = ""
+            currentPublishedDate = ""
+            currentUpdatedDate = ""
             currentThumbnailUrl = nil
+            currentAtomLinkPriority = 0
         }
         if currentItem != nil {
+            let isDirectItemChild = elementStack.dropLast().last.map { $0 == "item" || $0 == "entry" } == true
+            if isDirectItemChild,
+               elementName == "link",
+               let href = attributeDict["href"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !href.isEmpty {
+                let rel = attributeDict["rel"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let priority: Int
+                switch rel {
+                case nil, "", "alternate": priority = 2
+                case "self": priority = 1
+                default: priority = 0
+                }
+                if priority > currentAtomLinkPriority {
+                    currentLink = href
+                    currentAtomLinkPriority = priority
+                }
+            }
             if elementName == "media:thumbnail" || elementName == "media:content" {
                 if let url = attributeDict["url"], currentThumbnailUrl == nil {
                     currentThumbnailUrl = url
@@ -90,34 +127,62 @@ class RSSParserDelegate: NSObject, XMLParserDelegate {
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         let cleaned = string.trimmingCharacters(in: .newlines)
-        guard !cleaned.isEmpty else { return }
+        guard currentItem != nil, !cleaned.isEmpty else { return }
 
-        switch currentElement {
+        let itemIndex = elementStack.lastIndex { $0 == "item" || $0 == "entry" }
+        let contentElement = itemIndex.flatMap { index in
+            elementStack.index(after: index) < elementStack.endIndex
+                ? elementStack[elementStack.index(after: index)]
+                : nil
+        }
+        switch contentElement {
         case "title":       currentTitle += string
         case "link":        currentLink += cleaned
-        case "description", "summary": currentDescription += string
-        case "pubDate", "published", "dc:date": currentPubDate += cleaned
+        case "description": currentDescription += string
+        case "summary": currentSummary += string
+        case "content": currentContent += string
+        case "pubdate", "published", "dc:date": currentPublishedDate += cleaned
+        case "updated": currentUpdatedDate += cleaned
         default: break
         }
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        defer {
+            if !elementStack.isEmpty {
+                elementStack.removeLast()
+            }
+        }
         guard elementName == "item" || elementName == "entry", var item = currentItem else { return }
-        item.title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.title = normalizedText(currentTitle)
         item.link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        item.description = currentDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.description = [currentDescription, currentSummary, currentContent]
+            .map(normalizedText)
+            .first { !$0.isEmpty } ?? ""
         item.thumbnailUrl = currentThumbnailUrl
 
-        let dateString = currentPubDate.trimmingCharacters(in: .whitespacesAndNewlines)
-        var parsedDate: Date? = nil
-        for format in Self._dateFormats {
-            _dateFormatter.dateFormat = format
-            if let d = _dateFormatter.date(from: dateString) { parsedDate = d; break }
-        }
-        item.pubDate = parsedDate.map { _iso8601Out.string(from: $0) } ?? dateString
+        let dateStrings = [currentPublishedDate, currentUpdatedDate]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let parsedDate = dateStrings.compactMap(parseDate).max()
+        item.pubDate = parsedDate.map { _iso8601Out.string(from: $0) }
 
         items.append(item)
         currentItem = nil
+    }
+
+    private func parseDate(_ value: String) -> Date? {
+        for format in Self._dateFormats {
+            _dateFormatter.dateFormat = format
+            if let date = _dateFormatter.date(from: value) {
+                return date
+            }
+        }
+        return nil
+    }
+
+    private func normalizedText(_ value: String) -> String {
+        value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 }
 
@@ -161,10 +226,11 @@ extension NetworkManager {
                 let nhkItems = try await parseRss(url: nhkUrl)
                 nhkCompleted = true
                 for item in nhkItems where titleMatchesKeyword(item.title, keyword: keyword) {
+                    guard let itemURL = validatedWebURLString(item.link) else { continue }
                     results.append(FeedItem(
-                        id: "news:nhk:\(stableIdHash(item.link))",
+                        id: "news:nhk:\(stableIdHash(itemURL))",
                         platform: "news",
-                        url: item.link,
+                        url: itemURL,
                         title: cleanNewsTitle(item.title),
                         content_text: item.description.isEmpty ? nil : item.description,
                         author: "NHK",
@@ -189,10 +255,11 @@ extension NetworkManager {
                 for item in gnewsItems {
                     let cleanedTitle = cleanNewsTitle(item.title)
                     guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { continue }
+                    guard let itemURL = validatedWebURLString(item.link) else { continue }
                     results.append(FeedItem(
-                        id: "news:gnews:\(stableIdHash(item.link))",
+                        id: "news:gnews:\(stableIdHash(itemURL))",
                         platform: "news",
-                        url: item.link,
+                        url: itemURL,
                         title: cleanedTitle,
                         content_text: item.description.isEmpty ? nil : item.description,
                         author: "Google News",
@@ -703,12 +770,12 @@ extension NetworkManager {
 
         let nowString = _scraperISO8601.string(from: Date())
         let items = entries.prefix(25).compactMap { item -> FeedItem? in
-            guard !item.link.isEmpty else { return nil }
-            let itemId = item.link.split(separator: "/").last.map(String.init) ?? item.link
+            guard let itemURL = validatedWebURLString(item.link) else { return nil }
+            let itemId = itemURL.split(separator: "/").last.map(String.init) ?? itemURL
             return FeedItem(
                 id: "note:\(itemId)",
                 platform: "note",
-                url: item.link,
+                url: itemURL,
                 title: item.title.isEmpty ? nil : item.title,
                 content_text: item.description.isEmpty ? nil : item.description,
                 author: nil,
@@ -813,13 +880,13 @@ extension NetworkManager {
         }
 
         let feedItems: [FeedItem] = items.compactMap { item in
-            guard !item.link.isEmpty else { return nil }
+            guard let itemURL = validatedWebURLString(item.link) else { return nil }
             let cleanedTitle = cleanNewsTitle(item.title)
             guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { return nil }
             return FeedItem(
-                id: "\(platform):gnews:\(stableIdHash(item.link))",
+                id: "\(platform):gnews:\(stableIdHash(itemURL))",
                 platform: platform,
-                url: item.link,
+                url: itemURL,
                 title: cleanedTitle.isEmpty ? nil : cleanedTitle,
                 content_text: item.description.isEmpty ? nil : item.description,
                 author: nil,
@@ -837,6 +904,17 @@ extension NetworkManager {
     }
 
     // MARK: - Private Helpers
+
+    private func validatedWebURLString(_ rawValue: String) -> String? {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false else {
+            return nil
+        }
+        return value
+    }
 
     private func stableIdHash(_ input: String) -> String {
         var v: UInt64 = 14695981039346656037
@@ -874,11 +952,13 @@ extension NetworkManager {
         request.timeoutInterval = 12
         request.setValue(scraperBrowserUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
-        let (data, _) = try await perform(request, method: "GET")
+        let (data, _) = try await perform(request, method: "GET", logFailure: false)
         let parser = XMLParser(data: data)
         let delegate = RSSParserDelegate()
         parser.delegate = delegate
-        parser.parse()
+        guard parser.parse(), delegate.recognizedFeedRoot else {
+            throw parser.parserError ?? URLError(.cannotParseResponse)
+        }
         return delegate.items
     }
 
@@ -911,19 +991,24 @@ extension NetworkManager {
         return try? await perform(request, method: "POST")
     }
 
-    private func perform(_ request: URLRequest, method: String) async throws -> (Data, HTTPURLResponse) {
+    private func perform(
+        _ request: URLRequest,
+        method: String,
+        logFailure: Bool = true
+    ) async throws -> (Data, HTTPURLResponse) {
         let url = request.url
+        var responseStatus: Int?
         do {
             let (data, response) = try await session.data(for: request)
+            responseStatus = (response as? HTTPURLResponse)?.statusCode
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                let status = (response as? HTTPURLResponse)?.statusCode
-                AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: status=\(status.map(String.init) ?? "unknown")")
                 throw URLError(.badServerResponse)
             }
             return (data, http)
         } catch {
-            if !isCancellationError(error) {
-                AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: \(error.localizedDescription)")
+            if logFailure, !isCancellationError(error) {
+                let detail = responseStatus.map { "status=\($0)" } ?? error.localizedDescription
+                AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: \(detail)")
             }
             throw error
         }

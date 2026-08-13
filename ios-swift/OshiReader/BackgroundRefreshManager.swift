@@ -532,10 +532,12 @@ enum BackgroundRefreshPolicy {
     // UserDefaults snapshot and independently decide the same platform is "due", double-
     // sending the diagnostic the throttle exists to prevent.
     private static let deviceFallbackFailureDiagnosticLock = NSLock()
+    private static var deviceFallbackFailureDiagnosticsInFlight = Set<String>()
 
-    // Returns the subset of `missingPlatforms` that haven't had a failure diagnostic sent
-    // within the throttle window. Read-only — does not itself record anything as sent;
-    // call markDeviceFallbackFailureDiagnosticSent(_:) once the send actually succeeds.
+    // Reserves and returns the subset of `missingPlatforms` that haven't had a failure
+    // diagnostic sent within the throttle window and aren't already being sent by a
+    // concurrent foreground/background refresh. Call finishDeviceFallbackFailureDiagnostic
+    // after the request completes to either commit or release the reservation.
     // Keyed per platform — not a single global timestamp — so a failure on one platform
     // doesn't suppress the alert for an unrelated platform failing soon after. Shared by
     // both the foreground (FeedView) and background (BackgroundRefreshManager)
@@ -546,18 +548,22 @@ enum BackgroundRefreshPolicy {
         defer { deviceFallbackFailureDiagnosticLock.unlock() }
         let lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
         let now = Date().timeIntervalSince1970
-        return missingPlatforms.filter { now - (lastSent[$0] ?? 0) >= deviceFallbackFailureDiagnosticThrottle }
+        let due = missingPlatforms.filter {
+            !deviceFallbackFailureDiagnosticsInFlight.contains($0) &&
+                now - (lastSent[$0] ?? 0) >= deviceFallbackFailureDiagnosticThrottle
+        }
+        deviceFallbackFailureDiagnosticsInFlight.formUnion(due)
+        return due
     }
 
-    // Records `platforms` as having had a failure diagnostic successfully sent just now.
-    // Call this only after the send actually succeeds — marking eagerly (before knowing
-    // whether the POST landed) would let a network failure sending the diagnostic silence
-    // real retries for up to an hour, which is exactly backwards: a device with a flaky
-    // connection is often the same device whose scrape failures most need reporting.
-    static func markDeviceFallbackFailureDiagnosticSent(_ platforms: Set<String>) {
+    // Finishes an in-flight reservation. A successful send starts the throttle window;
+    // a failed send only releases the reservation so the next refresh can retry.
+    static func finishDeviceFallbackFailureDiagnostic(_ platforms: Set<String>, sent: Bool) {
         guard !platforms.isEmpty else { return }
         deviceFallbackFailureDiagnosticLock.lock()
         defer { deviceFallbackFailureDiagnosticLock.unlock() }
+        deviceFallbackFailureDiagnosticsInFlight.subtract(platforms)
+        guard sent else { return }
         var lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
         let now = Date().timeIntervalSince1970
         for platform in platforms {
@@ -565,6 +571,24 @@ enum BackgroundRefreshPolicy {
         }
         UserDefaults.standard.set(lastSent, forKey: deviceFallbackFailureDiagnosticThrottleKey)
     }
+
+    #if DEBUG
+    static func resetDeviceFallbackFailureDiagnosticStateForTesting(_ platforms: Set<String>) {
+        guard !platforms.isEmpty else { return }
+        deviceFallbackFailureDiagnosticLock.lock()
+        defer { deviceFallbackFailureDiagnosticLock.unlock() }
+        deviceFallbackFailureDiagnosticsInFlight.subtract(platforms)
+        var lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
+        for platform in platforms {
+            lastSent.removeValue(forKey: platform)
+        }
+        if lastSent.isEmpty {
+            UserDefaults.standard.removeObject(forKey: deviceFallbackFailureDiagnosticThrottleKey)
+        } else {
+            UserDefaults.standard.set(lastSent, forKey: deviceFallbackFailureDiagnosticThrottleKey)
+        }
+    }
+    #endif
 
     static func sourceScope(
         activeTerms: [WatchTerm],
@@ -1476,9 +1500,7 @@ final class BackgroundRefreshManager {
                 // would let a failed POST (plausible on the same flaky connection that's
                 // often the actual cause of the scrape failures being reported) silence
                 // real retries for up to an hour instead of trying again next cycle.
-                if sent {
-                    BackgroundRefreshPolicy.markDeviceFallbackFailureDiagnosticSent(duePlatforms)
-                }
+                BackgroundRefreshPolicy.finishDeviceFallbackFailureDiagnostic(duePlatforms, sent: sent)
             }
         }
         return completion
