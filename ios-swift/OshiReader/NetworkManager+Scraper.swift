@@ -40,84 +40,321 @@ struct LocalFallbackScrapeResult {
 }
 
 class RSSParserDelegate: NSObject, XMLParserDelegate {
+    private static let atomNamespace = "http://www.w3.org/2005/atom"
+    private static let dublinCoreNamespace = "http://purl.org/dc/elements/1.1/"
+    private static let mediaRSSNamespace = "http://search.yahoo.com/mrss/"
+    private static let rdfNamespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    private static let rssOneNamespace = "http://purl.org/rss/1.0/"
+    private static let rssContentNamespace = "http://purl.org/rss/1.0/modules/content/"
+
+    private let sourceURL: URL?
+
     var items = [RssItem]()
-    private var currentElement = ""
+    private(set) var recognizedFeedRoot = false
+    private var sawDocumentRoot = false
+    private var elementStack = [String]()
+    private var baseURLStack = [URL?]()
     private var currentItem: RssItem? = nil
+    private var currentItemDepth: Int? = nil
 
     private var currentTitle = ""
     private var currentLink = ""
+    private var currentLinkBaseURL: URL?
+    private var currentRDFAboutLink = ""
+    private var currentRDFAboutBaseURL: URL?
+    private var currentPermalinkGuid = ""
+    private var currentGuidBaseURL: URL?
+    private var currentGuidCanBePermalink = false
     private var currentDescription = ""
-    private var currentPubDate = ""
+    private var currentSummary = ""
+    private var currentContent = ""
+    private var currentPublishedDate = ""
+    private var currentUpdatedDate = ""
     private var currentThumbnailUrl: String? = nil
+    private var currentThumbnailBaseURL: URL?
+    private var currentThumbnailPriority = 0
+    private var currentAtomLinkPriority = 0
+
+    init(sourceURL: URL? = nil) {
+        self.sourceURL = sourceURL
+        super.init()
+    }
 
     private let _dateFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(secondsFromGMT: 0)
+        df.twoDigitStartDate = Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: 1950, month: 1, day: 1)
+        )
         return df
     }()
     private static let _dateFormats = [
+        "E, d MMM yy HH:mm:ss z",
+        "E, d MMM yy HH:mm z",
+        "d MMM yy HH:mm:ss z",
+        "d MMM yy HH:mm z",
         "E, d MMM yyyy HH:mm:ss Z",
+        "E, d MMM yyyy HH:mm Z",
+        "d MMM yyyy HH:mm:ss Z",
+        "d MMM yyyy HH:mm Z",
         "yyyy-MM-dd'T'HH:mm:ssZ",
         "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-        "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        "yyyy-MM-dd'T'HH:mm:ss'Z'",
+        "yyyy-MM-dd"
     ]
     private let _iso8601Out = ISO8601DateFormatter()
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
-        currentElement = elementName
-        if elementName == "item" || elementName == "entry" {
+        let rawElementName = (qName ?? elementName).lowercased()
+        let localElementName = Self.feedElementName(
+            elementName,
+            namespaceURI: namespaceURI,
+            qualifiedName: qName
+        )
+        elementStack.append(localElementName)
+        let inheritedBaseURL = baseURLStack.last.flatMap { $0 } ?? sourceURL
+        let xmlBase = attributeDict.first { $0.key.lowercased() == "xml:base" }?.value
+        let elementBaseURL = xmlBase.flatMap {
+            URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines), relativeTo: inheritedBaseURL)?.absoluteURL
+        } ?? inheritedBaseURL
+        baseURLStack.append(elementBaseURL)
+        if !sawDocumentRoot {
+            sawDocumentRoot = true
+            recognizedFeedRoot = ["rss", "feed"].contains(localElementName) ||
+                (localElementName == "rdf" && namespaceURI?.lowercased() == Self.rdfNamespace) ||
+                rawElementName == "rdf:rdf"
+        }
+        if currentItem == nil && (localElementName == "item" || localElementName == "entry") {
             currentItem = RssItem()
+            currentItemDepth = elementStack.count
             currentTitle = ""
             currentLink = ""
+            currentLinkBaseURL = nil
+            currentRDFAboutLink = ""
+            currentRDFAboutBaseURL = nil
+            currentPermalinkGuid = ""
+            currentGuidBaseURL = nil
+            currentGuidCanBePermalink = false
             currentDescription = ""
-            currentPubDate = ""
+            currentSummary = ""
+            currentContent = ""
+            currentPublishedDate = ""
+            currentUpdatedDate = ""
             currentThumbnailUrl = nil
+            currentThumbnailBaseURL = nil
+            currentThumbnailPriority = 0
+            currentAtomLinkPriority = 0
+            if localElementName == "item",
+               namespaceURI?.lowercased() == Self.rssOneNamespace {
+                currentRDFAboutLink = attributeDict.first { $0.key.lowercased() == "rdf:about" }?.value ?? ""
+                currentRDFAboutBaseURL = elementBaseURL
+            }
         }
         if currentItem != nil {
-            if elementName == "media:thumbnail" || elementName == "media:content" {
-                if let url = attributeDict["url"], currentThumbnailUrl == nil {
-                    currentThumbnailUrl = url
+            let isDirectItemChild = elementStack.dropLast().last.map { $0 == "item" || $0 == "entry" } == true
+            if isDirectItemChild,
+                elementStack.dropLast().last == "item",
+               localElementName == "guid" {
+                let isPermaLink = attributeDict.first { $0.key.lowercased() == "ispermalink" }?.value
+                currentGuidCanBePermalink = isPermaLink?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased() != "false"
+                currentGuidBaseURL = elementBaseURL
+            }
+            if isDirectItemChild,
+               localElementName == "link",
+               attributeDict["href"] == nil {
+                currentLinkBaseURL = elementBaseURL
+            }
+            if isDirectItemChild,
+               localElementName == "link",
+               let href = attributeDict["href"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !href.isEmpty,
+               resolveWebURLString(href, baseURL: elementBaseURL) != nil {
+                let rel = attributeDict["rel"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let priority: Int
+                switch rel {
+                case nil, "", "alternate": priority = 2
+                case "self": priority = 1
+                default: priority = 0
+                }
+                if priority > currentAtomLinkPriority {
+                    currentLink = href
+                    currentLinkBaseURL = elementBaseURL
+                    currentAtomLinkPriority = priority
                 }
             }
-            if elementName == "enclosure",
+            if localElementName == "media:thumbnail",
                let url = attributeDict["url"],
-               attributeDict["type"]?.hasPrefix("image") == true,
-               currentThumbnailUrl == nil {
+               resolveWebURLString(url, baseURL: elementBaseURL) != nil,
+               currentThumbnailPriority < 2 {
                 currentThumbnailUrl = url
+                currentThumbnailBaseURL = elementBaseURL
+                currentThumbnailPriority = 2
+            }
+            if localElementName == "media:content",
+               let url = attributeDict["url"],
+               resolveWebURLString(url, baseURL: elementBaseURL) != nil,
+               currentThumbnailPriority < 1,
+               Self.mediaContentCanBeThumbnail(attributeDict) {
+                currentThumbnailUrl = url
+                currentThumbnailBaseURL = elementBaseURL
+                currentThumbnailPriority = 1
+            }
+            if localElementName == "enclosure",
+               let url = attributeDict["url"],
+               resolveWebURLString(url, baseURL: elementBaseURL) != nil,
+               attributeDict["type"]?
+                   .trimmingCharacters(in: .whitespacesAndNewlines)
+                   .lowercased()
+                   .hasPrefix("image/") == true,
+               currentThumbnailPriority < 1 {
+                currentThumbnailUrl = url
+                currentThumbnailBaseURL = elementBaseURL
+                currentThumbnailPriority = 1
             }
         }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        let cleaned = string.trimmingCharacters(in: .newlines)
-        guard !cleaned.isEmpty else { return }
+        appendText(string)
+    }
 
-        switch currentElement {
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let string = String(data: CDATABlock, encoding: .utf8) else { return }
+        appendText(string)
+    }
+
+    private func appendText(_ string: String) {
+        let cleaned = string.trimmingCharacters(in: .newlines)
+        guard currentItem != nil, !cleaned.isEmpty else { return }
+
+        let itemIndex = currentItemDepth.map { $0 - 1 }
+        let contentElement = itemIndex.flatMap { index in
+            elementStack.index(after: index) < elementStack.endIndex
+                ? elementStack[elementStack.index(after: index)]
+                : nil
+        }
+        switch contentElement {
         case "title":       currentTitle += string
         case "link":        currentLink += cleaned
-        case "description", "summary": currentDescription += string
-        case "pubDate", "published", "dc:date": currentPubDate += cleaned
+        case "guid" where currentGuidCanBePermalink: currentPermalinkGuid += cleaned
+        case "description": currentDescription += string
+        case "summary": currentSummary += string
+        case "content": currentContent += string
+        case "pubdate", "published", "date": currentPublishedDate += cleaned
+        case "updated": currentUpdatedDate += cleaned
         default: break
         }
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        guard elementName == "item" || elementName == "entry", var item = currentItem else { return }
-        item.title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        item.link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        item.description = currentDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        item.thumbnailUrl = currentThumbnailUrl
-
-        let dateString = currentPubDate.trimmingCharacters(in: .whitespacesAndNewlines)
-        var parsedDate: Date? = nil
-        for format in Self._dateFormats {
-            _dateFormatter.dateFormat = format
-            if let d = _dateFormatter.date(from: dateString) { parsedDate = d; break }
+        defer {
+            if !elementStack.isEmpty {
+                elementStack.removeLast()
+            }
+            if !baseURLStack.isEmpty {
+                baseURLStack.removeLast()
+            }
         }
-        item.pubDate = parsedDate.map { _iso8601Out.string(from: $0) } ?? dateString
+        let localElementName = Self.feedElementName(
+            elementName,
+            namespaceURI: namespaceURI,
+            qualifiedName: qName
+        )
+        guard (localElementName == "item" || localElementName == "entry"),
+              currentItemDepth == elementStack.count,
+              var item = currentItem else { return }
+        item.title = normalizedText(currentTitle)
+        let explicitLink = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.link = [
+            (explicitLink, currentLinkBaseURL),
+            (currentPermalinkGuid, currentGuidBaseURL),
+            (currentRDFAboutLink, currentRDFAboutBaseURL)
+        ]
+            .compactMap { resolveWebURLString($0.0, baseURL: $0.1) }
+            .first ?? ""
+        item.description = [currentDescription, currentSummary, currentContent]
+            .map(normalizedText)
+            .first { !$0.isEmpty } ?? ""
+        item.thumbnailUrl = currentThumbnailUrl.flatMap {
+            resolveWebURLString($0, baseURL: currentThumbnailBaseURL)
+        }
+
+        let dateStrings = [currentPublishedDate, currentUpdatedDate]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let parsedDate = dateStrings.compactMap(parseDate).max()
+        item.pubDate = parsedDate.map { _iso8601Out.string(from: $0) }
 
         items.append(item)
         currentItem = nil
+        currentItemDepth = nil
+    }
+
+    private static func feedElementName(
+        _ elementName: String,
+        namespaceURI: String?,
+        qualifiedName: String?
+    ) -> String {
+        let localName = elementName.lowercased()
+        let namespace = namespaceURI?.lowercased()
+        if namespace == atomNamespace { return localName }
+        if namespace == dublinCoreNamespace, localName == "date" { return "date" }
+        if namespace == mediaRSSNamespace { return "media:\(localName)" }
+        if namespace == rssContentNamespace, localName == "encoded" { return "content" }
+
+        let normalized = (qualifiedName ?? elementName).lowercased()
+        let parts = normalized.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return normalized }
+        switch (parts[0], parts[1]) {
+        case ("atom", let localName), ("rss", let localName):
+            return localName
+        case ("dc", "date"):
+            return "date"
+        default:
+            return normalized
+        }
+    }
+
+    private static func mediaContentCanBeThumbnail(_ attributes: [String: String]) -> Bool {
+        let medium = attributes["medium"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let type = attributes["type"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let hasExplicitNonImageMedium = medium.map { $0 != "image" } ?? false
+        let hasExplicitNonImageType = type.map { !$0.hasPrefix("image/") } ?? false
+        return !hasExplicitNonImageMedium && !hasExplicitNonImageType
+    }
+
+    private func resolveWebURLString(_ rawValue: String, baseURL: URL? = nil) -> String? {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              let url = URL(string: value, relativeTo: baseURL ?? sourceURL)?.absoluteURL,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false else {
+            return nil
+        }
+        return url.absoluteString
+    }
+
+    private func parseDate(_ value: String) -> Date? {
+        for format in Self._dateFormats {
+            _dateFormatter.dateFormat = format
+            if let date = _dateFormatter.date(from: value) {
+                return date
+            }
+        }
+        return nil
+    }
+
+    private func normalizedText(_ value: String) -> String {
+        value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 }
 
@@ -136,6 +373,13 @@ extension NetworkManager {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     }
 
+    // A cancelled Task (background-refresh deadline cutoff, a task group calling
+    // cancelAll() once another search already succeeded, a dismissed view, etc.)
+    // is an intentional abort, not a network failure — don't log it as one.
+    private func isCancellationError(_ error: Error) -> Bool {
+        (error as? URLError)?.code == .cancelled || error is CancellationError
+    }
+
     // MARK: - RSS Fallback (NHK + Google News)
 
     func scrapeRSSFallback(keyword: String, tagKeyword: String? = nil) async -> [FeedItem] {
@@ -149,45 +393,59 @@ extension NetworkManager {
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
-        if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml"),
-           let nhkItems = try? await parseRss(url: nhkUrl) {
-            nhkCompleted = true
-            for item in nhkItems where titleMatchesKeyword(item.title, keyword: keyword) {
-                results.append(FeedItem(
-                    id: "news:nhk:\(stableIdHash(item.link))",
-                    platform: "news",
-                    url: item.link,
-                    title: cleanNewsTitle(item.title),
-                    content_text: item.description.isEmpty ? nil : item.description,
-                    author: "NHK",
-                    thumbnail_url: nil,
-                    media_type: "article",
-                    published_at: item.pubDate ?? nowString,
-                    watch_term_keyword: tag,
-                    fetched_at: nowString
-                ))
+        if let nhkUrl = URL(string: "https://www3.nhk.or.jp/rss/news/cat7.xml") {
+            do {
+                let nhkItems = try await parseRss(url: nhkUrl)
+                nhkCompleted = true
+                for item in nhkItems where titleMatchesKeyword(item.title, keyword: keyword) {
+                    guard let itemURL = validatedWebURLString(item.link) else { continue }
+                    results.append(FeedItem(
+                        id: "news:nhk:\(stableIdHash(itemURL))",
+                        platform: "news",
+                        url: itemURL,
+                        title: cleanNewsTitle(item.title),
+                        content_text: item.description.isEmpty ? nil : item.description,
+                        author: "NHK",
+                        thumbnail_url: nil,
+                        media_type: "article",
+                        published_at: item.pubDate ?? nowString,
+                        watch_term_keyword: tag,
+                        fetched_at: nowString
+                    ))
+                }
+            } catch {
+                if !isCancellationError(error) {
+                    AppLogger.scraping.error("NHK RSS fallback failed: \(error.localizedDescription)")
+                }
             }
         }
 
-        if let gnewsUrl = googleNewsSearchURL(query: keyword),
-           let gnewsItems = try? await parseRss(url: gnewsUrl) {
-            googleNewsCompleted = true
-            for item in gnewsItems {
-                let cleanedTitle = cleanNewsTitle(item.title)
-                guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { continue }
-                results.append(FeedItem(
-                    id: "news:gnews:\(stableIdHash(item.link))",
-                    platform: "news",
-                    url: item.link,
-                    title: cleanedTitle,
-                    content_text: item.description.isEmpty ? nil : item.description,
-                    author: "Google News",
-                    thumbnail_url: nil,
-                    media_type: "article",
-                    published_at: item.pubDate ?? nowString,
-                    watch_term_keyword: tag,
-                    fetched_at: nowString
-                ))
+        if let gnewsUrl = googleNewsSearchURL(query: keyword) {
+            do {
+                let gnewsItems = try await parseRss(url: gnewsUrl)
+                googleNewsCompleted = true
+                for item in gnewsItems {
+                    let cleanedTitle = cleanNewsTitle(item.title)
+                    guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { continue }
+                    guard let itemURL = validatedWebURLString(item.link) else { continue }
+                    results.append(FeedItem(
+                        id: "news:gnews:\(stableIdHash(itemURL))",
+                        platform: "news",
+                        url: itemURL,
+                        title: cleanedTitle,
+                        content_text: item.description.isEmpty ? nil : item.description,
+                        author: "Google News",
+                        thumbnail_url: nil,
+                        media_type: "article",
+                        published_at: item.pubDate ?? nowString,
+                        watch_term_keyword: tag,
+                        fetched_at: nowString
+                    ))
+                }
+            } catch {
+                if !isCancellationError(error) {
+                    AppLogger.scraping.error("Google News general fallback failed: \(error.localizedDescription)")
+                }
             }
         }
 
@@ -670,22 +928,26 @@ extension NetworkManager {
                   let url = URL(string: "https://note.com/hashtag/\(encoded)/rss") else {
                 continue
             }
-            guard let parsed = try? await parseRss(url: url) else {
+            do {
+                entries = try await parseRss(url: url)
+                completed = true
+            } catch {
+                if !isCancellationError(error) {
+                    AppLogger.scraping.error("Note RSS fallback failed for tag \(noteTag): \(error.localizedDescription)")
+                }
                 continue
             }
-            completed = true
-            entries = parsed
             if !entries.isEmpty { break }
         }
 
         let nowString = _scraperISO8601.string(from: Date())
         let items = entries.prefix(25).compactMap { item -> FeedItem? in
-            guard !item.link.isEmpty else { return nil }
-            let itemId = item.link.split(separator: "/").last.map(String.init) ?? item.link
+            guard let itemURL = validatedWebURLString(item.link) else { return nil }
+            let itemId = itemURL.split(separator: "/").last.map(String.init) ?? itemURL
             return FeedItem(
                 id: "note:\(itemId)",
                 platform: "note",
-                url: item.link,
+                url: itemURL,
                 title: item.title.isEmpty ? nil : item.title,
                 content_text: item.description.isEmpty ? nil : item.description,
                 author: nil,
@@ -751,36 +1013,52 @@ extension NetworkManager {
     ) async -> LocalFallbackScrapeResult {
         let query = "\(keyword) site:\(site)"
         guard let url = googleNewsSearchURL(query: query, locale: locale) else {
+            AppLogger.scraping.error("Google News fallback failed platform=\(platform) site=\(site): could not build search URL")
             return LocalFallbackScrapeResult()
         }
 
         let tag = tagKeyword ?? keyword
         let nowString = _scraperISO8601.string(from: Date())
 
-        guard let initialItems = try? await parseRss(url: url, acceptLanguage: locale.acceptLanguage) else {
+        let initialItems: [RssItem]
+        do {
+            initialItems = try await parseRss(url: url, acceptLanguage: locale.acceptLanguage)
+        } catch {
+            if !isCancellationError(error) {
+                AppLogger.scraping.error("Google News fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+            }
             return LocalFallbackScrapeResult()
         }
         var items = initialItems
         if !items.contains(where: { titleMatchesKeyword(cleanNewsTitle($0.title), keyword: keyword) }) {
             let historicalQuery = "\(query) when:10y"
-            guard let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale),
-                  let historicalItems = try? await parseRss(
-                    url: historicalURL,
-                    acceptLanguage: locale.acceptLanguage
-                  ) else {
-                return LocalFallbackScrapeResult()
+            if let historicalURL = googleNewsSearchURL(query: historicalQuery, locale: locale) {
+                do {
+                    items = try await parseRss(url: historicalURL, acceptLanguage: locale.acceptLanguage)
+                } catch {
+                    if !isCancellationError(error) {
+                        AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): \(error.localizedDescription)")
+                    }
+                    // The historical widening pass is best-effort, not required — on
+                    // failure, fall through with the initial fetch's (successful, if
+                    // empty) result rather than discarding it. Returning empty here
+                    // would erase a genuinely successful check and falsely mark this
+                    // platform as "did not complete" in the missing-platform diagnostic,
+                    // even though the site was actually checked and just had no matches.
+                }
+            } else {
+                AppLogger.scraping.error("Google News historical fallback failed platform=\(platform) site=\(site): could not build search URL")
             }
-            items = historicalItems
         }
 
         let feedItems: [FeedItem] = items.compactMap { item in
-            guard !item.link.isEmpty else { return nil }
+            guard let itemURL = validatedWebURLString(item.link) else { return nil }
             let cleanedTitle = cleanNewsTitle(item.title)
             guard titleMatchesKeyword(cleanedTitle, keyword: keyword) else { return nil }
             return FeedItem(
-                id: "\(platform):gnews:\(stableIdHash(item.link))",
+                id: "\(platform):gnews:\(stableIdHash(itemURL))",
                 platform: platform,
-                url: item.link,
+                url: itemURL,
                 title: cleanedTitle.isEmpty ? nil : cleanedTitle,
                 content_text: item.description.isEmpty ? nil : item.description,
                 author: nil,
@@ -798,6 +1076,17 @@ extension NetworkManager {
     }
 
     // MARK: - Private Helpers
+
+    private func validatedWebURLString(_ rawValue: String) -> String? {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false else {
+            return nil
+        }
+        return value
+    }
 
     private func stableIdHash(_ input: String) -> String {
         var v: UInt64 = 14695981039346656037
@@ -822,20 +1111,27 @@ extension NetworkManager {
         url: URL,
         acceptLanguage: String = GoogleNewsFallbackLocale.japan.acceptLanguage
     ) async throws -> [RssItem] {
-        guard let (data, _) = await httpGET(
-            url,
-            headers: [
-                "User-Agent": scraperBrowserUserAgent,
-                "Accept-Language": acceptLanguage
-            ],
-            timeout: 12
-        ) else {
-            throw URLError(.badServerResponse)
-        }
+        // Calls perform() directly (bypassing httpGET's Optional-collapsing wrapper) so
+        // the real error — genuinely a cancellation, or genuinely a bad response — reaches
+        // this function's callers intact. Reconstructing that distinction from Task.isCancelled
+        // after the fact (as this used to) is inherently racy: this call runs inside a
+        // TaskGroup alongside many sibling site fetches, and a sibling finishing and
+        // triggering cancelAll() can flip Task.isCancelled to true at any moment — including
+        // right after this call's own genuine, unrelated HTTP failure already resolved —
+        // which would misattribute that real failure as routine cancellation and suppress
+        // logging a genuinely diagnosable bug.
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue(scraperBrowserUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
+        let (data, response) = try await perform(request, method: "GET", logFailure: false)
         let parser = XMLParser(data: data)
-        let delegate = RSSParserDelegate()
+        parser.shouldProcessNamespaces = true
+        let delegate = RSSParserDelegate(sourceURL: response.url ?? url)
         parser.delegate = delegate
-        parser.parse()
+        guard parser.parse(), delegate.recognizedFeedRoot else {
+            throw parser.parserError ?? URLError(.cannotParseResponse)
+        }
         return delegate.items
     }
 
@@ -849,12 +1145,7 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else {
-            return nil
-        }
-        return (data, http)
+        return try? await perform(request, method: "GET")
     }
 
     private func httpPOST(
@@ -870,12 +1161,30 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else {
-            return nil
+        return try? await perform(request, method: "POST")
+    }
+
+    private func perform(
+        _ request: URLRequest,
+        method: String,
+        logFailure: Bool = true
+    ) async throws -> (Data, HTTPURLResponse) {
+        let url = request.url
+        var responseStatus: Int?
+        do {
+            let (data, response) = try await session.data(for: request)
+            responseStatus = (response as? HTTPURLResponse)?.statusCode
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            return (data, http)
+        } catch {
+            if logFailure, !isCancellationError(error) {
+                let detail = responseStatus.map { "status=\($0)" } ?? error.localizedDescription
+                AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: \(detail)")
+            }
+            throw error
         }
-        return (data, http)
     }
 
     private func cleanNewsTitle(_ title: String) -> String {

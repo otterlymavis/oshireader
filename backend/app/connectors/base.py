@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import re
-from typing import Optional
-from urllib.parse import urlencode
+from typing import Coroutine, Optional
+from urllib.parse import quote, urlencode
 import unicodedata
 
 import feedparser
@@ -37,6 +38,103 @@ def jina_reader_headers(accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Langu
     if settings.jina_api_key:
         headers["Authorization"] = f"Bearer {settings.jina_api_key}"
     return headers
+
+
+async def fetch_google_news_via_public_proxy(
+    google_news_url: str,
+    accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Language"],
+) -> bytes | None:
+    """Fetch a Google News RSS URL through allorigins.win, a free public
+    read-through proxy, as a second, independent hop between jina.ai and Bing.
+
+    Different infrastructure and IP space than both jina.ai and our own
+    Cloudflare Worker (which Google already blocks for direct Google News
+    fetches — see CLAUDE.md), so a block on either of those shouldn't
+    correlate with a block here. Returns raw RSS bytes (parse with
+    feedparser, same as the Bing fallback) or None on any failure.
+
+    Timeout matches jina_reader_headers' hop (10s) rather than Bing's (12s):
+    this hop runs concurrently with jina, not after it, so its timeout sets
+    the floor for how long that concurrent pair can take before falling
+    through to Bing — keeping it at parity with jina avoids adding extra
+    worst-case latency to a connector fetch budget that's already tight
+    once Bing's own hop is added on top.
+    """
+    proxy_url = "https://api.allorigins.win/raw?url=" + quote(google_news_url, safe="")
+    headers = {**GOOGLE_NEWS_HEADERS, "Accept-Language": accept_language}
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=headers) as client:
+            resp = await client.get(proxy_url)
+            if not resp.is_success:
+                return None
+            return resp.content
+    except Exception:
+        return None
+
+
+async def race_jina_and_public_proxy(
+    jina_coro: Coroutine[object, object, tuple[list["SourceItemCreate"], bool]],
+    proxy_coro: Coroutine[object, object, list["SourceItemCreate"]],
+) -> list["SourceItemCreate"]:
+    """Run the jina.ai and public-proxy Google News fallback hops concurrently and
+    return jina's items if it found any, falling back to the proxy's only when
+    jina's own request failed outright.
+
+    jina_coro must resolve to (items, succeeded) — succeeded reflects whether
+    jina's HTTP request itself succeeded, independent of whether it found any
+    keyword matches. The public proxy exists to cover for jina being
+    *unreachable*, not to widen an empty-but-legitimate result (that's
+    when:10y's and Bing's job already) — so once jina has genuinely answered,
+    successfully, with zero matches, there's no reason to let a second request
+    against a free, presumably rate-limited proxy run to completion too.
+    Without this, the proxy fires on effectively every poll regardless of
+    jina's health, since "jina succeeded but found nothing" — not "jina found
+    matches" — is the common case across ~20 platforms every 15 minutes,
+    working against the same jina-load-reduction reasoning this session
+    applied to jina's own double-query retry.
+
+    Starting both hops together instead of sequentially avoids stacking each
+    hop's own timeout on top of the other's before Bing even gets a chance to
+    run — trying jina (10s) then the public proxy (10s) then Bing (up to 12s)
+    one after another could approach or exceed the connector's overall fetch
+    budget (25s) on its own. The finally block cancels the proxy hop as soon
+    as it's no longer needed (jina found matches, or jina succeeded with
+    none), and also covers the caller itself getting cancelled from outside
+    (the scheduler's own connector-level timeout): proxy_task is a separate
+    task, not part of the awaited chain, so cancelling the caller's own
+    coroutine wouldn't otherwise cascade to it, and it would keep running
+    detached past the connector's own timeout.
+
+    Shared by every connector with this fallback chain, so a future change to
+    the cancellation/retry logic can't drift between per-connector copies.
+    """
+    jina_task = asyncio.ensure_future(jina_coro)
+    proxy_task = asyncio.ensure_future(proxy_coro)
+    proxy_was_awaited = False
+    try:
+        jina_items, jina_succeeded = await jina_task
+        if jina_items or jina_succeeded:
+            return jina_items
+        proxy_was_awaited = True
+        return await proxy_task
+    finally:
+        if not proxy_task.done():
+            proxy_task.cancel()
+            try:
+                await proxy_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # The public proxy is a best-effort hedge. If it failed while
+                # being cancelled because jina already answered (or the caller
+                # itself timed out), its error must not replace that outcome.
+                pass
+        elif not proxy_was_awaited:
+            # Retrieve (and discard) any exception so it isn't logged as "never
+            # retrieved" at garbage-collection time — the proxy hop is best-effort
+            # and we no longer care why it failed once it's not going to be used.
+            if not proxy_task.cancelled():
+                proxy_task.exception()
 
 
 SEARCH_RESULT_MAX_AGE = timedelta(days=31)
@@ -237,6 +335,61 @@ def build_google_news_jina_items(
                 title=title,
                 content_text=None,
                 author=author,
+                raw_payload=raw_payload,
+            )
+        )
+    return items
+
+
+async def build_google_news_public_proxy_items(
+    content: bytes,
+    keyword: str,
+    *,
+    platform: str,
+    title_suffix_re: Optional[re.Pattern] = None,
+    raw_payload_extra: Optional[dict] = None,
+) -> list[SourceItemCreate]:
+    """Parse a Google News RSS response fetched via the public-proxy fallback
+    (allorigins.win) into matching, recent SourceItemCreates.
+
+    Shared by every connector that uses the public-proxy hop, same reasoning
+    as build_google_news_jina_items above: a per-connector copy of this
+    parsing previously drifted (one added a link to the dedup set before the
+    recency check, another after) and centralizing it removes that class of
+    bug entirely instead of relying on both copies staying in sync by hand.
+    """
+    try:
+        feed = await asyncio.to_thread(feedparser.parse, content)
+    except Exception:
+        return []
+
+    items: list[SourceItemCreate] = []
+    seen: set[str] = set()
+    for entry in feed.entries[:25]:
+        title = (entry.get("title") or "").strip()
+        link = entry.get("link", "")
+        if title_suffix_re:
+            title = title_suffix_re.sub("", title).strip()
+        if not link or not title or link in seen:
+            continue
+        if not title_contains_keyword(keyword, title):
+            continue
+        published = parse_feed_date(entry)
+        if published is None or not is_recent_search_result(published):
+            continue
+        seen.add(link)
+        raw_payload = {"keyword": keyword, "source": "google_news_public_proxy"}
+        if raw_payload_extra:
+            raw_payload.update(raw_payload_extra)
+        items.append(
+            SourceItemCreate(
+                platform=platform,
+                item_id=link,
+                url=link,
+                published_at=published,
+                media_type="article",
+                title=title,
+                content_text=entry.get("summary") or None,
                 raw_payload=raw_payload,
             )
         )

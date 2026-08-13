@@ -52,6 +52,26 @@ def record_fetch_result(platform: str, *, succeeded: bool, item_count: int = 0, 
             entry["consecutive_failures"] = entry.get("consecutive_failures", 0) + 1
 
 
+def record_jina_result(platform: str, *, succeeded: bool, error: str | None = None) -> None:
+    """Records r.jina.ai's raw HTTP outcome for this platform's most recent Google
+    News fallback request, independent of whether it found any keyword matches.
+
+    record_fetch_result's main status collapses "jina failed, Bing fallback also
+    came up empty" and "genuinely no news this cycle" into the same
+    status="empty" — both report item_count=0. This is recorded separately so a
+    renewed jina outage (key expired, jina down, quota hit) stays visible via
+    /api/source-health even on platforms whose overall status still looks fine
+    because Bing's fallback (or a lucky empty-but-legitimate jina response)
+    covered for it.
+    """
+    now = _utcnow()
+    with _lock:
+        entry = _health.setdefault(platform, {"consecutive_failures": 0})
+        entry["jina_checked_at"] = now
+        entry["jina_ok"] = succeeded
+        entry["jina_error"] = error if not succeeded else None
+
+
 def record_filtered(platform: str) -> None:
     """Record that a fetch was skipped by mode filtering (e.g. MEDIA_ONLY), not attempted.
 
@@ -66,12 +86,17 @@ def record_filtered(platform: str) -> None:
         entry = _health.get(platform)
         if entry is not None and entry.get("cycle") == _cycle and entry.get("status") != "filtered":
             return
-        _health[platform] = {
+        # Update in place rather than replacing the dict outright — a full replace would
+        # silently drop jina_ok/jina_error/jina_checked_at (and last_success_at etc.) set
+        # by an earlier real fetch this platform had before it started being filtered.
+        entry = dict(entry) if entry is not None else {}
+        entry.update({
             "consecutive_failures": 0,
             "status": "filtered",
             "last_checked_at": now,
             "cycle": _cycle,
-        }
+        })
+        _health[platform] = entry
 
 
 def snapshot() -> list[dict]:
@@ -85,6 +110,9 @@ def snapshot() -> list[dict]:
                 "last_item_count": entry.get("last_item_count"),
                 "last_error": entry.get("last_error"),
                 "consecutive_failures": entry.get("consecutive_failures", 0),
+                "jina_checked_at": entry.get("jina_checked_at"),
+                "jina_ok": entry.get("jina_ok"),
+                "jina_error": entry.get("jina_error"),
             }
             for platform, entry in sorted(_health.items())
         ]

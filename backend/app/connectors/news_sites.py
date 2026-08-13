@@ -21,14 +21,18 @@ from app.connectors.base import (
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     build_google_news_jina_items,
+    build_google_news_public_proxy_items,
     contains_keyword,
+    fetch_google_news_via_public_proxy,
     fetch_search_rss_via_proxy,
     is_recent_search_result,
     jina_reader_headers,
     mark_date_provenance,
     parse_feed_date,
+    race_jina_and_public_proxy,
     title_contains_keyword,
 )
+from app.source_health import record_jina_result
 
 log = logging.getLogger(__name__)
 
@@ -126,14 +130,18 @@ class _GNewsSiteConnector(BaseConnector):
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
             return []
-        items = await self._fetch_gnews(keyword)
-        if not items:
-            items = await self._fetch_gnews(keyword, history_years=10)
-        return items
+        return await self._fetch_gnews(keyword)
 
-    async def _fetch_gnews(self, keyword: str, history_years: int | None = None) -> list[SourceItemCreate]:
-        history = f" when:{history_years}y" if history_years else ""
-        encoded = quote(f"{keyword} site:{self.SITE}{history}")
+    async def _fetch_gnews(self, keyword: str) -> list[SourceItemCreate]:
+        # Always query with when:10y rather than trying an unscoped query first and
+        # retrying with when:10y only on an empty result. when:10y is a superset of
+        # the unscoped query (Google's default ranking can omit matches that
+        # when:10y surfaces) and every result is filtered to the last 31 days
+        # downstream regardless (is_recent_search_result), so the two-step retry
+        # bought no extra recall — only a second jina.ai request on every poll that
+        # found nothing on the first try, which is the common case across ~20
+        # platforms every 15 minutes and the scarcest resource in this chain.
+        encoded = quote(f"{keyword} site:{self.SITE} when:10y")
         url = (
             f"https://news.google.com/rss/search?q={encoded}"
             f"&hl={quote(self.GNEWS_HL)}"
@@ -143,18 +151,22 @@ class _GNewsSiteConnector(BaseConnector):
         # Google News is unreachable directly from Render's outbound IP (see
         # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
         # Google from Cloudflare's IP ranges, so neither is worth the timeout
-        # budget: go straight to the jina.ai reader proxy, then Bing.
-        items = await self._fetch_gnews_jina(keyword, url, history_years)
+        # budget: go straight to the jina.ai reader proxy and a second,
+        # independent public proxy (see race_jina_and_public_proxy), then Bing.
+        items = await race_jina_and_public_proxy(
+            self._fetch_gnews_jina(keyword, url, history_years=10),
+            self._fetch_gnews_public_proxy(keyword, url),
+        )
         if items:
             return items
-        return await self._fetch_bing_news(keyword, history_years)
+        return await self._fetch_bing_news(keyword, history_years=10)
 
     async def _fetch_gnews_jina(
         self,
         keyword: str,
         google_news_url: str,
         history_years: int | None,
-    ) -> list[SourceItemCreate]:
+    ) -> tuple[list[SourceItemCreate], bool]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
             async with httpx.AsyncClient(
@@ -163,17 +175,37 @@ class _GNewsSiteConnector(BaseConnector):
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("%s Google News Jina fallback returned %d", self.PLATFORM, resp.status_code)
-                    return []
+                    record_jina_result(self.PLATFORM, succeeded=False, error=f"http_{resp.status_code}")
+                    return [], False
         except Exception as exc:
             log.warning("%s Google News Jina fallback error: %s", self.PLATFORM, exc)
-            return []
+            record_jina_result(self.PLATFORM, succeeded=False, error=type(exc).__name__)
+            return [], False
 
-        return build_google_news_jina_items(
+        record_jina_result(self.PLATFORM, succeeded=True)
+        items = build_google_news_jina_items(
             resp.text,
             keyword,
             platform=self.PLATFORM,
             title_suffix_re=self.TITLE_SUFFIX_RE,
             raw_payload_extra={"site": self.SITE, "history_years": history_years},
+        )
+        return items, True
+
+    async def _fetch_gnews_public_proxy(
+        self,
+        keyword: str,
+        google_news_url: str,
+    ) -> list[SourceItemCreate]:
+        content = await fetch_google_news_via_public_proxy(google_news_url, accept_language=self.ACCEPT_LANGUAGE)
+        if not content:
+            return []
+        return await build_google_news_public_proxy_items(
+            content,
+            keyword,
+            platform=self.PLATFORM,
+            title_suffix_re=self.TITLE_SUFFIX_RE,
+            raw_payload_extra={"site": self.SITE},
         )
 
     async def _fetch_bing_news(
@@ -328,8 +360,6 @@ class AmebloConnector(_GNewsSiteConnector):
         items = await self._fetch_ameba_search(stripped)
         if not items:
             items = await self._fetch_gnews(stripped)
-        if not items:
-            items = await self._fetch_gnews(stripped, history_years=10)
         return items
 
     async def _fetch_ameba_search(self, keyword: str) -> list[SourceItemCreate]:
@@ -600,6 +630,4 @@ class BARKSConnector(_GNewsSiteConnector):
         items = await self._fetch_direct_rss("https://www.barks.jp/news/rss/", keyword)
         if not items:
             items = await self._fetch_gnews(keyword)
-        if not items:
-            items = await self._fetch_gnews(keyword, history_years=10)
         return items

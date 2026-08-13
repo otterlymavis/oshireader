@@ -157,6 +157,7 @@ private struct FeedRefreshReport {
     var backendConnectivityFailed = false
     var customCompletedCheck = false
     var completedDevicePlatforms = Set<String>()
+    var missingDevicePlatforms = Set<String>()
     var feedScopeRevision: Int?
 
     mutating func record(
@@ -207,6 +208,7 @@ private struct FeedRefreshReport {
         backendConnectivityFailed = backendConnectivityFailed || other.backendConnectivityFailed
         customCompletedCheck = customCompletedCheck || other.customCompletedCheck
         completedDevicePlatforms.formUnion(other.completedDevicePlatforms)
+        missingDevicePlatforms.formUnion(other.missingDevicePlatforms)
         if feedScopeRevision == nil {
             feedScopeRevision = other.feedScopeRevision
         }
@@ -215,6 +217,10 @@ private struct FeedRefreshReport {
 
     mutating func markCompletedDevicePlatforms(_ platforms: Set<String>) {
         completedDevicePlatforms.formUnion(platforms)
+    }
+
+    mutating func markMissingDevicePlatforms(_ platforms: Set<String>) {
+        missingDevicePlatforms.formUnion(platforms)
     }
 
     private static func didBackendReturnItems(strategy: String, itemCount: Int) -> Bool {
@@ -1239,8 +1245,16 @@ struct FeedView: View {
             return report
         }
         await withTaskGroup(
-            of: (termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
+            of: (searchID: Int, termKeyword: String, searchTerm: String, result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>).self
         ) { group in
+            // Tracks every search submitted below, keyed by a unique index rather than
+            // keyword text — a term whose alias duplicates its own keyword (or two terms
+            // sharing a keyword) would otherwise collide on a string key. Matches
+            // BackgroundRefreshManager's equivalent loop so a search still in flight when
+            // this whole group is cancelled counts toward its platforms' expected total
+            // as not-completed, instead of vanishing from missingPlatforms entirely.
+            var pendingSearches: [Int: Set<String>] = [:]
+            var nextSearchID = 0
             for term in fallbackTerms {
                 let platformsForTerm = platformsToScrape.intersection(
                     BackgroundRefreshPolicy.deviceFallbackPlatforms(
@@ -1251,19 +1265,29 @@ struct FeedView: View {
                 guard !platformsForTerm.isEmpty else { continue }
                 let searchTerms = [term.keyword] + term.aliases
                 for searchTerm in searchTerms {
+                    let searchID = nextSearchID
+                    nextSearchID += 1
+                    pendingSearches[searchID] = platformsForTerm
                     group.addTask {
                         let scrapeResult = await NetworkManager.shared.scrapeLocalFallbacksWithCompletion(
                             keyword: searchTerm,
                             tagKeyword: term.keyword,
                             platformIds: platformsForTerm
                         )
-                        return (term.keyword, searchTerm, scrapeResult, platformsForTerm)
+                        return (searchID, term.keyword, searchTerm, scrapeResult, platformsForTerm)
                     }
                 }
             }
             var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
             var scrapeAttempts = [[FeedItem]]()
             for await scrape in group {
+                // Remove from pendingSearches before checking cancellation: `scrape` is
+                // already a fully-arrived result at this point regardless of the parent
+                // task's cancellation state, so if cancellation is noticed on this same
+                // iteration, this search should just be omitted from scrapeResults
+                // entirely (neither credited nor padded in as "missing") rather than
+                // left in pendingSearches and later counted as a failure it didn't have.
+                pendingSearches.removeValue(forKey: scrape.searchID)
                 if Task.isCancelled {
                     group.cancelAll()
                     break
@@ -1300,11 +1324,33 @@ struct FeedView: View {
                     )
                 }
             }
-            report.markCompletedDevicePlatforms(
-                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
-                    scrapeResults
+            // Any search that never reported back (cancelled before finishing) still
+            // needs to count toward its platforms' expected total as not-completed —
+            // otherwise a term with an alias whose search never ran could look fully
+            // covered from just its keyword search completing, and the alias search
+            // would silently never get retried.
+            for expectedPlatforms in pendingSearches.values {
+                scrapeResults.append((LocalFallbackScrapeResult(), expectedPlatforms))
+            }
+            // Diff against platforms actually expected by this round's searches, not the
+            // user's full subscribed set — a platform can be subscribed but excluded from
+            // every active term this round (e.g. a media-only term), in which case it was
+            // never attempted and shouldn't be reported as having failed to complete.
+            let (completedPlatforms, missingPlatforms) = BackgroundRefreshPolicy.deviceFallbackCompletionStatus(scrapeResults)
+            report.markCompletedDevicePlatforms(completedPlatforms)
+            if !missingPlatforms.isEmpty {
+                // A platform can silently drop out of a request (network error, timeout,
+                // bad response — see NetworkManager+Scraper.swift's httpGET logging) without
+                // any single strategy attempt above reporting "failed", since a scrape that
+                // never completes just contributes nothing to scrapeResults. Surface that gap
+                // explicitly so it isn't indistinguishable from "this platform had no news".
+                report.markMissingDevicePlatforms(missingPlatforms)
+                report.record(
+                    strategy: "device_local_scrapers",
+                    status: "failed",
+                    detail: "did not complete: \(missingPlatforms.sorted().joined(separator: ","))"
                 )
-            )
+            }
         }
         if !report.attempts.contains(where: { $0.strategy == "device_local_scrapers" }) {
             report.record(strategy: "device_local_scrapers", status: "empty")
@@ -1361,10 +1407,24 @@ struct FeedView: View {
     private func sendNoResultsDiagnosticIfNeeded(_ report: FeedRefreshReport) async {
         guard !report.backendConnectivityFailed else { return }
         let activeTermsCount = db.terms.filter { $0.is_active }.count
-        guard activeTermsCount > 0, db.feedItems.isEmpty, report.addedCount == 0 else { return }
+        guard activeTermsCount > 0 else { return }
+
+        let feedIsEmpty = db.feedItems.isEmpty && report.addedCount == 0
+        // The empty-feed case is rare and always worth reporting. A partial device-fallback
+        // failure alongside an otherwise-populated feed is comparatively common (a single
+        // slow/blocked site among ~25), so it's throttled per platform — not with one
+        // global timestamp — so a failure on one platform doesn't suppress the alert for
+        // an unrelated platform failing soon after. Shared with the background refresh
+        // path (BackgroundRefreshManager.devicePlatformsDueForFailureDiagnostic) so the
+        // two don't independently spam the same platform failure.
+        let duePlatforms = feedIsEmpty
+            ? []
+            : BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic(report.missingDevicePlatforms)
+        guard feedIsEmpty || !duePlatforms.isEmpty else { return }
+
         let info = Bundle.main.infoDictionary
         let diagnostic = ClientDiagnosticReport(
-            reason: "feed_refresh_no_results_after_fallbacks",
+            reason: feedIsEmpty ? "feed_refresh_no_results_after_fallbacks" : "device_fallback_partial_failure",
             environment: NetworkManager.shared.environmentName,
             api_base: NetworkManager.shared.apiBase,
             app_version: info?["CFBundleShortVersionString"] as? String,
@@ -1374,8 +1434,14 @@ struct FeedView: View {
             cached_feed_count: db.feedItems.count,
             events: report.attempts.map(\.diagnosticEvent)
         )
-        AppLogger.network.error("No feed results after \(report.attempts.count) strategies; sending diagnostic")
-        await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+        AppLogger.network.error("\(feedIsEmpty ? "No feed results" : "Device fallback incomplete") after \(report.attempts.count) strategies; sending diagnostic")
+        let sent = await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+        // Only start the throttle window on a confirmed send — marking eagerly would let a
+        // failed POST (plausible on the same flaky connection that's often the actual
+        // cause of the scrape failures being reported) silence real retries for an hour.
+        if !duePlatforms.isEmpty {
+            BackgroundRefreshPolicy.finishDeviceFallbackFailureDiagnostic(duePlatforms, sent: sent)
+        }
     }
 
     private func clearRefreshErrorIfLocalFeedIsUsable(_ report: FeedRefreshReport) {

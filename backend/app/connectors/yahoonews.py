@@ -15,11 +15,15 @@ from app.connectors.base import (
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     build_google_news_jina_items,
+    build_google_news_public_proxy_items,
+    fetch_google_news_via_public_proxy,
     fetch_search_rss_via_proxy,
     jina_reader_headers,
     parse_feed_date,
+    race_jina_and_public_proxy,
     title_contains_keyword,
 )
+from app.source_health import record_jina_result
 
 log = logging.getLogger(__name__)
 
@@ -57,25 +61,39 @@ class YahooNewsConnector(BaseConnector):
         # Google News is unreachable directly from Render's outbound IP (see
         # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
         # Google from Cloudflare's IP ranges, so neither is worth the timeout
-        # budget: go straight to the jina.ai reader proxy, then Bing.
-        items = await self._fetch_gnews_jina(keyword, url)
+        # budget: go straight to the jina.ai reader proxy and a second,
+        # independent public proxy (see race_jina_and_public_proxy), then Bing.
+        items = await race_jina_and_public_proxy(
+            self._fetch_gnews_jina(keyword, url),
+            self._fetch_gnews_public_proxy(keyword, url),
+        )
         if items:
             return items
         return await self._fetch_bing_news(keyword)
 
-    async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
+    async def _fetch_gnews_jina(self, keyword: str, google_news_url: str) -> tuple[list[SourceItemCreate], bool]:
         proxy_url = "https://r.jina.ai/http://" + google_news_url.replace("https://", "")
         try:
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=jina_reader_headers()) as client:
                 resp = await client.get(proxy_url)
                 if not resp.is_success:
                     log.warning("YahooNews Google News Jina fallback returned status %d", resp.status_code)
-                    return []
+                    record_jina_result(self.PLATFORM, succeeded=False, error=f"http_{resp.status_code}")
+                    return [], False
         except Exception as exc:
             log.warning("YahooNews Google News Jina fallback error: %s", exc)
-            return []
+            record_jina_result(self.PLATFORM, succeeded=False, error=type(exc).__name__)
+            return [], False
 
-        return build_google_news_jina_items(resp.text, keyword, platform=self.PLATFORM)
+        record_jina_result(self.PLATFORM, succeeded=True)
+        items = build_google_news_jina_items(resp.text, keyword, platform=self.PLATFORM)
+        return items, True
+
+    async def _fetch_gnews_public_proxy(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
+        content = await fetch_google_news_via_public_proxy(google_news_url)
+        if not content:
+            return []
+        return await build_google_news_public_proxy_items(content, keyword, platform=self.PLATFORM)
 
     async def _fetch_bing_news(self, keyword: str) -> list[SourceItemCreate]:
         query = f"{keyword} site:news.yahoo.co.jp"

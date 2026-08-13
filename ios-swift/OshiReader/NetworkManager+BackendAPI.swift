@@ -14,6 +14,13 @@ struct SourceHealthEntry: Decodable, Identifiable {
     let last_item_count: Int?
     let last_error: String?
     let consecutive_failures: Int
+    // jina_ok reflects r.jina.ai's raw request outcome, independent of `status` above —
+    // a platform can show status "success"/"empty" (Bing covered for it) while jina_ok is
+    // false, meaning jina itself is degraded even though the platform looks healthy
+    // overall. See backend/app/source_health.py's record_jina_result.
+    let jina_checked_at: String?
+    let jina_ok: Bool?
+    let jina_error: String?
 
     var id: String { platform }
 }
@@ -769,8 +776,9 @@ extension NetworkManager {
         }
     }
 
-    func sendClientDiagnostic(_ report: ClientDiagnosticReport) async {
-        guard !isUITesting else { return }
+    @discardableResult
+    func sendClientDiagnostic(_ report: ClientDiagnosticReport) async -> Bool {
+        guard !isUITesting else { return false }
         do {
             let body = try JSONEncoder().encode(report)
             try await apiVoid(
@@ -779,8 +787,10 @@ extension NetworkManager {
                 body: body,
                 timeout: 12
             )
+            return true
         } catch {
             AppLogger.network.warning("sendClientDiagnostic failed: \(error.localizedDescription)")
+            return false
         }
     }
 }

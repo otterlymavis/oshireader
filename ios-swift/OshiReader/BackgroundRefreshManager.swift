@@ -503,6 +503,93 @@ enum BackgroundRefreshPolicy {
         })
     }
 
+    static func expectedDeviceFallbackPlatforms(
+        _ scrapeResults: [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]
+    ) -> Set<String> {
+        scrapeResults.reduce(into: Set<String>()) { result, scrapeResult in
+            result.formUnion(scrapeResult.expectedPlatforms.map { Platform.normalize($0) })
+        }
+    }
+
+    // Combines the two functions above into the pair both FeedView's foreground
+    // deepFallback and BackgroundRefreshManager's background equivalent actually need
+    // from a completed scrapeResults array, so that computation can't drift between
+    // the two independent task-group loops that build scrapeResults in the first
+    // place.
+    static func deviceFallbackCompletionStatus(
+        _ scrapeResults: [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]
+    ) -> (completed: Set<String>, missing: Set<String>) {
+        let completed = completedDeviceFallbackPlatformsForEligibleSearches(scrapeResults)
+        let expected = expectedDeviceFallbackPlatforms(scrapeResults)
+        return (completed, expected.subtracting(completed))
+    }
+
+    private static let deviceFallbackFailureDiagnosticThrottleKey = "feed.device_fallback_failure_diagnostic_last_sent_by_platform"
+    private static let deviceFallbackFailureDiagnosticThrottle: TimeInterval = 60 * 60
+    // Foreground (FeedView) and background (BackgroundRefreshManager) refreshes can run
+    // concurrently on different tasks and both call devicePlatformsDueForFailureDiagnostic;
+    // without serializing the read-modify-write below, both could read the same stale
+    // UserDefaults snapshot and independently decide the same platform is "due", double-
+    // sending the diagnostic the throttle exists to prevent.
+    private static let deviceFallbackFailureDiagnosticLock = NSLock()
+    private static var deviceFallbackFailureDiagnosticsInFlight = Set<String>()
+
+    // Reserves and returns the subset of `missingPlatforms` that haven't had a failure
+    // diagnostic sent within the throttle window and aren't already being sent by a
+    // concurrent foreground/background refresh. Call finishDeviceFallbackFailureDiagnostic
+    // after the request completes to either commit or release the reservation.
+    // Keyed per platform — not a single global timestamp — so a failure on one platform
+    // doesn't suppress the alert for an unrelated platform failing soon after. Shared by
+    // both the foreground (FeedView) and background (BackgroundRefreshManager)
+    // device-fallback paths.
+    static func devicePlatformsDueForFailureDiagnostic(_ missingPlatforms: Set<String>) -> Set<String> {
+        guard !missingPlatforms.isEmpty else { return [] }
+        deviceFallbackFailureDiagnosticLock.lock()
+        defer { deviceFallbackFailureDiagnosticLock.unlock() }
+        let lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
+        let now = Date().timeIntervalSince1970
+        let due = missingPlatforms.filter {
+            !deviceFallbackFailureDiagnosticsInFlight.contains($0) &&
+                now - (lastSent[$0] ?? 0) >= deviceFallbackFailureDiagnosticThrottle
+        }
+        deviceFallbackFailureDiagnosticsInFlight.formUnion(due)
+        return due
+    }
+
+    // Finishes an in-flight reservation. A successful send starts the throttle window;
+    // a failed send only releases the reservation so the next refresh can retry.
+    static func finishDeviceFallbackFailureDiagnostic(_ platforms: Set<String>, sent: Bool) {
+        guard !platforms.isEmpty else { return }
+        deviceFallbackFailureDiagnosticLock.lock()
+        defer { deviceFallbackFailureDiagnosticLock.unlock() }
+        deviceFallbackFailureDiagnosticsInFlight.subtract(platforms)
+        guard sent else { return }
+        var lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
+        let now = Date().timeIntervalSince1970
+        for platform in platforms {
+            lastSent[platform] = now
+        }
+        UserDefaults.standard.set(lastSent, forKey: deviceFallbackFailureDiagnosticThrottleKey)
+    }
+
+    #if DEBUG
+    static func resetDeviceFallbackFailureDiagnosticStateForTesting(_ platforms: Set<String>) {
+        guard !platforms.isEmpty else { return }
+        deviceFallbackFailureDiagnosticLock.lock()
+        defer { deviceFallbackFailureDiagnosticLock.unlock() }
+        deviceFallbackFailureDiagnosticsInFlight.subtract(platforms)
+        var lastSent = (UserDefaults.standard.dictionary(forKey: deviceFallbackFailureDiagnosticThrottleKey) as? [String: Double]) ?? [:]
+        for platform in platforms {
+            lastSent.removeValue(forKey: platform)
+        }
+        if lastSent.isEmpty {
+            UserDefaults.standard.removeObject(forKey: deviceFallbackFailureDiagnosticThrottleKey)
+        } else {
+            UserDefaults.standard.set(lastSent, forKey: deviceFallbackFailureDiagnosticThrottleKey)
+        }
+    }
+    #endif
+
     static func sourceScope(
         activeTerms: [WatchTerm],
         customUrls: [CustomUrl],
@@ -1337,12 +1424,20 @@ final class BackgroundRefreshManager {
             }
 
             var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
+            var wasCancelled = false
             for await scrape in group {
+                // Remove from pendingSearches before checking cancellation: `scrape` is
+                // already a fully-arrived result at this point regardless of the parent
+                // task's cancellation state, so if cancellation is noticed on this same
+                // iteration, this search should just be omitted from scrapeResults
+                // entirely (neither credited nor padded in as "missing") rather than
+                // left in pendingSearches and later counted as a failure it didn't have.
+                pendingSearches.removeValue(forKey: scrape.searchID)
                 if Task.isCancelled {
+                    wasCancelled = true
                     group.cancelAll()
                     break
                 }
-                pendingSearches.removeValue(forKey: scrape.searchID)
                 guard let currentTerm = db.term(matchingKeyword: scrape.termKeyword) else { continue }
                 let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
                     for: currentTerm,
@@ -1377,17 +1472,42 @@ final class BackgroundRefreshManager {
             for expectedPlatforms in pendingSearches.values {
                 scrapeResults.append((LocalFallbackScrapeResult(), expectedPlatforms))
             }
-            completion.completedDevicePlatforms.formUnion(
-                BackgroundRefreshPolicy.completedDeviceFallbackPlatformsForEligibleSearches(
-                    scrapeResults
-                )
-            )
+            let (completedPlatforms, missingPlatforms) = BackgroundRefreshPolicy.deviceFallbackCompletionStatus(scrapeResults)
+            completion.completedDevicePlatforms.formUnion(completedPlatforms)
+            // Hitting the shared background deadline (wasCancelled) is a routine, expected
+            // occurrence given ~20 platforms polled within a tight BGAppRefreshTask budget —
+            // not a per-platform failure. Reporting it as one would flood the diagnostic
+            // with false positives on every ordinary deadline cutoff.
+            let duePlatforms = wasCancelled
+                ? []
+                : BackgroundRefreshPolicy.devicePlatformsDueForFailureDiagnostic(missingPlatforms)
+            if !duePlatforms.isEmpty {
+                // Most refreshes happen here, in the background, not via FeedView's
+                // foreground path — so this is where the diagnostic actually needs to
+                // reach real users, not just the isLiveBackgroundPushTesting harness.
+                // Awaited inline rather than fired as a detached, unawaited Task: this
+                // function's caller (refreshLocalDeviceSourcesForBackground) races the
+                // whole thing against a shared deadline and cancels it cleanly if time
+                // runs out, and handle(task:) calls task.setTaskCompleted(success:)
+                // right after this function returns — a detached Task here could get
+                // killed by iOS before its POST ever left, silently dropping the
+                // diagnostic on effectively every background run. Awaiting it puts the
+                // send under the same graceful-cancellation umbrella as the scrape
+                // itself, so it gets an honest chance to complete when there's slack
+                // left, instead of no chance at all.
+                let sent = await sendDeviceFallbackFailureDiagnostic(missingPlatforms: duePlatforms, db: db)
+                // Only start the throttle window on a confirmed send — marking eagerly
+                // would let a failed POST (plausible on the same flaky connection that's
+                // often the actual cause of the scrape failures being reported) silence
+                // real retries for up to an hour instead of trying again next cycle.
+                BackgroundRefreshPolicy.finishDeviceFallbackFailureDiagnostic(duePlatforms, sent: sent)
+            }
         }
         return completion
     }
 
-    private func sendLiveTestFailureDiagnostic(reason: String, detail: String, db: LocalDB) async {
-        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+    @discardableResult
+    private func sendFailureDiagnostic(reason: String, strategy: String, detail: String, db: LocalDB) async -> Bool {
         let info = Bundle.main.infoDictionary
         let diagnostic = ClientDiagnosticReport(
             reason: reason,
@@ -1400,7 +1520,7 @@ final class BackgroundRefreshManager {
             cached_feed_count: db.feedItems.count,
             events: [
                 ClientDiagnosticEvent(
-                    strategy: "background_refresh",
+                    strategy: strategy,
                     status: "failed",
                     item_count: 0,
                     added_count: 0,
@@ -1408,7 +1528,22 @@ final class BackgroundRefreshManager {
                 )
             ]
         )
-        await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+        return await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+    }
+
+    @discardableResult
+    private func sendDeviceFallbackFailureDiagnostic(missingPlatforms: Set<String>, db: LocalDB) async -> Bool {
+        await sendFailureDiagnostic(
+            reason: "device_fallback_partial_failure",
+            strategy: "device_local_scrapers",
+            detail: "did not complete: \(missingPlatforms.sorted().joined(separator: ","))",
+            db: db
+        )
+    }
+
+    private func sendLiveTestFailureDiagnostic(reason: String, detail: String, db: LocalDB) async {
+        guard NetworkManager.shared.isLiveBackgroundPushTesting else { return }
+        await sendFailureDiagnostic(reason: reason, strategy: "background_refresh", detail: detail, db: db)
     }
 
     private static func refreshErrorKind(_ error: Error) -> String {

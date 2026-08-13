@@ -256,6 +256,31 @@ class TestSearchRssProxy:
         assert client.get.await_args.kwargs["headers"]["Authorization"] == "Bearer secret"
 
 
+class TestGoogleNewsProxyRace:
+    @pytest.mark.asyncio
+    async def test_awaits_cancelled_proxy_cleanup_before_returning_jina_result(self):
+        proxy_cleaned_up = asyncio.Event()
+
+        async def jina_fetch():
+            await asyncio.sleep(0)
+            return [], True
+
+        async def proxy_fetch():
+            try:
+                await asyncio.Event().wait()
+                return []
+            finally:
+                proxy_cleaned_up.set()
+
+        result = await base_module.race_jina_and_public_proxy(
+            jina_fetch(),
+            proxy_fetch(),
+        )
+
+        assert result == []
+        assert proxy_cleaned_up.is_set()
+
+
 class TestSourceItemCreateCompositeId:
     def test_composite_id_is_platform_colon_item_id(self):
         item = SourceItemCreate(
@@ -1805,7 +1830,7 @@ class TestNewsSiteFetch:
             result = await connector.fetch("吉沢亮", "all_info")
 
         assert result == []
-        assert gnews.await_count == 2
+        gnews.assert_awaited_once_with("吉沢亮")
 
     @pytest.mark.asyncio
     async def test_livedoor_filters_google_news_summary_only_matches(self):
@@ -1875,10 +1900,13 @@ class TestNewsSiteFetch:
             result = await AllkpopConnector().fetch("BLACKPINK", "all_info")
 
         assert len(result) == 1
-        request_url = client_cls.return_value.__aenter__.return_value.get.await_args.args[0]
-        assert "hl=en" in request_url
-        assert "gl=US" in request_url
-        assert "ceid=US%3Aen" in request_url
+        # The jina and public-proxy fallback hops now run concurrently, so the last
+        # recorded call isn't reliably jina's — search every call made instead.
+        request_urls = [
+            call.args[0]
+            for call in client_cls.return_value.__aenter__.return_value.get.await_args_list
+        ]
+        assert any("hl=en" in url and "gl=US" in url and "ceid=US%3Aen" in url for url in request_urls)
 
     @pytest.mark.asyncio
     async def test_english_sites_pass_market_to_bing_news_proxy(self):
