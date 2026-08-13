@@ -1281,11 +1281,17 @@ struct FeedView: View {
             var scrapeResults = [(result: LocalFallbackScrapeResult, expectedPlatforms: Set<String>)]()
             var scrapeAttempts = [[FeedItem]]()
             for await scrape in group {
+                // Remove from pendingSearches before checking cancellation: `scrape` is
+                // already a fully-arrived result at this point regardless of the parent
+                // task's cancellation state, so if cancellation is noticed on this same
+                // iteration, this search should just be omitted from scrapeResults
+                // entirely (neither credited nor padded in as "missing") rather than
+                // left in pendingSearches and later counted as a failure it didn't have.
+                pendingSearches.removeValue(forKey: scrape.searchID)
                 if Task.isCancelled {
                     group.cancelAll()
                     break
                 }
-                pendingSearches.removeValue(forKey: scrape.searchID)
                 guard let currentTerm = db.term(matchingKeyword: scrape.termKeyword) else { continue }
                 let currentFallbackPlatforms = BackgroundRefreshPolicy.deviceFallbackPlatforms(
                     for: currentTerm,
@@ -1429,7 +1435,13 @@ struct FeedView: View {
             events: report.attempts.map(\.diagnosticEvent)
         )
         AppLogger.network.error("\(feedIsEmpty ? "No feed results" : "Device fallback incomplete") after \(report.attempts.count) strategies; sending diagnostic")
-        await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+        let sent = await NetworkManager.shared.sendClientDiagnostic(diagnostic)
+        // Only start the throttle window on a confirmed send — marking eagerly would let a
+        // failed POST (plausible on the same flaky connection that's often the actual
+        // cause of the scrape failures being reported) silence real retries for an hour.
+        if sent, !duePlatforms.isEmpty {
+            BackgroundRefreshPolicy.markDeviceFallbackFailureDiagnosticSent(duePlatforms)
+        }
     }
 
     private func clearRefreshErrorIfLocalFeedIsUsable(_ report: FeedRefreshReport) {

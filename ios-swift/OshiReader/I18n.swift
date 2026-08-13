@@ -857,6 +857,12 @@ class I18nManager: ObservableObject {
             "zh-TW": "無法載入來源狀態，請下拉重新整理再試一次。",
             "zh-CN": "无法加载来源状态，请下拉刷新重试。"
         ],
+        "sourceStatusJinaDegraded": [
+            "en": "Google News fallback (jina) is degraded",
+            "ja": "Google Newsのフォールバック（jina）が低下しています",
+            "zh-TW": "Google 新聞備援（jina）狀態不佳",
+            "zh-CN": "Google 新闻备用通道（jina）状态不佳"
+        ],
         "clearAllDataAlert": [
             "en": "Clear All Data?",
             "ja": "データをすべて削除しますか？",

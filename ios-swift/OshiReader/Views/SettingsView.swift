@@ -846,6 +846,15 @@ struct SourceStatusView: View {
                     .foregroundColor(theme.colors.textSub)
                     .lineLimit(2)
             }
+            // jina_ok can be false while `status` still reads success/empty (Bing covered
+            // for it) — surface that separately so a degraded jina fallback isn't hidden
+            // behind an otherwise-healthy-looking row.
+            if entry.jina_ok == false {
+                Text(i18n.t("sourceStatusJinaDegraded") + (entry.jina_error.map { ": \($0)" } ?? ""))
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .lineLimit(2)
+            }
         }
         .padding(.vertical, 2)
         .accessibilityIdentifier("settings.sourceStatus.row.\(entry.platform)")

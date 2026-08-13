@@ -861,23 +861,20 @@ extension NetworkManager {
         url: URL,
         acceptLanguage: String = GoogleNewsFallbackLocale.japan.acceptLanguage
     ) async throws -> [RssItem] {
-        guard let (data, _) = await httpGET(
-            url,
-            headers: [
-                "User-Agent": scraperBrowserUserAgent,
-                "Accept-Language": acceptLanguage
-            ],
-            timeout: 12
-        ) else {
-            // httpGET collapses every failure reason to nil, including a cancelled Task —
-            // preserve that distinction here (instead of always throwing the generic
-            // badServerResponse below) so callers can tell a routine abort apart from a
-            // real fetch failure and skip logging it as one.
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            throw URLError(.badServerResponse)
-        }
+        // Calls perform() directly (bypassing httpGET's Optional-collapsing wrapper) so
+        // the real error — genuinely a cancellation, or genuinely a bad response — reaches
+        // this function's callers intact. Reconstructing that distinction from Task.isCancelled
+        // after the fact (as this used to) is inherently racy: this call runs inside a
+        // TaskGroup alongside many sibling site fetches, and a sibling finishing and
+        // triggering cancelAll() can flip Task.isCancelled to true at any moment — including
+        // right after this call's own genuine, unrelated HTTP failure already resolved —
+        // which would misattribute that real failure as routine cancellation and suppress
+        // logging a genuinely diagnosable bug.
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue(scraperBrowserUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
+        let (data, _) = try await perform(request, method: "GET")
         let parser = XMLParser(data: data)
         let delegate = RSSParserDelegate()
         parser.delegate = delegate
@@ -895,7 +892,7 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        return await perform(request, method: "GET")
+        return try? await perform(request, method: "GET")
     }
 
     private func httpPOST(
@@ -911,24 +908,24 @@ extension NetworkManager {
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        return await perform(request, method: "POST")
+        return try? await perform(request, method: "POST")
     }
 
-    private func perform(_ request: URLRequest, method: String) async -> (Data, HTTPURLResponse)? {
+    private func perform(_ request: URLRequest, method: String) async throws -> (Data, HTTPURLResponse) {
         let url = request.url
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 let status = (response as? HTTPURLResponse)?.statusCode
                 AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: status=\(status.map(String.init) ?? "unknown")")
-                return nil
+                throw URLError(.badServerResponse)
             }
             return (data, http)
         } catch {
             if !isCancellationError(error) {
                 AppLogger.scraping.error("\(method) \(url?.host ?? url?.absoluteString ?? "?") failed: \(error.localizedDescription)")
             }
-            return nil
+            throw error
         }
     }
 
