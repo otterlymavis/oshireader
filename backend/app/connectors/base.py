@@ -74,67 +74,85 @@ async def fetch_google_news_via_public_proxy(
 
 async def race_jina_and_public_proxy(
     jina_coro: Coroutine[object, object, tuple[list["SourceItemCreate"], bool]],
-    proxy_coro: Coroutine[object, object, list["SourceItemCreate"]],
+    *proxy_coros: Coroutine[object, object, list["SourceItemCreate"]],
 ) -> list["SourceItemCreate"]:
-    """Run the jina.ai and public-proxy Google News fallback hops concurrently and
-    return jina's items if it found any, falling back to the proxy's only when
-    jina's own request failed outright.
+    """Run the jina.ai hop and one or more independent free-proxy fallback hops
+    concurrently, returning jina's items if it found any, falling back to the
+    proxies' merged, deduped results only when jina's own request failed
+    outright.
 
     jina_coro must resolve to (items, succeeded) — succeeded reflects whether
     jina's HTTP request itself succeeded, independent of whether it found any
-    keyword matches. The public proxy exists to cover for jina being
-    *unreachable*, not to widen an empty-but-legitimate result (that's
-    when:10y's and Bing's job already) — so once jina has genuinely answered,
-    successfully, with zero matches, there's no reason to let a second request
-    against a free, presumably rate-limited proxy run to completion too.
-    Without this, the proxy fires on effectively every poll regardless of
-    jina's health, since "jina succeeded but found nothing" — not "jina found
-    matches" — is the common case across ~20 platforms every 15 minutes,
-    working against the same jina-load-reduction reasoning this session
-    applied to jina's own double-query retry.
+    keyword matches. The proxies exist to cover for jina being *unreachable*,
+    not to widen an empty-but-legitimate result (that's when:10y's and Bing's
+    job already) — so once jina has genuinely answered, successfully, with
+    zero matches, there's no reason to let the proxy requests run to
+    completion too. Without this, the proxies fire on effectively every poll
+    regardless of jina's health, since "jina succeeded but found nothing" —
+    not "jina found matches" — is the common case across ~20 platforms every
+    15 minutes, working against the same jina-load-reduction reasoning this
+    session applied to jina's own double-query retry.
 
-    Starting both hops together instead of sequentially avoids stacking each
-    hop's own timeout on top of the other's before Bing even gets a chance to
-    run — trying jina (10s) then the public proxy (10s) then Bing (up to 12s)
-    one after another could approach or exceed the connector's overall fetch
-    budget (25s) on its own. The finally block cancels the proxy hop as soon
+    Multiple proxy_coros are independent hops against different infrastructure
+    (e.g. a free public proxy and this project's own Cloudflare Worker) so a
+    block or outage on one doesn't take down jina's only fallback too. Their
+    results are merged and deduped by item_id — the same underlying Google
+    News RSS content fetched through two proxies naturally produces identical
+    item_ids, and downstream match-creation already dedupes on composite_id,
+    so a plain merge is correct without needing to pick a single "winner."
+
+    Starting every hop together instead of sequentially avoids stacking each
+    hop's own timeout on top of the others' before Bing even gets a chance to
+    run — trying jina (10s) then each proxy (10s) then Bing (up to 12s) one
+    after another could approach or exceed the connector's overall fetch
+    budget (25s) on its own. The finally block cancels every proxy hop as soon
     as it's no longer needed (jina found matches, or jina succeeded with
     none), and also covers the caller itself getting cancelled from outside
-    (the scheduler's own connector-level timeout): proxy_task is a separate
-    task, not part of the awaited chain, so cancelling the caller's own
-    coroutine wouldn't otherwise cascade to it, and it would keep running
+    (the scheduler's own connector-level timeout): proxy tasks are separate
+    tasks, not part of the awaited chain, so cancelling the caller's own
+    coroutine wouldn't otherwise cascade to them, and they would keep running
     detached past the connector's own timeout.
 
     Shared by every connector with this fallback chain, so a future change to
     the cancellation/retry logic can't drift between per-connector copies.
     """
     jina_task = asyncio.ensure_future(jina_coro)
-    proxy_task = asyncio.ensure_future(proxy_coro)
-    proxy_was_awaited = False
+    proxy_tasks = [asyncio.ensure_future(coro) for coro in proxy_coros]
+    proxies_were_awaited = False
     try:
         jina_items, jina_succeeded = await jina_task
         if jina_items or jina_succeeded:
             return jina_items
-        proxy_was_awaited = True
-        return await proxy_task
+        proxies_were_awaited = True
+        results = await asyncio.gather(*proxy_tasks, return_exceptions=True)
+        merged: dict[str, "SourceItemCreate"] = {}
+        for result in results:
+            if isinstance(result, BaseException):
+                continue
+            for item in result:
+                merged.setdefault(item.item_id, item)
+        return list(merged.values())
     finally:
-        if not proxy_task.done():
-            proxy_task.cancel()
-            try:
-                await proxy_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                # The public proxy is a best-effort hedge. If it failed while
-                # being cancelled because jina already answered (or the caller
-                # itself timed out), its error must not replace that outcome.
-                pass
-        elif not proxy_was_awaited:
-            # Retrieve (and discard) any exception so it isn't logged as "never
-            # retrieved" at garbage-collection time — the proxy hop is best-effort
-            # and we no longer care why it failed once it's not going to be used.
-            if not proxy_task.cancelled():
-                proxy_task.exception()
+        for proxy_task in proxy_tasks:
+            if not proxy_task.done():
+                proxy_task.cancel()
+                try:
+                    await proxy_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    # Each proxy is a best-effort hedge. If it failed while
+                    # being cancelled because jina already answered (or the
+                    # caller itself timed out), its error must not replace
+                    # that outcome.
+                    pass
+            elif not proxies_were_awaited:
+                # Retrieve (and discard) any exception so it isn't logged as
+                # "never retrieved" at garbage-collection time — a proxy hop
+                # is best-effort and we no longer care why it failed once
+                # it's not going to be used.
+                if not proxy_task.cancelled():
+                    proxy_task.exception()
 
 
 SEARCH_RESULT_MAX_AGE = timedelta(days=31)

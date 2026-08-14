@@ -156,6 +156,7 @@ class _GNewsSiteConnector(BaseConnector):
         items = await race_jina_and_public_proxy(
             self._fetch_gnews_jina(keyword, url, history_years=10),
             self._fetch_gnews_public_proxy(keyword, url),
+            self._fetch_gnews_worker_proxy(keyword),
         )
         if items:
             return items
@@ -198,6 +199,30 @@ class _GNewsSiteConnector(BaseConnector):
         google_news_url: str,
     ) -> list[SourceItemCreate]:
         content = await fetch_google_news_via_public_proxy(google_news_url, accept_language=self.ACCEPT_LANGUAGE)
+        if not content:
+            return []
+        return await build_google_news_public_proxy_items(
+            content,
+            keyword,
+            platform=self.PLATFORM,
+            title_suffix_re=self.TITLE_SUFFIX_RE,
+            raw_payload_extra={"site": self.SITE},
+        )
+
+    async def _fetch_gnews_worker_proxy(self, keyword: str) -> list[SourceItemCreate]:
+        # Second, independent proxy hop for the same Google News search — this
+        # project's own Cloudflare Worker (already used for Bing below) rather
+        # than a third-party free proxy, so it doesn't share allorigins.win's
+        # rate limits or uptime.
+        query = f"{keyword} site:{self.SITE} when:10y"
+        content = await fetch_search_rss_via_proxy(
+            query,
+            target="google",
+            hl=self.GNEWS_HL,
+            gl=self.GNEWS_GL,
+            ceid=self.GNEWS_CEID,
+            accept_language=self.ACCEPT_LANGUAGE,
+        )
         if not content:
             return []
         return await build_google_news_public_proxy_items(
