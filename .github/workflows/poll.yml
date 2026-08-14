@@ -18,11 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BACKEND_URL: https://oshireader.onrender.com
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
-      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       ALERT_CONTEXT: poll-feed
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -31,6 +31,8 @@ jobs:
 
       - name: Trigger backend poll
         id: poll_trigger
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           for attempt in $(seq 1 18); do
             BODY=$(mktemp)
@@ -43,7 +45,6 @@ jobs:
             CURL_EXIT=$?
             set -e
             echo "Attempt $attempt response status: $STATUS"
-            echo "Attempt $attempt response body: $(cat "$BODY")"
             if [ "$CURL_EXIT" -eq 28 ]; then
               rm -f "$BODY"
               echo "Poll request timed out locally; diagnostics will wait for the backend poll to settle."
@@ -81,10 +82,10 @@ jobs:
           try:
               payload = json.loads(body)
           except json.JSONDecodeError as exc:
-              print(f"Invalid poll response JSON: {exc}; body={body}", file=sys.stderr)
+              print(f"Invalid poll response JSON: {exc}", file=sys.stderr)
               raise SystemExit(2)
           if not isinstance(payload, dict):
-              print(f"Invalid poll response payload: {payload}", file=sys.stderr)
+              print("Invalid poll response payload: expected an object", file=sys.stderr)
               raise SystemExit(2)
           print((payload.get("status") or "").strip())
           PY
@@ -116,6 +117,8 @@ jobs:
 
       - name: Validate backend notification diagnostics
         if: steps.poll_trigger.outputs.diagnostics_ready == 'true'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           for attempt in $(seq 1 24); do
             BODY=$(mktemp)
@@ -125,7 +128,6 @@ jobs:
               --max-time 30 || true)
             if [ "$STATUS" != "200" ]; then
               echo "Poller health attempt $attempt failed with status ${STATUS:-curl_failed}"
-              echo "Response body: $(cat "$BODY")"
               rm -f "$BODY"
               if [ "$attempt" -eq 24 ]; then
                 exit 1
@@ -142,10 +144,10 @@ jobs:
           try:
               data = json.loads(body)
           except json.JSONDecodeError as exc:
-              print(f"Invalid diagnostics JSON: {exc}; body={body}", file=sys.stderr)
+              print(f"Invalid diagnostics JSON: {exc}", file=sys.stderr)
               raise SystemExit(2)
           if not isinstance(data, dict):
-              print(f"Invalid diagnostics payload: {data}", file=sys.stderr)
+              print("Invalid diagnostics payload: expected an object", file=sys.stderr)
               raise SystemExit(2)
           attempt = sys.argv[2]
 
@@ -154,9 +156,47 @@ jobs:
               if value is None:
                   return {}
               if not isinstance(value, dict):
-                  print(f"Invalid diagnostics field {key}: {value}", file=sys.stderr)
+                  print(f"Invalid diagnostics field {key}: expected an object", file=sys.stderr)
                   raise SystemExit(2)
               return value
+
+          def notification_health_summary(health):
+              safe_keys = {
+                  "healthy",
+                  "active_notify_terms",
+                  "active_silent_orphan_terms",
+                  "active_notify_terms_without_verified_devices",
+                  "orphaned_notification_grace_minutes",
+              }
+              return {key: health.get(key) for key in safe_keys if key in health}
+
+          def poll_event_summary(event):
+              safe_payload_keys = {
+                  "terms",
+                  "total_terms",
+                  "due_terms",
+                  "notification_lane_terms",
+                  "regular_lane_terms",
+                  "connectors",
+                  "new_matches",
+                  "failed_connectors",
+                  "flushed_pending_terms",
+                  "term_offset",
+                  "next_term_offset",
+              }
+              payload = event.get("payload")
+              if not isinstance(payload, dict):
+                  payload = {}
+              return {
+                  "id": event.get("id"),
+                  "status": event.get("status"),
+                  "created_at": event.get("created_at"),
+                  "payload": {
+                      key: payload.get(key)
+                      for key in safe_payload_keys
+                      if key in payload
+                  },
+              }
 
           apns = object_field(data, "apns")
           notification_health = object_field(data, "notification_health")
@@ -166,10 +206,7 @@ jobs:
           if pending_notifications is None:
               pending_notifications = []
           if not isinstance(pending_notifications, list):
-              print(
-                  f"Invalid diagnostics field pending_notifications: {pending_notifications}",
-                  file=sys.stderr,
-              )
+              print("Invalid diagnostics field pending_notifications: expected a list", file=sys.stderr)
               raise SystemExit(2)
           summary = {
               "items_total": data.get("items_total"),
@@ -180,34 +217,28 @@ jobs:
               "device_tokens_by_environment_and_verification": apns.get(
                   "device_tokens_by_environment_and_verification", {}
               ),
-              "notification_health": notification_health,
+              "notification_health": notification_health_summary(notification_health),
               "pending_notification_count": len(pending_notifications),
-              "pending_notifications": pending_notifications[:5],
-              "pending_notifications_truncated": max(0, len(pending_notifications) - 5),
-              "latest_poll": {
-                  "id": latest_poll.get("id"),
-                  "status": latest_poll.get("status"),
-                  "created_at": latest_poll.get("created_at"),
-                  "payload": latest_poll.get("payload"),
-              },
-              "latest_successful_poll": {
-                  "id": latest_successful_poll.get("id"),
-                  "status": latest_successful_poll.get("status"),
-                  "created_at": latest_successful_poll.get("created_at"),
-                  "payload": latest_successful_poll.get("payload"),
-              },
+              "latest_poll": poll_event_summary(latest_poll),
+              "latest_successful_poll": poll_event_summary(latest_successful_poll),
           }
           print(f"Diagnostics attempt {attempt}")
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
           failures = []
           if apns.get("configured") is not True:
-              print(f"Notification warning: APNs is not configured: {apns}")
+              print("Notification warning: APNs is not configured")
           if notification_health.get("healthy") is not True:
-              print(f"Notification warning: notification health is degraded: {notification_health}")
+              print("Notification warning: notification health is degraded")
           if latest_poll.get("status") in {"started", "running_past_request_timeout"}:
-              failures.append(f"poll is still running: {latest_poll}")
+              failures.append(
+                  "poll is still running: "
+                  f"status={latest_poll.get('status')} created_at={latest_poll.get('created_at')}"
+              )
           if pending_notifications:
-              print(f"Notification warning: pending notifications remain after poll: {pending_notifications}")
+              print(
+                  "Notification warning: pending notifications remain after poll: "
+                  f"count={len(pending_notifications)}"
+              )
           if failures:
               raise SystemExit("; ".join(failures))
           PY
@@ -225,6 +256,8 @@ jobs:
 
       - name: Send failure alert
         if: failure()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "No ALERT_WEBHOOK_URL configured; skipping failure alert"

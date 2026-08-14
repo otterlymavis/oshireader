@@ -5,6 +5,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import sessionmaker
 
 from app.connectors.base import SourceItemCreate
@@ -42,16 +43,41 @@ def _mock_connector(platform: str, items: list) -> MagicMock:
 
 
 async def _run_poll(db_engine, connectors):
-    """Run _poll_once_unlocked patched to use the test DB engine."""
+    """Run ingestion against the test DB without production refresh cadence."""
     TestSession = sessionmaker(bind=db_engine)
     with patch("app.ingestion.scheduler._build_connectors", return_value=connectors), \
          patch("app.ingestion.scheduler.SessionLocal", TestSession), \
          patch("app.ingestion.scheduler.send_new_match_notifications", new=AsyncMock()), \
+         patch("app.ingestion.scheduler._term_is_due", return_value=True), \
          patch.object(settings, "poll_terms_per_run", 0):
         await _poll_once_unlocked()
 
 
 class TestIngestionNewItems:
+    @pytest.mark.asyncio
+    async def test_persists_last_polled_at_and_skips_immediate_second_poll(
+        self,
+        db_engine,
+        db_session,
+    ):
+        term = WatchTerm(keyword="Aiko")
+        db_session.add(term)
+        db_session.commit()
+        term_id = term.id
+
+        connector = _mock_connector("youtube", [])
+        TestSession = sessionmaker(bind=db_engine)
+        with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
+             patch("app.ingestion.scheduler.SessionLocal", TestSession), \
+             patch.object(settings, "poll_terms_per_run", 0):
+            await _poll_once_unlocked()
+            await _poll_once_unlocked()
+
+        persisted = db_session.get(WatchTerm, term_id)
+        db_session.refresh(persisted)
+        assert persisted.last_polled_at is not None
+        connector.fetch.assert_awaited_once()
+
     @pytest.mark.asyncio
     async def test_new_item_creates_source_item(self, db_engine, db_session):
         term = WatchTerm(keyword="Aiko")
@@ -205,6 +231,7 @@ class TestIngestionNotifications:
         term = WatchTerm(keyword="Aiko", notify_on_new=True)
         db_session.add(term)
         db_session.commit()
+        term_id = term.id
 
         connector = _mock_connector("youtube", [_make_item(item_id="new1")])
         mock_notify = AsyncMock()
@@ -216,7 +243,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
+        assert sa_inspect(called_term).identity == (term_id,)
         assert called_count == 1
         assert preview_item["title"] == "Aiko Haruka Test Item"
         assert preview_item["match_id"]
@@ -306,6 +333,7 @@ class TestIngestionNotifications:
         )
         db_session.add(term)
         db_session.commit()
+        term_id = term.id
 
         newest = datetime.now(timezone.utc)
         older = newest - timedelta(days=3)
@@ -334,7 +362,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
+        assert sa_inspect(called_term).identity == (term_id,)
         assert called_count == 1
         assert preview_item["id"] == "youtube:fresh"
         assert preview_item["title"] == "Aiko fresh"
@@ -675,6 +703,7 @@ class TestIngestionNotifications:
             ),
         ])
         db_session.commit()
+        catchup_term_id = catchup_term.id
         mock_notify = AsyncMock(return_value=True)
         TestSession = sessionmaker(bind=db_engine)
 
@@ -686,7 +715,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_awaited_once()
         _, called_term, called_count, preview_item = mock_notify.await_args.args
-        assert called_term.id == catchup_term.id
+        assert sa_inspect(called_term).identity == (catchup_term_id,)
         assert called_count == 1
         assert preview_item["id"] == shared.id
 
@@ -833,6 +862,7 @@ class TestIngestionNotifications:
         db_session.flush()
         db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
         db_session.commit()
+        term_id = term.id
 
         fresh_new_discovery = _make_item(
             platform="youtube",
@@ -853,7 +883,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
+        assert sa_inspect(called_term).identity == (term_id,)
         assert called_count == 1
         assert preview_item["id"] == "youtube:fresh-established"
 
@@ -883,6 +913,7 @@ class TestIngestionNotifications:
         db_session.flush()
         db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
         db_session.commit()
+        term_id = term.id
 
         reply_at = datetime.now(timezone.utc) - timedelta(minutes=20)
         updated_thread = _make_item(
@@ -910,7 +941,7 @@ class TestIngestionNotifications:
         assert refreshed.content_text == "Aiko new reply"
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
+        assert sa_inspect(called_term).identity == (term_id,)
         assert called_count == 1
         assert preview_item["id"] == "5ch:old-thread"
         assert preview_item["content_text"] == "Aiko new reply"
@@ -941,6 +972,7 @@ class TestIngestionNotifications:
         db_session.flush()
         db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
         db_session.commit()
+        term_id = term.id
 
         reply_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         updated_thread = _make_item(
@@ -968,7 +1000,7 @@ class TestIngestionNotifications:
         assert refreshed.raw_payload["date_parsed"] is True
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
+        assert sa_inspect(called_term).identity == (term_id,)
         assert called_count == 1
         assert preview_item["id"] == "girlschannel:estimated-thread"
         assert preview_item["content_text"] == "Aiko new reply"
@@ -999,6 +1031,7 @@ class TestIngestionNotifications:
         db_session.flush()
         db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
         db_session.commit()
+        term_id = term.id
 
         reply_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         updated_thread = _make_item(
@@ -1026,7 +1059,7 @@ class TestIngestionNotifications:
         assert refreshed.raw_payload["date_parsed"] is True
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
+        assert sa_inspect(called_term).identity == (term_id,)
         assert called_count == 1
         assert preview_item["id"] == "girlschannel:empty-payload-thread"
         assert preview_item["content_text"] == "Aiko new reply"
@@ -1057,6 +1090,7 @@ class TestIngestionNotifications:
         db_session.flush()
         db_session.add(Match(watch_term_id=term.id, source_item_id=existing.id))
         db_session.commit()
+        term_id = term.id
 
         reply_at = datetime.now(timezone.utc) - timedelta(minutes=5)
         new_item_at = datetime.now(timezone.utc) - timedelta(minutes=30)
@@ -1096,7 +1130,7 @@ class TestIngestionNotifications:
 
         mock_notify.assert_called_once()
         _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert called_term.keyword == "Aiko"
+        assert sa_inspect(called_term).identity == (term_id,)
         assert called_count == 2
         assert preview_item["id"] == "youtube:fresh-video"
         assert preview_item["source"] == "youtube_api"
@@ -1383,6 +1417,8 @@ class TestIngestionNotifications:
         second = WatchTerm(keyword="Haruka", notify_on_new=True)
         db_session.add_all([first, second])
         db_session.commit()
+        first_id = first.id
+        second_id = second.id
 
         async def fetch(search_term, _mode):
             return [
@@ -1417,9 +1453,9 @@ class TestIngestionNotifications:
             await _poll_once_unlocked()
 
         assert mock_notify.call_count == 3
-        assert mock_notify.call_args_list[0].args[1].keyword == "Aiko"
-        assert mock_notify.call_args_list[1].args[1].keyword == "Haruka"
-        assert mock_notify.call_args_list[2].args[1].keyword == "Aiko"
+        assert sa_inspect(mock_notify.call_args_list[0].args[1]).identity == (first_id,)
+        assert sa_inspect(mock_notify.call_args_list[1].args[1]).identity == (second_id,)
+        assert sa_inspect(mock_notify.call_args_list[2].args[1]).identity == (first_id,)
         retry_db = TestSession()
         try:
             assert retry_db.query(PendingNotification).count() == 0

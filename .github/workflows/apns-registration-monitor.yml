@@ -14,11 +14,11 @@ jobs:
     timeout-minutes: 15
     env:
       BACKEND_URL: https://oshireader.onrender.com
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
-      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       ALERT_CONTEXT: apns-registration-monitor
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -26,6 +26,8 @@ jobs:
           fi
 
       - name: Check registration health
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           python3 - <<'PY'
           import json
@@ -52,7 +54,7 @@ jobs:
                       payload = json.loads(body)
                   except json.JSONDecodeError as exc:
                       raise ResponseFormatError(
-                          f"Backend returned non-JSON response from {url}: {body}"
+                          f"Backend returned non-JSON response from {url}"
                       ) from exc
                   return response.status, payload
 
@@ -60,18 +62,14 @@ jobs:
               try:
                   status, payload = request_json(f"{backend_url}/api/admin/poller-health")
               except urllib.error.HTTPError as exc:
-                  error_body = exc.read().decode("utf-8", errors="replace")
-                  raise SystemExit(
-                      f"Backend diagnostics returned HTTP {exc.code}: {error_body}"
-                  ) from exc
+                  raise SystemExit(f"Backend diagnostics returned HTTP {exc.code}") from exc
               except ResponseFormatError as exc:
                   raise SystemExit(str(exc)) from exc
               print(f"Backend status: {status}")
-              print(json.dumps(payload, ensure_ascii=False, default=str))
               if status != 200:
                   raise SystemExit(f"Backend diagnostics returned HTTP {status}")
               if not isinstance(payload, dict):
-                  raise SystemExit(f"Backend diagnostics must be an object: {payload!r}")
+                  raise SystemExit("Backend diagnostics must be an object")
               return payload
 
           def orphaned_ids(health, key):
@@ -79,18 +77,18 @@ jobs:
               if raw_ids is None:
                   raw_ids = []
               if not isinstance(raw_ids, list):
-                  raise SystemExit(f"notification_health field {key} must be a list: {raw_ids!r}")
+                  raise SystemExit(f"notification_health field {key} must be a list")
               ids = []
               for raw_id in raw_ids:
                   try:
                       term_id = int(raw_id)
                   except (TypeError, ValueError) as exc:
                       raise SystemExit(
-                          f"notification_health field {key} contains invalid term id: {raw_id!r}"
+                          f"notification_health field {key} contains an invalid term id"
                       ) from exc
                   if term_id <= 0:
                       raise SystemExit(
-                          f"notification_health field {key} contains non-positive term id: {term_id}"
+                          f"notification_health field {key} contains a non-positive term id"
                       )
                   ids.append(term_id)
               return list(dict.fromkeys(ids))
@@ -100,7 +98,7 @@ jobs:
               if value is None:
                   return {}
               if not isinstance(value, dict):
-                  raise SystemExit(f"{key} diagnostics must be an object: {value!r}")
+                  raise SystemExit(f"{key} diagnostics must be an object")
               return value
 
           def validated_notification_health(payload):
@@ -111,7 +109,7 @@ jobs:
                   "active_notify_term_ids_without_verified_devices",
               }
               if not isinstance(health, dict):
-                  raise SystemExit(f"Missing notification_health diagnostics: {payload}")
+                  raise SystemExit("Missing notification_health diagnostics")
               missing_keys = sorted(required_keys - set(health))
               if missing_keys:
                   raise SystemExit(
@@ -123,9 +121,7 @@ jobs:
               try:
                   value = int(health.get(key))
               except (TypeError, ValueError) as exc:
-                  raise SystemExit(
-                      f"notification_health field {key} is not an integer: {health.get(key)!r}"
-                  ) from exc
+                  raise SystemExit(f"notification_health field {key} is not an integer") from exc
               if value < 0:
                   raise SystemExit(f"notification_health field {key} is negative: {value}")
               return value
@@ -135,7 +131,7 @@ jobs:
               if registration is None:
                   raise SystemExit("apns_registration field missing from backend diagnostics response")
               if not isinstance(registration, dict):
-                  raise SystemExit(f"apns_registration diagnostics must be an object: {registration!r}")
+                  raise SystemExit("apns_registration diagnostics must be an object")
               apns = object_field(payload, "apns")
               server_environment = str(apns.get("server_environment") or "")
               reasons_by_environment = registration.get("reasons_by_environment")
@@ -148,19 +144,17 @@ jobs:
               if reasons is None:
                   reasons = {}
               if not isinstance(reasons, dict):
-                  raise SystemExit(f"apns_registration reasons must be an object: {reasons!r}")
+                  raise SystemExit("apns_registration reasons must be an object")
               parsed = {}
               for reason, raw_count in reasons.items():
                   try:
                       count = int(raw_count)
                   except (TypeError, ValueError) as exc:
                       raise SystemExit(
-                          f"apns_registration reason count for {reason!r} is not an integer: {raw_count!r}"
+                          "apns_registration reason count is not an integer"
                       ) from exc
                   if count < 0:
-                      raise SystemExit(
-                          f"apns_registration reason count for {reason!r} is negative: {count}"
-                      )
+                      raise SystemExit("apns_registration reason count is negative")
                   parsed[str(reason)] = count
               return parsed
 
@@ -171,15 +165,38 @@ jobs:
 
           payload = fetch_diagnostics()
           health = validated_notification_health(payload)
-          print(json.dumps({
-              "notification_health": health,
-              "apns": object_field(payload, "apns"),
-              "apns_registration": object_field(payload, "apns_registration"),
-          }, ensure_ascii=False, indent=2, default=str))
-          notify_ids = orphaned_ids(health, "active_notify_term_ids_without_verified_devices")
-
           apns = object_field(payload, "apns")
+          registration = object_field(payload, "apns_registration")
           reasons = registration_reasons(payload)
+          print(json.dumps({
+              "notification_health": {
+                  key: health.get(key)
+                  for key in (
+                      "healthy",
+                      "active_notify_terms",
+                      "active_silent_orphan_terms",
+                      "active_notify_terms_without_verified_devices",
+                      "orphaned_notification_grace_minutes",
+                  )
+                  if key in health
+              },
+              "apns": {
+                  key: apns.get(key)
+                  for key in (
+                      "configured",
+                      "server_environment",
+                      "device_tokens_by_environment",
+                      "device_tokens_by_environment_and_verification",
+                  )
+                  if key in apns
+              },
+              "apns_registration": {
+                  "count": registration.get("count"),
+                  "reasons": reasons,
+              },
+          }, ensure_ascii=False, indent=2, default=str))
+          orphaned_ids(health, "active_notify_term_ids_without_verified_devices")
+
           failures = []
           active_notify_terms = health_count(health, "active_notify_terms")
           if active_notify_terms and apns.get("configured") is not True:
@@ -189,8 +206,7 @@ jobs:
           missing = health_count(health, "active_notify_terms_without_verified_devices")
           if missing:
               failures.append(
-                  f"{missing} active notification term(s) have no verified APNs device; "
-                  f"term_ids={notify_ids}"
+                  f"{missing} active notification term(s) have no verified APNs device"
               )
           repeated = {reason: count for reason, count in reasons.items() if count >= 3}
           if repeated:
@@ -203,6 +219,8 @@ jobs:
 
       - name: Send failure alert
         if: failure()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "No ALERT_WEBHOOK_URL configured; skipping failure alert"

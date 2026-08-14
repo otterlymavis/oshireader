@@ -26,11 +26,12 @@ jobs:
     timeout-minutes: 10
     env:
       BACKEND_URL: https://oshireader.onrender.com
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
       ACTION: ${{ inputs.action }}
       TERM_IDS: ${{ inputs.term_ids }}
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -48,11 +49,12 @@ jobs:
 
       - name: Purge YouTube bad-date items
         if: inputs.action == 'purge-youtube-bad-dates'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
-          BODY=$(mktemp)
           set +e
           STATUS=$(curl --silent --show-error \
-            --output "$BODY" \
+            --output /dev/null \
             --write-out "%{http_code}" \
             --request POST \
             "$BACKEND_URL/api/admin/maintenance/purge-youtube-bad-dates" \
@@ -61,8 +63,6 @@ jobs:
           CURL_EXIT=$?
           set -e
           echo "YouTube bad-date cleanup response HTTP $STATUS"
-          cat "$BODY"
-          rm -f "$BODY"
           if [ "$CURL_EXIT" -ne 0 ]; then
             echo "YouTube bad-date cleanup curl failed with exit code $CURL_EXIT"
             exit "$CURL_EXIT"
@@ -73,11 +73,12 @@ jobs:
 
       - name: Purge YouTube Google News fallback items
         if: inputs.action == 'purge-youtube-google-news'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
-          BODY=$(mktemp)
           set +e
           STATUS=$(curl --silent --show-error \
-            --output "$BODY" \
+            --output /dev/null \
             --write-out "%{http_code}" \
             --request POST \
             "$BACKEND_URL/api/admin/maintenance/purge-youtube-google-news" \
@@ -86,8 +87,6 @@ jobs:
           CURL_EXIT=$?
           set -e
           echo "YouTube Google News cleanup response HTTP $STATUS"
-          cat "$BODY"
-          rm -f "$BODY"
           if [ "$CURL_EXIT" -ne 0 ]; then
             echo "YouTube Google News cleanup curl failed with exit code $CURL_EXIT"
             exit "$CURL_EXIT"
@@ -98,11 +97,12 @@ jobs:
 
       - name: Purge Yahoo News bad-date items
         if: inputs.action == 'purge-yahoonews-bad-dates'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
-          BODY=$(mktemp)
           set +e
           STATUS=$(curl --silent --show-error \
-            --output "$BODY" \
+            --output /dev/null \
             --write-out "%{http_code}" \
             --request POST \
             "$BACKEND_URL/api/admin/maintenance/purge-yahoonews-bad-dates" \
@@ -111,8 +111,6 @@ jobs:
           CURL_EXIT=$?
           set -e
           echo "Yahoo News bad-date cleanup response HTTP $STATUS"
-          cat "$BODY"
-          rm -f "$BODY"
           if [ "$CURL_EXIT" -ne 0 ]; then
             echo "Yahoo News bad-date cleanup curl failed with exit code $CURL_EXIT"
             exit "$CURL_EXIT"
@@ -123,11 +121,12 @@ jobs:
 
       - name: Prune storage for test quota recovery
         if: inputs.action == 'prune-storage'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
-          BODY=$(mktemp)
           set +e
           STATUS=$(curl --silent --show-error \
-            --output "$BODY" \
+            --output /dev/null \
             --write-out "%{http_code}" \
             --request POST \
             "$BACKEND_URL/api/admin/maintenance/prune-storage?match_per_term_platform_limit=100&muted_per_term_limit=500&backend_event_keep=200&include_discussion_platforms=true" \
@@ -136,8 +135,6 @@ jobs:
           CURL_EXIT=$?
           set -e
           echo "Prune response HTTP $STATUS"
-          cat "$BODY"
-          rm -f "$BODY"
           if [ "$CURL_EXIT" -ne 0 ]; then
             echo "Prune storage curl failed with exit code $CURL_EXIT"
             exit "$CURL_EXIT"
@@ -148,6 +145,8 @@ jobs:
 
       - name: Mute orphaned notification terms
         if: inputs.action == 'mute-orphaned-notify-terms'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$TERM_IDS" ]; then
             echo "term_ids is required for mute-orphaned-notify-terms"
@@ -178,18 +177,26 @@ jobs:
                   try:
                       payload = json.loads(body)
                   except json.JSONDecodeError as exc:
-                      raise SystemExit(f"orphaned term maintenance returned non-JSON response: {body}") from exc
-                  print(json.dumps(payload, ensure_ascii=False, indent=2))
+                      raise SystemExit("orphaned term maintenance returned non-JSON response") from exc
           except urllib.error.HTTPError as exc:
-              error_body = exc.read().decode("utf-8", errors="replace")
-              print(error_body)
               raise SystemExit(f"orphaned term maintenance returned HTTP {exc.code}")
-          except (TimeoutError, urllib.error.URLError, OSError) as exc:
-              raise SystemExit(f"orphaned term maintenance request failed: {exc}") from exc
+          except (TimeoutError, urllib.error.URLError, OSError):
+              raise SystemExit("orphaned term maintenance request failed") from None
+          if not isinstance(payload, dict):
+              raise SystemExit("orphaned term maintenance returned a non-object payload")
+          updated_terms = payload.get("updated_terms")
+          if not isinstance(updated_terms, list):
+              raise SystemExit("orphaned term maintenance returned invalid updated terms")
+          print(json.dumps({
+              "action": "mute-notify",
+              "updated_count": len(updated_terms),
+          }, ensure_ascii=False, indent=2))
           PY
 
       - name: Enable notification terms with verified devices
         if: inputs.action == 'enable-notify-terms'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$TERM_IDS" ]; then
             echo "term_ids is required for enable-notify-terms"
@@ -212,7 +219,7 @@ jobs:
                   if value.strip()
               ))
           except ValueError as exc:
-              raise SystemExit(f"term_ids must contain only integers: {os.environ['TERM_IDS']!r}") from exc
+              raise SystemExit("term_ids must contain only integers") from exc
           if not term_ids or any(term_id <= 0 for term_id in term_ids):
               raise SystemExit("term_ids must contain positive integers")
 
@@ -248,21 +255,16 @@ jobs:
                   with urllib.request.urlopen(request, timeout=90) as response:
                       payload = json.load(response)
               except urllib.error.HTTPError as exc:
-                  body = exc.read().decode("utf-8", errors="replace")
-                  raise SystemExit(
-                      f"Failed to enable term {term_id}: HTTP {exc.code}: {body}"
-                  ) from exc
-              if payload.get("notify_on_new") is not True:
-                  raise SystemExit(f"Term {term_id} did not enable notifications: {payload}")
-              print(json.dumps({
-                  "term_id": term_id,
-                  "keyword": payload.get("keyword"),
-                  "notify_on_new": payload.get("notify_on_new"),
-              }, ensure_ascii=False))
+                  raise SystemExit(f"Failed to enable term {term_id}: HTTP {exc.code}") from exc
+              if not isinstance(payload, dict) or payload.get("notify_on_new") is not True:
+                  raise SystemExit(f"Term {term_id} did not enable notifications")
+          print(json.dumps({"enabled_count": len(term_ids)}, ensure_ascii=False))
           PY
 
       - name: Deactivate orphaned terms
         if: inputs.action == 'deactivate-orphaned-terms'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$TERM_IDS" ]; then
             echo "term_ids is required for deactivate-orphaned-terms"
@@ -293,12 +295,18 @@ jobs:
                   try:
                       payload = json.loads(body)
                   except json.JSONDecodeError as exc:
-                      raise SystemExit(f"orphaned term maintenance returned non-JSON response: {body}") from exc
-                  print(json.dumps(payload, ensure_ascii=False, indent=2))
+                      raise SystemExit("orphaned term maintenance returned non-JSON response") from exc
           except urllib.error.HTTPError as exc:
-              error_body = exc.read().decode("utf-8", errors="replace")
-              print(error_body)
               raise SystemExit(f"orphaned term maintenance returned HTTP {exc.code}")
-          except (TimeoutError, urllib.error.URLError, OSError) as exc:
-              raise SystemExit(f"orphaned term maintenance request failed: {exc}") from exc
+          except (TimeoutError, urllib.error.URLError, OSError):
+              raise SystemExit("orphaned term maintenance request failed") from None
+          if not isinstance(payload, dict):
+              raise SystemExit("orphaned term maintenance returned a non-object payload")
+          updated_terms = payload.get("updated_terms")
+          if not isinstance(updated_terms, list):
+              raise SystemExit("orphaned term maintenance returned invalid updated terms")
+          print(json.dumps({
+              "action": "deactivate",
+              "updated_count": len(updated_terms),
+          }, ensure_ascii=False, indent=2))
           PY
