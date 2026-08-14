@@ -571,12 +571,31 @@ extension NetworkManager {
             if Platform.usesNewsRSSFallback(for: platformIds) {
                 group.addTask { await self.scrapeRSSFallbackWithCompletion(keyword: keyword, tagKeyword: tag) }
             }
+
+            // Every site below hits news.google.com/rss/search. Firing all of them in
+            // the same instant reads as abuse to Google from a single device IP and
+            // gets partially or wholly 503'd — which platform "wins" is essentially
+            // random per attempt. Stagger their start times so the requests spread out
+            // instead of landing as one burst.
+            var googleNewsRequestIndex = 0
             if Platform.usesNiconicoRSSFallback(for: platformIds) {
-                group.addTask { await self.scrapeNiconicoRSSWithCompletion(keyword: keyword, tagKeyword: tag) }
+                let index = googleNewsRequestIndex
+                googleNewsRequestIndex += 1
+                group.addTask {
+                    guard (try? await Self.staggerGoogleNewsRequest(index: index)) != nil else {
+                        return LocalFallbackScrapeResult()
+                    }
+                    return await self.scrapeNiconicoRSSWithCompletion(keyword: keyword, tagKeyword: tag)
+                }
             }
             for fallback in Platform.googleNewsFallbackSites(for: platformIdsForGenericGoogleNews) {
+                let index = googleNewsRequestIndex
+                googleNewsRequestIndex += 1
                 group.addTask {
-                    await self.scrapeGoogleNewsSiteWithCompletion(
+                    guard (try? await Self.staggerGoogleNewsRequest(index: index)) != nil else {
+                        return LocalFallbackScrapeResult()
+                    }
+                    return await self.scrapeGoogleNewsSiteWithCompletion(
                         keyword: keyword,
                         site: fallback.site,
                         platform: fallback.platform,
@@ -595,6 +614,15 @@ extension NetworkManager {
             }
             return result
         }
+    }
+
+    // Spreads the site-scoped Google News requests across ~3s instead of firing all
+    // of them in the same instant (see scrapeLocalFallbacksWithCompletion). Throws on
+    // cancellation so a torn-down scan doesn't fire a request that's no longer needed.
+    private static let googleNewsRequestStaggerNanoseconds: UInt64 = 200_000_000
+    private static func staggerGoogleNewsRequest(index: Int) async throws {
+        guard index > 0 else { return }
+        try await Task.sleep(nanoseconds: UInt64(index) * googleNewsRequestStaggerNanoseconds)
     }
 
     // MARK: - YouTube Keyless Search
