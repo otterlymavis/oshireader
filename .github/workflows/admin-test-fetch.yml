@@ -21,12 +21,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BACKEND_URL: https://oshireader.onrender.com
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
       KEYWORD: ${{ inputs.keyword }}
       PLATFORM: ${{ inputs.platform }}
       SAMPLES: ${{ inputs.samples }}
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -34,10 +35,13 @@ jobs:
           fi
 
       - name: Run admin test fetch
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           python3 - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.parse
           import urllib.request
 
@@ -51,7 +55,24 @@ jobs:
               params["platform"] = platform
           url = os.environ["BACKEND_URL"].rstrip("/") + "/api/admin/test-fetch?" + urllib.parse.urlencode(params)
           req = urllib.request.Request(url, headers={"Authorization": f"Bearer {os.environ['ADMIN_API_TOKEN']}"})
-          with urllib.request.urlopen(req, timeout=75) as response:
-              payload = json.load(response)
-          print(json.dumps(payload, ensure_ascii=False, indent=2))
+          try:
+              with urllib.request.urlopen(req, timeout=75) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as exc:
+              raise SystemExit(f"Admin test fetch returned HTTP {exc.code}") from None
+          except urllib.error.URLError:
+              raise SystemExit("Admin test fetch request failed") from None
+
+          if not isinstance(payload, dict):
+              raise SystemExit("Admin test fetch returned a non-object payload")
+          counts = {}
+          for source, result in payload.items():
+              if isinstance(result, dict):
+                  raw_count = result.get("count")
+              else:
+                  raw_count = result
+              if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+                  raise SystemExit("Admin test fetch returned an invalid source count")
+              counts[str(source)] = raw_count
+          print(json.dumps({"source_counts": counts}, ensure_ascii=False, indent=2))
           PY

@@ -17,15 +17,18 @@ jobs:
     env:
       WORKER_HEALTH_URL: https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
       ACTIVE_POLL_TIMEOUT_MINUTES: "30"
-      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       ALERT_CONTEXT: poller-monitor
     steps:
       - name: Check poller health
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           BODY=$(mktemp)
+          trap 'rm -f "$BODY"' EXIT
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
+            --header "Authorization: Bearer $ADMIN_API_TOKEN" \
             --retry 1 \
             --retry-all-errors \
             --retry-delay 10 \
@@ -33,8 +36,6 @@ jobs:
             "$WORKER_HEALTH_URL" || true)
 
           echo "HTTP status: $STATUS"
-          cat "$BODY"
-          echo
 
           python3 - "$STATUS" "$BODY" <<'PY'
           import json
@@ -48,17 +49,54 @@ jobs:
           try:
               payload = json.loads(body)
           except json.JSONDecodeError as exc:
-              raise SystemExit(f"Worker health returned non-JSON response: {exc}; body={body}") from exc
+              raise SystemExit(f"Worker health returned non-JSON response: {exc}") from exc
           if not isinstance(payload, dict):
-              raise SystemExit(f"Worker health returned invalid payload: {payload}")
+              raise SystemExit("Worker health returned a non-object payload")
 
           def object_field(payload, key):
               value = payload.get(key)
               if value is None:
                   return {}
               if not isinstance(value, dict):
-                  raise SystemExit(f"Worker health field {key} must be an object: {value!r}")
+                  raise SystemExit(f"Worker health field {key} must be an object")
               return value
+
+          def poll_event_summary(event):
+              safe_payload_keys = {
+                  "terms",
+                  "total_terms",
+                  "due_terms",
+                  "notification_lane_terms",
+                  "regular_lane_terms",
+                  "connectors",
+                  "new_matches",
+                  "failed_connectors",
+                  "flushed_pending_terms",
+                  "term_offset",
+                  "next_term_offset",
+              }
+              raw_payload = event.get("payload")
+              safe_payload = (
+                  {key: raw_payload[key] for key in safe_payload_keys if key in raw_payload}
+                  if isinstance(raw_payload, dict)
+                  else {}
+              )
+              return {
+                  "id": event.get("id"),
+                  "status": event.get("status"),
+                  "created_at": event.get("created_at"),
+                  "payload": safe_payload,
+              }
+
+          def notification_health_summary(health):
+              safe_keys = {
+                  "healthy",
+                  "active_notify_terms",
+                  "active_silent_orphan_terms",
+                  "active_notify_terms_without_verified_devices",
+                  "orphaned_notification_grace_minutes",
+              }
+              return {key: health.get(key) for key in safe_keys if key in health}
 
           diagnostics = object_field(payload, "diagnostics")
           latest_success = object_field(diagnostics, "latest_successful_poll")
@@ -73,13 +111,11 @@ jobs:
           if pending_notifications is None:
               pending_notifications = []
           if not isinstance(pending_notifications, list):
-              raise SystemExit(
-                  f"Worker health field pending_notifications must be a list: {pending_notifications!r}"
-              )
+              raise SystemExit("Worker health field pending_notifications must be a list")
           summary = {
               "healthy": payload.get("healthy"),
-              "latest_successful_poll": latest_success,
-              "latest_poll": latest_poll,
+              "latest_successful_poll": poll_event_summary(latest_success),
+              "latest_poll": poll_event_summary(latest_poll),
               "items_total": diagnostics.get("items_total"),
               "matches_total": diagnostics.get("matches_total"),
               "apns_configured": apns.get("configured"),
@@ -87,9 +123,8 @@ jobs:
               "device_tokens_by_environment_and_verification": apns.get(
                   "device_tokens_by_environment_and_verification", {}
               ),
-              "notification_health": notification_health,
-              "pending_notifications": pending_notifications,
-              "latest_relevant_apns": diagnostics.get("latest_relevant_apns"),
+              "notification_health": notification_health_summary(notification_health),
+              "pending_notification_count": len(pending_notifications),
           }
 
           failures = []
@@ -108,17 +143,20 @@ jobs:
                       failures.append(
                           "Active backend poll is stuck: "
                           f"{active_poll_age_minutes:.1f} minutes old; "
-                          f"threshold={active_poll_timeout_minutes:.1f}; payload={latest_poll}"
+                          f"threshold={active_poll_timeout_minutes:.1f}"
                       )
           if status != "200":
               failures.append(f"worker health endpoint returned HTTP {status}")
           if payload.get("status") != "ok" or payload.get("healthy") is not True:
-              failures.append(f"Poller health is degraded: {payload}")
+              failures.append(
+                  "Poller health is degraded: "
+                  f"status={payload.get('status')!r} healthy={payload.get('healthy')!r}"
+              )
           if payload.get("idle") is True:
               summary["idle"] = True
               print("Poller is healthy and idle; no recent successful poll is required.")
           elif not created_at:
-              failures.append(f"Missing latest_successful_poll timestamp: {payload}")
+              failures.append("Missing latest_successful_poll timestamp")
           else:
               completed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
               if completed.tzinfo is None:
@@ -127,7 +165,7 @@ jobs:
               summary["age_minutes"] = round(age_minutes, 1)
               if age_minutes > 360 and not active_poll_within_stale_window:
                   failures.append(
-                      f"Latest successful poll is too old: {age_minutes:.1f} minutes; payload={payload}"
+                      f"Latest successful poll is too old: {age_minutes:.1f} minutes"
                   )
               elif age_minutes > 360:
                   print(
@@ -135,16 +173,16 @@ jobs:
                       "stale grace window; deferring the stale failure."
                   )
           if apns.get("configured") is not True:
-              print(f"Notification warning: APNs is not configured: {apns}")
+              print("Notification warning: APNs is not configured")
           if notification_health.get("healthy") is not True:
-              print(f"Notification warning: notification health is degraded: {notification_health}")
+              print("Notification warning: notification health is degraded")
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
           if pending_notifications:
               latest_poll_created_at = latest_poll.get("created_at")
               pending_updated_at = []
               for pending in pending_notifications:
                   if not isinstance(pending, dict):
-                      raise SystemExit(f"Pending notification must be an object: {pending!r}")
+                      raise SystemExit("Pending notification must be an object")
                   if pending.get("updated_at"):
                       pending_updated_at.append(pending.get("updated_at"))
 
@@ -176,13 +214,18 @@ jobs:
                       "treating this monitor check as healthy."
                   )
               else:
-                  print(f"Notification warning: pending notifications remain: {pending_notifications}")
+                  print(
+                      "Notification warning: pending notifications remain: "
+                      f"count={len(pending_notifications)}"
+                  )
           if failures:
               raise SystemExit("; ".join(failures))
           PY
 
       - name: Send failure alert
         if: failure()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "No ALERT_WEBHOOK_URL configured; skipping failure alert"

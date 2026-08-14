@@ -13,10 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BACKEND_URL: https://oshireader.onrender.com
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
       KEYWORD: ${{ inputs.keyword }}
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -24,10 +25,13 @@ jobs:
           fi
 
       - name: Run Twitter probe
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           python3 - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.parse
           import urllib.request
 
@@ -37,7 +41,39 @@ jobs:
               url,
               headers={"Authorization": f"Bearer {os.environ['ADMIN_API_TOKEN']}"},
           )
-          with urllib.request.urlopen(req, timeout=45) as response:
-              payload = json.load(response)
-          print(json.dumps(payload, ensure_ascii=False, indent=2))
+          try:
+              with urllib.request.urlopen(req, timeout=45) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as exc:
+              raise SystemExit(f"Admin Twitter probe returned HTTP {exc.code}") from None
+          except urllib.error.URLError:
+              raise SystemExit("Admin Twitter probe request failed") from None
+
+          if not isinstance(payload, dict):
+              raise SystemExit("Admin Twitter probe returned a non-object payload")
+          api = payload.get("api")
+          if not isinstance(api, dict):
+              raise SystemExit("Admin Twitter probe returned invalid API diagnostics")
+          data_count = api.get("data_count")
+          status = api.get("status")
+          if isinstance(data_count, bool) or not isinstance(data_count, int) or data_count < 0:
+              raise SystemExit("Admin Twitter probe returned an invalid data count")
+          if status is not None and (isinstance(status, bool) or not isinstance(status, int)):
+              raise SystemExit("Admin Twitter probe returned an invalid HTTP status")
+          summary = {
+              "env_has_bearer_token": payload.get("env_has_bearer_token") is True,
+              "db_has_bearer_token": payload.get("db_has_bearer_token") is True,
+              "selected_bearer_source": (
+                  payload.get("selected_bearer_source")
+                  if payload.get("selected_bearer_source") in {"env", "db", None}
+                  else "invalid"
+              ),
+              "api": {
+                  "attempted": api.get("attempted") is True,
+                  "status": status,
+                  "data_count": data_count,
+                  "error_present": bool(api.get("error_title") or api.get("error_detail")),
+              },
+          }
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
           PY

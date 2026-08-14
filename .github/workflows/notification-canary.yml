@@ -13,11 +13,11 @@ jobs:
     timeout-minutes: 5
     env:
       BACKEND_CANARY_URL: https://oshireader.onrender.com/api/admin/notification-canary
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
-      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       ALERT_CONTEXT: notification-canary
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -26,8 +26,11 @@ jobs:
 
       - name: Check verified-device eligibility
         id: eligibility
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           BODY=$(mktemp)
+          trap 'rm -f "$BODY"' EXIT
           STATUS=$(curl --silent --show-error \
             --retry 2 \
             --retry-all-errors \
@@ -38,7 +41,7 @@ jobs:
             "https://oshireader.onrender.com/api/admin/poller-health" \
             -H "Authorization: Bearer $ADMIN_API_TOKEN")
           if [ "$STATUS" != "200" ]; then
-            cat "$BODY"
+            echo "Eligibility diagnostics returned HTTP $STATUS"
             exit 1
           fi
           python3 - "$BODY" <<'PY'
@@ -68,8 +71,11 @@ jobs:
 
       - name: Send synthetic notification canary
         if: steps.eligibility.outputs.canary_allowed == 'true'
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           BODY=$(mktemp)
+          trap 'rm -f "$BODY"' EXIT
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
@@ -82,8 +88,6 @@ jobs:
             -H "Authorization: Bearer $ADMIN_API_TOKEN")
 
           echo "HTTP status: $STATUS"
-          cat "$BODY"
-          echo
 
           python3 - "$STATUS" "$BODY" <<'PY'
           import json
@@ -91,13 +95,40 @@ jobs:
 
           status = sys.argv[1]
           with open(sys.argv[2], encoding="utf-8") as response_file:
-              payload = json.load(response_file)
+              response_payload = json.load(response_file)
 
-          terms = payload.get("terms") or [payload]
+          if not isinstance(response_payload, dict):
+              raise SystemExit("canary endpoint returned a non-object payload")
+          detail = response_payload.get("detail")
+          payload = detail if isinstance(detail, dict) else response_payload
+
+          raw_terms = payload.get("terms")
+          terms = raw_terms if isinstance(raw_terms, list) else []
+          term_summaries = []
+          for index, term in enumerate(terms, start=1):
+              if not isinstance(term, dict):
+                  term_summaries.append({"term_index": index, "valid": False})
+                  continue
+              apns_event = term.get("apns_event") or {}
+              if not isinstance(apns_event, dict):
+                  apns_event = {}
+              apns_payload = apns_event.get("payload") or {}
+              if not isinstance(apns_payload, dict):
+                  apns_payload = {}
+              term_summaries.append({
+                  "term_index": index,
+                  "valid": True,
+                  "delivered": term.get("delivered"),
+                  "device_count": apns_payload.get("device_count"),
+                  "delivered_count": apns_payload.get("delivered_count"),
+                  "retryable_failures": apns_payload.get("retryable_failures"),
+                  "pruned_tokens": apns_payload.get("pruned_tokens"),
+              })
           summary = {
               "all_terms": payload.get("all_terms"),
               "delivered": payload.get("delivered"),
-              "terms": terms,
+              "term_count": len(terms),
+              "terms": term_summaries,
           }
           print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
 
@@ -105,23 +136,30 @@ jobs:
           if status != "200":
               failures.append(f"canary endpoint returned HTTP {status}")
           if payload.get("delivered") is not True:
-              failures.append(f"canary did not deliver: {payload}")
-          if not terms:
-              failures.append(f"canary response did not include term results: {payload}")
-          for term in terms:
+              failures.append("canary did not deliver")
+          if not isinstance(raw_terms, list) or not terms:
+              failures.append("canary response did not include term results")
+          for index, term in enumerate(terms, start=1):
+              if not isinstance(term, dict):
+                  failures.append(f"term_index={index} result is not an object")
+                  continue
               apns_event = term.get("apns_event") or {}
+              if not isinstance(apns_event, dict):
+                  apns_event = {}
               apns_payload = apns_event.get("payload") or {}
+              if not isinstance(apns_payload, dict):
+                  apns_payload = {}
               device_count = apns_payload.get("device_count", 0)
               delivered_count = apns_payload.get("delivered_count", 0)
               retryable_failures = apns_payload.get("retryable_failures", 0)
               pruned_tokens = apns_payload.get("pruned_tokens", 0)
-              term_label = f"term_id={term.get('term_id')} keyword={term.get('keyword')}"
+              term_label = f"term_index={index}"
               if term.get("delivered") is not True:
-                  failures.append(f"{term_label} did not deliver: {term}")
+                  failures.append(f"{term_label} did not deliver")
               if device_count < 1:
-                  failures.append(f"{term_label} APNs event did not target any devices: {apns_event}")
+                  failures.append(f"{term_label} APNs event did not target any devices")
               if delivered_count < 1:
-                  failures.append(f"{term_label} APNs event did not record a delivery: {apns_event}")
+                  failures.append(f"{term_label} APNs event did not record a delivery")
               if delivered_count != device_count:
                   failures.append(
                       f"{term_label} APNs delivery was incomplete: "
@@ -137,6 +175,8 @@ jobs:
 
       - name: Send failure alert
         if: failure()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "No ALERT_WEBHOOK_URL configured; skipping failure alert"

@@ -29,13 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
       BACKEND_URL: https://oshireader.onrender.com
       DRY_RUN: ${{ inputs.dry_run }}
       KEEP_PER_ENVIRONMENT: ${{ inputs.keep_per_environment }}
       PRESERVE_OWNER_SCOPED: ${{ inputs.preserve_owner_scoped }}
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -43,8 +44,11 @@ jobs:
           fi
 
       - name: Prune superseded APNs tokens
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           BODY=$(mktemp)
+          trap 'rm -f "$BODY"' EXIT
           STATUS=$(curl --silent --show-error \
             --output "$BODY" \
             --write-out "%{http_code}" \
@@ -65,7 +69,26 @@ jobs:
           with open(sys.argv[2], encoding="utf-8") as response_file:
               payload = json.load(response_file)
 
-          print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
           if status != "200":
               raise SystemExit(f"maintenance endpoint returned HTTP {status}")
+          if not isinstance(payload, dict):
+              raise SystemExit("maintenance endpoint returned a non-object payload")
+
+          summary = {}
+          for key in (
+              "dry_run",
+              "keep_per_environment",
+              "preserve_owner_scoped",
+              "candidate_count",
+              "kept_count",
+              "removed_count",
+          ):
+              if key not in payload:
+                  raise SystemExit(f"maintenance response is missing {key}")
+              summary[key] = payload[key]
+          for key in ("candidate_count", "kept_count", "removed_count"):
+              value = summary[key]
+              if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                  raise SystemExit(f"maintenance response has invalid {key}")
+          print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
           PY

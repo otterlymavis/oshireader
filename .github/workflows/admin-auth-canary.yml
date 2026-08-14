@@ -14,9 +14,10 @@ jobs:
     timeout-minutes: 3
     env:
       BACKEND_URL: https://oshireader.onrender.com
-      ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
     steps:
       - name: Check required secret
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           if [ -z "$ADMIN_API_TOKEN" ]; then
             echo "Missing GitHub Actions secret: ADMIN_API_TOKEN"
@@ -24,9 +25,12 @@ jobs:
           fi
 
       - name: Verify backend admin authentication
+        env:
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: |
           BODY=$(mktemp)
-            STATUS=$(curl --silent --show-error \
+          trap 'rm -f "$BODY"' EXIT
+          STATUS=$(curl --silent --show-error \
             --retry 2 \
             --retry-all-errors \
             --retry-delay 10 \
@@ -39,7 +43,6 @@ jobs:
           echo "Backend auth status: $STATUS"
           if [ "$STATUS" != "200" ]; then
             echo "Backend admin authentication failed"
-            cat "$BODY"
             exit 1
           fi
 
