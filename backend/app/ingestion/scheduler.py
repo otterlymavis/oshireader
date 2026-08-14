@@ -1698,10 +1698,6 @@ async def _poll_once_unlocked() -> None:
         polled_at = datetime.now(timezone.utc)
         for term in all_terms:
             term.last_polled_at = polled_at
-            try:
-                db.expunge(term)
-            except Exception:
-                pass
         db.commit()
 
     finally:
