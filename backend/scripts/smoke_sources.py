@@ -389,8 +389,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allow-empty",
         action="append",
-        default=["twitter"],
-        help="Platform allowed to return no results without failing. Can be repeated. Defaults to twitter.",
+        default=[],
+        help="Platform allowed to return no results without failing. Can be repeated.",
     )
     return parser.parse_args()
 

@@ -38,18 +38,34 @@ def record_fetch_result(platform: str, *, succeeded: bool, item_count: int = 0, 
     now = _utcnow()
     with _lock:
         entry = _health.setdefault(platform, {"consecutive_failures": 0})
+        starts_result_cycle = entry.get("result_cycle") != _cycle
+        if starts_result_cycle:
+            entry["result_cycle"] = _cycle
+            entry["cycle_base_failures"] = entry.get("consecutive_failures", 0)
+            entry["cycle_failed"] = False
+            entry["cycle_had_items"] = False
         entry["last_checked_at"] = now
         entry["cycle"] = _cycle
         if succeeded:
-            entry["status"] = "success" if item_count else "empty"
+            entry["cycle_had_items"] = entry["cycle_had_items"] or item_count > 0
             entry["last_success_at"] = now
-            entry["last_item_count"] = item_count
-            entry["last_error"] = None
-            entry["consecutive_failures"] = 0
+            entry["last_item_count"] = (
+                item_count
+                if starts_result_cycle
+                else max(item_count, entry.get("last_item_count", 0))
+            )
+            # One platform is fetched for every term and alias. Once any search
+            # fails in this cycle, retain that failure so a later successful
+            # empty search cannot hide the term needing device fallback.
+            if not entry["cycle_failed"]:
+                entry["status"] = "success" if entry["cycle_had_items"] else "empty"
+                entry["last_error"] = None
+                entry["consecutive_failures"] = 0
         else:
+            entry["cycle_failed"] = True
             entry["status"] = "failure"
             entry["last_error"] = error
-            entry["consecutive_failures"] = entry.get("consecutive_failures", 0) + 1
+            entry["consecutive_failures"] = entry["cycle_base_failures"] + 1
 
 
 def record_jina_result(platform: str, *, succeeded: bool, error: str | None = None) -> None:

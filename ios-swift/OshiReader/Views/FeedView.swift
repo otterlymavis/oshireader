@@ -158,7 +158,29 @@ private struct FeedRefreshReport {
     var customCompletedCheck = false
     var completedDevicePlatforms = Set<String>()
     var missingDevicePlatforms = Set<String>()
+    var sourceHealthFailedPlatforms = Set<String>()
     var feedScopeRevision: Int?
+
+    var backendFeedFailed: Bool {
+        BackgroundRefreshPolicy.lastBackendAttemptFailed(
+            attempts
+                .filter { $0.strategy.hasPrefix("backend_feed") }
+                .map(\.status)
+        )
+    }
+
+    var failedBackendPlatforms: Set<String> {
+        var latestStatuses = [String: String]()
+        for attempt in attempts {
+            if let platform = Self.backendPlatformID(from: attempt.strategy) {
+                latestStatuses[platform] = attempt.status
+            }
+        }
+        let requestFailures = Set(latestStatuses.compactMap { platform, status in
+            status == "failed" ? platform : nil
+        })
+        return requestFailures.union(sourceHealthFailedPlatforms)
+    }
 
     mutating func record(
         strategy: String,
@@ -221,6 +243,10 @@ private struct FeedRefreshReport {
 
     mutating func markMissingDevicePlatforms(_ platforms: Set<String>) {
         missingDevicePlatforms.formUnion(platforms)
+    }
+
+    mutating func markFailedBackendSourcePlatforms(_ platforms: Set<String>) {
+        sourceHealthFailedPlatforms.formUnion(platforms)
     }
 
     private static func didBackendReturnItems(strategy: String, itemCount: Int) -> Bool {
@@ -920,11 +946,19 @@ struct FeedView: View {
             isScrapingFallback = false
         }
 
+        async let sourceHealthEntries = NetworkManager.shared.fetchSourceHealth(
+            timeout: BackgroundRefreshPolicy.foregroundBackendTimeout
+        )
         var report = await quickRefresh(
             skipTermSync: skipTermSync,
             feedScopeRevision: feedScopeRevision,
             selectedPlatform: refreshPlatform
         )
+        if let entries = await sourceHealthEntries {
+            report.markFailedBackendSourcePlatforms(
+                BackgroundRefreshPolicy.failedBackendSourcePlatforms(entries)
+            )
+        }
 
         guard !Task.isCancelled else { return }
         let feedScopeRevision = report.feedScopeRevision ?? BackgroundRefreshPolicy.currentFeedScopeRevision
@@ -934,34 +968,42 @@ struct FeedView: View {
             await sendNoResultsDiagnosticIfNeeded(report)
             return
         }
-        // Scrape device-side after the backend pass. The backend's Render datacenter IP is
-        // blocked by Google News (503) and niconico (403), so many sources (niconico, 5ch,
-        // smartnews, ameblo, aera, hochi, sponichi, livedoor, mantanweb, barks,
-        // realsound, cinemacafe, mdpr, oricon, yahoo) only return data when fetched
-        // from the device's own network.
+        // Scrape device-side after the backend pass. Source availability varies by
+        // egress network, so a source blocked or timed out from the backend may still
+        // work from the device's own connection.
         // mergeItems() dedupes against the backend results.
         //
-        // Throttle it: each run fires ~15 Google News requests from the phone, so skip on
+        // Throttle it: each run can fire many source requests from the phone, so skip on
         // rapid successive refreshes (but always run on a cold/empty cache). Without this
         // the device risks the same 503 rate-limiting.
         let cacheIsEmpty = db.feedItems.isEmpty
 
         let elapsed = Self.lastDeviceScrapeAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
-        guard BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+        let forcedFallbackPlatforms = BackgroundRefreshPolicy.forcedForegroundDeviceFallbackPlatforms(
+            selectedPlatform: refreshPlatform,
+            backendFeedFailed: report.backendFeedFailed,
+            failedBackendPlatforms: report.failedBackendPlatforms,
+            fallbackPlatforms: fallbackPlatformsNeedingDevice
+        )
+        let shouldRunBroadDeviceRefresh = BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
             cacheIsEmpty: cacheIsEmpty,
             elapsedSinceLastDeviceScrape: elapsed,
             throttle: Self.deviceScrapeThrottle,
-            forceRefresh: refreshPlatform != nil && !fallbackPlatformsNeedingDevice.isEmpty
-        ) else {
+            forceRefresh: false
+        )
+        guard shouldRunBroadDeviceRefresh || !forcedFallbackPlatforms.isEmpty else {
             report.record(strategy: "device_scrape", status: "throttled", detail: "\(Int(elapsed))s since last run")
             recordCompletedRefreshCheckIfNeeded(report, feedScopeRevision: feedScopeRevision)
             await sendNoResultsDiagnosticIfNeeded(report)
             return
         }
+        let platformsToScrape = shouldRunBroadDeviceRefresh
+            ? fallbackPlatformsNeedingDevice
+            : forcedFallbackPlatforms
         isScrapingFallback = true
         report.append(await deepFallback(
             triggerBackendPoll: refreshPlatform == nil && !report.backendReturnedItems && !report.backendConnectivityFailed,
-            fallbackPlatforms: fallbackPlatformsNeedingDevice
+            fallbackPlatforms: platformsToScrape
         ))
         guard !Task.isCancelled else { return }
         clearRefreshErrorIfLocalFeedIsUsable(report)

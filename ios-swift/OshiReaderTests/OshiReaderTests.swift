@@ -809,6 +809,21 @@ final class OshiReaderTests: XCTestCase {
             BackgroundRefreshPolicy.minimumLocalRefreshWindow,
             BackgroundRefreshPolicy.operationDeadline
         )
+        let reservedDeadline = BackgroundRefreshPolicy.backendPhaseDeadline(needsLocalRefresh: true)
+        XCTAssertLessThan(reservedDeadline, BackgroundRefreshPolicy.operationDeadline)
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.operationDeadline - reservedDeadline,
+            BackgroundRefreshPolicy.localRefreshCancellationBuffer
+        )
+        XCTAssertGreaterThan(reservedDeadline, BackgroundRefreshPolicy.pollTimeout)
+        XCTAssertGreaterThanOrEqual(
+            BackgroundRefreshPolicy.minimumLocalRefreshWindow,
+            15
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.backendPhaseDeadline(needsLocalRefresh: false),
+            BackgroundRefreshPolicy.operationDeadline
+        )
     }
 
     func testBackgroundRefreshLocalFallbackOnlyStartsWithRemainingBudget() {
@@ -1102,6 +1117,89 @@ final class OshiReaderTests: XCTestCase {
                 throttle: 30 * 60,
                 forceRefresh: true
             )
+        )
+    }
+
+    func testBackendFailureForcesDeviceFallbackPastRecentScrapeThrottle() {
+        let fallbackPlatforms: Set<String> = ["youtube", "mdpr"]
+        let forcedPlatforms = BackgroundRefreshPolicy.forcedForegroundDeviceFallbackPlatforms(
+            selectedPlatform: nil,
+            backendFeedFailed: true,
+            failedBackendPlatforms: [],
+            fallbackPlatforms: fallbackPlatforms
+        )
+
+        XCTAssertEqual(forcedPlatforms, fallbackPlatforms)
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.shouldStartForegroundDeviceRefresh(
+                cacheIsEmpty: false,
+                elapsedSinceLastDeviceScrape: 30,
+                throttle: 30 * 60,
+                forceRefresh: !forcedPlatforms.isEmpty
+            )
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.forcedForegroundDeviceFallbackPlatforms(
+                selectedPlatform: nil,
+                backendFeedFailed: false,
+                failedBackendPlatforms: ["mdpr"],
+                fallbackPlatforms: fallbackPlatforms
+            ),
+            ["mdpr"]
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.forcedForegroundDeviceFallbackPlatforms(
+                selectedPlatform: nil,
+                backendFeedFailed: false,
+                failedBackendPlatforms: [],
+                fallbackPlatforms: fallbackPlatforms
+            ),
+            []
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.forcedForegroundDeviceFallbackPlatforms(
+                selectedPlatform: nil,
+                backendFeedFailed: true,
+                failedBackendPlatforms: [],
+                fallbackPlatforms: []
+            ),
+            []
+        )
+        XCTAssertFalse(BackgroundRefreshPolicy.lastBackendAttemptFailed(["failed", "items"]))
+        XCTAssertTrue(BackgroundRefreshPolicy.lastBackendAttemptFailed(["empty", "failed"]))
+    }
+
+    func testFailedSourceHealthForcesOnlyFailedDeviceFallbackPlatforms() {
+        let entries = [
+            SourceHealthEntry(
+                platform: "mdpr",
+                status: "failure",
+                last_checked_at: nil,
+                last_success_at: nil,
+                last_item_count: 0,
+                last_error: "SourceUnavailableError",
+                consecutive_failures: 2,
+                jina_checked_at: nil,
+                jina_ok: nil,
+                jina_error: nil
+            ),
+            SourceHealthEntry(
+                platform: "oricon",
+                status: "empty",
+                last_checked_at: nil,
+                last_success_at: nil,
+                last_item_count: 0,
+                last_error: nil,
+                consecutive_failures: 0,
+                jina_checked_at: nil,
+                jina_ok: nil,
+                jina_error: nil
+            ),
+        ]
+
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.failedBackendSourcePlatforms(entries),
+            ["mdpr"]
         )
     }
 
