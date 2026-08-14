@@ -66,7 +66,6 @@ class YahooNewsConnector(BaseConnector):
         items = await race_jina_and_public_proxy(
             self._fetch_gnews_jina(keyword, url),
             self._fetch_gnews_public_proxy(keyword, url),
-            self._fetch_gnews_worker_proxy(keyword),
         )
         if items:
             return items
@@ -92,17 +91,6 @@ class YahooNewsConnector(BaseConnector):
 
     async def _fetch_gnews_public_proxy(self, keyword: str, google_news_url: str) -> list[SourceItemCreate]:
         content = await fetch_google_news_via_public_proxy(google_news_url)
-        if not content:
-            return []
-        return await build_google_news_public_proxy_items(content, keyword, platform=self.PLATFORM)
-
-    async def _fetch_gnews_worker_proxy(self, keyword: str) -> list[SourceItemCreate]:
-        # Second, independent proxy hop for the same Google News search — this
-        # project's own Cloudflare Worker (already used for Bing below) rather
-        # than a third-party free proxy, so it doesn't share allorigins.win's
-        # rate limits or uptime.
-        query = f"{keyword} site:news.yahoo.co.jp"
-        content = await fetch_search_rss_via_proxy(query, target="google", hl="ja", gl="JP", ceid="JP:ja")
         if not content:
             return []
         return await build_google_news_public_proxy_items(content, keyword, platform=self.PLATFORM)
