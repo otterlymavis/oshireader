@@ -19,15 +19,20 @@ from app.connectors.base import (
     BaseConnector,
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
+    SourceUnavailableError,
     SourceItemCreate,
     build_google_news_jina_items,
     build_google_news_public_proxy_items,
     contains_keyword,
+    fetch_google_news_direct,
     fetch_google_news_via_public_proxy,
     fetch_search_rss_via_proxy,
+    first_nonempty_result,
     is_recent_search_result,
+    is_usable_jina_reader_response,
     jina_reader_headers,
     mark_date_provenance,
+    parse_feed_document,
     parse_feed_date,
     race_jina_and_public_proxy,
     title_contains_keyword,
@@ -148,18 +153,40 @@ class _GNewsSiteConnector(BaseConnector):
             f"&gl={quote(self.GNEWS_GL)}"
             f"&ceid={quote(self.GNEWS_CEID)}"
         )
-        # Google News is unreachable directly from Render's outbound IP (see
-        # CLAUDE.md) and the Cloudflare Worker proxy is now also blocked by
-        # Google from Cloudflare's IP ranges, so neither is worth the timeout
-        # budget: go straight to the jina.ai reader proxy and a second,
-        # independent public proxy (see race_jina_and_public_proxy), then Bing.
-        items = await race_jina_and_public_proxy(
-            self._fetch_gnews_jina(keyword, url, history_years=10),
-            self._fetch_gnews_public_proxy(keyword, url),
+        # Direct Google availability varies by egress IP. Hedge it against the
+        # proxy chain so its own timeout cannot consume the scheduler's entire
+        # connector deadline before another path gets a chance to answer.
+        return await first_nonempty_result(
+            self._fetch_gnews_direct(keyword, url),
+            race_jina_and_public_proxy(
+                self._fetch_gnews_jina(keyword, url, history_years=10),
+                self._fetch_gnews_public_proxy(keyword, url),
+            ),
+            self._fetch_bing_news(keyword, history_years=10),
         )
-        if items:
-            return items
-        return await self._fetch_bing_news(keyword, history_years=10)
+
+    async def _fetch_gnews_direct(
+        self,
+        keyword: str,
+        google_news_url: str,
+    ) -> list[SourceItemCreate]:
+        content = await fetch_google_news_direct(
+            google_news_url,
+            accept_language=self.ACCEPT_LANGUAGE,
+        )
+        if not content:
+            raise SourceUnavailableError("direct Google News unavailable")
+        return await build_google_news_public_proxy_items(
+            content,
+            keyword,
+            platform=self.PLATFORM,
+            title_suffix_re=self.TITLE_SUFFIX_RE,
+            raw_payload_extra={
+                "site": self.SITE,
+                "history_years": 10,
+                "source": "google_news_direct",
+            },
+        )
 
     async def _fetch_gnews_jina(
         self,
@@ -182,6 +209,9 @@ class _GNewsSiteConnector(BaseConnector):
             record_jina_result(self.PLATFORM, succeeded=False, error=type(exc).__name__)
             return [], False
 
+        if not is_usable_jina_reader_response(resp.text):
+            record_jina_result(self.PLATFORM, succeeded=False, error="invalid_response")
+            return [], False
         record_jina_result(self.PLATFORM, succeeded=True)
         items = build_google_news_jina_items(
             resp.text,
@@ -199,7 +229,7 @@ class _GNewsSiteConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         content = await fetch_google_news_via_public_proxy(google_news_url, accept_language=self.ACCEPT_LANGUAGE)
         if not content:
-            return []
+            raise SourceUnavailableError("public Google News proxy unavailable")
         return await build_google_news_public_proxy_items(
             content,
             keyword,
@@ -223,18 +253,26 @@ class _GNewsSiteConnector(BaseConnector):
             accept_language=self.ACCEPT_LANGUAGE,
         )
         try:
+            if content:
+                try:
+                    feed = await parse_feed_document(content)
+                except SourceUnavailableError:
+                    log.warning("%s Bing News proxy returned a non-feed response", self.PLATFORM)
+                    content = None
             if not content:
                 source = "bing_news"
                 async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=self._headers()) as client:
                     resp = await client.get(url)
                     if not resp.is_success:
                         log.warning("%s Bing News fallback returned %d", self.PLATFORM, resp.status_code)
-                        return []
+                        raise SourceUnavailableError("Bing News unavailable")
                 content = resp.content
-            feed = await asyncio.to_thread(feedparser.parse, content)
+                feed = await parse_feed_document(content)
         except Exception as exc:
+            if isinstance(exc, SourceUnavailableError):
+                raise
             log.warning("%s Bing News fallback error: %s", self.PLATFORM, exc)
-            return []
+            raise SourceUnavailableError("Bing News unavailable") from exc
 
         items: list[SourceItemCreate] = []
         seen: set[str] = set()
@@ -282,11 +320,13 @@ class _GNewsSiteConnector(BaseConnector):
                 resp = await client.get(rss_url)
                 if not resp.is_success:
                     log.warning("%s direct RSS returned %d", self.PLATFORM, resp.status_code)
-                    return []
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+                    raise SourceUnavailableError("direct RSS unavailable")
+            feed = await parse_feed_document(resp.content)
         except Exception as exc:
+            if isinstance(exc, SourceUnavailableError):
+                raise
             log.warning("%s direct RSS error: %s", self.PLATFORM, exc)
-            return []
+            raise SourceUnavailableError("direct RSS unavailable") from exc
 
         items: list[SourceItemCreate] = []
         seen: set[str] = set()
@@ -334,11 +374,21 @@ class _RSSFirstGNewsSiteConnector(_GNewsSiteConnector):
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
             return []
+        direct_succeeded = False
         for rss_url in self.RSS_URLS:
-            items = await self._fetch_direct_rss(rss_url, keyword)
+            try:
+                items = await self._fetch_direct_rss(rss_url, keyword)
+            except SourceUnavailableError:
+                continue
+            direct_succeeded = True
             if items:
                 return items
-        return await super().fetch(keyword, mode)
+        try:
+            return await super().fetch(keyword, mode)
+        except SourceUnavailableError:
+            if direct_succeeded:
+                return []
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -357,10 +407,16 @@ class AmebloConnector(_GNewsSiteConnector):
         if not stripped:
             return []
 
-        items = await self._fetch_ameba_search(stripped)
-        if not items:
-            items = await self._fetch_gnews(stripped)
-        return items
+        try:
+            items = await self._fetch_ameba_search(stripped)
+        except SourceUnavailableError:
+            return await self._fetch_gnews(stripped)
+        if items:
+            return items
+        try:
+            return await self._fetch_gnews(stripped)
+        except SourceUnavailableError:
+            return []
 
     async def _fetch_ameba_search(self, keyword: str) -> list[SourceItemCreate]:
         encoded = quote(keyword, safe="")
@@ -380,10 +436,12 @@ class AmebloConnector(_GNewsSiteConnector):
                 resp = await client.get(url)
                 if not resp.is_success:
                     log.warning("%s Ameba search returned %d", self.PLATFORM, resp.status_code)
-                    return []
+                    raise SourceUnavailableError("Ameba search unavailable")
         except Exception as exc:
+            if isinstance(exc, SourceUnavailableError):
+                raise
             log.warning("%s Ameba search error: %s", self.PLATFORM, exc)
-            return []
+            raise SourceUnavailableError("Ameba search unavailable") from exc
 
         state = _extract_window_state(resp.text)
         entry_map = (state.get("blogEntry") or {}).get("blogEntryMap") or {}
@@ -492,10 +550,16 @@ class RealSoundConnector(_GNewsSiteConnector):
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
             return []
-        items = await self._fetch_direct_search(keyword)
+        try:
+            items = await self._fetch_direct_search(keyword)
+        except SourceUnavailableError:
+            return await super().fetch(keyword, mode)
         if items:
             return items
-        return await super().fetch(keyword, mode)
+        try:
+            return await super().fetch(keyword, mode)
+        except SourceUnavailableError:
+            return []
 
     async def _fetch_direct_search(self, keyword: str) -> list[SourceItemCreate]:
         url = f"https://realsound.jp/?s={quote(keyword)}"
@@ -504,10 +568,12 @@ class RealSoundConnector(_GNewsSiteConnector):
                 response = await client.get(url)
                 if not response.is_success:
                     log.warning("realsound direct search returned %d", response.status_code)
-                    return []
+                    raise SourceUnavailableError("RealSound direct search unavailable")
         except Exception as exc:
+            if isinstance(exc, SourceUnavailableError):
+                raise
             log.warning("realsound direct search error: %s", exc)
-            return []
+            raise SourceUnavailableError("RealSound direct search unavailable") from exc
 
         soup = BeautifulSoup(response.text, "lxml")
         items: list[SourceItemCreate] = []
@@ -619,15 +685,8 @@ class KpopOfficialConnector(_RSSFirstGNewsSiteConnector):
     TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*Kpop Official\s*$', re.I)
 
 
-class BARKSConnector(_GNewsSiteConnector):
+class BARKSConnector(_RSSFirstGNewsSiteConnector):
     PLATFORM = "barks"
     SITE = "barks.jp"
+    RSS_URLS = ("https://www.barks.jp/news/rss/",)
     TITLE_SUFFIX_RE = re.compile(r'\s*[|\-]\s*BARKS\s*$', re.I)
-
-    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
-        if mode == CollectionMode.MEDIA_ONLY:
-            return []
-        items = await self._fetch_direct_rss("https://www.barks.jp/news/rss/", keyword)
-        if not items:
-            items = await self._fetch_gnews(keyword)
-        return items

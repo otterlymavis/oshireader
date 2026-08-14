@@ -6,12 +6,18 @@ import pytest
 
 from app.connectors.base import SourceItemCreate
 from app.models import CollectionMode
-from scripts.smoke_sources import KOREAN_ARTIST_KEYWORDS, _check_connector, check_connector
+from scripts.smoke_sources import KOREAN_ARTIST_KEYWORDS, _check_connector, check_connector, parse_args
 
 
 def test_korean_artist_smoke_preset_is_representative_and_unique():
     assert KOREAN_ARTIST_KEYWORDS == ["BTS", "BLACKPINK", "IU", "NewJeans", "SEVENTEEN"]
     assert len(KOREAN_ARTIST_KEYWORDS) == len(set(KOREAN_ARTIST_KEYWORDS))
+
+
+def test_live_smoke_does_not_exempt_tokenless_twitter_from_empty_failures(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["smoke_sources.py"])
+
+    assert parse_args().allow_empty == []
 
 
 class FakeConnector:

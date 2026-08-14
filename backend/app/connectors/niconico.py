@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+import html
 import logging
 import re
 from urllib.parse import quote
@@ -14,6 +16,8 @@ from app.connectors.base import (
     SourceItemCreate,
     contains_keyword,
     is_recent_search_result,
+    mark_date_provenance,
+    parse_feed_document,
     parse_feed_date,
 )
 
@@ -31,30 +35,105 @@ _HEADERS = {
 class NicoNicoConnector(BaseConnector):
     PLATFORM = "niconico"
     SUPPORTS_MEDIA_FILTER = True
-    # Render's outbound IP gets a permanent 403 from NicoNico (see CLAUDE.md);
-    # real matches for this platform arrive via a separate client-side scrape,
-    # so this connector's backend poll result would just show as permanently
-    # "failed" without reflecting whether the source actually works.
-    REPORTS_STATUS_TO_CLIENT = False
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
-        # Both feeds are unconditionally unreachable from Render's IP (see
-        # CLAUDE.md), so run them concurrently rather than sequentially —
-        # otherwise every poll pays up to the sum of both feeds' timeouts
-        # before failing instead of just the slower of the two.
+        # Snapshot Search is NicoNico's current keyless API. A successful empty
+        # response is authoritative; use the legacy feeds only when the API is
+        # unavailable or malformed.
+        snapshot_items = await self._fetch_snapshot_search(keyword)
+        if snapshot_items is not None:
+            return snapshot_items
+
+        # Keep the two legacy feeds concurrent so a slow or blocked endpoint
+        # costs at most one timeout when the primary API is unavailable.
         items, tag_items = await asyncio.gather(
             self._fetch_rss(keyword),
             self._fetch_tag_rss(keyword),
         )
-        if items is None:
-            items = tag_items
-        if items is None:
-            # Both of NicoNico's own feeds failed to fetch (e.g. the 403 Render's
-            # outbound IP gets — see CLAUDE.md). Raise rather than returning []
-            # so the scheduler's existing failure path records this as a real
-            # failure instead of a misleading "success, zero results" — actual
-            # matches for this source arrive via the separate client-side scrape.
-            raise RuntimeError(f"NicoNico feeds unavailable for keyword {keyword!r}")
+        feed_results = [result for result in (items, tag_items) if result is not None]
+        merged: list[SourceItemCreate] = []
+        seen = set()
+        for result in feed_results:
+            for item in result:
+                if item.item_id not in seen:
+                    seen.add(item.item_id)
+                    merged.append(item)
+        if merged:
+            return merged[:25]
+
+        if not feed_results:
+            # Every independent NicoNico path failed. Raise so scheduler health
+            # records an outage instead of a misleading successful empty check.
+            raise RuntimeError(f"NicoNico sources unavailable for keyword {keyword!r}")
+        return []
+
+    async def _fetch_snapshot_search(self, keyword: str) -> list[SourceItemCreate] | None:
+        url = "https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search"
+        params = {
+            "q": keyword,
+            # Ingestion uses the title as primary text, so constrain the API
+            # before its 25-row limit rather than discarding title matches that
+            # were crowded out by description/tag-only results.
+            "targets": "title",
+            "fields": "contentId,title,description,userId,channelId,thumbnailUrl,startTime",
+            "_sort": "-startTime",
+            "_limit": "25",
+            "_context": "OshiReader",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=_HEADERS) as client:
+                resp = await client.get(url, params=params)
+                if not resp.is_success:
+                    log.debug("NicoNico snapshot search returned status %d", resp.status_code)
+                    return None
+                payload = resp.json()
+        except Exception as exc:
+            log.debug("NicoNico snapshot search error: %s", exc)
+            return None
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return None
+
+        items: list[SourceItemCreate] = []
+        for raw in payload["data"]:
+            if not isinstance(raw, dict):
+                continue
+            video_id = str(raw.get("contentId") or "").strip()
+            title = str(raw.get("title") or "").strip()
+            description = html.unescape(re.sub(r"<[^>]+>", " ", str(raw.get("description") or "")))
+            # Ingestion treats the title as the primary searchable text when a
+            # title exists. Apply the same rule here so a keyword mentioned only
+            # in a long description does not become a result that ingestion will
+            # immediately reject as a mismatch.
+            if not video_id or not title or not contains_keyword(keyword, title):
+                continue
+            try:
+                published = datetime.fromisoformat(str(raw.get("startTime") or "").replace("Z", "+00:00"))
+                if published.tzinfo is None:
+                    published = published.replace(tzinfo=timezone.utc)
+                published = mark_date_provenance(published.astimezone(timezone.utc), date_parsed=True)
+            except ValueError:
+                continue
+            if not is_recent_search_result(published):
+                continue
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=video_id,
+                    url=f"https://www.nicovideo.jp/watch/{video_id}",
+                    published_at=published,
+                    media_type="video",
+                    title=title,
+                    content_text=" ".join(description.split()) or None,
+                    thumbnail_url=raw.get("thumbnailUrl") or None,
+                    raw_payload={
+                        "source": "snapshot_search",
+                        "keyword": keyword,
+                        "user_id": raw.get("userId"),
+                        "channel_id": raw.get("channelId"),
+                    },
+                )
+            )
         return items
 
     async def _fetch_rss(self, keyword: str) -> list[SourceItemCreate] | None:
@@ -67,7 +146,7 @@ class NicoNicoConnector(BaseConnector):
                 if not resp.is_success:
                     log.debug("NicoNico search RSS returned status %d", resp.status_code)
                     return None
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+            feed = await parse_feed_document(resp.content)
         except Exception as exc:
             log.debug("NicoNico search RSS fetch error: %s", exc)
             return None
@@ -84,7 +163,7 @@ class NicoNicoConnector(BaseConnector):
                 if not resp.is_success:
                     log.debug("NicoNico tag RSS returned status %d", resp.status_code)
                     return None
-            feed = await asyncio.to_thread(feedparser.parse, resp.content)
+            feed = await parse_feed_document(resp.content)
         except Exception as exc:
             log.debug("NicoNico tag RSS fetch error: %s", exc)
             return None

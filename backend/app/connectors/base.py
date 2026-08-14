@@ -25,6 +25,52 @@ GOOGLE_NEWS_HEADERS = {
     "Accept-Language": "ja,en;q=0.9",
 }
 
+
+class SourceUnavailableError(RuntimeError):
+    """Every independent transport for a source failed to answer."""
+
+
+async def parse_feed_document(content: bytes) -> feedparser.FeedParserDict:
+    """Parse RSS/Atom bytes while rejecting HTTP-200 block/error pages."""
+    try:
+        feed = await asyncio.to_thread(feedparser.parse, content)
+    except Exception as exc:
+        raise SourceUnavailableError("feed response could not be parsed") from exc
+    # feedparser accepts arbitrary HTML without necessarily setting ``bozo``.
+    # A recognized feed version distinguishes that from a valid empty feed.
+    if not getattr(feed, "version", ""):
+        raise SourceUnavailableError("response is not a recognized RSS/Atom feed")
+    return feed
+
+
+def is_usable_jina_reader_response(text: str) -> bool:
+    """Accept only recognizable Jina output for a Google News RSS search."""
+    normalized = text.strip().casefold()
+    if not normalized:
+        return False
+    if any(
+        marker in normalized
+        for marker in (
+            "abusealleviationerror",
+            "securitycompromiseerror",
+            "rate limit exceeded",
+            "too many requests",
+        )
+    ):
+        return False
+    # A result-bearing response contains Google News article links. A valid
+    # empty response still carries Jina's URL Source/Markdown Content envelope.
+    # Requiring either positive structure keeps arbitrary HTML/JSON challenge
+    # pages from becoming authoritative successful-empty results.
+    has_article_link = "news.google.com/rss/articles/" in normalized
+    has_empty_feed_envelope = (
+        "url source:" in normalized
+        and "news.google.com/rss/search" in normalized
+        and "markdown content:" in normalized
+    )
+    return has_article_link or has_empty_feed_envelope
+
+
 def jina_reader_headers(accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Language"]) -> dict[str, str]:
     """Headers for requests to r.jina.ai's reader proxy.
 
@@ -72,14 +118,69 @@ async def fetch_google_news_via_public_proxy(
         return None
 
 
+async def fetch_google_news_direct(
+    google_news_url: str,
+    accept_language: str = GOOGLE_NEWS_HEADERS["Accept-Language"],
+) -> bytes | None:
+    """Fetch Google News RSS directly, falling through cleanly when blocked.
+
+    Render previously returned 503 for this request, but that restriction is
+    not stable: a direct request can recover while the proxy paths are blocked
+    or out of quota. Keep this as a best-effort hop so callers retain their
+    independent proxy and Bing fallbacks.
+    """
+    headers = {**GOOGLE_NEWS_HEADERS, "Accept-Language": accept_language}
+    try:
+        async with httpx.AsyncClient(
+            timeout=10.0,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            response = await client.get(google_news_url)
+            if not response.is_success:
+                return None
+            return response.content
+    except Exception:
+        return None
+
+
+async def first_nonempty_result(
+    *coroutines: Coroutine[object, object, list["SourceItemCreate"]],
+) -> list["SourceItemCreate"]:
+    """Return the first non-empty result while preserving total route failure."""
+    all_tasks = {asyncio.ensure_future(coroutine) for coroutine in coroutines}
+    pending = set(all_tasks)
+    completed_successfully = False
+    try:
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    result = task.result()
+                except Exception:
+                    continue
+                completed_successfully = True
+                if result:
+                    return result
+        if completed_successfully or not all_tasks:
+            return []
+        raise SourceUnavailableError("all source routes unavailable")
+    finally:
+        for task in all_tasks:
+            if not task.done():
+                task.cancel()
+        if all_tasks:
+            await asyncio.gather(*all_tasks, return_exceptions=True)
+
+
 async def race_jina_and_public_proxy(
     jina_coro: Coroutine[object, object, tuple[list["SourceItemCreate"], bool]],
     *proxy_coros: Coroutine[object, object, list["SourceItemCreate"]],
 ) -> list["SourceItemCreate"]:
     """Run the jina.ai hop and one or more independent free-proxy fallback hops
-    concurrently, returning jina's items if it found any, falling back to the
-    proxies' merged, deduped results only when jina's own request failed
-    outright.
+    concurrently, returning the first non-empty result. A successful empty
+    jina response remains authoritative unless a proxy already found items;
+    when jina fails outright, completed proxy results are merged and deduped.
 
     jina_coro must resolve to (items, succeeded) — succeeded reflects whether
     jina's HTTP request itself succeeded, independent of whether it found any
@@ -90,8 +191,8 @@ async def race_jina_and_public_proxy(
     completion too. Without this, the proxies fire on effectively every poll
     regardless of jina's health, since "jina succeeded but found nothing" —
     not "jina found matches" — is the common case across ~20 platforms every
-    15 minutes, working against the same jina-load-reduction reasoning this
-    session applied to jina's own double-query retry.
+    15 minutes. A non-empty proxy may still return first so a slow jina request
+    cannot hide usable results behind the connector-level deadline.
 
     Multiple proxy_coros are independent hops against different infrastructure
     (e.g. a free public proxy and this project's own Cloudflare Worker) so a
@@ -118,41 +219,44 @@ async def race_jina_and_public_proxy(
     """
     jina_task = asyncio.ensure_future(jina_coro)
     proxy_tasks = [asyncio.ensure_future(coro) for coro in proxy_coros]
-    proxies_were_awaited = False
+    all_tasks = [jina_task, *proxy_tasks]
     try:
+        pending = set(all_tasks)
+        while not jina_task.done():
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            early_proxy_items: dict[str, "SourceItemCreate"] = {}
+            for task in done:
+                if task is jina_task:
+                    continue
+                try:
+                    result = task.result()
+                except Exception:
+                    continue
+                for item in result:
+                    early_proxy_items.setdefault(item.item_id, item)
+            if early_proxy_items:
+                return list(early_proxy_items.values())
+
         jina_items, jina_succeeded = await jina_task
         if jina_items or jina_succeeded:
             return jina_items
-        proxies_were_awaited = True
         results = await asyncio.gather(*proxy_tasks, return_exceptions=True)
         merged: dict[str, "SourceItemCreate"] = {}
+        proxy_succeeded = False
         for result in results:
             if isinstance(result, BaseException):
                 continue
+            proxy_succeeded = True
             for item in result:
                 merged.setdefault(item.item_id, item)
+        if not proxy_succeeded:
+            raise SourceUnavailableError("jina and proxy routes unavailable")
         return list(merged.values())
     finally:
-        for proxy_task in proxy_tasks:
-            if not proxy_task.done():
-                proxy_task.cancel()
-                try:
-                    await proxy_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    # Each proxy is a best-effort hedge. If it failed while
-                    # being cancelled because jina already answered (or the
-                    # caller itself timed out), its error must not replace
-                    # that outcome.
-                    pass
-            elif not proxies_were_awaited:
-                # Retrieve (and discard) any exception so it isn't logged as
-                # "never retrieved" at garbage-collection time — a proxy hop
-                # is best-effort and we no longer care why it failed once
-                # it's not going to be used.
-                if not proxy_task.cancelled():
-                    proxy_task.exception()
+        for task in all_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*all_tasks, return_exceptions=True)
 
 
 SEARCH_RESULT_MAX_AGE = timedelta(days=31)
@@ -331,7 +435,7 @@ def build_google_news_jina_items(
     recency check, admitting stale articles as if they were fresh matches.
     """
     items: list[SourceItemCreate] = []
-    for entry in parse_google_news_markdown(markdown_text)[:25]:
+    for entry in parse_google_news_markdown(markdown_text):
         title = entry["title"]
         if title_suffix_re:
             title = title_suffix_re.sub("", title).strip()
@@ -356,6 +460,8 @@ def build_google_news_jina_items(
                 raw_payload=raw_payload,
             )
         )
+        if len(items) >= 25:
+            break
     return items
 
 
@@ -376,14 +482,11 @@ async def build_google_news_public_proxy_items(
     recency check, another after) and centralizing it removes that class of
     bug entirely instead of relying on both copies staying in sync by hand.
     """
-    try:
-        feed = await asyncio.to_thread(feedparser.parse, content)
-    except Exception:
-        return []
+    feed = await parse_feed_document(content)
 
     items: list[SourceItemCreate] = []
     seen: set[str] = set()
-    for entry in feed.entries[:25]:
+    for entry in feed.entries:
         title = (entry.get("title") or "").strip()
         link = entry.get("link", "")
         if title_suffix_re:
@@ -411,6 +514,8 @@ async def build_google_news_public_proxy_items(
                 raw_payload=raw_payload,
             )
         )
+        if len(items) >= 25:
+            break
     return items
 
 

@@ -50,7 +50,11 @@ enum BackgroundRefreshPolicy {
     static let incrementalFetchOverlap: TimeInterval = 15 * 60
     static let foregroundRefreshStaleAfter: TimeInterval = 5 * 60
     static let backendPollTriggerInterval: TimeInterval = 170 * 60
-    static let minimumLocalRefreshWindow: TimeInterval = 3
+    // A newly discovered local scope needs enough remaining time for 25
+    // site-scoped Google News requests staggered over roughly five seconds plus
+    // real network time. Normal local work starts concurrently with the backend.
+    static let minimumLocalRefreshWindow: TimeInterval = 15
+    static let localRefreshCancellationBuffer: TimeInterval = 1
     private static let lastForegroundCompletedRefreshAtKey = "background_refresh.foreground_completed_at"
     private static let lastBackendCompletedRefreshAtKey = "background_refresh.backend_completed_at"
     private static let lastBackendPollTriggeredAtKey = "background_refresh.backend_poll_triggered_at"
@@ -623,6 +627,22 @@ enum BackgroundRefreshPolicy {
         remainingTime >= minimumLocalRefreshWindow
     }
 
+    static func backendPhaseDeadline(needsLocalRefresh: Bool) -> TimeInterval {
+        guard needsLocalRefresh else { return operationDeadline }
+        // Backend and local phases run concurrently. Give each almost the full
+        // operation window instead of forcing term sync, an 8-second poll, and
+        // the feed fetch through the nine seconds left by a sequential split.
+        return max(0, operationDeadline - localRefreshCancellationBuffer)
+    }
+
+    static func failedBackendSourcePlatforms(_ entries: [SourceHealthEntry]) -> Set<String> {
+        Set(entries.compactMap { entry in
+            entry.status == "failure" && entry.consecutive_failures > 0
+                ? Platform.normalize(entry.platform)
+                : nil
+        })
+    }
+
     static func shouldStartForegroundDeviceRefresh(
         cacheIsEmpty: Bool,
         elapsedSinceLastDeviceScrape: TimeInterval,
@@ -633,6 +653,29 @@ enum BackgroundRefreshPolicy {
             cacheIsEmpty ||
             UserDefaults.standard.bool(forKey: feedScopeNeedsRefreshKey) ||
             elapsedSinceLastDeviceScrape > throttle
+    }
+
+    static func lastBackendAttemptFailed(_ statuses: [String]) -> Bool {
+        statuses.last == "failed"
+    }
+
+    static func forcedForegroundDeviceFallbackPlatforms(
+        selectedPlatform: String?,
+        backendFeedFailed: Bool,
+        failedBackendPlatforms: Set<String>,
+        fallbackPlatforms: Set<String>
+    ) -> Set<String> {
+        guard !fallbackPlatforms.isEmpty else { return [] }
+        if let selectedPlatform {
+            let normalized = Platform.normalize(selectedPlatform)
+            return fallbackPlatforms.contains(normalized) ? [normalized] : []
+        }
+        if backendFeedFailed {
+            return fallbackPlatforms
+        }
+        return fallbackPlatforms.intersection(
+            failedBackendPlatforms.map { Platform.normalize($0) }
+        )
     }
 
     static func shouldSkipBackendRetriesAfterFailure(_ error: Error) -> Bool {
@@ -1030,14 +1073,29 @@ final class BackgroundRefreshManager {
         }
 
         let startedAt = Date()
+        let initialScope = BackgroundRefreshPolicy.sourceScope(
+            activeTerms: LocalDB.shared.terms.filter(\.is_active),
+            customUrls: LocalDB.shared.customUrls,
+            subscribedPlatforms: LocalDB.shared.subscribedPlatforms
+        )
+        let phaseDeadline = BackgroundRefreshPolicy.backendPhaseDeadline(
+            needsLocalRefresh: initialScope.needsLocal
+        )
+        async let initialLocalRefresh: LocalSourceRefreshCompletion = initialScope.needsLocal
+            ? refreshLocalDeviceSourcesForBackground(timeout: phaseDeadline)
+            : LocalSourceRefreshCompletion()
         let backendRefresh = await refreshBackendWithinDeadline(
             triggerPoll: triggerPoll,
             notifyOnNew: notifyOnNew,
             skipTermSync: skipTermSync,
             feedScopeRevision: feedScopeRevision,
-            backendTimeout: backendTimeout
+            backendTimeout: backendTimeout,
+            deadline: phaseDeadline
         )
-        guard !Task.isCancelled else { return backendRefresh.refreshed }
+        var localRefresh = await initialLocalRefresh
+        guard !Task.isCancelled else {
+            return backendRefresh.refreshed || localRefresh.completedAnySource
+        }
         let feedScopeRevision = backendRefresh.feedScopeRevision ?? BackgroundRefreshPolicy.currentFeedScopeRevision
 
         let activeTerms = LocalDB.shared.terms.filter(\.is_active)
@@ -1062,22 +1120,17 @@ final class BackgroundRefreshManager {
             return backendRefresh.refreshed
         }
 
-        let remainingTime = BackgroundRefreshPolicy.remainingOperationTime(startedAt: startedAt)
-        guard BackgroundRefreshPolicy.shouldStartLocalBackgroundRefresh(remainingTime: remainingTime) else {
-            AppLogger.network.notice("Skipping local background refresh because the operation deadline is near")
-            BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
-                completedBackendPlatforms: backendRefresh.completedPlatforms,
-                customRefreshed: false,
-                completedDevicePlatforms: [],
-                activeTerms: activeTerms,
-                customUrls: customUrls,
-                subscribedPlatforms: subscribedPlatforms,
-                feedScopeRevision: feedScopeRevision
-            )
-            return backendRefresh.refreshed
+        // Backend sync may introduce a newly active local source that was not
+        // present in the initial snapshot. Give that source any remaining time;
+        // otherwise the local phase has already run alongside the backend.
+        if !initialScope.needsLocal {
+            let remainingTime = BackgroundRefreshPolicy.remainingOperationTime(startedAt: startedAt)
+            if BackgroundRefreshPolicy.shouldStartLocalBackgroundRefresh(remainingTime: remainingTime) {
+                localRefresh = await refreshLocalDeviceSourcesForBackground(timeout: remainingTime)
+            } else {
+                AppLogger.network.notice("Skipping newly-added local background source because the operation deadline is near")
+            }
         }
-
-        let localRefresh = await refreshLocalDeviceSourcesForBackground(timeout: remainingTime)
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
             completedBackendPlatforms: backendRefresh.completedPlatforms,
             customRefreshed: localRefresh.customRefreshed,
@@ -1095,7 +1148,8 @@ final class BackgroundRefreshManager {
         notifyOnNew: Bool = true,
         skipTermSync: Bool = false,
         feedScopeRevision: Int? = nil,
-        backendTimeout: TimeInterval = 30
+        backendTimeout: TimeInterval = 30,
+        deadline: TimeInterval = BackgroundRefreshPolicy.operationDeadline
     ) async -> BackendSourceRefreshCompletion {
         await withTaskGroup(of: BackendSourceRefreshCompletion.self) { group in
             group.addTask { @MainActor in
@@ -1110,7 +1164,7 @@ final class BackgroundRefreshManager {
             group.addTask {
                 do {
                     try await Task.sleep(
-                        nanoseconds: UInt64(BackgroundRefreshPolicy.operationDeadline * 1_000_000_000)
+                        nanoseconds: UInt64(deadline * 1_000_000_000)
                     )
                 } catch {
                     return BackendSourceRefreshCompletion()
@@ -1371,15 +1425,8 @@ final class BackgroundRefreshManager {
     private func performLocalDeviceSourcesRefreshForBackground() async -> LocalSourceRefreshCompletion {
         let db = LocalDB.shared
         var completion = LocalSourceRefreshCompletion()
-
-        if !db.customUrls.isEmpty {
-            let customItems = db.currentCustomFeedItems(
-                await NetworkManager.shared.scrapeCustomUrls(db.customUrls)
-            )
-            guard !Task.isCancelled else { return completion }
-            _ = db.mergeItems(newItems: customItems, notifyOnNew: false)
-            completion.customRefreshed = true
-        }
+        let customUrls = db.customUrls
+        async let scrapedCustomItems = NetworkManager.shared.scrapeCustomUrls(customUrls)
 
         let activeTerms = db.terms.filter(\.is_active)
         let fallbackPlatforms = BackgroundRefreshPolicy.fallbackPlatformsNeedingDevice(in: db.subscribedPlatforms)
@@ -1388,6 +1435,12 @@ final class BackgroundRefreshManager {
             subscribedPlatforms: db.subscribedPlatforms
         )
         guard !fallbackTerms.isEmpty, !fallbackPlatforms.isEmpty else {
+            let customItems = db.currentCustomFeedItems(await scrapedCustomItems)
+            guard !Task.isCancelled else { return completion }
+            if !customUrls.isEmpty {
+                _ = db.mergeItems(newItems: customItems, notifyOnNew: false)
+                completion.customRefreshed = true
+            }
             return completion
         }
 
@@ -1502,6 +1555,12 @@ final class BackgroundRefreshManager {
                 // real retries for up to an hour instead of trying again next cycle.
                 BackgroundRefreshPolicy.finishDeviceFallbackFailureDiagnostic(duePlatforms, sent: sent)
             }
+        }
+        let customItems = db.currentCustomFeedItems(await scrapedCustomItems)
+        guard !Task.isCancelled else { return completion }
+        if !customUrls.isEmpty {
+            _ = db.mergeItems(newItems: customItems, notifyOnNew: false)
+            completion.customRefreshed = true
         }
         return completion
     }

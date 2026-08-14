@@ -26,9 +26,13 @@ from app.connectors import twitter as twitter_module
 from app.connectors import yahoonews as yahoonews_module
 from app.connectors import youtube as youtube_module
 from app.connectors.base import (
+    SourceUnavailableError,
     SourceItemCreate,
+    build_google_news_public_proxy_items,
     contains_keyword,
     fetch_search_rss_via_proxy,
+    is_usable_jina_reader_response,
+    parse_feed_document,
     parse_feed_date,
     parse_google_news_markdown,
     title_contains_keyword,
@@ -46,6 +50,7 @@ from app.connectors.news_sites import (
     AmebloConnector,
     AllkpopConnector,
     CinemaCafeConnector,
+    KpopOfficialConnector,
     SoompiConnector,
     LivedoorConnector,
     NatalieConnector,
@@ -140,8 +145,9 @@ class _FeedEntry(dict):
 
 
 class _FakeFeed:
-    def __init__(self, entries):
+    def __init__(self, entries, version="rss20"):
         self.entries = entries
+        self.version = version
 
 
 def _rss_entry(link="https://example.com/1", title="Title", summary="", item_id=None):
@@ -258,6 +264,35 @@ class TestSearchRssProxy:
 
 class TestGoogleNewsProxyRace:
     @pytest.mark.asyncio
+    async def test_nonempty_proxy_can_win_while_jina_is_stalled(self):
+        jina_cancelled = asyncio.Event()
+        proxy_item = SourceItemCreate(
+            platform="ameblo",
+            item_id="proxy-fast",
+            url="https://ameblo.jp/proxy-fast",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+        )
+
+        async def stalled_jina():
+            try:
+                await asyncio.Event().wait()
+                return [], False
+            finally:
+                jina_cancelled.set()
+
+        async def fast_proxy():
+            return [proxy_item]
+
+        result = await asyncio.wait_for(
+            base_module.race_jina_and_public_proxy(stalled_jina(), fast_proxy()),
+            timeout=0.1,
+        )
+
+        assert result == [proxy_item]
+        assert jina_cancelled.is_set()
+
+    @pytest.mark.asyncio
     async def test_awaits_cancelled_proxy_cleanup_before_returning_jina_result(self):
         proxy_cleaned_up = asyncio.Event()
 
@@ -357,6 +392,106 @@ class TestGoogleNewsProxyRace:
         assert result == []
         assert proxy_cleaned_up.is_set()
         assert worker_proxy_cleaned_up.is_set()
+
+
+class TestFirstNonemptyResult:
+    @pytest.mark.asyncio
+    async def test_returns_fast_fallback_without_waiting_for_slow_direct_hop(self):
+        slow_hop_cancelled = asyncio.Event()
+        fallback_item = SourceItemCreate(
+            platform="mdpr",
+            item_id="fallback-1",
+            url="https://mdpr.jp/fallback-1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+        )
+
+        async def slow_direct():
+            try:
+                await asyncio.Event().wait()
+                return []
+            finally:
+                slow_hop_cancelled.set()
+
+        async def fast_fallback():
+            await asyncio.sleep(0)
+            return [fallback_item]
+
+        result = await asyncio.wait_for(
+            base_module.first_nonempty_result(slow_direct(), fast_fallback()),
+            timeout=0.1,
+        )
+
+        assert result == [fallback_item]
+        assert slow_hop_cancelled.is_set()
+
+    @pytest.mark.asyncio
+    async def test_raises_when_every_route_is_unavailable(self):
+        async def unavailable():
+            raise SourceUnavailableError("route unavailable")
+
+        with pytest.raises(SourceUnavailableError):
+            await base_module.first_nonempty_result(unavailable(), unavailable())
+
+
+class TestParseFeedDocument:
+    @pytest.mark.asyncio
+    async def test_accepts_a_valid_empty_rss_feed(self):
+        content = b'<?xml version="1.0"?><rss version="2.0"><channel><title>Empty</title></channel></rss>'
+
+        feed = await parse_feed_document(content)
+
+        assert feed.version == "rss20"
+        assert feed.entries == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_http_200_html_block_page(self):
+        with pytest.raises(SourceUnavailableError, match="recognized RSS/Atom"):
+            await parse_feed_document(b"<html><title>Request blocked</title></html>")
+
+    @pytest.mark.asyncio
+    async def test_google_news_builder_propagates_invalid_feed_failure(self):
+        with pytest.raises(SourceUnavailableError):
+            await build_google_news_public_proxy_items(
+                b"<html><title>Proxy quota exceeded</title></html>",
+                "Aiko",
+                platform="mdpr",
+            )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "{\"name\":\"AbuseAlleviationError\"}",
+            "SecurityCompromiseError: blocked upstream",
+            "Too many requests",
+        ],
+    )
+    def test_rejects_empty_and_embedded_jina_error_responses(self, text):
+        assert is_usable_jina_reader_response(text) is False
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "<html><title>Upstream challenge</title></html>",
+            '{"error":"temporarily unavailable"}',
+            "# Google News\n\nNo recognizable source envelope",
+        ],
+    )
+    def test_rejects_nonempty_but_unrecognized_jina_responses(self, text):
+        assert is_usable_jina_reader_response(text) is False
+
+    def test_accepts_recognizable_empty_jina_google_news_envelope(self):
+        text = (
+            "Title: Google News\n\n"
+            "URL Source: https://news.google.com/rss/search?q=Aiko\n\n"
+            "Markdown Content:\n"
+        )
+        assert is_usable_jina_reader_response(text) is True
+
+    def test_accepts_jina_google_news_article_markdown(self):
+        text = "### [Aiko](https://news.google.com/rss/articles/article-1)"
+        assert is_usable_jina_reader_response(text) is True
 
 
 class TestSourceItemCreateCompositeId:
@@ -728,17 +863,43 @@ class TestConnectorMediaOnlyEarlyReturn:
 
 
 class TestTwitterConnectorNoToken:
-    """Without API credentials, Twitter cannot provide trustworthy tweet dates."""
+    """Without API credentials, X uses notification-safe public index items."""
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_bearer_token_is_empty_string(self):
-        result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
-        assert result == []
+    async def test_returns_estimated_public_index_item_when_bearer_token_is_empty(self):
+        entry = _rss_entry(
+            link="https://news.google.com/rss/articles/x-1",
+            title="Aiko concert update - x.com",
+        )
+        with patch(
+            "app.connectors.twitter.fetch_google_news_direct",
+            new=AsyncMock(return_value=b"<rss/>"),
+        ), patch(
+            "app.connectors.twitter.fetch_google_news_via_public_proxy",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "app.connectors.twitter.fetch_search_rss_via_proxy",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "app.connectors.twitter.feedparser.parse",
+            return_value=_FakeFeed([entry]),
+        ):
+            result = await TwitterConnector(bearer_token="").fetch("Aiko", "all_info")
+
+        assert len(result) == 1
+        assert result[0].platform == "twitter"
+        assert result[0].raw_payload["source"] == "google_news_direct"
+        assert result[0].raw_payload["date_parsed"] is False
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_media_only_with_no_token(self):
-        result = await TwitterConnector(bearer_token="").fetch("Aiko", "media_only")
+        with patch(
+            "app.connectors.twitter.fetch_google_news_direct",
+            new=AsyncMock(),
+        ) as direct:
+            result = await TwitterConnector(bearer_token="").fetch("Aiko", "media_only")
         assert result == []
+        direct.assert_not_awaited()
 
 # ---------------------------------------------------------------------------
 # HTTP-level connector tests (mock httpx.AsyncClient + feedparser.parse)
@@ -1550,9 +1711,26 @@ class TestGirlsChannelFetch:
 
 
 class TestMdprFetch:
-    # Google News is unreachable directly from Render's outbound IP, and the
-    # Cloudflare Worker proxy is now also blocked by Google, so mdpr goes
-    # straight to Bing via the worker proxy (fetch_search_rss_via_proxy).
+    # Direct Google News is preferred when available; Bing remains the fallback.
+
+    @pytest.mark.asyncio
+    async def test_prefers_direct_google_news_when_it_has_items(self):
+        entry = _rss_entry(link="https://mdpr.jp/a1", title="Aiko - モデルプレス")
+        with patch(
+            "app.connectors.mdpr.fetch_google_news_direct",
+            new=AsyncMock(return_value=b"<rss/>"),
+        ), patch(
+            "app.connectors.mdpr.fetch_search_rss_via_proxy",
+            new=AsyncMock(return_value=None),
+        ) as proxy, patch(
+            "app.connectors.mdpr.feedparser.parse",
+            return_value=_FakeFeed([entry]),
+        ):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+
+        assert len(result) == 1
+        assert result[0].raw_payload["source"] == "google_news_direct"
+        proxy.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_returns_items_with_title_cleaned(self):
@@ -1560,15 +1738,27 @@ class TestMdprFetch:
         no_link = _FeedEntry(id="nl", link="", title="skip")
         no_title = _rss_entry(link="https://mdpr.jp/a2", title="   ")
         fake_feed = _FakeFeed([valid, no_link, no_title])
-        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
         assert result[0].title == "Aiko"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_proxy_unavailable(self):
-        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
+    async def test_raises_when_all_routes_are_unavailable(self):
+        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
+            with pytest.raises(SourceUnavailableError):
+                await ModelPressConnector().fetch("Aiko", "all_info")
+
+    @pytest.mark.asyncio
+    async def test_filters_stale_google_news_items(self):
+        entry = _rss_entry(link="https://mdpr.jp/old", title="Aiko old - モデルプレス")
+        entry.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
+        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.mdpr.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1577,7 +1767,8 @@ class TestMdprFetch:
         e1 = _rss_entry(link="https://mdpr.jp/a1", item_id="dup", title="Aiko A")
         e2 = _rss_entry(link="https://mdpr.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
@@ -1585,7 +1776,8 @@ class TestMdprFetch:
     @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
         fake_feed = _FakeFeed([_rss_entry(link="https://mdpr.jp/a1", title="unrelated - モデルプレス")])
-        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
@@ -1597,16 +1789,37 @@ class TestMdprFetch:
             title="unrelated - モデルプレス",
             summary="Aiko appears elsewhere in the Google News cluster",
         )
-        with patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.mdpr.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
 
 
 class TestOriconFetch:
-    # Google News is unreachable directly from Render's outbound IP, and the
-    # Cloudflare Worker proxy is now also blocked by Google, so oricon goes
-    # straight to Bing via the worker proxy (fetch_search_rss_via_proxy).
+    # Direct Google News is preferred when available; Bing remains the fallback.
+
+    @pytest.mark.asyncio
+    async def test_prefers_direct_google_news_when_it_has_items(self):
+        entry = _rss_entry(
+            link="https://oricon.co.jp/a1",
+            title="Aiko 受賞 - ORICON NEWS",
+        )
+        with patch(
+            "app.connectors.oricon.fetch_google_news_direct",
+            new=AsyncMock(return_value=b"<rss/>"),
+        ), patch(
+            "app.connectors.oricon.fetch_search_rss_via_proxy",
+            new=AsyncMock(return_value=None),
+        ) as proxy, patch(
+            "app.connectors.oricon.feedparser.parse",
+            return_value=_FakeFeed([entry]),
+        ):
+            result = await OriconConnector().fetch("Aiko", "all_info")
+
+        assert len(result) == 1
+        assert result[0].raw_payload["source"] == "google_news_direct"
+        proxy.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_returns_items_with_title_cleaned_and_author_set(self):
@@ -1614,7 +1827,8 @@ class TestOriconFetch:
         no_link = _FeedEntry(id="nl", link="", title="skip")
         empty_title = _rss_entry(link="https://oricon.co.jp/a2", title="  - ORICON NEWS")
         fake_feed = _FakeFeed([valid, no_link, empty_title])
-        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
@@ -1628,7 +1842,8 @@ class TestOriconFetch:
             title="unrelated - ORICON NEWS",
             summary="Aiko appears elsewhere in the Google News cluster",
         )
-        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
@@ -1637,23 +1852,26 @@ class TestOriconFetch:
     async def test_filters_stale_google_news_items(self):
         entry = _rss_entry(link="https://oricon.co.jp/old", title="Aiko old - ORICON NEWS")
         entry.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
-        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_proxy_unavailable(self):
-        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
-            result = await OriconConnector().fetch("Aiko", "all_info")
-        assert result == []
+    async def test_raises_when_all_routes_are_unavailable(self):
+        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
+            with pytest.raises(SourceUnavailableError):
+                await OriconConnector().fetch("Aiko", "all_info")
 
     @pytest.mark.asyncio
     async def test_deduplicates_by_item_id(self):
         e1 = _rss_entry(link="https://oricon.co.jp/a1", item_id="dup", title="Aiko A")
         e2 = _rss_entry(link="https://oricon.co.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
@@ -1661,7 +1879,8 @@ class TestOriconFetch:
     @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
         fake_feed = _FakeFeed([_rss_entry(link="https://oricon.co.jp/a1", title="受賞 - ORICON NEWS")])
-        with patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
              patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
@@ -1965,16 +2184,121 @@ class TestNewsSiteFetch:
         gnews.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_site_connector_prefers_direct_google_news_before_proxy_chain(self):
+        entry = _rss_entry(
+            link="https://news.google.com/rss/articles/allkpop-1",
+            title="BTS Announces New Concert - allkpop",
+        )
+        connector = AllkpopConnector()
+        with patch(
+            "app.connectors.news_sites.fetch_google_news_direct",
+            new=AsyncMock(return_value=b"<rss/>"),
+        ), patch(
+            "app.connectors.news_sites.feedparser.parse",
+            return_value=_FakeFeed([entry]),
+        ), patch.object(
+            connector,
+            "_fetch_gnews_jina",
+            new=AsyncMock(return_value=([], True)),
+        ) as jina, patch.object(
+            connector,
+            "_fetch_gnews_public_proxy",
+            new=AsyncMock(return_value=[]),
+        ) as public_proxy:
+            result = await connector.fetch("BTS", "all_info")
+
+        assert len(result) == 1
+        assert result[0].raw_payload["source"] == "google_news_direct"
+        jina.assert_awaited_once()
+        public_proxy.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bing_can_win_while_direct_google_news_is_stalled(self):
+        connector = AllkpopConnector()
+        direct_cancelled = asyncio.Event()
+        item = SourceItemCreate(
+            platform="allkpop",
+            item_id="bing-1",
+            url="https://allkpop.com/article/bing-1",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+            title="BTS Bing result",
+        )
+
+        async def stalled_direct(*args, **kwargs):
+            try:
+                await asyncio.Event().wait()
+                return []
+            finally:
+                direct_cancelled.set()
+
+        with patch.object(connector, "_fetch_gnews_direct", side_effect=stalled_direct), \
+             patch.object(connector, "_fetch_gnews_jina", new=AsyncMock(return_value=([], False))), \
+             patch.object(
+                 connector,
+                 "_fetch_gnews_public_proxy",
+                 new=AsyncMock(side_effect=SourceUnavailableError("proxy unavailable")),
+             ), \
+             patch.object(connector, "_fetch_bing_news", new=AsyncMock(return_value=[item])):
+            result = await asyncio.wait_for(connector._fetch_gnews("BTS"), timeout=0.1)
+
+        assert result == [item]
+        assert direct_cancelled.is_set()
+
+    @pytest.mark.asyncio
+    async def test_site_connector_raises_when_every_route_is_unavailable(self):
+        connector = AllkpopConnector()
+        unavailable = SourceUnavailableError("route unavailable")
+        with patch.object(connector, "_fetch_gnews_direct", new=AsyncMock(side_effect=unavailable)), \
+             patch.object(connector, "_fetch_gnews_jina", new=AsyncMock(return_value=([], False))), \
+             patch.object(connector, "_fetch_gnews_public_proxy", new=AsyncMock(side_effect=unavailable)), \
+             patch.object(connector, "_fetch_bing_news", new=AsyncMock(side_effect=unavailable)):
+            with pytest.raises(SourceUnavailableError):
+                await connector._fetch_gnews("BTS")
+
+    @pytest.mark.asyncio
+    async def test_direct_google_news_scans_past_unusable_first_page_entries(self):
+        unrelated = [
+            _rss_entry(
+                link=f"https://news.google.com/rss/articles/old-{index}",
+                title=f"Unrelated archive item {index} - Kpop Official",
+            )
+            for index in range(25)
+        ]
+        matching = _rss_entry(
+            link="https://news.google.com/rss/articles/stray-kids-current",
+            title="Stray Kids Album Update - Kpop Official",
+        )
+        connector = KpopOfficialConnector()
+        with patch.object(
+            connector,
+            "_fetch_direct_rss",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "app.connectors.news_sites.fetch_google_news_direct",
+            new=AsyncMock(return_value=b"<rss/>"),
+        ), patch(
+            "app.connectors.news_sites.feedparser.parse",
+            return_value=_FakeFeed([*unrelated, matching]),
+        ):
+            result = await connector.fetch("Stray Kids", "all_info")
+
+        assert len(result) == 1
+        assert result[0].title == "Stray Kids Album Update"
+
+    @pytest.mark.asyncio
     async def test_english_sites_use_english_google_news_locale(self):
-        # Direct-to-Google-News fetches always 503 from Render, and the
-        # Cloudflare Worker proxy is now also blocked by Google, so the
-        # jina.ai reader proxy is the first hop actually attempted.
+        # Force the direct hop empty to verify the retained Jina fallback uses
+        # the source's English/US locale.
         markdown = (
             "### [BLACKPINK Announces New Concert](https://news.google.com/rss/articles/allkpop-1)\n\n"
             "[BLACKPINK Announces New Concert](https://news.google.com/rss/articles/allkpop-1)\n\n"
             "Wed, 24 Jul 2026 02:07:03 GMT\n"
         )
-        with patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=markdown)) as client_cls:
+        with patch(
+            "app.connectors.news_sites.fetch_google_news_direct",
+            new=AsyncMock(return_value=None),
+        ), patch("app.connectors.news_sites.httpx.AsyncClient", _http_mock(text=markdown)) as client_cls:
             result = await AllkpopConnector().fetch("BLACKPINK", "all_info")
 
         assert len(result) == 1
@@ -2002,6 +2326,31 @@ class TestNewsSiteFetch:
         assert len(result) == 1
         assert proxy.await_args.kwargs["mkt"] == "en-US"
         assert proxy.await_args.kwargs["accept_language"] == "en,ko;q=0.9,ja;q=0.7"
+
+    @pytest.mark.asyncio
+    async def test_malformed_bing_proxy_response_falls_back_to_direct_bing(self):
+        valid = _FakeFeed([
+            _rss_entry(
+                link="https://www.allkpop.com/article/direct-1",
+                title="BLACKPINK Direct Bing Result",
+            )
+        ])
+        connector = AllkpopConnector()
+        with patch(
+            "app.connectors.news_sites.fetch_search_rss_via_proxy",
+            new=AsyncMock(return_value=b"<html>proxy blocked</html>"),
+        ), patch(
+            "app.connectors.news_sites.httpx.AsyncClient",
+            _http_mock(content=b"<rss/>"),
+        ) as client_cls, patch(
+            "app.connectors.news_sites.feedparser.parse",
+            side_effect=[_FakeFeed([], version=""), valid],
+        ):
+            result = await connector._fetch_bing_news("BLACKPINK", None)
+
+        assert len(result) == 1
+        assert result[0].raw_payload["source"] == "bing_news"
+        client_cls.return_value.__aenter__.return_value.get.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_bing_news_fallback_unwraps_article_url(self):
@@ -2250,11 +2599,11 @@ class TestTogetterFetch:
 
 
 _JINA_MARKDOWN = """
-# Yahoo News Search Results
+Title: Google News
 
-1. [アイコの新曲情報](https://news.yahoo.co.jp/articles/abc123)
-2. [アイコの別ニュース](https://news.yahoo.co.jp/articles/xyz789)
-3. [重複エントリ](https://news.yahoo.co.jp/articles/abc123)
+URL Source: https://news.google.com/rss/search?q=%E3%82%A2%E3%82%A4%E3%82%B3
+
+Markdown Content:
 """
 
 
@@ -2346,14 +2695,14 @@ class TestYahooNewsFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_jina_non_success_returns_empty(self):
+    async def test_all_unavailable_routes_raise(self):
         with patch("app.connectors.yahoonews.httpx.AsyncClient",
                    _http_mock(status_code=500, is_success=False)):
-            result = await YahooNewsConnector().fetch("アイコ", "all_info")
-        assert result == []
+            with pytest.raises(SourceUnavailableError):
+                await YahooNewsConnector().fetch("アイコ", "all_info")
 
     @pytest.mark.asyncio
-    async def test_jina_exception_returns_empty(self):
+    async def test_all_route_exceptions_raise(self):
         empty_feed = _FakeFeed([])
         call_count = [0]
 
@@ -2374,8 +2723,8 @@ class TestYahooNewsFetch:
         ctx.__aexit__ = AsyncMock(return_value=False)
         with patch("app.connectors.yahoonews.httpx.AsyncClient", MagicMock(return_value=ctx)), \
              patch("app.connectors.yahoonews.feedparser.parse", return_value=empty_feed):
-            result = await YahooNewsConnector().fetch("アイコ", "all_info")
-        assert result == []
+            with pytest.raises(SourceUnavailableError):
+                await YahooNewsConnector().fetch("アイコ", "all_info")
 
     @pytest.mark.asyncio
     async def test_gnews_feedparser_exception_falls_back_to_jina(self):
@@ -2483,6 +2832,42 @@ def _nico_ctx(side_effect=None, rss_content=b"<rss/>"):
 
 class TestNicoNicoFetch:
     @pytest.mark.asyncio
+    async def test_snapshot_search_recovers_when_legacy_rss_is_no_longer_a_feed(self):
+        snapshot_response = MagicMock(is_success=True)
+        snapshot_response.json.return_value = {
+            "meta": {"status": 200},
+            "data": [{
+                "contentId": "sm46665469",
+                "title": "Resigh - 最悪 feat. Hatsune Miku 初音ミク",
+                "description": "<b>初音ミク</b> new song",
+                "tags": "初音ミク vocaloid",
+                "userId": 142951452,
+                "channelId": None,
+                "thumbnailUrl": "https://nicovideo.cdn.nimg.jp/thumbnails/46665469/46665469.jpg",
+                "startTime": _CONNECTOR_TEST_NOW.isoformat(),
+            }],
+        }
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=snapshot_response)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        connector = NicoNicoConnector()
+        with patch.object(connector, "_fetch_rss", new=AsyncMock(return_value=[])) as legacy_rss, \
+             patch.object(connector, "_fetch_tag_rss", new=AsyncMock(return_value=[])) as legacy_tag, \
+             patch("app.connectors.niconico.httpx.AsyncClient", return_value=ctx):
+            result = await connector.fetch("初音ミク", "all_info")
+
+        assert len(result) == 1
+        assert result[0].item_id == "sm46665469"
+        assert result[0].raw_payload["source"] == "snapshot_search"
+        assert result[0].raw_payload["date_parsed"] is True
+        assert client.get.await_args.kwargs["params"]["targets"] == "title"
+        legacy_rss.assert_not_awaited()
+        legacy_tag.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_rss_returns_items_on_success(self):
         entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm12345", title="Aiko cover")
         entry["media_thumbnail"] = [{"url": "https://cdn.nicovideo.jp/t.jpg"}]
@@ -2536,17 +2921,15 @@ class TestNicoNicoFetch:
 
     @pytest.mark.asyncio
     async def test_both_rss_fail_raises_without_gnews_fallback(self):
-        call_count = [0]
         fail_resp = MagicMock(is_success=False, status_code=403)
-        ok_resp = MagicMock(is_success=True, content=b"<rss/>")
 
         async def _side(url, **kw):
-            call_count[0] += 1
-            return fail_resp if call_count[0] <= 2 else ok_resp
+            return fail_resp
 
         gnews_entry = _rss_entry(link="https://www.nicovideo.jp/watch/sm88", title="Aiko GNews video")
         fake_feed = _FakeFeed([gnews_entry])
-        with patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
+        with patch.object(NicoNicoConnector, "_fetch_snapshot_search", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.niconico.httpx.AsyncClient", _nico_ctx(side_effect=_side)), \
              patch("app.connectors.niconico.feedparser.parse", return_value=fake_feed):
             with pytest.raises(RuntimeError):
                 await NicoNicoConnector().fetch("Aiko", "all_info")
@@ -2892,7 +3275,8 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=[])):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
 
@@ -2901,12 +3285,13 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(side_effect=Exception("connection refused"))
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=[])):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_http_error_status_does_not_fall_back_to_public_index(self):
+    async def test_http_error_status_falls_back_to_public_index(self):
         resp = MagicMock()
         resp.is_success = False
         resp.status_code = 429
@@ -2915,9 +3300,21 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+        fallback = [
+            SourceItemCreate(
+                platform="twitter",
+                item_id="indexed-1",
+                url="https://news.google.com/rss/articles/indexed-1",
+                published_at=datetime.now(timezone.utc),
+                media_type="text",
+                title="Aiko indexed post",
+                raw_payload={"date_parsed": False},
+            )
+        ]
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=fallback)):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
-        assert result == []
+        assert result == fallback
 
     @pytest.mark.asyncio
     async def test_filters_tweets_without_keyword(self):
@@ -2939,7 +3336,8 @@ class TestTwitterFetch:
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=client_mock)
         ctx.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)):
+        with patch("app.connectors.twitter.httpx.AsyncClient", MagicMock(return_value=ctx)), \
+             patch.object(TwitterConnector, "_fetch_public_index", new=AsyncMock(return_value=[])):
             result = await TwitterConnector(bearer_token="tok").fetch("Aiko", "all_info")
         assert result == []
 
