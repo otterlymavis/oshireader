@@ -280,6 +280,84 @@ class TestGoogleNewsProxyRace:
         assert result == []
         assert proxy_cleaned_up.is_set()
 
+    @pytest.mark.asyncio
+    async def test_merges_and_dedupes_results_from_multiple_proxies(self):
+        shared_item = SourceItemCreate(
+            platform="ameblo",
+            item_id="gnews:shared",
+            url="https://ameblo.jp/shared",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+        )
+        proxy_only_item = SourceItemCreate(
+            platform="ameblo",
+            item_id="gnews:proxy-only",
+            url="https://ameblo.jp/proxy-only",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+        )
+        worker_only_item = SourceItemCreate(
+            platform="ameblo",
+            item_id="gnews:worker-only",
+            url="https://ameblo.jp/worker-only",
+            published_at=datetime.now(timezone.utc),
+            media_type="article",
+        )
+
+        async def jina_fetch():
+            return [], False
+
+        async def proxy_fetch():
+            return [shared_item, proxy_only_item]
+
+        async def worker_proxy_fetch():
+            return [shared_item, worker_only_item]
+
+        result = await base_module.race_jina_and_public_proxy(
+            jina_fetch(),
+            proxy_fetch(),
+            worker_proxy_fetch(),
+        )
+
+        assert {item.item_id for item in result} == {
+            "gnews:shared",
+            "gnews:proxy-only",
+            "gnews:worker-only",
+        }
+
+    @pytest.mark.asyncio
+    async def test_cancels_all_proxies_when_jina_succeeds(self):
+        proxy_cleaned_up = asyncio.Event()
+        worker_proxy_cleaned_up = asyncio.Event()
+
+        async def jina_fetch():
+            await asyncio.sleep(0)
+            return [], True
+
+        async def proxy_fetch():
+            try:
+                await asyncio.Event().wait()
+                return []
+            finally:
+                proxy_cleaned_up.set()
+
+        async def worker_proxy_fetch():
+            try:
+                await asyncio.Event().wait()
+                return []
+            finally:
+                worker_proxy_cleaned_up.set()
+
+        result = await base_module.race_jina_and_public_proxy(
+            jina_fetch(),
+            proxy_fetch(),
+            worker_proxy_fetch(),
+        )
+
+        assert result == []
+        assert proxy_cleaned_up.is_set()
+        assert worker_proxy_cleaned_up.is_set()
+
 
 class TestSourceItemCreateCompositeId:
     def test_composite_id_is_platform_colon_item_id(self):
