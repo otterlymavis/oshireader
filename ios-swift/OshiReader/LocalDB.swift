@@ -119,7 +119,7 @@ class LocalDB: ObservableObject {
     private var pendingFeedItemsSave: PendingFeedItemsSave?
 
     // Bump this whenever a migration step is added below.
-    private static let currentSchemaVersion = 5
+    private static let currentSchemaVersion = 6
     private static let schemaVersionKey = "localdb_schema_version"
 
     init(directory: URL, feedItemsSaveCoalescingDelay: DispatchTimeInterval = .milliseconds(250)) {
@@ -217,10 +217,25 @@ class LocalDB: ObservableObject {
                 "natalie",
                 "soompi",
             ])
+        case 6:
+            return normalizeLegacyMediaOnlyTerms()
         default:
             AppLogger.persistence.warning("No migration handler for schema v\(version)")
             return false
         }
+    }
+
+    @discardableResult
+    private func normalizeLegacyMediaOnlyTerms() -> Bool {
+        var changed = false
+        for index in terms.indices where terms[index].collection_mode == .mediaOnly {
+            terms[index].collection_mode = .allInfo
+            changed = true
+        }
+        if changed {
+            saveToFile(name: "terms", value: terms)
+        }
+        return changed
     }
 
     @discardableResult
@@ -455,7 +470,7 @@ class LocalDB: ObservableObject {
     }
 
     func addTermFromBackend(_ term: WatchTerm) {
-        terms.insert(term, at: 0)
+        terms.insert(Self.normalizedTermForCurrentSchema(term), at: 0)
         saveToFile(name: "terms", value: terms)
         BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
     }
@@ -463,9 +478,10 @@ class LocalDB: ObservableObject {
     func replaceTerm(localId: String, with serverTerm: WatchTerm) {
         if let idx = terms.firstIndex(where: { $0.id == localId }) {
             let originalTerm = terms[idx]
-            terms[idx] = serverTerm
+            let normalizedServerTerm = Self.normalizedTermForCurrentSchema(serverTerm)
+            terms[idx] = normalizedServerTerm
             saveToFile(name: "terms", value: terms)
-            if Self.feedScopeFieldsChanged(from: originalTerm, to: serverTerm) {
+            if Self.feedScopeFieldsChanged(from: originalTerm, to: normalizedServerTerm) {
                 BackgroundRefreshPolicy.invalidateRefreshCompletionsForFeedScopeChange()
             }
         }
@@ -492,6 +508,12 @@ class LocalDB: ObservableObject {
             lhs.selected_platforms != rhs.selected_platforms ||
             lhs.is_active != rhs.is_active ||
             lhs.aliases != rhs.aliases
+    }
+
+    private static func normalizedTermForCurrentSchema(_ term: WatchTerm) -> WatchTerm {
+        var normalized = term
+        normalized.collection_mode = .allInfo
+        return normalized
     }
 
     func markTermDeleteConfirmed(_ term: WatchTerm) {

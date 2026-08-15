@@ -10,6 +10,7 @@ from urllib.parse import quote
 import feedparser
 import httpx
 
+from app.config import settings
 from app.connectors.base import (
     BaseConnector,
     CollectionMode,
@@ -32,6 +33,16 @@ _HEADERS = {
 }
 
 
+def _route_budgets() -> tuple[float, float]:
+    """Reserve cleanup time while scaling routes to the deployed connector budget."""
+    total = max(0.03, float(settings.connector_fetch_timeout_seconds))
+    reserve = min(1.0, total / 8.0)
+    usable = total - reserve
+    snapshot = min(5.0, usable * 3.0 / 7.0)
+    legacy = usable - snapshot
+    return snapshot, legacy
+
+
 class NicoNicoConnector(BaseConnector):
     PLATFORM = "niconico"
     SUPPORTS_MEDIA_FILTER = True
@@ -40,17 +51,45 @@ class NicoNicoConnector(BaseConnector):
         # Snapshot Search is NicoNico's current keyless API. A successful empty
         # response is authoritative; use the legacy feeds only when the API is
         # unavailable or malformed.
-        snapshot_items = await self._fetch_snapshot_search(keyword)
+        snapshot_budget, legacy_budget = _route_budgets()
+        try:
+            snapshot_items = await asyncio.wait_for(
+                self._fetch_snapshot_search(keyword),
+                timeout=snapshot_budget,
+            )
+        except asyncio.TimeoutError:
+            log.debug("NicoNico snapshot search exceeded its route budget")
+            snapshot_items = None
         if snapshot_items is not None:
             return snapshot_items
 
-        # Keep the two legacy feeds concurrent so a slow or blocked endpoint
-        # costs at most one timeout when the primary API is unavailable.
-        items, tag_items = await asyncio.gather(
-            self._fetch_rss(keyword),
-            self._fetch_tag_rss(keyword),
-        )
-        feed_results = [result for result in (items, tag_items) if result is not None]
+        # Keep the two legacy feeds concurrent and preserve any route that
+        # finishes inside the remaining connector budget. Waiting for a hung
+        # sibling with gather() would discard a usable fast result when the
+        # scheduler's outer deadline expires.
+        legacy_tasks = {
+            asyncio.create_task(self._fetch_rss(keyword)),
+            asyncio.create_task(self._fetch_tag_rss(keyword)),
+        }
+        done: set[asyncio.Task] = set()
+        try:
+            done, _ = await asyncio.wait(
+                legacy_tasks,
+                timeout=legacy_budget,
+            )
+        finally:
+            for task in legacy_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*legacy_tasks, return_exceptions=True)
+        feed_results: list[list[SourceItemCreate]] = []
+        for task in done:
+            try:
+                result = task.result()
+            except Exception:
+                continue
+            if result is not None:
+                feed_results.append(result)
         merged: list[SourceItemCreate] = []
         seen = set()
         for result in feed_results:

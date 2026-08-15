@@ -207,7 +207,9 @@ extension NetworkManager {
             firstTermByKeyword(LocalDB.shared.terms)
         }
         var changed = false
-        for term in backendTerms {
+        for backendTerm in backendTerms {
+            var term = backendTerm
+            term.collection_mode = .allInfo
             let shouldSkipAfterDelete = await MainActor.run {
                 LocalDB.shared.shouldSkipBackendTermAfterLocalDelete(term)
             }

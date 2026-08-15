@@ -221,14 +221,6 @@ struct OshiPage: View {
                                 .foregroundColor(theme.colors.primary)
                                 .cornerRadius(99)
                             
-                            Text(term.collection_mode == .mediaOnly ? "📹 " + i18n.t("mediaOnly") : "📄 " + i18n.t("allInfo"))
-                                .font(.system(size: 12, weight: .medium))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(theme.colors.divider)
-                                .foregroundColor(theme.colors.textMuted)
-                                .cornerRadius(99)
-                            
                             Circle()
                                 .frame(width: 8, height: 8)
                                 .foregroundColor(term.is_active ? theme.colors.accentGreen : theme.colors.border)

@@ -125,9 +125,9 @@ class TestCollectionModeValidation:
         obj = WatchTermCreate(keyword="k", collection_mode="all_info")
         assert obj.collection_mode == CollectionMode.ALL_INFO
 
-    def test_create_accepts_media_only_string(self):
+    def test_create_normalizes_retired_media_only_string(self):
         obj = WatchTermCreate(keyword="k", collection_mode="media_only")
-        assert obj.collection_mode == CollectionMode.MEDIA_ONLY
+        assert obj.collection_mode == CollectionMode.ALL_INFO
 
     def test_create_rejects_unknown_mode(self):
         with pytest.raises(ValidationError):
@@ -141,9 +141,9 @@ class TestCollectionModeValidation:
         obj = WatchTermUpdate(collection_mode=None)
         assert obj.collection_mode is None
 
-    def test_update_accepts_media_only(self):
+    def test_update_normalizes_retired_media_only(self):
         obj = WatchTermUpdate(collection_mode="media_only")
-        assert obj.collection_mode == CollectionMode.MEDIA_ONLY
+        assert obj.collection_mode == CollectionMode.ALL_INFO
 
     def test_collection_mode_equals_its_value_string(self):
         # str enum: CollectionMode.MEDIA_ONLY == "media_only" must be True
