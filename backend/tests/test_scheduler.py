@@ -811,23 +811,36 @@ class TestPollTermWindow:
 
 
 class TestTermRefreshCadence:
-    def test_default_free_term_is_due_after_three_hours(self):
+    def test_device_owned_free_term_is_due_after_three_hours(self):
         now = datetime.now(timezone.utc)
         term = WatchTerm(
             keyword="Aiko",
             refresh_tier="free",
+            owner_device_secret="device-1",
             last_polled_at=now - timedelta(minutes=180),
         )
 
-        assert app_settings.refresh_free_interval_minutes == 180
+        assert app_settings.refresh_free_interval_minutes == 1440
         assert _term_is_due(term, now) is True
 
-    def test_default_free_term_is_not_due_before_three_hours(self):
+    def test_device_owned_free_term_is_not_due_before_three_hours(self):
         now = datetime.now(timezone.utc)
         term = WatchTerm(
             keyword="Aiko",
             refresh_tier="free",
+            owner_device_secret="device-1",
             last_polled_at=now - timedelta(minutes=179),
+        )
+
+        assert _term_is_due(term, now) is False
+
+    def test_unowned_free_term_keeps_configured_daily_cadence(self):
+        now = datetime.now(timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            refresh_tier="free",
+            owner_device_secret=None,
+            last_polled_at=now - timedelta(minutes=180),
         )
 
         assert _term_is_due(term, now) is False
