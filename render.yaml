@@ -21,7 +21,7 @@ services:
       - key: POLL_TERMS_PER_RUN
         value: "2"
       - key: REFRESH_FREE_INTERVAL_MINUTES
-        value: "1440"
+        value: "180"
       - key: REFRESH_STANDARD_INTERVAL_MINUTES
         value: "360"
       - key: REFRESH_PREMIUM_INTERVAL_MINUTES

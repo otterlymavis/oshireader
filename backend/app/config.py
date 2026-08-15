@@ -12,7 +12,11 @@ class Settings(BaseSettings):
     connector_fetch_timeout_seconds: float = 8.0
     connector_concurrency: int = 1
     poll_terms_per_run: int = 1
-    refresh_free_interval_minutes: int = 1440
+    # iOS asks the backend for a refresh roughly every 170 minutes. Keep the
+    # default/free term cadence aligned with that request window; otherwise all
+    # app-created terms (which default to "free") are silently held for 24 hours
+    # and the homepage depends almost entirely on opportunistic device scraping.
+    refresh_free_interval_minutes: int = 180
     refresh_standard_interval_minutes: int = 360
     refresh_premium_interval_minutes: int = 180
     inactive_poll_after_days: int = 30
