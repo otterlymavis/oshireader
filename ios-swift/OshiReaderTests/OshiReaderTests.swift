@@ -1144,6 +1144,20 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testFocusedFallbackPlatformsStillFetchBackendResults() {
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.backendPlatformsForFocusedRefresh("youtube"),
+            ["youtube"]
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.backendPlatformsForFocusedRefresh("niconico"),
+            ["niconico"]
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.backendPlatformsForFocusedRefresh("custom").isEmpty
+        )
+    }
+
     func testBackendFailureForcesDeviceFallbackPastRecentScrapeThrottle() {
         let fallbackPlatforms: Set<String> = ["youtube", "mdpr"]
         let forcedPlatforms = BackgroundRefreshPolicy.forcedForegroundDeviceFallbackPlatforms(
