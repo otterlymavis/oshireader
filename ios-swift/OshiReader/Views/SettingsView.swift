@@ -10,7 +10,6 @@ struct SettingsView: View {
     @State private var showingAddKeywordAlert = false
     @State private var showingClearAllAlert = false
     @State private var newKeyword = ""
-    @State private var newCollectionMode = CollectionMode.allInfo
     @State private var newSourceMode = SourceMode.all
     @State private var newSelectedPlatforms: Set<String> = []
     @State private var addingAliasForId: String? = nil
@@ -231,12 +230,6 @@ struct SettingsView: View {
                         .cornerRadius(8)
                         .accessibilityIdentifier("settings.keywordField")
                     
-                    Picker(i18n.t("collectionMode"), selection: $newCollectionMode) {
-                        Text("📄 " + i18n.t("allInfo")).tag(CollectionMode.allInfo)
-                        Text("📹 " + i18n.t("mediaOnly")).tag(CollectionMode.mediaOnly)
-                    }
-                    .pickerStyle(.segmented)
-
                     Picker("Sources", selection: $newSourceMode) {
                         Text("All sources").tag(SourceMode.all)
                         Text("Selected").tag(SourceMode.selected)
@@ -286,7 +279,12 @@ struct SettingsView: View {
                                 showingAddKeywordAlert = false
                                 return
                             }
-                            let savedTerm = db.saveTerm(keyword: trimmed, collectionMode: newCollectionMode, sourceMode: newSourceMode, selectedPlatforms: Array(newSelectedPlatforms).sorted())
+                            let savedTerm = db.saveTerm(
+                                keyword: trimmed,
+                                collectionMode: .allInfo,
+                                sourceMode: newSourceMode,
+                                selectedPlatforms: Array(newSelectedPlatforms).sorted()
+                            )
 
                             Task {
                                 await refreshLocalFallbacks(for: savedTerm)
@@ -377,7 +375,6 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 10) {
-                keywordCollectionModeButton(for: term)
                 keywordSourceMenu(for: term)
                 keywordStatusPill(for: term)
             }
@@ -486,25 +483,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
-    }
-
-    private func keywordCollectionModeButton(for term: WatchTerm) -> some View {
-        Button {
-            let next: CollectionMode = term.collection_mode == .allInfo ? .mediaOnly : .allInfo
-            db.updateTerm(id: term.id, collectionMode: next)
-            Task {
-                _ = try? await NetworkManager.shared.updateWatchTerm(id: term.id, collectionMode: next)
-            }
-        } label: {
-            Text(term.collection_mode == .mediaOnly ? "📹" : "📄")
-                .font(.caption)
-                .frame(width: 34, height: 34)
-                .background(theme.colors.divider)
-                .foregroundColor(theme.colors.textSub)
-                .clipShape(Circle())
-        }
-        .buttonStyle(PlainButtonStyle())
-        .accessibilityIdentifier("settings.keywordMode.\(term.keyword)")
     }
 
     private func keywordSourceMenu(for term: WatchTerm) -> some View {

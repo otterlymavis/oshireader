@@ -72,6 +72,48 @@ class TestApplyStartupMigrations:
             apply_startup_migrations(fresh_engine)
             apply_startup_migrations(fresh_engine)  # must not raise
 
+    def test_normalizes_retired_media_only_watch_terms(self, fresh_engine):
+        Base.metadata.create_all(bind=fresh_engine)
+        Session = sessionmaker(bind=fresh_engine)
+        db = Session()
+        try:
+            recently_polled = datetime.now(timezone.utc)
+            db.add_all([
+                WatchTerm(
+                    keyword="Legacy media",
+                    collection_mode="media_only",
+                    last_polled_at=recently_polled,
+                ),
+                WatchTerm(
+                    keyword="All info",
+                    collection_mode="all_info",
+                    last_polled_at=recently_polled,
+                ),
+            ])
+            db.commit()
+        finally:
+            db.close()
+
+        with patch("app.migrations.SessionLocal", Session):
+            apply_startup_migrations(fresh_engine, run_cleanups=False)
+            apply_startup_migrations(fresh_engine, run_cleanups=False)
+
+        db = Session()
+        try:
+            modes = {
+                term.keyword: term.collection_mode
+                for term in db.query(WatchTerm).order_by(WatchTerm.keyword).all()
+            }
+            assert modes == {
+                "All info": "all_info",
+                "Legacy media": "all_info",
+            }
+            terms = {term.keyword: term for term in db.query(WatchTerm).all()}
+            assert terms["Legacy media"].last_polled_at is None
+            assert terms["All info"].last_polled_at is not None
+        finally:
+            db.close()
+
     def test_muted_feed_item_id_autogenerates_after_startup_migration(self, fresh_engine):
         Session = sessionmaker(bind=fresh_engine)
         with patch("app.migrations.SessionLocal", Session):

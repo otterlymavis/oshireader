@@ -180,14 +180,14 @@ class TestCreateWatchTerm:
         assert resp.status_code == 201
         assert resp.json()["collection_mode"] == "all_info"
 
-    def test_creates_term_with_explicit_collection_mode(self, client):
+    def test_normalizes_retired_collection_mode_on_create(self, client):
         with patch("app.api.watch_terms.queue_poll"):
             resp = client.post(
                 "/api/watch-terms/",
                 json={"keyword": "Aiko", "collection_mode": "media_only"},
             )
         assert resp.status_code == 201
-        assert resp.json()["collection_mode"] == "media_only"
+        assert resp.json()["collection_mode"] == "all_info"
 
     def test_duplicate_keyword_returns_409(self, client):
         with patch("app.api.watch_terms.queue_poll"):
@@ -756,18 +756,46 @@ class TestUpdateWatchTerm:
             client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
         mock_poll.assert_not_called()
 
-    def test_update_collection_mode_triggers_poll(self, client, db_session):
-        term = WatchTerm(keyword="Aiko", collection_mode="all_info")
+    def test_retired_collection_mode_update_triggers_poll(self, client, db_session):
+        term = WatchTerm(
+            keyword="Aiko",
+            collection_mode="all_info",
+            last_polled_at=datetime.now(timezone.utc),
+        )
         db_session.add(term)
         db_session.commit()
 
         with patch("app.api.watch_terms.queue_poll") as mock_poll:
             resp = client.patch(f"/api/watch-terms/{term.id}", json={"collection_mode": "media_only"})
         assert resp.status_code == 200
-        assert resp.json()["collection_mode"] == "media_only"
+        assert resp.json()["collection_mode"] == "all_info"
         mock_poll.assert_called_once()
+        db_session.refresh(term)
+        assert term.last_polled_at is None
 
-    def test_update_collection_mode(self, client, db_session):
+    def test_expanding_selected_sources_makes_term_due_and_triggers_poll(self, client, db_session):
+        term = WatchTerm(
+            keyword="Aiko",
+            source_mode="selected",
+            selected_platforms=["youtube"],
+            last_polled_at=datetime.now(timezone.utc),
+        )
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll") as mock_poll:
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"selected_platforms": ["youtube", "note"]},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["selected_platforms"] == ["note", "youtube"]
+        mock_poll.assert_called_once()
+        db_session.refresh(term)
+        assert term.last_polled_at is None
+
+    def test_normalizes_retired_collection_mode_on_update(self, client, db_session):
         term = WatchTerm(keyword="Aiko", collection_mode="all_info")
         db_session.add(term)
         db_session.commit()
@@ -775,7 +803,7 @@ class TestUpdateWatchTerm:
         with patch("app.api.watch_terms.queue_poll"):
             resp = client.patch(f"/api/watch-terms/{term.id}", json={"collection_mode": "media_only"})
         assert resp.status_code == 200
-        assert resp.json()["collection_mode"] == "media_only"
+        assert resp.json()["collection_mode"] == "all_info"
 
     def test_reactivating_term_triggers_poll(self, client, db_session):
         term = WatchTerm(keyword="Aiko", is_active=False)

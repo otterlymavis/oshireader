@@ -25,11 +25,14 @@ final class OshiReaderUITests: XCTestCase {
     func testAddKeywordFlow() throws {
         tapTab(index: 4, labels: ["Settings"])
 
+        XCTAssertFalse(app.buttons["settings.keywordMode.UITest Oshi"].exists)
+
         app.buttons["settings.addKeywordButton"].tap()
 
         // Sheet may take a moment; wait up to 5 s for the only non-secure text field to appear
         let keywordField = app.textFields.firstMatch
         XCTAssertTrue(keywordField.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "media only")).firstMatch.exists)
         keywordField.tap()
         keywordField.typeText("New UI Keyword")
 
@@ -349,6 +352,9 @@ final class OshiReaderUITests: XCTestCase {
 
     func testAvatarEditorFlow() throws {
         tapTab(index: 3, labels: ["My Oshi"])
+
+        XCTAssertFalse(app.staticTexts["📄 All info"].exists)
+        XCTAssertFalse(app.staticTexts["📹 Media only"].exists)
 
         let editButton = app.buttons["oshi.editButton.UITest Oshi"]
         XCTAssertTrue(editButton.waitForExistence(timeout: 3))

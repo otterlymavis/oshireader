@@ -826,6 +826,30 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testChangedFeedScopeReplaysAnAlreadyRunningLocalBackgroundRefresh() {
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.localBackgroundRefreshNeedsReplay(
+                initiallyNeededLocalRefresh: true,
+                initialFeedScopeRevision: 4,
+                currentFeedScopeRevision: 5
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.localBackgroundRefreshNeedsReplay(
+                initiallyNeededLocalRefresh: true,
+                initialFeedScopeRevision: 5,
+                currentFeedScopeRevision: 5
+            )
+        )
+        XCTAssertFalse(
+            BackgroundRefreshPolicy.localBackgroundRefreshNeedsReplay(
+                initiallyNeededLocalRefresh: false,
+                initialFeedScopeRevision: 4,
+                currentFeedScopeRevision: 5
+            )
+        )
+    }
+
     func testBackgroundRefreshLocalFallbackOnlyStartsWithRemainingBudget() {
         let now = Date(timeIntervalSince1970: 1_000)
         let plentyOfTimeStartedAt = now.addingTimeInterval(
@@ -4480,6 +4504,27 @@ final class OshiReaderTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
     }
 
+    func testSchemaV6NormalizesLegacyMediaOnlyTerms() throws {
+        let legacyTerms = [
+            WatchTerm(keyword: "Legacy Media", collection_mode: .mediaOnly),
+            WatchTerm(keyword: "All Info", collection_mode: .allInfo),
+        ]
+        try JSONEncoder().encode(legacyTerms)
+            .write(to: tempDir.appendingPathComponent("terms.json"))
+        UserDefaults.standard.set(5, forKey: "localdb_schema_version")
+
+        let freshDB = LocalDB(directory: tempDir)
+
+        XCTAssertEqual(freshDB.terms.count, 2)
+        XCTAssertTrue(freshDB.terms.allSatisfy { $0.collection_mode == .allInfo })
+        let reloadedTerms: [WatchTerm] = try JSONDecoder().decode(
+            [WatchTerm].self,
+            from: Data(contentsOf: tempDir.appendingPathComponent("terms.json"))
+        )
+        XCTAssertTrue(reloadedTerms.allSatisfy { $0.collection_mode == .allInfo })
+        UserDefaults.standard.removeObject(forKey: "localdb_schema_version")
+    }
+
     func testSchemaMigrationPrunesSummaryOnlyArticleMatch() throws {
         let term = WatchTerm(keyword: "吉沢亮")
         let now = ISO8601DateFormatter().string(from: Date())
@@ -5626,6 +5671,7 @@ final class OshiReaderTests: XCTestCase {
         db.addTermFromBackend(server)
         XCTAssertEqual(db.terms.count, 2)
         XCTAssertEqual(db.terms.first?.id, "server-99", "addTermFromBackend must insert at position 0")
+        XCTAssertEqual(db.terms.first?.collection_mode, .allInfo)
         _ = first
     }
 
@@ -5636,7 +5682,7 @@ final class OshiReaderTests: XCTestCase {
         XCTAssertEqual(db.terms.count, 1)
         XCTAssertEqual(db.terms.first?.id, "server-42")
         XCTAssertEqual(db.terms.first?.keyword, "Aiko Updated")
-        XCTAssertEqual(db.terms.first?.collection_mode, .mediaOnly)
+        XCTAssertEqual(db.terms.first?.collection_mode, .allInfo)
     }
 
     func testReplaceTermNoOpForUnknownId() throws {
@@ -6145,10 +6191,49 @@ final class NetworkManagerTests: XCTestCase {
         XCTAssertTrue(result.changed)
         let syncedTerm = LocalDB.shared.term(matchingKeyword: keyword)
         XCTAssertEqual(syncedTerm?.id, "42")
-        XCTAssertEqual(syncedTerm?.collection_mode, .mediaOnly)
+        XCTAssertEqual(syncedTerm?.collection_mode, .allInfo)
         XCTAssertEqual(syncedTerm?.is_active, false)
         XCTAssertEqual(syncedTerm?.notify_on_new, false)
         XCTAssertEqual(syncedTerm?.aliases, ["Server Alias"])
+    }
+
+    @MainActor
+    func testSyncTermsFromBackendDoesNotReportLegacyModeNormalizationAsAChange() async throws {
+        let keyword = "Pull Legacy Mode \(UUID().uuidString)"
+        let localTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .allInfo,
+            is_active: true,
+            notify_on_new: false,
+            aliases: []
+        )
+        let backendTerm = WatchTerm(
+            id: "42",
+            keyword: keyword,
+            collection_mode: .mediaOnly,
+            is_active: true,
+            notify_on_new: false,
+            aliases: []
+        )
+        _ = LocalDB.shared.deleteTerm(keyword: keyword)
+        LocalDB.shared.addTermFromBackend(localTerm)
+        defer { _ = LocalDB.shared.deleteTerm(keyword: keyword) }
+        let backendData = try JSONEncoder().encode([backendTerm])
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/watch-terms")
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (backendData, Self.response(status: 200))
+        }
+
+        let result = await NetworkManager.shared.syncTermsFromBackendWithStatus()
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertFalse(result.changed)
+        XCTAssertEqual(
+            LocalDB.shared.term(matchingKeyword: keyword)?.collection_mode,
+            .allInfo
+        )
     }
 
     @MainActor

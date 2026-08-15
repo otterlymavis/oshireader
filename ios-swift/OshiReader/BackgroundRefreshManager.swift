@@ -627,6 +627,14 @@ enum BackgroundRefreshPolicy {
         remainingTime >= minimumLocalRefreshWindow
     }
 
+    static func localBackgroundRefreshNeedsReplay(
+        initiallyNeededLocalRefresh: Bool,
+        initialFeedScopeRevision: Int,
+        currentFeedScopeRevision: Int
+    ) -> Bool {
+        initiallyNeededLocalRefresh && initialFeedScopeRevision != currentFeedScopeRevision
+    }
+
     static func backendPhaseDeadline(needsLocalRefresh: Bool) -> TimeInterval {
         guard needsLocalRefresh else { return operationDeadline }
         // Backend and local phases run concurrently. Give each almost the full
@@ -1073,6 +1081,7 @@ final class BackgroundRefreshManager {
         }
 
         let startedAt = Date()
+        let initialFeedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
         let initialScope = BackgroundRefreshPolicy.sourceScope(
             activeTerms: LocalDB.shared.terms.filter(\.is_active),
             customUrls: LocalDB.shared.customUrls,
@@ -1097,6 +1106,7 @@ final class BackgroundRefreshManager {
             return backendRefresh.refreshed || localRefresh.completedAnySource
         }
         let feedScopeRevision = backendRefresh.feedScopeRevision ?? BackgroundRefreshPolicy.currentFeedScopeRevision
+        var localRefreshFeedScopeRevision = initialFeedScopeRevision
 
         let activeTerms = LocalDB.shared.terms.filter(\.is_active)
         let customUrls = LocalDB.shared.customUrls
@@ -1120,15 +1130,23 @@ final class BackgroundRefreshManager {
             return backendRefresh.refreshed
         }
 
-        // Backend sync may introduce a newly active local source that was not
-        // present in the initial snapshot. Give that source any remaining time;
-        // otherwise the local phase has already run alongside the backend.
-        if !initialScope.needsLocal {
+        // Backend sync may introduce or alter a local term after the concurrent
+        // local task captured its initial snapshot. Replay the local phase when
+        // there is enough time; otherwise retain the stale revision so the scope
+        // stays dirty and the next foreground/background opportunity retries it.
+        let needsLocalReplay = BackgroundRefreshPolicy.localBackgroundRefreshNeedsReplay(
+            initiallyNeededLocalRefresh: initialScope.needsLocal,
+            initialFeedScopeRevision: initialFeedScopeRevision,
+            currentFeedScopeRevision: feedScopeRevision
+        )
+        if !initialScope.needsLocal || needsLocalReplay {
             let remainingTime = BackgroundRefreshPolicy.remainingOperationTime(startedAt: startedAt)
             if BackgroundRefreshPolicy.shouldStartLocalBackgroundRefresh(remainingTime: remainingTime) {
+                let replayFeedScopeRevision = BackgroundRefreshPolicy.currentFeedScopeRevision
                 localRefresh = await refreshLocalDeviceSourcesForBackground(timeout: remainingTime)
+                localRefreshFeedScopeRevision = replayFeedScopeRevision
             } else {
-                AppLogger.network.notice("Skipping newly-added local background source because the operation deadline is near")
+                AppLogger.network.notice("Deferring changed local background scope because the operation deadline is near")
             }
         }
         BackgroundRefreshPolicy.recordBackgroundRefreshCompleted(
@@ -1138,7 +1156,7 @@ final class BackgroundRefreshManager {
             activeTerms: LocalDB.shared.terms.filter(\.is_active),
             customUrls: LocalDB.shared.customUrls,
             subscribedPlatforms: LocalDB.shared.subscribedPlatforms,
-            feedScopeRevision: feedScopeRevision
+            feedScopeRevision: localRefreshFeedScopeRevision
         )
         return backendRefresh.refreshed || localRefresh.completedAnySource
     }

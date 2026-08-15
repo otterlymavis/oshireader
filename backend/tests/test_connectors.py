@@ -2831,6 +2831,51 @@ def _nico_ctx(side_effect=None, rss_content=b"<rss/>"):
 
 
 class TestNicoNicoFetch:
+    def test_route_budgets_scale_with_connector_deadline(self):
+        with patch.object(niconico_module.settings, "connector_fetch_timeout_seconds", 8.0):
+            assert niconico_module._route_budgets() == pytest.approx((3.0, 4.0))
+        with patch.object(niconico_module.settings, "connector_fetch_timeout_seconds", 25.0):
+            assert niconico_module._route_budgets() == pytest.approx((5.0, 19.0))
+
+    @pytest.mark.asyncio
+    async def test_slow_snapshot_preserves_fast_legacy_result_inside_route_budgets(self):
+        connector = NicoNicoConnector()
+        fallback = SourceItemCreate(
+            platform="niconico",
+            item_id="sm-fallback",
+            url="https://www.nicovideo.jp/watch/sm-fallback",
+            published_at=_CONNECTOR_TEST_NOW,
+            media_type="video",
+            title="Aiko fallback video",
+        )
+
+        async def stalled_route(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        with patch.object(
+            connector,
+            "_fetch_snapshot_search",
+            new=AsyncMock(side_effect=stalled_route),
+        ), patch.object(
+            connector,
+            "_fetch_rss",
+            new=AsyncMock(return_value=[fallback]),
+        ) as legacy_rss, patch.object(
+            connector,
+            "_fetch_tag_rss",
+            new=AsyncMock(side_effect=stalled_route),
+        ), patch(
+            "app.connectors.niconico._route_budgets",
+            return_value=(0.01, 0.01),
+        ):
+            result = await asyncio.wait_for(
+                connector.fetch("Aiko", "all_info"),
+                timeout=0.1,
+            )
+
+        assert result == [fallback]
+        legacy_rss.assert_awaited_once_with("Aiko")
+
     @pytest.mark.asyncio
     async def test_snapshot_search_recovers_when_legacy_rss_is_no_longer_a_feed(self):
         snapshot_response = MagicMock(is_success=True)

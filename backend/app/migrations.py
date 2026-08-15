@@ -94,7 +94,10 @@ def _backfill_missing_defaults(engine: Engine) -> None:
     aliases_default = _json_default(engine)
     with engine.begin() as conn:
         conn.execute(text(f"UPDATE watch_terms SET aliases = {aliases_default} WHERE aliases IS NULL"))
-        conn.execute(text("UPDATE watch_terms SET collection_mode = 'all_info' WHERE collection_mode IS NULL"))
+        conn.execute(text(
+            "UPDATE watch_terms SET collection_mode = 'all_info', last_polled_at = NULL "
+            "WHERE collection_mode IS NULL OR collection_mode = 'media_only'"
+        ))
         conn.execute(text("UPDATE watch_terms SET source_mode = 'all' WHERE source_mode IS NULL"))
         conn.execute(text(f"UPDATE watch_terms SET selected_platforms = {aliases_default} WHERE selected_platforms IS NULL"))
         conn.execute(text("UPDATE watch_terms SET is_active = TRUE WHERE is_active IS NULL"))

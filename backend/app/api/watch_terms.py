@@ -207,6 +207,19 @@ async def update_term(
         raise HTTPException(409, "A watch term with this keyword already exists")
     for k, v in updates.items():
         setattr(term, k, v)
+    # A queued poll still passes through due-term selection. Make every fetch-
+    # scope expansion immediately eligible instead of allowing a recent poll
+    # timestamp from the old scope to discard the queued work.
+    should_poll = (
+        "keyword" in updates
+        or "aliases" in updates
+        or "collection_mode" in updates
+        or "source_mode" in updates
+        or "selected_platforms" in updates
+        or (updates.get("is_active") is True)
+    )
+    if should_poll:
+        term.last_polled_at = None
     if not auth.is_admin:
         await _require_verified_notification_device(db, term)
     if updates.get("notify_on_new") is False or updates.get("is_active") is False:
@@ -219,13 +232,6 @@ async def update_term(
         db.rollback()
         raise HTTPException(409, "A watch term with this keyword already exists")
     db.refresh(term)
-    # Re-poll when changes affect what gets fetched on the next cycle.
-    should_poll = (
-        "keyword" in updates
-        or "aliases" in updates
-        or "collection_mode" in updates
-        or (updates.get("is_active") is True)
-    )
     if should_poll:
         queue_poll()
     return term

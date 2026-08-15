@@ -37,6 +37,12 @@ def _strip_optional_string(v: object) -> object:
     return v
 
 
+def _normalize_retired_collection_mode(v: object) -> object:
+    if v == CollectionMode.MEDIA_ONLY:
+        return CollectionMode.ALL_INFO
+    return v
+
+
 class WatchTermCreate(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
     aliases: list[str] = Field(default=[], max_length=20)
@@ -57,6 +63,11 @@ class WatchTermCreate(BaseModel):
     @classmethod
     def clean_aliases(cls, v: list) -> list:
         return _clean_aliases_list(v)
+
+    @field_validator("collection_mode", mode="before")
+    @classmethod
+    def normalize_collection_mode(cls, v: object) -> object:
+        return _normalize_retired_collection_mode(v)
 
     @field_validator("selected_platforms", mode="before")
     @classmethod
@@ -90,6 +101,11 @@ class WatchTermUpdate(BaseModel):
         if v is None:
             return None
         return _clean_aliases_list(v)
+
+    @field_validator("collection_mode", mode="before")
+    @classmethod
+    def normalize_collection_mode(cls, v: object) -> object:
+        return _normalize_retired_collection_mode(v)
 
     @field_validator("selected_platforms", mode="before")
     @classmethod
