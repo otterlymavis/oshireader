@@ -64,6 +64,7 @@ _queued_task: asyncio.Task | None = None
 # post date. We update published_at whenever we see a more recent date from the connector.
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel"})
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
+_DEVICE_OWNED_REFRESH_INTERVAL = timedelta(minutes=180)
 _FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
 _CATCHUP_NOTIFICATION_MIN_MATCH_AGE = timedelta(minutes=10)
@@ -348,7 +349,13 @@ def _term_refresh_interval(term: WatchTerm) -> timedelta:
         (term.refresh_tier or "free").casefold(),
         settings.refresh_intervals_minutes["free"],
     )
-    return timedelta(minutes=minutes)
+    configured = timedelta(minutes=minutes)
+    # iOS asks the backend for a poll roughly every 170 minutes. App-created
+    # terms are owner-scoped, so cap only those terms at three hours instead of
+    # collapsing the free/standard/premium cadence for every API client.
+    if term.owner_device_secret:
+        return min(configured, _DEVICE_OWNED_REFRESH_INTERVAL)
+    return configured
 
 
 def _term_is_due(term: WatchTerm, now: datetime) -> bool:

@@ -155,16 +155,16 @@ These are intentionally conservative for the current Render instance:
 - `POLL_TERMS_PER_RUN=2`
 - `CONNECTOR_CONCURRENCY=1`
 - `CONNECTOR_FETCH_TIMEOUT_SECONDS=8`
-- `REFRESH_FREE_INTERVAL_MINUTES=180`
 - `NOTIFICATION_FRESHNESS_WINDOW_MINUTES=120`
 - `ORPHANED_NOTIFICATION_GRACE_MINUTES=60`
 - Worker `MIN_POLL_INTERVAL_MINUTES=120`
 - Worker `STALE_AFTER_MINUTES=360`
 - Worker `ACTIVE_POLL_TIMEOUT_MINUTES=30`
 - iOS/backend device-triggered polls remain throttled to a 170-minute cadence,
-  while default/free backend terms become due at 180 minutes. This small offset
-  lets a device-triggered request reach the next due window without leaving
-  ordinary app-created terms stale for a full day.
+  while device-owned backend terms become due after at most 180 minutes. The
+  owner-scoped cap preserves the configured free/standard/premium intervals for
+  non-device API clients without leaving ordinary app-created terms stale for a
+  full day.
 
 Increase them only after the service has stayed healthy for a few days, and change
 one knob at a time. If polling starts to miss completion markers again, roll the
