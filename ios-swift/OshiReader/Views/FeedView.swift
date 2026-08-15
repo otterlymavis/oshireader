@@ -1156,10 +1156,11 @@ struct FeedView: View {
         let platformsToFetch: [String] = {
             guard !shouldSkipBackendRetries else { return [] }
             if let focusedPlatform {
-                if Platform.shouldRunDeviceFallback(focusedPlatform) {
-                    return []
-                }
-                return Platform.shouldFetchFromBackend(focusedPlatform) ? [focusedPlatform] : []
+                // A device-fallback role still has a backend connector. Fetch its
+                // stored/backend results first, then let refreshFeed run the focused
+                // device pass as a second lane below. Skipping this lane made focused
+                // YouTube and NicoNico refreshes depend entirely on device scraping.
+                return BackgroundRefreshPolicy.backendPlatformsForFocusedRefresh(focusedPlatform)
             }
             return Array(Set(db.subscribedPlatforms.filter {
                 Platform.shouldFetchFromBackend($0)
