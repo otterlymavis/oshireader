@@ -36,6 +36,7 @@ from app.ingestion.scheduler import (
     _queue_duplicate_term_notifications,
     _queue_pending_notification,
     _search_terms_for,
+    _term_is_due,
 )
 from app.connectors.base import SourceItemCreate
 from app.connectors.youtube import YouTubeConnector
@@ -807,6 +808,29 @@ class TestPollTermWindow:
         assert selected == terms
         assert offset == 0
         assert next_offset == 0
+
+
+class TestTermRefreshCadence:
+    def test_default_free_term_is_due_after_three_hours(self):
+        now = datetime.now(timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            refresh_tier="free",
+            last_polled_at=now - timedelta(minutes=180),
+        )
+
+        assert app_settings.refresh_free_interval_minutes == 180
+        assert _term_is_due(term, now) is True
+
+    def test_default_free_term_is_not_due_before_three_hours(self):
+        now = datetime.now(timezone.utc)
+        term = WatchTerm(
+            keyword="Aiko",
+            refresh_tier="free",
+            last_polled_at=now - timedelta(minutes=179),
+        )
+
+        assert _term_is_due(term, now) is False
 
 
 class TestNotificationFreshnessWindow:
