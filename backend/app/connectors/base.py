@@ -12,9 +12,29 @@ import unicodedata
 
 import feedparser
 import httpx
+from bs4 import BeautifulSoup
 
 from app.config import settings
 from app.models import CollectionMode
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def clean_html_text(value: str | None) -> str | None:
+    """Strip HTML tags and collapse whitespace, or None for empty input."""
+    if not value:
+        return None
+    text = BeautifulSoup(value, "lxml").get_text(" ", strip=True)
+    cleaned = _WHITESPACE_RE.sub(" ", text).strip()
+    return cleaned or None
+
+# Shared desktop-Chrome UA for connectors that scrape a site directly rather
+# than going through Google News. Keep it in one place so a future UA bump
+# doesn't happen in some connectors but not others.
+SCRAPE_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 GOOGLE_NEWS_HEADERS = {
     "User-Agent": (
@@ -522,6 +542,10 @@ async def build_google_news_public_proxy_items(
 class BaseConnector(ABC):
     PLATFORM: str = ""
     SUPPORTS_MEDIA_FILTER: bool = False
+    # Per-connector floor on the scheduler's fetch deadline, for sources whose
+    # multi-hop fallback chain (proxy + jina, etc.) needs longer than the
+    # default budget. None means "use the scheduler's configured default".
+    MIN_FETCH_TIMEOUT_SECONDS: float | None = None
     # Whether this connector's own fetch success/failure should be surfaced via
     # /api/source-health. False for connectors that are structurally unable to
     # be fetched from the backend's host (see CLAUDE.md) but still deliver
@@ -532,3 +556,96 @@ class BaseConnector(ABC):
     @abstractmethod
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         ...
+
+
+class GoogleNewsDirectAndBingConnector(BaseConnector):
+    """Site-scoped Google-News-direct + Bing-proxy fallback connector.
+
+    Subclasses set SITE and PLATFORM (and optionally TITLE_SUFFIX_RE, AUTHOR,
+    ITEM_CAP) — see mdpr.py/oricon.py, whose fetch chains were built together
+    commit-for-commit and stayed in lockstep.
+    """
+
+    SITE: str = ""
+    TITLE_SUFFIX_RE: "re.Pattern | None" = None
+    AUTHOR: str | None = None
+    ITEM_CAP: int = 25
+    SUPPORTS_MEDIA_FILTER = False
+
+    async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
+        if mode == CollectionMode.MEDIA_ONLY:
+            return []
+
+        query = f"{keyword} site:{self.SITE}"
+        google_url = (
+            f"https://news.google.com/rss/search?q={quote(query)}"
+            "&hl=ja&gl=JP&ceid=JP%3Aja"
+        )
+        return await first_nonempty_result(
+            self._fetch_source(google_url, keyword, "google_news_direct", direct=True),
+            self._fetch_source(query, keyword, "bing_news_proxy", direct=False),
+        )
+
+    async def _fetch_source(
+        self,
+        query_or_url: str,
+        keyword: str,
+        source: str,
+        *,
+        direct: bool,
+    ) -> list[SourceItemCreate]:
+        content = (
+            await fetch_google_news_direct(query_or_url)
+            if direct
+            else await fetch_search_rss_via_proxy(query_or_url, target="bing")
+        )
+        if not content:
+            raise SourceUnavailableError(f"{source} unavailable")
+        feed = await parse_feed_document(content)
+        return await self._items_from_feed(feed, keyword, source)
+
+    def _clean_title(self, value: str) -> str:
+        if self.TITLE_SUFFIX_RE is None:
+            return value.strip()
+        return self.TITLE_SUFFIX_RE.sub("", value).strip()
+
+    async def _items_from_feed(self, feed, keyword: str, source: str) -> list[SourceItemCreate]:
+        items: list[SourceItemCreate] = []
+        seen: set[str] = set()
+        for entry in (feed.entries if feed else []):
+            link = entry.get("link", "")
+            if not link:
+                continue
+            item_id = entry.get("id") or link
+            if item_id in seen:
+                continue
+            title = self._clean_title(entry.get("title", ""))
+            summary = entry.get("summary") or ""
+            if not title:
+                continue
+            if not title_contains_keyword(keyword, title):
+                continue
+            published = parse_feed_date(entry)
+            if published is None:
+                continue
+            if not is_recent_search_result(published):
+                continue
+            seen.add(item_id)
+            items.append(
+                SourceItemCreate(
+                    platform=self.PLATFORM,
+                    item_id=item_id,
+                    url=link,
+                    published_at=published,
+                    media_type="article",
+                    author=self.AUTHOR,
+                    title=title,
+                    content_text=summary or None,
+                    thumbnail_url=None,
+                    raw_payload={"source": source, "keyword": keyword},
+                )
+            )
+            if len(items) >= self.ITEM_CAP:
+                break
+
+        return items

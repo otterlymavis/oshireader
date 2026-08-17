@@ -65,7 +65,6 @@ _queued_task: asyncio.Task | None = None
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel"})
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _DEVICE_OWNED_REFRESH_INTERVAL = timedelta(minutes=180)
-_FIVECH_FETCH_TIMEOUT_SECONDS = 35.0
 _MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
 _CATCHUP_NOTIFICATION_MIN_MATCH_AGE = timedelta(minutes=10)
 _PREVIEW_SOURCE_NEW_MATCH = "new_match"
@@ -243,8 +242,8 @@ def _cache_successful_fetch(
 
 def connector_fetch_timeout_seconds(connector: BaseConnector) -> float:
     timeout = settings.connector_fetch_timeout_seconds
-    if connector.PLATFORM == "5ch":
-        return max(timeout, _FIVECH_FETCH_TIMEOUT_SECONDS)
+    if connector.MIN_FETCH_TIMEOUT_SECONDS is not None:
+        return max(timeout, connector.MIN_FETCH_TIMEOUT_SECONDS)
     return timeout
 
 
@@ -410,14 +409,7 @@ def _report_orphaned_notification_terms(db) -> set[int]:
     orphaned_ids: set[int] = set()
     orphaned_keywords: list[str] = []
     for term in terms:
-        has_device = (
-            db.query(APNSDeviceToken.token)
-            .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
-            .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
-            .first()
-            is not None
-        )
-        if has_device:
+        if _term_has_verified_device(db, term):
             continue
         orphaned_ids.add(term.id)
         if len(orphaned_keywords) < 10:
@@ -509,14 +501,7 @@ def _report_orphaned_duplicate_terms(db) -> set[int]:
     orphaned_ids: set[int] = set()
     orphaned_keywords: list[str] = []
     for term in candidates:
-        has_any_owner_device = (
-            db.query(APNSDeviceToken.token)
-            .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
-            .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
-            .first()
-            is not None
-        )
-        if has_any_owner_device:
+        if _term_has_verified_device(db, term):
             continue
 
         replacements = (
@@ -565,14 +550,7 @@ def _report_orphaned_silent_terms(db) -> set[int]:
     orphaned_ids: set[int] = set()
     orphaned_keywords: list[str] = []
     for term in candidates:
-        has_any_owner_device = (
-            db.query(APNSDeviceToken.token)
-            .filter(APNSDeviceToken.device_secret == term.owner_device_secret)
-            .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
-            .first()
-            is not None
-        )
-        if has_any_owner_device:
+        if _term_has_verified_device(db, term):
             continue
 
         orphaned_ids.add(term.id)
@@ -905,6 +883,26 @@ def _newer_pending_preview(
     ):
         return candidate_preview
     return current_preview
+
+
+def resolve_sendable_pending_preview(db, pending: PendingNotification) -> dict | None:
+    """Unwrap a PendingNotification's preview_item into a flat, sendable preview dict.
+
+    preview_item is stored as {"items": [...]} once any candidate has been queued
+    (see _queue_pending_notification); callers must not pass it to APNs payload
+    building unwrapped, or every field lookup silently misses.
+    """
+    items = _pending_notification_items(pending)
+    if not items:
+        preview_item = pending.preview_item
+        return preview_item if isinstance(preview_item, dict) and preview_item else None
+    observed_at = pending.updated_at or pending.created_at or datetime.now(timezone.utc)
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    best: dict | None = None
+    for item in items:
+        best = _newer_pending_preview(db, best, item, observed_at)
+    return _sendable_pending_preview(best) if best else None
 
 
 def _parse_pending_preview_published_at(preview_item: dict) -> datetime | None:
@@ -1770,9 +1768,16 @@ def _prune_old_items_with_limit(
     raise_on_error: bool = False,
 ) -> dict[str, int]:
     try:
-        discussion_filter = "" if include_discussion_platforms else (
-            "WHERE si.platform NOT IN ('5ch', 'girlschannel')"
-        )
+        params = {"match_per_term_platform_limit": match_per_term_platform_limit}
+        discussion_filter = ""
+        if not include_discussion_platforms:
+            platform_params = {
+                f"discussion_platform_{i}": platform
+                for i, platform in enumerate(_DISCUSSION_PLATFORMS)
+            }
+            placeholders = ", ".join(f":{key}" for key in platform_params)
+            discussion_filter = f"WHERE si.platform NOT IN ({placeholders})"
+            params.update(platform_params)
         result = db.execute(sa_text(f"""
             DELETE FROM matches WHERE id IN (
                 SELECT id FROM (
@@ -1787,7 +1792,7 @@ def _prune_old_items_with_limit(
                 ) ranked
                 WHERE rn > :match_per_term_platform_limit
             )
-        """), {"match_per_term_platform_limit": match_per_term_platform_limit})
+        """), params)
         pruned = result.rowcount or 0
         muted_pruned = _prune_old_muted_feed_items(db, muted_per_term_limit)
         orphan_source_items_pruned = _delete_orphan_source_items(db)

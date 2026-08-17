@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.auth import AuthContext, require_admin_or_device_auth
+from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_auth
 from app.database import get_db
 from app.models import Match, MutedFeedItem, SourceItem, WatchTerm
 from app.relevance import watch_term_matches
@@ -53,9 +53,7 @@ def mute_feed_item(
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
-    term = db.get(WatchTerm, body.watch_term_id)
-    if term is None or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
-        raise HTTPException(404, "Watch term not found")
+    term = get_owned_watch_term(db, body.watch_term_id, auth)
 
     source_item = db.get(SourceItem, body.source_item_id)
     if source_item is None:
@@ -126,6 +124,9 @@ def get_feed(
         # Filter by when the item was *stored* (matched_at), not published_at.
         # Items with broadcast dates earlier in the day but fetched after last sync
         # must still appear (e.g. TVer episodes with midnight broadcast dates).
+        # Timeless platforms always bypass this — unlike the days-based window
+        # below, incremental sync must surface new activity on old forum threads
+        # regardless of how old the original match is.
         q = q.filter(
             or_(Match.created_at > aware_since,
                 SourceItem.platform.in_(_TIMELESS_PLATFORMS))
@@ -146,7 +147,10 @@ def get_feed(
     needed = offset + limit
     relevant_rows = []
     scan_offset = 0
-    batch_size = max(200, needed)
+    # Bounded by _MAX_FEED_SCAN_ROWS so a large offset/limit can't force a single
+    # unbounded query — the loop guard below only stops *further* iterations,
+    # it doesn't limit how many rows the first one asks for.
+    batch_size = min(max(200, needed), _MAX_FEED_SCAN_ROWS)
     while len(relevant_rows) < needed and scan_offset < _MAX_FEED_SCAN_ROWS:
         batch = q.offset(scan_offset).limit(batch_size).all()
         if not batch:

@@ -9,21 +9,20 @@ from typing import Optional
 
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, contains_keyword
+from app.connectors.base import (
+    SCRAPE_USER_AGENT,
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    contains_keyword,
+    is_recent_search_result,
+)
 
 log = logging.getLogger(__name__)
 
 _YEAR_RE = re.compile(r'^(\d{4})年')
 _MONTH_DAY_RE = re.compile(r'(\d+)月(\d+)日')
 _TIME_RE = re.compile(r'(\d+):(\d+)')
-_MAX_INDEX_AGE = timedelta(days=31)
-_FUTURE_GRACE = timedelta(days=1)
-
-
-def _is_recent(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 
 def _parse_timestamp_value(val: object) -> Optional[datetime]:
@@ -102,7 +101,7 @@ def _parse_tver_date(content: dict) -> Optional[datetime]:
 
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "User-Agent": SCRAPE_USER_AGENT,
     "Accept-Language": "ja,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
@@ -236,7 +235,7 @@ class TVERConnector(BaseConnector):
                     if not published_at:
                         log.debug("Skipping TVer item without trustworthy date: %s", ep_id)
                         continue
-                    if not _is_recent(published_at):
+                    if not is_recent_search_result(published_at):
                         log.debug("Skipping stale TVer item %s dated %s", ep_id, published_at)
                         continue
 

@@ -23,6 +23,7 @@ from app.connectors.base import (
     SourceItemCreate,
     build_google_news_jina_items,
     build_google_news_public_proxy_items,
+    clean_html_text,
     contains_keyword,
     fetch_google_news_direct,
     fetch_google_news_via_public_proxy,
@@ -40,8 +41,6 @@ from app.connectors.base import (
 from app.source_health import record_jina_result
 
 log = logging.getLogger(__name__)
-
-_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _unwrap_bing_news_url(link: str) -> str:
@@ -61,14 +60,6 @@ def _is_bing_news_redirect(link: str) -> bool:
         (host == "bing.com" or host.endswith(".bing.com"))
         and parsed.path.endswith("/news/apiclick.aspx")
     )
-
-
-def _clean_html_fragment(value: str | None) -> str | None:
-    if not value:
-        return None
-    text = BeautifulSoup(value, "lxml").get_text(" ", strip=True)
-    cleaned = _WHITESPACE_RE.sub(" ", text).strip()
-    return cleaned or None
 
 
 def _extract_window_state(html: str) -> dict:
@@ -459,9 +450,9 @@ class AmebloConnector(_GNewsSiteConnector):
             if not item_id or item_id in seen:
                 continue
 
-            title = _clean_html_fragment(raw.get("entryTitle")) or ""
-            content = _clean_html_fragment(raw.get("entryContent"))
-            blog_title = _clean_html_fragment(raw.get("blogTitle"))
+            title = clean_html_text(raw.get("entryTitle")) or ""
+            content = clean_html_text(raw.get("entryContent"))
+            blog_title = clean_html_text(raw.get("blogTitle"))
             if not title:
                 continue
             if not contains_keyword(keyword, title, content, blog_title):

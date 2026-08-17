@@ -139,7 +139,7 @@ struct Platform {
             bg: Color(red: 0.9, green: 0.97, blue: 0.95),
             fg: Color(red: 0.1, green: 0.7, blue: 0.5),
             rawPlatformValues: ["note"],
-            usesStrictKeywordMatching: true, skipDateCutoff: false,
+            usesStrictKeywordMatching: false, skipDateCutoff: false,
             isMediaPlatform: false, subscribedByDefault: true,
             fetchRole: .deviceFallback
         ),

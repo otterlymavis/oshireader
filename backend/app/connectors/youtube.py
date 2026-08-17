@@ -10,10 +10,13 @@ import feedparser
 import httpx
 
 from app.connectors.base import (
+    SCRAPE_USER_AGENT,
+    SEARCH_RESULT_MAX_AGE,
     BaseConnector,
     CollectionMode,
     SourceItemCreate,
     contains_keyword,
+    is_recent_search_result,
     title_contains_keyword,
 )
 
@@ -24,14 +27,6 @@ _RELATIVE_RE = re.compile(
     r'(\d+)[\s\xa0\u3000]*(second|minute|hour|day|week|month|year|秒|分|時間|日|週間?|週|ヶ月|か月|年)'
 )
 _YTDATA_RE = re.compile(r"ytInitialData\s*=\s*({.+?});", re.S)
-_MAX_RESULT_AGE = timedelta(days=31)
-_FUTURE_GRACE = timedelta(days=1)
-
-
-def _is_recent(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _MAX_RESULT_AGE <= published <= now + _FUTURE_GRACE
 
 
 def _parse_youtube_relative(text: str) -> Optional[datetime]:
@@ -74,7 +69,7 @@ class YouTubeConnector(BaseConnector):
         self.api_key = api_key
 
     async def _fetch_api(self, keyword: str) -> list[SourceItemCreate]:
-        cutoff = datetime.now(timezone.utc) - _MAX_RESULT_AGE
+        cutoff = datetime.now(timezone.utc) - SEARCH_RESULT_MAX_AGE
         params = {
             "part": "snippet",
             "q": keyword,
@@ -104,7 +99,7 @@ class YouTubeConnector(BaseConnector):
             ):
                 continue
             published = datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00"))
-            if not _is_recent(published):
+            if not is_recent_search_result(published):
                 continue
             thumb = snippet.get("thumbnails", {}).get("medium", {}).get("url")
             payload = dict(raw)
@@ -129,7 +124,7 @@ class YouTubeConnector(BaseConnector):
 
     async def _fetch_scrape(self, keyword: str) -> list[SourceItemCreate]:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": SCRAPE_USER_AGENT,
             "Accept-Language": "ja,ja-JP;q=0.9,en;q=0.8",
         }
         url = f"https://www.youtube.com/results?search_query={keyword}"
@@ -187,7 +182,7 @@ class YouTubeConnector(BaseConnector):
                     if published_at is None:
                         continue
 
-                    if not _is_recent(published_at):
+                    if not is_recent_search_result(published_at):
                         continue
                     if not contains_keyword(keyword, title, desc, channel):
                         continue
@@ -249,7 +244,7 @@ class YouTubeConnector(BaseConnector):
             published = _parse_feed_date_if_present(entry)
             if published is None:
                 continue
-            if not _is_recent(published):
+            if not is_recent_search_result(published):
                 continue
             items.append(
                 SourceItemCreate(

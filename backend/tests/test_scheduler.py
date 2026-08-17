@@ -37,8 +37,10 @@ from app.ingestion.scheduler import (
     _queue_pending_notification,
     _search_terms_for,
     _term_is_due,
+    connector_fetch_timeout_seconds,
 )
 from app.connectors.base import SourceItemCreate
+from app.connectors.fivech import FiveChConnector
 from app.connectors.youtube import YouTubeConnector
 from app.connectors.twitter import TwitterConnector
 from app.models import (
@@ -193,6 +195,30 @@ class TestPruneOldItems:
             )
             assert count == 250, f"{platform} should not be pruned"
 
+    def test_prune_includes_community_platforms_when_requested(self, db):
+        term = WatchTerm(keyword="k3b", aliases=[])
+        db.add(term)
+        db.commit()
+
+        for platform in ("5ch", "girlschannel"):
+            _add_items(db, term, platform, 250)
+
+        _prune_old_items_with_limit(
+            db,
+            muted_per_term_limit=500,
+            match_per_term_platform_limit=200,
+            include_discussion_platforms=True,
+        )
+
+        for platform in ("5ch", "girlschannel"):
+            count = (
+                db.query(Match)
+                .join(SourceItem, SourceItem.id == Match.source_item_id)
+                .filter(SourceItem.platform == platform)
+                .count()
+            )
+            assert count == 200, f"{platform} should be pruned when explicitly included"
+
     def test_prune_no_longer_preserves_removed_togetter_source(self, db):
         term = WatchTerm(keyword="k3", aliases=[])
         db.add(term)
@@ -325,6 +351,7 @@ class TestFetchOne:
         c.PLATFORM = "mock"
         c.SUPPORTS_MEDIA_FILTER = True
         c.REPORTS_STATUS_TO_CLIENT = reports_status_to_client
+        c.MIN_FETCH_TIMEOUT_SECONDS = None
         if side_effect is not None:
             c.fetch = AsyncMock(side_effect=side_effect)
         else:
@@ -502,6 +529,7 @@ class TestFetchOne:
     async def test_returns_empty_list_on_timeout(self, caplog):
         connector = MagicMock()
         connector.PLATFORM = "mock"
+        connector.MIN_FETCH_TIMEOUT_SECONDS = None
 
         async def slow_fetch(_search_term, _mode):
             await asyncio.sleep(1)
@@ -538,6 +566,23 @@ class TestFetchOne:
 
         assert result == []
         connector.fetch.assert_not_awaited()
+
+
+class TestConnectorFetchTimeoutSeconds:
+    def test_5ch_floor_applies_via_connector_class_attribute(self):
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.connector_fetch_timeout_seconds = 8.0
+            assert connector_fetch_timeout_seconds(FiveChConnector()) == 35.0
+
+    def test_default_timeout_used_for_connectors_without_a_floor(self):
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.connector_fetch_timeout_seconds = 8.0
+            assert connector_fetch_timeout_seconds(YouTubeConnector(api_key="k")) == 8.0
+
+    def test_configured_timeout_wins_when_already_above_the_floor(self):
+        with patch("app.ingestion.scheduler.settings") as s:
+            s.connector_fetch_timeout_seconds = 60.0
+            assert connector_fetch_timeout_seconds(FiveChConnector()) == 60.0
 
 
 class TestConnectorBatches:

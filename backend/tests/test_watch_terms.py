@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
@@ -738,6 +738,28 @@ class TestUpdateWatchTerm:
         assert resp.status_code == 200
         assert resp.json()["notify_on_new"] is True
 
+    def test_update_explicit_null_clears_language_hint(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", language_hint="ja")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"language_hint": None})
+        assert resp.status_code == 200
+        assert resp.json()["language_hint"] is None
+        db_session.refresh(term)
+        assert term.language_hint is None
+
+    def test_update_omitted_field_leaves_language_hint_unchanged(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", language_hint="ja")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.patch(f"/api/watch-terms/{term.id}", json={"is_active": False})
+        assert resp.status_code == 200
+        assert resp.json()["language_hint"] == "ja"
+
     def test_update_aliases_triggers_poll(self, client, db_session):
         term = WatchTerm(keyword="Aiko", aliases=[])
         db_session.add(term)
@@ -978,6 +1000,59 @@ class TestUpdateWatchTerm:
 
         assert resp.status_code == 409
         mock_verify.assert_not_called()
+
+
+class TestTriggerNotification:
+    def test_unwraps_queued_items_preview_before_sending(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(PendingNotification(
+            watch_term_id=term.id,
+            new_count=2,
+            preview_item={
+                "items": [
+                    {
+                        "id": "note:1",
+                        "title": "First note",
+                        "url": "https://note.com/1",
+                        "published_at": "2026-08-01T00:00:00+00:00",
+                    },
+                    {
+                        "id": "note:2",
+                        "title": "Second note",
+                        "url": "https://note.com/2",
+                        "published_at": "2026-08-02T00:00:00+00:00",
+                    },
+                ]
+            },
+        ))
+        db_session.commit()
+
+        mock_send = AsyncMock(return_value=True)
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=mock_send):
+            resp = client.post(f"/api/watch-terms/{term.id}/notify")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"term_id": term.id, "keyword": "Aiko", "count": 2, "cleared": True}
+        mock_send.assert_awaited_once()
+        _, sent_term, count, preview = mock_send.await_args.args
+        assert sent_term.id == term.id
+        assert count == 2
+        assert "items" not in preview
+        assert preview["title"] in {"First note", "Second note"}
+        assert preview["url"] in {"https://note.com/1", "https://note.com/2"}
+
+    def test_returns_409_when_no_pending_content(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch("app.apns.apns_configured", return_value=True):
+            resp = client.post(f"/api/watch-terms/{term.id}/notify")
+
+        assert resp.status_code == 409
 
 
 class TestDeleteWatchTerm:

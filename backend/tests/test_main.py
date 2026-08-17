@@ -627,6 +627,46 @@ class TestAdminStats:
         assert health["active_notify_terms_without_verified_devices"] == 0
         assert health["active_notify_term_ids_without_verified_devices"] == []
 
+    def test_poller_health_device_count_queries_do_not_scale_with_term_count(self, client, db_session):
+        """Device-count queries must be O(1), not O(terms) — this endpoint is
+        polled by an external watchdog on a tight cadence."""
+        from sqlalchemy import event
+
+        for i in range(10):
+            secret = f"secret-{i}"
+            db_session.add_all([
+                WatchTerm(keyword=f"Term{i}", is_active=True, owner_device_secret=secret),
+                APNSDeviceToken(
+                    token=f"{i:064d}",
+                    environment="sandbox",
+                    device_secret=secret,
+                    is_verified=True,
+                ),
+            ])
+        db_session.commit()
+
+        engine = db_session.get_bind()
+        statements = []
+
+        def _capture(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _capture)
+        try:
+            r = client.get("/api/admin/poller-health")
+        finally:
+            event.remove(engine, "before_cursor_execute", _capture)
+
+        assert r.status_code == 200
+        device_token_queries = [s for s in statements if "apns_device_tokens" in s.lower()]
+        # 10 owner-scoped terms would cost 30 queries at 3-per-term; bulk aggregation
+        # keeps this fixed regardless of term count (plus 2 unrelated group-by
+        # queries the endpoint already issues for its environment breakdown).
+        assert len(device_token_queries) <= 10, (
+            f"expected O(1) device-count queries regardless of term count, "
+            f"got {len(device_token_queries)}: {device_token_queries}"
+        )
+
     def test_stats_includes_recent_backend_events(self, client, db_session):
         db_session.add(BackendEvent(
             kind="apns",
@@ -1268,6 +1308,49 @@ class TestAdminPoll:
         assert r.json() == {"status": "poll already running"}
 
 
+class TestAdminTriggerNotification:
+    def test_unwraps_queued_items_preview_before_sending(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", notify_on_new=True)
+        db_session.add(term)
+        db_session.flush()
+        db_session.add(PendingNotification(
+            watch_term_id=term.id,
+            new_count=2,
+            preview_item={
+                "items": [
+                    {
+                        "id": "note:1",
+                        "title": "First note",
+                        "url": "https://note.com/1",
+                        "published_at": "2026-08-01T00:00:00+00:00",
+                    },
+                    {
+                        "id": "note:2",
+                        "title": "Second note",
+                        "url": "https://note.com/2",
+                        "published_at": "2026-08-02T00:00:00+00:00",
+                    },
+                ]
+            },
+        ))
+        db_session.commit()
+
+        mock_send = AsyncMock(return_value=True)
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.send_new_match_notifications", new=mock_send):
+            r = client.post(f"/api/admin/notify/{term.id}")
+
+        assert r.status_code == 200
+        assert r.json() == {"term_id": term.id, "keyword": "Aiko", "count": 2, "cleared": True}
+        mock_send.assert_awaited_once()
+        _, sent_term, count, preview = mock_send.await_args.args
+        assert sent_term.id == term.id
+        assert count == 2
+        assert "items" not in preview
+        assert preview["title"] in {"First note", "Second note"}
+        assert preview["url"] in {"https://note.com/1", "https://note.com/2"}
+
+
 class TestAdminNotificationCanary:
     def test_canary_sends_synthetic_new_match_notification(self, client, db_session):
         term = WatchTerm(keyword="Aiko", is_active=True, notify_on_new=True)
@@ -1799,6 +1882,7 @@ class TestAdminTestFetch:
         )
         mock_connector = MagicMock()
         mock_connector.PLATFORM = "youtube"
+        mock_connector.MIN_FETCH_TIMEOUT_SECONDS = None
         mock_connector.fetch = AsyncMock(return_value=[mock_item])
 
         with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]):
@@ -1819,6 +1903,7 @@ class TestAdminTestFetch:
         )
         mock_connector = MagicMock()
         mock_connector.PLATFORM = "youtube"
+        mock_connector.MIN_FETCH_TIMEOUT_SECONDS = None
         mock_connector.fetch = AsyncMock(return_value=[mock_item])
 
         with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]):
@@ -1904,6 +1989,7 @@ class TestAdminTestFetch:
         )
         mock_connector = MagicMock()
         mock_connector.PLATFORM = "news"
+        mock_connector.MIN_FETCH_TIMEOUT_SECONDS = None
         mock_connector.fetch = AsyncMock(return_value=[matching, unrelated])
 
         with patch("app.ingestion.scheduler._build_connectors", return_value=[mock_connector]), \
