@@ -38,6 +38,7 @@ def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate
 def _mock_connector(platform: str, items: list) -> MagicMock:
     c = MagicMock()
     c.PLATFORM = platform
+    c.MIN_FETCH_TIMEOUT_SECONDS = None
     c.fetch = AsyncMock(return_value=items)
     return c
 
@@ -1431,6 +1432,7 @@ class TestIngestionNotifications:
 
         connector = MagicMock()
         connector.PLATFORM = "youtube"
+        connector.MIN_FETCH_TIMEOUT_SECONDS = None
         connector.fetch = fetch
         mock_notify = AsyncMock(side_effect=[RuntimeError("bad APNs key"), None, None])
         TestSession = sessionmaker(bind=db_engine)
@@ -1669,6 +1671,7 @@ class TestIngestionNotifications:
 
         connector = MagicMock()
         connector.PLATFORM = "youtube"
+        connector.MIN_FETCH_TIMEOUT_SECONDS = None
         connector.fetch = fetch
         TestSession = sessionmaker(bind=db_engine)
 
@@ -1735,6 +1738,7 @@ class TestIngestionNotifications:
 
         connector = MagicMock()
         connector.PLATFORM = "youtube"
+        connector.MIN_FETCH_TIMEOUT_SECONDS = None
         connector.fetch = fetch
         mock_notify = AsyncMock(return_value=True)
         TestSession = sessionmaker(bind=db_engine)
@@ -2256,6 +2260,7 @@ class TestIngestionConnectorErrorIsolation:
 
         bad_connector = MagicMock()
         bad_connector.PLATFORM = "bad"
+        bad_connector.MIN_FETCH_TIMEOUT_SECONDS = None
         bad_connector.fetch = AsyncMock(side_effect=RuntimeError("network failed"))
 
         good_item = _make_item(platform="youtube", item_id="ok1")
@@ -2275,6 +2280,7 @@ class TestIngestionConnectorErrorIsolation:
 
         bad = MagicMock()
         bad.PLATFORM = "bad"
+        bad.MIN_FETCH_TIMEOUT_SECONDS = None
         bad.fetch = AsyncMock(side_effect=RuntimeError("timeout"))
 
         await _run_poll(db_engine, [bad])

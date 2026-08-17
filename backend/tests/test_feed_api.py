@@ -196,6 +196,33 @@ class TestFeedQueryValidation:
 
 
 class TestFeedAPI:
+    def test_pagination_scan_is_bounded_by_max_scan_rows(self, client, db_session, monkeypatch):
+        """A large offset/limit must not force a single unbounded query past
+        _MAX_FEED_SCAN_ROWS — the loop guard only stops further iterations,
+        it doesn't by itself cap how many rows the first one asks for."""
+        from sqlalchemy.orm import Query as SAQuery
+
+        monkeypatch.setattr("app.api.feed._MAX_FEED_SCAN_ROWS", 50)
+        term = _make_term(db_session)
+        item = _make_item(db_session)
+        _make_match(db_session, term, item)
+
+        seen_limits = []
+        original_limit = SAQuery.limit
+
+        def spy_limit(self, n):
+            seen_limits.append(n)
+            return original_limit(self, n)
+
+        with patch.object(SAQuery, "limit", spy_limit):
+            resp = client.get("/api/feed/?offset=100000&limit=200")
+
+        assert resp.status_code == 200
+        assert seen_limits, "expected the feed query to call .limit(...)"
+        assert all(n <= 50 for n in seen_limits), (
+            f"query requested more rows than the scan cap allows: {seen_limits}"
+        )
+
     def test_feed_empty(self, client):
         resp = client.get("/api/feed/")
         assert resp.status_code == 200

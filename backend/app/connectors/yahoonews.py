@@ -7,7 +7,6 @@ from urllib.parse import quote, quote_plus
 
 import feedparser
 import httpx
-from bs4 import BeautifulSoup
 
 from app.connectors.base import (
     BaseConnector,
@@ -17,6 +16,7 @@ from app.connectors.base import (
     SourceItemCreate,
     build_google_news_jina_items,
     build_google_news_public_proxy_items,
+    clean_html_text,
     fetch_google_news_via_public_proxy,
     fetch_search_rss_via_proxy,
     is_usable_jina_reader_response,
@@ -29,16 +29,6 @@ from app.connectors.base import (
 from app.source_health import record_jina_result
 
 log = logging.getLogger(__name__)
-
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def _clean_html_summary(value: str | None) -> str | None:
-    if not value:
-        return None
-    text = BeautifulSoup(value, "lxml").get_text(" ", strip=True)
-    cleaned = _WHITESPACE_RE.sub(" ", text).strip()
-    return cleaned or None
 
 
 class YahooNewsConnector(BaseConnector):
@@ -157,7 +147,7 @@ class YahooNewsConnector(BaseConnector):
                     published_at=published,
                     media_type="article",
                     title=title,
-                    content_text=entry.get("summary") or None,
+                    content_text=clean_html_text(entry.get("summary")),
                     raw_payload={"keyword": keyword, "source": source, "date_parsed": True},
                 )
             )

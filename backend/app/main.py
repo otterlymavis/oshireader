@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import Headers
 from starlette.middleware.gzip import GZipResponder
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -45,6 +45,7 @@ from app.ingestion.scheduler import (
     create_poll_task,
     poll_once,
     prune_storage,
+    resolve_sendable_pending_preview,
     scheduler,
     start_scheduler,
 )
@@ -289,22 +290,75 @@ def _server_apns_environment() -> str:
     return "sandbox" if settings.apns_use_sandbox else "production"
 
 
-def _notification_device_counts(db: Session, term: WatchTerm) -> dict:
-    query = db.query(APNSDeviceToken)
-    if term.owner_device_secret:
-        query = query.filter(APNSDeviceToken.device_secret == term.owner_device_secret)
-    total = query.count()
-    verified = query.filter(APNSDeviceToken.is_verified == True).count()  # noqa: E712
-    verified_for_server_environment = query.filter(
-        APNSDeviceToken.is_verified == True,  # noqa: E712
-        APNSDeviceToken.environment == _server_apns_environment(),
-    ).count()
-    return {
-        "owner_scoped": bool(term.owner_device_secret),
-        "notification_devices": total,
-        "notification_verified_devices": verified,
-        "notification_verified_devices_for_server_environment": verified_for_server_environment,
+def _bulk_notification_device_counts(db: Session, terms: list[WatchTerm]) -> dict[int, dict]:
+    """Compute _notification_device_counts-equivalent stats for every term in
+    two queries total instead of 3 per term.
+
+    Terms without an owner_device_secret all share the same unscoped counts
+    (computed once); owner-scoped terms are aggregated in a single grouped
+    query instead of 3 queries per term.
+    """
+    server_env = _server_apns_environment()
+    verified_case = case((APNSDeviceToken.is_verified == True, 1), else_=0)  # noqa: E712
+    verified_for_env_case = case(
+        (
+            (APNSDeviceToken.is_verified == True) & (APNSDeviceToken.environment == server_env),  # noqa: E712
+            1,
+        ),
+        else_=0,
+    )
+
+    unscoped_counts = {
+        "owner_scoped": False,
+        "notification_devices": db.query(APNSDeviceToken).count(),
+        "notification_verified_devices": db.query(APNSDeviceToken)
+        .filter(APNSDeviceToken.is_verified == True)  # noqa: E712
+        .count(),
+        "notification_verified_devices_for_server_environment": db.query(APNSDeviceToken)
+        .filter(
+            APNSDeviceToken.is_verified == True,  # noqa: E712
+            APNSDeviceToken.environment == server_env,
+        )
+        .count(),
     }
+
+    owner_secrets = {term.owner_device_secret for term in terms if term.owner_device_secret}
+    scoped_counts_by_secret: dict[str, dict] = {}
+    if owner_secrets:
+        rows = (
+            db.query(
+                APNSDeviceToken.device_secret,
+                func.count(APNSDeviceToken.token),
+                func.sum(verified_case),
+                func.sum(verified_for_env_case),
+            )
+            .filter(APNSDeviceToken.device_secret.in_(owner_secrets))
+            .group_by(APNSDeviceToken.device_secret)
+            .all()
+        )
+        for secret, total, verified, verified_for_env in rows:
+            scoped_counts_by_secret[secret] = {
+                "owner_scoped": True,
+                "notification_devices": total,
+                "notification_verified_devices": int(verified or 0),
+                "notification_verified_devices_for_server_environment": int(verified_for_env or 0),
+            }
+
+    result: dict[int, dict] = {}
+    for term in terms:
+        if term.owner_device_secret:
+            result[term.id] = scoped_counts_by_secret.get(
+                term.owner_device_secret,
+                {
+                    "owner_scoped": True,
+                    "notification_devices": 0,
+                    "notification_verified_devices": 0,
+                    "notification_verified_devices_for_server_environment": 0,
+                },
+            )
+        else:
+            result[term.id] = unscoped_counts
+    return result
 
 
 def _term_verified_device_count(db: Session, term: WatchTerm) -> int:
@@ -1125,7 +1179,7 @@ async def admin_trigger_notification(
     if pending is None:
         raise HTTPException(409, {"code": "no_pending_content", "message": "No pending notification content to deliver"})
     count = pending.new_count
-    preview = pending.preview_item
+    preview = resolve_sendable_pending_preview(db, pending)
     if count <= 0:
         db.delete(pending)
         db.commit()
@@ -1303,8 +1357,9 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
     active_notify_without_verified_devices: list[dict] = []
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
+    device_counts_by_term_id = _bulk_notification_device_counts(db, terms)
     for term in terms:
-        device_counts = _notification_device_counts(db, term)
+        device_counts = device_counts_by_term_id[term.id]
         row = {
             "id": term.id,
             "keyword": term.keyword,
@@ -1465,8 +1520,9 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
     active_notify_without_verified_devices: list[dict] = []
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
+    device_counts_by_term_id = _bulk_notification_device_counts(db, terms)
     for term in terms:
-        device_counts = _notification_device_counts(db, term)
+        device_counts = device_counts_by_term_id[term.id]
         row = {
             "id": term.id,
             "keyword": term.keyword,

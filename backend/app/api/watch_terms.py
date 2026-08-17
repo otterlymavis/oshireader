@@ -7,9 +7,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import AuthContext, require_admin_or_device_auth
+from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_auth
 from app.database import get_db
-from app.ingestion.scheduler import queue_poll
+from app.ingestion.scheduler import queue_poll, resolve_sendable_pending_preview
 from app.models import APNSDeviceToken, Match, PendingNotification, WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
@@ -190,10 +190,8 @@ async def update_term(
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
-    term = db.get(WatchTerm, term_id)
-    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
-        raise HTTPException(404, "Watch term not found")
-    updates = body.model_dump(exclude_none=True)
+    term = get_owned_watch_term(db, term_id, auth)
+    updates = body.model_dump(exclude_unset=True)
     _require_nonempty_source_selection(
         updates.get("source_mode", term.source_mode),
         updates.get("selected_platforms", term.selected_platforms or []),
@@ -246,9 +244,7 @@ async def trigger_notification(
     """Immediately push a notification for this term to the owner's devices."""
     from app.apns import apns_configured, send_new_match_notifications
 
-    term = db.get(WatchTerm, term_id)
-    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
-        raise HTTPException(404, "Watch term not found")
+    term = get_owned_watch_term(db, term_id, auth)
     if not term.notify_on_new:
         raise HTTPException(409, {"code": "notifications_disabled", "message": "Enable notifications for this term first"})
     if not apns_configured():
@@ -258,7 +254,7 @@ async def trigger_notification(
     if pending is None:
         raise HTTPException(409, {"code": "no_pending_content", "message": "No pending notification content to deliver"})
     count = pending.new_count
-    preview = pending.preview_item
+    preview = resolve_sendable_pending_preview(db, pending)
     if count <= 0:
         db.delete(pending)
         db.commit()
@@ -278,9 +274,7 @@ def clear_notification(
     db: Session = Depends(get_db),
 ) -> None:
     """Clear a pending notification for this term without delivering it."""
-    term = db.get(WatchTerm, term_id)
-    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
-        raise HTTPException(404, "Watch term not found")
+    term = get_owned_watch_term(db, term_id, auth)
     pending = db.get(PendingNotification, term_id)
     if pending is not None:
         db.delete(pending)
@@ -293,9 +287,7 @@ def delete_term(
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
-    term = db.get(WatchTerm, term_id)
-    if not term or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
-        raise HTTPException(404, "Watch term not found")
+    term = get_owned_watch_term(db, term_id, auth)
     db.delete(term)
     db.flush()
     db.execute(text(

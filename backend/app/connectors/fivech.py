@@ -17,6 +17,7 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    is_recent_search_result,
     title_contains_keyword,
 )
 from app.config import settings
@@ -62,8 +63,6 @@ _DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS = 24.0
 _DIRECT_EXTRA_SCAN_CURSOR_STEP = 32
 _DIRECT_EXTRA_SCAN_OFFSET_LIMIT = 512
 _ITEST_FETCH_TIMEOUT_SECONDS = 5.0
-_FIVECH_INDEX_MAX_AGE = timedelta(days=31)
-_FIVECH_INDEX_FUTURE_GRACE = timedelta(days=1)
 _DIRECT_BBSMENU_URL = "http://menu.2ch.sc/bbsmenu.html"
 _DIRECT_BBSMENU_CACHE_TTL_SECONDS = 3600.0
 
@@ -338,15 +337,12 @@ def _parse_itest_datetime(value: str) -> datetime | None:
     return local.astimezone(timezone.utc)
 
 
-def _is_recent_index_result(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _FIVECH_INDEX_MAX_AGE <= published <= now + _FIVECH_INDEX_FUTURE_GRACE
-
-
 class FiveChConnector(BaseConnector):
     PLATFORM = "5ch"
     SUPPORTS_MEDIA_FILTER = False
+    # The itest.5ch.io + proxy + jina fallback chain needs longer than the
+    # scheduler's default fetch deadline.
+    MIN_FETCH_TIMEOUT_SECONDS = 35.0
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
@@ -475,7 +471,7 @@ class FiveChConnector(BaseConnector):
             if (
                 isinstance(item, SourceItemCreate)
                 and (item.raw_payload or {}).get("date_source") == "dat_latest_post"
-                and _is_recent_index_result(item.published_at)
+                and is_recent_search_result(item.published_at)
             )
         ]
 

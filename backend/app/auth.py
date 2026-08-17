@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import APNSDeviceToken
+from app.models import APNSDeviceToken, WatchTerm
 
 
 @dataclass(frozen=True)
@@ -103,3 +103,11 @@ def require_admin_or_device_auth(
         detail="Invalid or missing admin or device credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def get_owned_watch_term(db: Session, term_id: int, auth: AuthContext) -> WatchTerm:
+    """Fetch a WatchTerm the caller is allowed to touch, or raise 404."""
+    term = db.get(WatchTerm, term_id)
+    if term is None or (not auth.is_admin and term.owner_device_secret != auth.device_secret):
+        raise HTTPException(status_code=404, detail="Watch term not found")
+    return term

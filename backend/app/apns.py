@@ -284,6 +284,7 @@ async def revalidate_unverified_devices(db: Session) -> int:
             device.is_verified = True
             device.verified_at = now
             verified += 1
+    db.commit()
     record_backend_event(
         db,
         "apns_registration",

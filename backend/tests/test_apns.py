@@ -616,6 +616,31 @@ class TestDeviceRevalidation:
         assert device.verified_at is not None
 
     @pytest.mark.asyncio
+    async def test_device_verification_survives_backend_event_recording_failure(self, db_session):
+        """record_backend_event intentionally swallows its own failures via a
+        full session rollback — device verification must already be committed
+        before that call, or a transient event-logging failure silently
+        discards real verification state."""
+        device = _device("3" * 64)
+        device.is_verified = False
+        device.verification_attempted_at = datetime.now(timezone.utc) - timedelta(hours=7)
+        db_session.add(device)
+        db_session.commit()
+
+        def failing_record_backend_event(db, *args, **kwargs):
+            db.rollback()
+
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns.validate_device_registration", new=AsyncMock(return_value=True)), \
+             patch("app.apns.record_backend_event", side_effect=failing_record_backend_event):
+            verified = await revalidate_unverified_devices(db_session)
+
+        assert verified == 1
+        db_session.refresh(device)
+        assert device.is_verified is True
+        assert device.verified_at is not None
+
+    @pytest.mark.asyncio
     async def test_throttles_recent_failed_verification(self, db_session):
         device = _device("2" * 64)
         device.is_verified = False

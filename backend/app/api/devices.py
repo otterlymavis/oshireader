@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import secrets
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from app.models import APNSDeviceToken, BackendEvent, WatchTerm
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
+log = logging.getLogger(__name__)
 
 _BACKGROUND_REFRESH_MIN_INTERVAL = timedelta(minutes=170)
 _BACKGROUND_REFRESH_ATTEMPT_TTL = timedelta(minutes=180)
@@ -321,13 +323,31 @@ async def request_device_background_refresh(body: APNSDeviceTestPush, db: Sessio
         return {"status": "poll throttled"}
     poll_task = ingestion_scheduler.create_poll_task()
     try:
-        await asyncio.wait_for(
-            asyncio.shield(poll_task),
-            timeout=_BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS,
-        )
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(poll_task),
+                timeout=_BACKGROUND_REFRESH_POLL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            # The poll can finish on the same event-loop turn that wait_for's
+            # deadline expires. In that boundary race, re-raise the completed
+            # task's exception (if any) instead of reporting a false timeout.
+            if poll_task.done():
+                poll_task.result()
+            else:
+                return {"status": "poll still running (request timed out)"}
         return {"status": "poll completed"}
-    except asyncio.TimeoutError:
-        return {"status": "poll still running (request timed out)"}
+    except Exception as exc:
+        log.exception("Device-triggered background refresh failed")
+        record_backend_event(
+            db,
+            "poll",
+            "failed",
+            "Device-triggered background refresh failed",
+            {"error": str(exc)},
+        )
+        db.commit()
+        return {"status": "poll failed"}
 
 
 @router.delete("/apns-token/{token}", status_code=204)
@@ -345,7 +365,17 @@ def delete_apns_token(
 
 @router.get("/apns-tokens", response_model=list[APNSDeviceTokenOut])
 def list_apns_tokens(_: None = Depends(require_admin_auth), db: Session = Depends(get_db)):
-    return db.query(APNSDeviceToken).order_by(APNSDeviceToken.last_seen_at.desc()).all()
+    devices = db.query(APNSDeviceToken).order_by(APNSDeviceToken.last_seen_at.desc()).all()
+    return [
+        APNSDeviceTokenOut(
+            token=device.token[-8:],
+            environment=device.environment,
+            device_id=device.device_id[-8:] if device.device_id else None,
+            last_seen_at=device.last_seen_at,
+            is_verified=device.is_verified,
+        )
+        for device in devices
+    ]
 
 
 @router.delete("/apns-tokens/unverified", status_code=200)

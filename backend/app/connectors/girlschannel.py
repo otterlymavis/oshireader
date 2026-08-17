@@ -14,6 +14,7 @@ from app.connectors.base import (
     CollectionMode,
     SourceItemCreate,
     contains_keyword,
+    is_recent_search_result,
     parse_feed_date,
     title_contains_keyword,
 )
@@ -39,14 +40,6 @@ HEADERS = {
     "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://girlschannel.net/",
 }
-_MAX_INDEX_AGE = timedelta(days=31)
-_FUTURE_GRACE = timedelta(days=1)
-
-
-def _is_recent(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 
 def _parse_jp_date(text: str) -> datetime | None:
@@ -168,7 +161,7 @@ class GirlsChannelConnector(BaseConnector):
             # every poll, or undated threads would pin themselves to the top forever.
             if not published:
                 continue
-            if not _is_recent(published):
+            if not is_recent_search_result(published):
                 continue
 
             items.append(
@@ -224,7 +217,7 @@ class GirlsChannelConnector(BaseConnector):
             published = parse_feed_date(entry)
             if published is None:
                 continue
-            if not _is_recent(published):
+            if not is_recent_search_result(published):
                 continue
             seen.add(item_id)
             items.append(

@@ -7,12 +7,14 @@ import feedparser
 import httpx
 
 from app.connectors.base import (
+    GOOGLE_NEWS_HEADERS,
+    SCRAPE_USER_AGENT,
     BaseConnector,
     CollectionMode,
-    GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
     build_google_news_jina_items,
     fetch_search_rss_via_proxy,
+    is_recent_search_result,
     parse_feed_date,
     title_contains_keyword,
 )
@@ -20,16 +22,8 @@ from app.connectors.base import (
 log = logging.getLogger(__name__)
 
 _HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "User-Agent": SCRAPE_USER_AGENT,
 }
-_MAX_INDEX_AGE = timedelta(days=31)
-_FUTURE_GRACE = timedelta(days=1)
-
-
-def _is_recent(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 # Curated public RSS feeds for the generic News source.
 #
@@ -68,7 +62,7 @@ class RSSConnector(BaseConnector):
                     published = parse_feed_date(entry)
                     if published is None:
                         continue
-                    if not _is_recent(published):
+                    if not is_recent_search_result(published):
                         continue
                     thumb = None
                     for enc in entry.get("enclosures", []):
@@ -160,7 +154,7 @@ class RSSConnector(BaseConnector):
             published = parse_feed_date(entry)
             if published is None:
                 continue
-            if not _is_recent(published):
+            if not is_recent_search_result(published):
                 continue
             seen.add(item_id)
             items.append(SourceItemCreate(
