@@ -24,8 +24,13 @@ Primary scheduled monitor:
 Manual worker health check:
 
 ```sh
-curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
+curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
 ```
+
+`notifications` and `diagnostics` are only included in the response when the
+request presents the admin bearer token — an unauthenticated request only
+returns the top-level `status`/`healthy` fields.
 
 Healthy output must include:
 
@@ -97,7 +102,8 @@ curl -i https://oshireader.onrender.com/api/admin/poller-health \
 Then verify the Worker:
 
 ```sh
-curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
+curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
 ```
 
 The Worker health check should report `status: ok`, `healthy: true`, no pending
