@@ -268,12 +268,14 @@ class LocalDB: ObservableObject {
         }
         let originalCount = self.feedItems.count
         self.feedItems.removeAll { item in
-            guard Platform.forRawValue(item.platform)?.usesStrictKeywordMatching == true,
-                  !item.watch_term_keyword.isEmpty else {
+            guard !item.watch_term_keyword.isEmpty else {
                 return false
             }
             guard let term = termsByKeyword[item.watch_term_keyword] else {
                 return true
+            }
+            guard Platform.forRawValue(item.platform)?.usesStrictKeywordMatching == true else {
+                return false
             }
             let candidates = [term.keyword] + term.aliases
             return !candidates.contains(where: { self.matchesKeyword(item: item, kw: $0) })
