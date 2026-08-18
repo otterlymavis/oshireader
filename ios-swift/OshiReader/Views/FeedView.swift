@@ -403,7 +403,7 @@ struct FeedView: View {
                     
                     NavigationStack {
                         if let item = selectedItem {
-                            ReaderView(feedItem: item)
+                            ReaderView(feedItem: item, siblingItems: cachedVisibleItems, onNavigate: { selectedItem = $0 })
                                 .id(item.id)
                         } else {
                             VStack(spacing: 16) {
@@ -676,7 +676,7 @@ struct FeedView: View {
                                     hidePostButton(for: item)
                                 }
                             } else {
-                                NavigationLink(destination: ReaderView(feedItem: item)) {
+                                NavigationLink(destination: ReaderView(feedItem: item, siblingItems: cachedVisibleItems)) {
                                     FeedCard(item: item, isSaved: savedIds.contains(item.id), theme: theme)
                                 }
                                 .buttonStyle(PlainButtonStyle())

@@ -18,6 +18,12 @@ enum ReaderWebLoadState {
 
 struct ReaderView: View {
     let feedItem: FeedItem
+    /// The ordered list `feedItem` was opened from (e.g. the current feed page).
+    /// Empty means "no sibling navigation" — prev/next controls stay hidden.
+    let siblingItems: [FeedItem]
+    /// Lets a split-view parent keep its own selection in sync when the user
+    /// moves between siblings from inside the reader instead of the list.
+    var onNavigate: ((FeedItem) -> Void)? = nil
 
     @StateObject private var db = LocalDB.shared
     @StateObject private var theme = ThemeManager.shared
@@ -26,6 +32,7 @@ struct ReaderView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
+    @State private var currentItem: FeedItem
     @State private var readerMode: Bool
     @State private var readerTheme: AppThemeMode = .light
     @State private var fontSize: CGFloat = 16.0
@@ -44,8 +51,11 @@ struct ReaderView: View {
     @State private var isSigningIntoX = false
     @State private var showOpenInBrowserBanner = false
 
-    init(feedItem: FeedItem) {
+    init(feedItem: FeedItem, siblingItems: [FeedItem] = [], onNavigate: ((FeedItem) -> Void)? = nil) {
         self.feedItem = feedItem
+        self.siblingItems = siblingItems
+        self.onNavigate = onNavigate
+        _currentItem = State(initialValue: feedItem)
         _readerMode = State(initialValue: Self.initialReaderMode(for: feedItem))
         _isTranslated = State(initialValue: UserDefaults.standard.bool(forKey: "auto_translate_reader") && !Self.usesSystemSafari(for: feedItem))
     }
@@ -62,7 +72,7 @@ struct ReaderView: View {
     }
 
     var originalPageUrl: URL? {
-        guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform) else { return nil }
+        guard let normalized = normalizedReaderUrl(currentItem.url, platform: currentItem.platform) else { return nil }
         return URL(string: normalized)
     }
 
@@ -71,7 +81,7 @@ struct ReaderView: View {
             return URL(string: "https://x.com/login")
         }
         guard let originalUrl = originalPageUrl else { return nil }
-        if isTranslated, !Self.usesSystemSafari(for: feedItem) {
+        if isTranslated, !Self.usesSystemSafari(for: currentItem) {
             let targetLang: String
             switch i18n.lang {
             case "ja": targetLang = "ja"
@@ -89,15 +99,40 @@ struct ReaderView: View {
     }
 
     var isSaved: Bool {
-        db.savedPages.contains(where: { $0.id == feedItem.id })
+        db.savedPages.contains(where: { $0.id == currentItem.id })
+    }
+
+    var currentSiblingIndex: Int? {
+        siblingItems.firstIndex(where: { $0.id == currentItem.id })
+    }
+
+    var previousSiblingItem: FeedItem? {
+        guard let index = currentSiblingIndex, index > 0 else { return nil }
+        return siblingItems[index - 1]
+    }
+
+    var nextSiblingItem: FeedItem? {
+        guard let index = currentSiblingIndex, index + 1 < siblingItems.count else { return nil }
+        return siblingItems[index + 1]
+    }
+
+    func navigate(to item: FeedItem) {
+        currentItem = item
+        readerMode = Self.initialReaderMode(for: item)
+        isTranslated = UserDefaults.standard.bool(forKey: "auto_translate_reader") && !Self.usesSystemSafari(for: item)
+        isSigningIntoX = false
+        showSignInBanner = false
+        showOpenInBrowserBanner = false
+        onNavigate?(item)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if let url = targetUrl {
                 ZStack {
-                    if Self.usesSystemSafari(for: feedItem) {
+                    if Self.usesSystemSafari(for: currentItem) {
                         SafariReaderView(url: url)
+                            .id(url)
                             .background(bgColor)
                             .onAppear {
                                 webLoadState = .loaded
@@ -105,8 +140,8 @@ struct ReaderView: View {
                     } else {
                         WebViewHelper(
                             url: url,
-                            cacheId: feedItem.id,
-                            platform: feedItem.platform,
+                            cacheId: currentItem.id,
+                            platform: currentItem.platform,
                             themeMode: readerTheme,
                             fontSize: fontSize,
                             fontFamilyCSS: appearance.readerFontFamilyCSS,
@@ -140,7 +175,7 @@ struct ReaderView: View {
                             },
                             onSelectedImages: { urls in saveSelectedImages(urls) },
                             onContentBlocked: {
-                                if feedItem.platform == "twitter" {
+                                if currentItem.platform == "twitter" {
                                     if !isSigningIntoX { showSignInBanner = true }
                                 } else {
                                     showOpenInBrowserBanner = true
@@ -150,7 +185,7 @@ struct ReaderView: View {
                         .background(bgColor)
                     }
 
-                    if !Self.usesSystemSafari(for: feedItem), webLoadState != .loaded {
+                    if !Self.usesSystemSafari(for: currentItem), webLoadState != .loaded {
                         readerLoadStateOverlay
                             .allowsHitTesting(webLoadState == .failed)
                     }
@@ -171,16 +206,38 @@ struct ReaderView: View {
                     .foregroundColor(theme.colors.textMuted)
             }
 
-            if !Self.usesSystemSafari(for: feedItem) {
+            if !Self.usesSystemSafari(for: currentItem) {
                 readerControlBar
             }
         }
         .background(bgColor)
-        .navigationTitle(feedItem.title ?? i18n.t("readerTitle"))
+        .navigationTitle(currentItem.title ?? i18n.t("readerTitle"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItemGroup(placement: .navigationBarLeading) {
+                if !siblingItems.isEmpty {
+                    Button {
+                        if let previousSiblingItem { navigate(to: previousSiblingItem) }
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(previousSiblingItem == nil)
+                    .accessibilityLabel(i18n.t("readerPreviousArticle"))
+                    .accessibilityIdentifier("reader.previousArticleButton")
+
+                    Button {
+                        if let nextSiblingItem { navigate(to: nextSiblingItem) }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(nextSiblingItem == nil)
+                    .accessibilityLabel(i18n.t("readerNextArticle"))
+                    .accessibilityIdentifier("reader.nextArticleButton")
+                }
+            }
+
             ToolbarItem(placement: .navigationBarTrailing) {
-                if !Self.usesSystemSafari(for: feedItem) {
+                if !Self.usesSystemSafari(for: currentItem) {
                     Button {
                         isTranslated.toggle()
                     } label: {
@@ -193,7 +250,7 @@ struct ReaderView: View {
 
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    _ = db.toggleSaved(item: feedItem)
+                    _ = db.toggleSaved(item: currentItem)
                 } label: {
                     Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                         .foregroundColor(theme.colors.primary)
@@ -202,7 +259,7 @@ struct ReaderView: View {
             }
 
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if !Self.usesSystemSafari(for: feedItem) {
+                if !Self.usesSystemSafari(for: currentItem) {
                     if isSavingSelectedImages {
                         ProgressView().tint(theme.colors.primary)
                     } else if isSelectingImages {
@@ -276,7 +333,7 @@ struct ReaderView: View {
         .onAppear {
             readerTheme = theme.mode
             fontSize = appearance.readerFontSize
-            if UserDefaults.standard.bool(forKey: "auto_translate_reader"), !Self.usesSystemSafari(for: feedItem) {
+            if UserDefaults.standard.bool(forKey: "auto_translate_reader"), !Self.usesSystemSafari(for: currentItem) {
                 isTranslated = true
             }
         }
