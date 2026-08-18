@@ -296,7 +296,7 @@ struct ReaderView: View {
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
-                if let url = targetUrl {
+                if let url = originalPageUrl {
                     ShareLink(item: url) {
                         Image(systemName: "square.and.arrow.up")
                             .foregroundColor(theme.colors.primary)
@@ -766,6 +766,12 @@ struct WebViewHelper: UIViewRepresentable {
                 }
             }
         }
+    }
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "oshireader")
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
     }
 
     private func styleInjectionJS() -> String {
