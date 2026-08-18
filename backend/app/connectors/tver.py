@@ -106,6 +106,8 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+_DETAIL_FETCH_CONCURRENCY = 4
+
 
 class TVERConnector(BaseConnector):
     PLATFORM = "tver"
@@ -184,6 +186,12 @@ class TVERConnector(BaseConnector):
                 log.warning("TVer response JSON parse failed: %s", exc)
                 return []
 
+            # Bound concurrent detail lookups so a broad keyword can't burst up
+            # to 25 simultaneous requests against statics.tver.jp from Render's
+            # single shared egress IP (this pattern mirrors fivech.py's
+            # _gather_limited, which exists for the same reason).
+            detail_fetch_semaphore = asyncio.Semaphore(_DETAIL_FETCH_CONCURRENCY)
+
             async def _process(ep: dict) -> Optional[SourceItemCreate]:
                 try:
                     content = ep.get("content") or ep.get("episode") or ep
@@ -225,17 +233,26 @@ class TVERConnector(BaseConnector):
                     # shows up in the per-episode detail description (e.g. "吉沢亮に
                     # クレーム?"). Fetch that detail whenever the list-level fields
                     # don't already confirm the match, or when we still need a date.
+                    detail_description = None
+                    detail_author = None
                     if not published_at or not contains_keyword(keyword, title, description, author, series_title):
-                        detail = await self._fetch_episode_detail(client, str(ep_id))
+                        async with detail_fetch_semaphore:
+                            detail = await self._fetch_episode_detail(client, str(ep_id))
                         if detail:
-                            if not description:
-                                description = detail.get("description")
+                            detail_description = detail.get("description")
+                            detail_author = detail.get("broadcastProviderLabel") or detail.get("productionProviderLabel")
                             if not published_at:
                                 published_at = _parse_tver_date(detail)
                                 date_source = "episode_detail"
 
-                    if not contains_keyword(keyword, title, description, author, series_title):
+                    # Check the list-level fields together with the detail-only
+                    # ones rather than replacing one with the other — a non-empty
+                    # but non-matching list description must not shadow a
+                    # genuinely matching detail description (or vice versa).
+                    if not contains_keyword(keyword, title, description, detail_description, author, detail_author, series_title):
                         return None
+                    if detail_description:
+                        description = detail_description
                     if not published_at:
                         log.debug("Skipping TVer item without trustworthy date: %s", ep_id)
                         return None
