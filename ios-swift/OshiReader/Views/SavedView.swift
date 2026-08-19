@@ -49,7 +49,6 @@ struct SavedView: View {
                                     selectedPage = db.savedPages.first(where: { $0.id == item.id })
                                 }
                             )
-                            .id(page.id)
                         } else {
                             VStack(spacing: 16) {
                                 Text("📂")

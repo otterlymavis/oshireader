@@ -84,7 +84,6 @@ struct SearchView: View {
                                 siblingItems: selectedLinks.map(feedItem(for:)),
                                 onNavigate: { selectedItem = $0 }
                             )
-                            .id(item.id)
                         } else {
                             emptyReaderPrompt
                         }
