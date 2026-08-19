@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     refresh_premium_interval_minutes: int = 180
     inactive_poll_after_days: int = 30
     retention_days: int = 30
+    max_watch_terms_per_device: int = 50
     notification_freshness_window_minutes: int = 120
     orphaned_notification_grace_minutes: int = 60
     pending_notification_stale_after_days: int = 7

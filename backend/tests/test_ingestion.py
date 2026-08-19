@@ -2546,23 +2546,23 @@ class TestIngestionPruning:
         db_session.add(term)
         db_session.commit()
 
-        self._seed_items(db_session, term, "youtube", 205)
+        self._seed_items(db_session, term, "youtube", 105)
         _prune_old_items(db_session)
 
         db_session.expire_all()
-        assert db_session.query(Match).count() == 200
-        assert db_session.query(SourceItem).count() == 200
+        assert db_session.query(Match).count() == 100
+        assert db_session.query(SourceItem).count() == 100
 
     def test_does_not_prune_at_or_below_limit(self, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)
         db_session.commit()
 
-        self._seed_items(db_session, term, "youtube", 200)
+        self._seed_items(db_session, term, "youtube", 100)
         _prune_old_items(db_session)
 
         db_session.expire_all()
-        assert db_session.query(Match).count() == 200
+        assert db_session.query(Match).count() == 100
 
     def test_skip_platforms_never_pruned(self, db_session):
         """5ch and girlschannel must be skipped regardless of count."""
@@ -2580,18 +2580,18 @@ class TestIngestionPruning:
         assert db_session.query(Match).count() == total_before
 
     def test_oldest_items_are_removed_not_newest(self, db_session):
-        """After pruning, the 5 oldest items must be gone; the 200 newest must survive."""
+        """After pruning, the 5 oldest items must be gone; the 100 newest must survive."""
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)
         db_session.commit()
 
-        self._seed_items(db_session, term, "youtube", 205)
+        self._seed_items(db_session, term, "youtube", 105)
         _prune_old_items(db_session)
 
         db_session.expire_all()
-        # item0000 is the newest (base - 0h), item0204 is the oldest (base - 204h)
+        # item0000 is the newest (base - 0h), item0104 is the oldest (base - 104h)
         assert db_session.get(SourceItem, "youtube:item0000") is not None
-        assert db_session.get(SourceItem, "youtube:item0204") is None
+        assert db_session.get(SourceItem, "youtube:item0104") is None
 
     def test_pruning_two_terms_independently(self, db_session):
         """Each (platform, watch_term) pair is pruned independently."""
@@ -2600,8 +2600,8 @@ class TestIngestionPruning:
         db_session.add_all([term1, term2])
         db_session.commit()
 
-        self._seed_items(db_session, term1, "youtube", 205, prefix="t1item")
-        self._seed_items(db_session, term2, "youtube", 205, prefix="t2item")
+        self._seed_items(db_session, term1, "youtube", 105, prefix="t1item")
+        self._seed_items(db_session, term2, "youtube", 105, prefix="t2item")
         _prune_old_items(db_session)
 
         db_session.expire_all()
@@ -2615,8 +2615,8 @@ class TestIngestionPruning:
             .filter(Match.watch_term_id == term2.id)
             .count()
         )
-        assert term1_count == 200
-        assert term2_count == 200
+        assert term1_count == 100
+        assert term2_count == 100
 
 
 class TestPollOnceLocking:

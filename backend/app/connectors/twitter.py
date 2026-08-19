@@ -193,7 +193,7 @@ class TwitterConnector(BaseConnector):
                     title=None,
                     content_text=tweet.get("text"),
                     thumbnail_url=thumb,
-                    raw_payload=tweet,
+                    raw_payload={"source": "twitter_api", "date_parsed": True},
                 )
             )
 

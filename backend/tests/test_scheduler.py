@@ -99,7 +99,7 @@ class TestPruneOldItems:
         _prune_old_items(db)
 
         remaining = db.query(Match).filter(Match.watch_term_id == term.id).count()
-        assert remaining == 200
+        assert remaining == 100
 
     def test_prune_deletes_orphan_source_items(self, db):
         term = WatchTerm(keyword="k2", aliases=[])
@@ -234,7 +234,7 @@ class TestPruneOldItems:
             .filter(SourceItem.platform == "togetter")
             .count()
         )
-        assert count == 200
+        assert count == 100
 
     def test_prune_is_idempotent(self, db):
         term = WatchTerm(keyword="k4", aliases=[])
@@ -249,7 +249,7 @@ class TestPruneOldItems:
         _prune_old_items(db)
         count_after_second = db.query(Match).filter(Match.watch_term_id == term.id).count()
 
-        assert count_after_first == count_after_second == 200
+        assert count_after_first == count_after_second == 100
 
     def test_prune_keeps_newest_items(self, db):
         term = WatchTerm(keyword="k5", aliases=[])
@@ -267,8 +267,8 @@ class TestPruneOldItems:
             .order_by(SourceItem.published_at.desc())
             .all()
         )
-        assert len(kept_items) == 200
-        # The most recent 200 should have item_ids 209 down to 10
+        assert len(kept_items) == 100
+        # The most recent 100 should have item_ids 209 down to 110
         newest_id = kept_items[0].item_id
         oldest_id = kept_items[-1].item_id
         assert int(newest_id.replace("item", "")) > int(oldest_id.replace("item", ""))
