@@ -453,6 +453,18 @@ class I18nManager: ObservableObject {
             "zh-TW": "原始網頁模式",
             "zh-CN": "原始网页模式"
         ],
+        "readerPreviousArticle": [
+            "en": "Previous Article",
+            "ja": "前の記事",
+            "zh-TW": "上一篇文章",
+            "zh-CN": "上一篇文章"
+        ],
+        "readerNextArticle": [
+            "en": "Next Article",
+            "ja": "次の記事",
+            "zh-TW": "下一篇文章",
+            "zh-CN": "下一篇文章"
+        ],
         "avatarEditor": [
             "en": "Avatar Editor",
             "ja": "アバターエディタ",
