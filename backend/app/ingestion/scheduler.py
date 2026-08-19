@@ -65,7 +65,7 @@ _queued_task: asyncio.Task | None = None
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel"})
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _DEVICE_OWNED_REFRESH_INTERVAL = timedelta(minutes=180)
-_MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
+_MUTED_FEED_ITEMS_PER_TERM_LIMIT = 500
 _CATCHUP_NOTIFICATION_MIN_MATCH_AGE = timedelta(minutes=10)
 _PREVIEW_SOURCE_NEW_MATCH = "new_match"
 _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
@@ -1677,7 +1677,7 @@ async def _poll_once_unlocked() -> None:
 
         _prune_irrelevant_matches(db, all_terms)
 
-        # Prune: keep at most 200 items per (platform, watch_term) to
+        # Prune: keep at most 100 items per (platform, watch_term) to
         # prevent unbounded DB growth.  Community platforms (5ch, girlschannel)
         # are excluded — their threads are rare and long-lived.
         _prune_old_items(db)
@@ -1722,7 +1722,7 @@ def _prune_irrelevant_matches(db, terms: list[WatchTerm]) -> None:
 
 
 def _prune_old_items(db) -> None:
-    """Delete the oldest matches beyond 200 per (platform, watch_term) pair.
+    """Delete the oldest matches beyond 100 per (platform, watch_term) pair.
 
     Uses a single window-function query (ROW_NUMBER) instead of one query per
     pair — O(1) round-trips regardless of how many (platform, term) combos exist.
@@ -1763,7 +1763,7 @@ def _prune_old_muted_feed_items(db, per_term_limit: int) -> int:
 def _prune_old_items_with_limit(
     db,
     muted_per_term_limit: int,
-    match_per_term_platform_limit: int = 200,
+    match_per_term_platform_limit: int = 100,
     include_discussion_platforms: bool = False,
     raise_on_error: bool = False,
 ) -> dict[str, int]:

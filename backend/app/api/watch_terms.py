@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_auth
+from app.config import settings
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll, resolve_sendable_pending_preview
 from app.models import APNSDeviceToken, Match, PendingNotification, WatchTerm
@@ -163,6 +164,19 @@ async def create_term(
     term = WatchTerm(**body.model_dump())
     if not auth.is_admin:
         term.owner_device_secret = auth.device_secret
+        existing_count = (
+            db.query(WatchTerm)
+            .filter(WatchTerm.owner_device_secret == auth.device_secret)
+            .count()
+        )
+        if existing_count >= settings.max_watch_terms_per_device:
+            raise HTTPException(
+                409,
+                {
+                    "code": "watch_term_limit_reached",
+                    "message": f"Maximum of {settings.max_watch_terms_per_device} watch terms per device",
+                },
+            )
         await _require_verified_notification_device(db, term)
     if _term_with_keyword_exists(
         db,

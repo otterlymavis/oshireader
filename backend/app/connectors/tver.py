@@ -267,8 +267,11 @@ class TVERConnector(BaseConnector):
                     ]
                     content_text = "\n".join(dict.fromkeys(content_text_parts)) or None
 
-                    raw_payload = dict(ep)
-                    raw_payload["date_source"] = date_source
+                    raw_payload = {
+                        "source": "tver_api",
+                        "date_source": date_source,
+                        "date_parsed": True,
+                    }
 
                     return SourceItemCreate(
                         platform=self.PLATFORM,

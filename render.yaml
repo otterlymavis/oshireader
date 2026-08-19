@@ -29,7 +29,9 @@ services:
       - key: INACTIVE_POLL_AFTER_DAYS
         value: "30"
       - key: RETENTION_DAYS
-        value: "30"
+        value: "14"
+      - key: MAX_WATCH_TERMS_PER_DEVICE
+        value: "50"
       - key: NOTIFICATION_FRESHNESS_WINDOW_MINUTES
         value: "120"
       - key: ORPHANED_NOTIFICATION_GRACE_MINUTES
