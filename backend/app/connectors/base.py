@@ -63,6 +63,18 @@ async def parse_feed_document(content: bytes) -> feedparser.FeedParserDict:
     return feed
 
 
+async def gather_limited(coros, concurrency: int) -> list:
+    """Run coroutines with bounded concurrency, so a single fetch loop can't
+    burst past a source's rate limit or Render's shared egress IP."""
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def run(coro):
+        async with semaphore:
+            return await coro
+
+    return await asyncio.gather(*(run(coro) for coro in coros), return_exceptions=True)
+
+
 def is_usable_jina_reader_response(text: str) -> bool:
     """Accept only recognizable Jina output for a Google News RSS search."""
     normalized = text.strip().casefold()

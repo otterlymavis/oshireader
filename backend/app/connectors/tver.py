@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -15,6 +14,7 @@ from app.connectors.base import (
     CollectionMode,
     SourceItemCreate,
     contains_keyword,
+    gather_limited,
     is_recent_search_result,
 )
 
@@ -186,12 +186,6 @@ class TVERConnector(BaseConnector):
                 log.warning("TVer response JSON parse failed: %s", exc)
                 return []
 
-            # Bound concurrent detail lookups so a broad keyword can't burst up
-            # to 25 simultaneous requests against statics.tver.jp from Render's
-            # single shared egress IP (this pattern mirrors fivech.py's
-            # _gather_limited, which exists for the same reason).
-            detail_fetch_semaphore = asyncio.Semaphore(_DETAIL_FETCH_CONCURRENCY)
-
             async def _process(ep: dict) -> Optional[SourceItemCreate]:
                 try:
                     content = ep.get("content") or ep.get("episode") or ep
@@ -236,8 +230,7 @@ class TVERConnector(BaseConnector):
                     detail_description = None
                     detail_author = None
                     if not published_at or not contains_keyword(keyword, title, description, author, series_title):
-                        async with detail_fetch_semaphore:
-                            detail = await self._fetch_episode_detail(client, str(ep_id))
+                        detail = await self._fetch_episode_detail(client, str(ep_id))
                         if detail:
                             detail_description = detail.get("description")
                             detail_author = detail.get("broadcastProviderLabel") or detail.get("productionProviderLabel")
@@ -270,7 +263,6 @@ class TVERConnector(BaseConnector):
                     raw_payload = {
                         "source": "tver_api",
                         "date_source": date_source,
-                        "date_parsed": True,
                     }
 
                     return SourceItemCreate(
@@ -289,8 +281,11 @@ class TVERConnector(BaseConnector):
                     log.warning("Error parsing TVer episode item: %s", exc)
                     return None
 
-            results = await asyncio.gather(*[_process(ep) for ep in episodes[:25]])
-            items = [item for item in results if item is not None]
+            results = await gather_limited(
+                [_process(ep) for ep in episodes[:25]],
+                concurrency=_DETAIL_FETCH_CONCURRENCY,
+            )
+            items = [item for item in results if isinstance(item, SourceItemCreate)]
             if items:
                 items.sort(key=lambda item: item.published_at, reverse=True)
                 return items

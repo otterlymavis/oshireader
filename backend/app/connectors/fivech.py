@@ -17,6 +17,7 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    gather_limited,
     is_recent_search_result,
     title_contains_keyword,
 )
@@ -163,16 +164,6 @@ class _ThreadHit:
     thread_id: str
     title: str
     posts: int
-
-
-async def _gather_limited(coros, concurrency: int = _DIRECT_SUBJECT_CONCURRENCY):
-    semaphore = asyncio.Semaphore(concurrency)
-
-    async def run(coro):
-        async with semaphore:
-            return await coro
-
-    return await asyncio.gather(*(run(coro) for coro in coros), return_exceptions=True)
 
 
 def _decode_shift_jis(content: bytes) -> str:
@@ -413,7 +404,7 @@ class FiveChConnector(BaseConnector):
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
             for start in range(0, len(_ITEST_BOARD_KEYS), _ITEST_REQUEST_CONCURRENCY):
                 board_batch = _ITEST_BOARD_KEYS[start:start + _ITEST_REQUEST_CONCURRENCY]
-                board_results = await _gather_limited(
+                board_results = await gather_limited(
                     [self._fetch_itest_board(client, board_key, keyword) for board_key in board_batch],
                     concurrency=_ITEST_REQUEST_CONCURRENCY,
                 )
@@ -462,7 +453,7 @@ class FiveChConnector(BaseConnector):
         items = self._parse_itest_board(text, board_key, keyword)
         if not items:
             return []
-        dated = await _gather_limited(
+        dated = await gather_limited(
             [self._apply_itest_latest_post_at(client, item) for item in items],
             concurrency=_ITEST_DAT_CONCURRENCY,
         )
@@ -751,7 +742,7 @@ class FiveChConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         if not hits:
             return []
-        dated = await _gather_limited(
+        dated = await gather_limited(
             [self._build_direct_item(client, hit, keyword) for hit in hits[:_DIRECT_DAT_LIMIT]],
             concurrency=_DIRECT_DAT_CONCURRENCY,
         )
