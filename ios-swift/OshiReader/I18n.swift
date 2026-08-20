@@ -605,24 +605,6 @@ class I18nManager: ObservableObject {
             "zh-TW": "無法註冊通知。請檢查設定，稍後再試。",
             "zh-CN": "无法注册通知。请检查设置，稍后再试。"
         ],
-        "notifNewItemsTitle": [
-            "en": "%@",
-            "ja": "%@",
-            "zh-TW": "%@",
-            "zh-CN": "%@"
-        ],
-        "notifNewItemsBodyOne": [
-            "en": "1 new item found.",
-            "ja": "1件の新着があります。",
-            "zh-TW": "1 個新項目。",
-            "zh-CN": "1 个新内容。"
-        ],
-        "notifNewItemsBodyMany": [
-            "en": "%d new items found.",
-            "ja": "%d件の新着があります。",
-            "zh-TW": "%d 個新項目。",
-            "zh-CN": "%d 个新内容。"
-        ],
         "notifNewItemsMoreFmt": [
             "en": "+ %d more",
             "ja": "ほか%d件",

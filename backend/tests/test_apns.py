@@ -38,18 +38,22 @@ class TestPayload:
 
     def test_payload_structure(self):
         payload = _payload(self._term("Miku"), 3)
-        assert payload["aps"]["alert"]["title"] == "Miku の新着"
+        assert payload["aps"]["alert"]["title"] == "Miku ほか2件"
         assert payload["aps"]["content-available"] == 1
         assert payload["watch_term_keyword"] == "Miku"
         assert payload["new_count"] == 3
 
-    def test_singular_body(self):
+    def test_no_preview_omits_subtitle_and_body(self):
         payload = _payload(self._term(), 1)
-        assert payload["aps"]["alert"]["body"] == "1件の新着があります。"
+        assert payload["aps"]["alert"]["title"] == "Aiko"
+        assert "subtitle" not in payload["aps"]["alert"]
+        assert "body" not in payload["aps"]["alert"]
 
-    def test_plural_body(self):
+    def test_no_preview_omits_subtitle_and_body_plural(self):
         payload = _payload(self._term(), 5)
-        assert payload["aps"]["alert"]["body"] == "5件の新着があります。"
+        assert payload["aps"]["alert"]["title"] == "Aiko ほか4件"
+        assert "subtitle" not in payload["aps"]["alert"]
+        assert "body" not in payload["aps"]["alert"]
 
     def test_watch_term_id_included(self):
         payload = _payload(self._term(term_id=42), 1)
@@ -79,8 +83,9 @@ class TestPayload:
         assert payload["aps"]["category"] == "OSHI_RESULT_PREVIEW"
         assert payload["aps"]["thread-id"] == "oshireader-1"
         assert payload["aps"]["target-content-id"] == "youtube:1"
-        assert payload["aps"]["alert"]["body"] == "Aiko announces a new live stream\nほか2件"
-        assert "subtitle" not in payload["aps"]["alert"]
+        assert payload["aps"]["alert"]["title"] == "Aiko ほか2件"
+        assert payload["aps"]["alert"]["subtitle"] == "Aiko announces a new live stream"
+        assert payload["aps"]["alert"]["body"] == "Longer stream details"
         assert payload["preview_item"]["url"] == "https://backend.example.com/api/feed/matches/123/redirect"
         assert payload["preview_item"]["match_id"] == "123"
         assert payload["preview_item"]["content_text"] == "Longer stream details"
@@ -179,7 +184,7 @@ class TestPayload:
         assert payload["preview_item"]["thumbnail_url"] == thumbnail_url
         assert _payload_size(payload) <= 3500
 
-    def test_alert_does_not_expose_source_metadata(self):
+    def test_alert_subtitle_is_item_title_not_author_or_platform(self):
         payload = _payload(
             self._term("Aiko"),
             1,
@@ -192,7 +197,9 @@ class TestPayload:
             },
         )
 
-        assert "subtitle" not in payload["aps"]["alert"]
+        assert payload["aps"]["alert"]["subtitle"] == "Aiko update"
+        assert "A" * 20 not in payload["aps"]["alert"]["subtitle"]
+        assert "P" * 20 not in payload["aps"]["alert"]["subtitle"]
         assert _payload_size(payload) <= 3500
 
 
