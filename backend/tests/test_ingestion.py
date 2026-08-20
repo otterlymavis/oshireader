@@ -253,7 +253,7 @@ class TestIngestionNotifications:
         assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
 
     @pytest.mark.asyncio
-    async def test_multiple_new_items_send_one_grouped_notification(self, db_engine, db_session):
+    async def test_multiple_new_items_each_send_their_own_notification(self, db_engine, db_session):
         term = WatchTerm(keyword="Aiko", notify_on_new=True)
         db_session.add(term)
         db_session.commit()
@@ -265,17 +265,20 @@ class TestIngestionNotifications:
                 _make_item(item_id="new2", title="Aiko second item"),
             ],
         )
-        mock_notify = AsyncMock()
+        mock_notify = AsyncMock(return_value=True)
         TestSession = sessionmaker(bind=db_engine)
         with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
              patch("app.ingestion.scheduler.SessionLocal", TestSession), \
              patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
             await _poll_once_unlocked()
 
-        mock_notify.assert_called_once()
-        _, _, called_count, preview_item = mock_notify.call_args.args
-        assert called_count == 2
-        assert preview_item["id"] == "youtube:new2"
+        assert mock_notify.call_count == 2
+        sent_ids = set()
+        for call in mock_notify.call_args_list:
+            _, _, called_count, preview_item = call.args
+            assert called_count == 1
+            sent_ids.add(preview_item["id"])
+        assert sent_ids == {"youtube:new1", "youtube:new2"}
 
     @pytest.mark.asyncio
     async def test_same_keyword_owner_duplicate_notified_from_global_poll_slot(
@@ -721,7 +724,7 @@ class TestIngestionNotifications:
         assert preview_item["id"] == shared.id
 
     @pytest.mark.asyncio
-    async def test_catchup_prioritizes_non_discussion_sources(
+    async def test_catchup_sends_a_notification_per_item_oldest_first(
         self,
         db_engine,
         db_session,
@@ -778,10 +781,13 @@ class TestIngestionNotifications:
              patch.object(settings, "poll_terms_per_run", 0):
             await _poll_once_unlocked()
 
-        mock_notify.assert_called_once()
-        _, _, called_count, preview_item = mock_notify.call_args.args
-        assert called_count == 2
-        assert preview_item["id"] == "5ch:recent-thread"
+        assert mock_notify.call_count == 2
+        # Oldest published item first, regardless of platform.
+        first_call, second_call = mock_notify.call_args_list
+        assert first_call.args[2] == 1
+        assert first_call.args[3]["id"] == "yahoonews:recent-article"
+        assert second_call.args[2] == 1
+        assert second_call.args[3]["id"] == "5ch:recent-thread"
 
     @pytest.mark.asyncio
     async def test_older_dated_discovery_for_established_term_is_added_without_notification(
@@ -1111,7 +1117,7 @@ class TestIngestionNotifications:
             content_text="Aiko fresh video",
             raw_payload={"date_parsed": True, "source": "youtube_api"},
         )
-        mock_notify = AsyncMock()
+        mock_notify = AsyncMock(return_value=True)
         TestSession = sessionmaker(bind=db_engine)
 
         with patch(
@@ -1129,12 +1135,18 @@ class TestIngestionNotifications:
         ):
             await _poll_once_unlocked()
 
-        mock_notify.assert_called_once()
-        _, called_term, called_count, preview_item = mock_notify.call_args.args
-        assert sa_inspect(called_term).identity == (term_id,)
-        assert called_count == 2
-        assert preview_item["id"] == "youtube:fresh-video"
-        assert preview_item["source"] == "youtube_api"
+        assert mock_notify.call_count == 2
+        for call in mock_notify.call_args_list:
+            _, called_term, _, _ = call.args
+            assert sa_inspect(called_term).identity == (term_id,)
+        # Oldest published item first: the fresh video (30 min ago) precedes
+        # the discussion reply update (5 min ago).
+        first_call, second_call = mock_notify.call_args_list
+        assert first_call.args[2] == 1
+        assert first_call.args[3]["id"] == "youtube:fresh-video"
+        assert first_call.args[3]["source"] == "youtube_api"
+        assert second_call.args[2] == 1
+        assert second_call.args[3]["id"] == "5ch:old-thread"
 
     @pytest.mark.asyncio
     async def test_duplicate_term_existing_discussion_reply_update_is_notified(
@@ -1465,7 +1477,7 @@ class TestIngestionNotifications:
             retry_db.close()
 
     @pytest.mark.asyncio
-    async def test_multi_item_pending_notification_sends_one_grouped_alert(
+    async def test_multi_item_pending_notification_sends_one_alert_per_item(
         self,
         db_session,
     ):
@@ -1521,21 +1533,21 @@ class TestIngestionNotifications:
             delivered = await _deliver_pending_notification(db_session, term)
 
         assert delivered is True
-        mock_notify.assert_called_once()
-        _, _, called_count, preview_item = mock_notify.call_args.args
-        assert called_count == 3
-        assert preview_item["id"] == "youtube:first"
-        assert mock_notify.call_args.kwargs["notification_item_ids"] == [
-            "youtube:first",
-            "youtube:second",
-            "youtube:third",
-        ]
-        assert "_notification_count" not in preview_item
+        assert mock_notify.call_count == 3
+        sent_ids = []
+        for call in mock_notify.call_args_list:
+            _, _, called_count, preview_item = call.args
+            assert called_count == 1
+            assert "_notification_count" not in preview_item
+            sent_ids.append(preview_item["id"])
+            assert call.kwargs["notification_item_ids"] == [preview_item["id"]]
+        # Items share a published_at, so queue order (first, second, third) is preserved.
+        assert sent_ids == ["youtube:first", "youtube:second", "youtube:third"]
         db_session.expire_all()
         assert db_session.get(PendingNotification, term.id) is None
 
     @pytest.mark.asyncio
-    async def test_grouped_pending_notification_failure_keeps_full_outbox(
+    async def test_per_item_notification_failure_keeps_full_outbox(
         self,
         db_session,
     ):
@@ -1586,10 +1598,9 @@ class TestIngestionNotifications:
             delivered = await _deliver_pending_notification(db_session, term)
 
         assert delivered is False
-        mock_notify.assert_called_once()
-        _, _, called_count, preview_item = mock_notify.call_args.args
-        assert called_count == 2
-        assert preview_item["id"] == "youtube:first"
+        assert mock_notify.call_count == 2
+        for call in mock_notify.call_args_list:
+            assert call.args[2] == 1
         db_session.expire_all()
         pending = db_session.get(PendingNotification, term.id)
         assert pending is not None

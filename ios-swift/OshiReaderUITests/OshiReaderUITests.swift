@@ -73,6 +73,7 @@ final class OshiReaderUITests: XCTestCase {
         XCTAssertNotNil(readerModeButton)
         assertReaderLoadedWithoutFallbackBanner()
 
+        tapToolbarButton(identifier: "reader.imageActionsMenuButton")
         let selectImagesButton = app.buttons["reader.selectImagesButton"]
         XCTAssertTrue(selectImagesButton.waitForExistence(timeout: 3))
         selectImagesButton.tap()
@@ -102,7 +103,71 @@ final class OshiReaderUITests: XCTestCase {
         let saveStatusMessage = saveStatusAlert.staticTexts.element(boundBy: 1)
         XCTAssertTrue(saveStatusMessage.exists)
         XCTAssertFalse(saveStatusMessage.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        XCTAssertTrue(selectImagesButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(toolbarButtonIsIdle(identifier: "reader.imageActionsMenuButton", timeout: 10))
+
+        readerModeButton?.tap()
+        assertReaderLoadedWithoutFallbackBanner()
+    }
+
+    func testOpenReaderFromFeedTapOnLinkedImageNavigates() throws {
+        app.terminate()
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-reader-images"])
+        app.launch()
+        tapTab(index: 0, labels: ["Feed"])
+
+        let headline = app.staticTexts["UITest Oshi headline"]
+        XCTAssertTrue(headline.waitForExistence(timeout: 3))
+        (firstExistingButton(containing: "UITest Oshi headline") ?? headline).tap()
+
+        XCTAssertNotNil(waitForButton(identifier: "reader.modeToggleButton", timeout: 10))
+        assertReaderLoadedWithoutFallbackBanner()
+
+        // Outside of the explicit save-images menu, tapping an image must not
+        // show a save/share sheet — it's normal page content.
+        let firstImage = app.buttons["fixture image one"]
+        XCTAssertTrue(firstImage.waitForExistence(timeout: 3))
+        firstImage.tap()
+        XCTAssertFalse(app.sheets.firstMatch.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.alerts.firstMatch.waitForExistence(timeout: 1))
+
+        // A photo that IS a link (the reported bug: tapping it showed the
+        // save sheet instead of navigating) must actually navigate.
+        let linkedImage = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "fixture linked image"))
+            .firstMatch
+        XCTAssertTrue(linkedImage.waitForExistence(timeout: 3))
+        linkedImage.tap()
+        XCTAssertFalse(app.sheets.firstMatch.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.alerts.firstMatch.waitForExistence(timeout: 1))
+        let navStatus = app.staticTexts["navigated:#fixture-target"]
+        XCTAssertTrue(navStatus.waitForExistence(timeout: 3), "Tapping a linked image should navigate instead of being swallowed by the save-image handler")
+    }
+
+    func testOpenReaderFromFeedSaveAllImages() throws {
+        app.terminate()
+        app.launchArguments = uiTestingLaunchArguments(["--uitesting-reader-images"])
+        app.launch()
+        tapTab(index: 0, labels: ["Feed"])
+
+        let headline = app.staticTexts["UITest Oshi headline"]
+        XCTAssertTrue(headline.waitForExistence(timeout: 3))
+        (firstExistingButton(containing: "UITest Oshi headline") ?? headline).tap()
+
+        let readerModeButton = waitForButton(identifier: "reader.modeToggleButton", timeout: 10)
+        XCTAssertNotNil(readerModeButton)
+        assertReaderLoadedWithoutFallbackBanner()
+
+        tapToolbarButton(identifier: "reader.imageActionsMenuButton")
+        let saveAllImagesButton = app.buttons["reader.saveAllImagesButton"]
+        XCTAssertTrue(saveAllImagesButton.waitForExistence(timeout: 3))
+        saveAllImagesButton.tap()
+
+        let saveStatusAlert = app.alerts.firstMatch
+        XCTAssertTrue(saveStatusAlert.waitForExistence(timeout: 10))
+        let saveStatusMessage = saveStatusAlert.staticTexts.element(boundBy: 1)
+        XCTAssertTrue(saveStatusMessage.exists)
+        XCTAssertFalse(saveStatusMessage.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertTrue(toolbarButtonIsIdle(identifier: "reader.imageActionsMenuButton", timeout: 10))
 
         readerModeButton?.tap()
         assertReaderLoadedWithoutFallbackBanner()
@@ -466,6 +531,35 @@ final class OshiReaderUITests: XCTestCase {
     private func waitForButton(identifier: String, timeout: TimeInterval) -> XCUIElement? {
         let button = app.buttons[identifier]
         return button.waitForExistence(timeout: timeout) ? button : nil
+    }
+
+    /// Finds and taps a navigation bar button by identifier, falling back to iOS's
+    /// automatic "More" overflow when the toolbar is too narrow to show it directly.
+    private func tapToolbarButton(identifier: String, timeout: TimeInterval = 5) {
+        let button = app.buttons[identifier]
+        if button.waitForExistence(timeout: timeout) {
+            button.tap()
+            return
+        }
+        let overflowButton = app.buttons["OverflowBarButtonItem"]
+        if overflowButton.waitForExistence(timeout: 1) {
+            overflowButton.tap()
+        }
+        XCTAssertTrue(button.waitForExistence(timeout: timeout), "Could not find toolbar button '\(identifier)', including via the overflow menu")
+        button.tap()
+    }
+
+    /// True once a toolbar button has returned to its idle state — either visible
+    /// directly, or (on a narrow toolbar) collapsed back into the "More" overflow.
+    private func toolbarButtonIsIdle(identifier: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let button = app.buttons[identifier]
+        let overflowButton = app.buttons["OverflowBarButtonItem"]
+        while Date() < deadline {
+            if button.exists || overflowButton.exists { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return button.exists || overflowButton.exists
     }
 
     private func waitForAnyButton(containing texts: [String], timeout: TimeInterval) -> XCUIElement? {

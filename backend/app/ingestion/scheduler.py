@@ -1207,19 +1207,32 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
             db.commit()
             return True
 
-        send_count = 0
-        send_preview: dict | None = None
-        send_item_ids: list[str] = []
-        for preview_item in pending_items:
-            if not _pending_preview_is_notification_eligible(db, term, preview_item, observed_at):
-                continue
-            send_count += _pending_notification_item_count(preview_item)
+        eligible_items = [
+            preview_item
+            for preview_item in pending_items
+            if _pending_preview_is_notification_eligible(db, term, preview_item, observed_at)
+        ]
+        # Oldest first, so a batch that accumulated across a missed delivery
+        # arrives in publish order instead of newest-first.
+        eligible_items.sort(
+            key=lambda item: _parse_pending_preview_published_at(item) or observed_at
+        )
+        # A source item can be queued more than once (e.g. a discussion thread
+        # re-queued as a reply update before the prior queue entry was
+        # delivered). Collapse to one send per id so a queuing duplicate
+        # doesn't become a duplicate push now that each item sends on its own.
+        seen_item_ids: set[str] = set()
+        deduped_items: list[dict] = []
+        for preview_item in eligible_items:
             item_id = preview_item.get("id")
-            if isinstance(item_id, str) and item_id not in send_item_ids:
-                send_item_ids.append(item_id)
-            send_preview = _newer_pending_preview(db, send_preview, preview_item, observed_at)
+            if isinstance(item_id, str):
+                if item_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(item_id)
+            deduped_items.append(preview_item)
+        eligible_items = deduped_items
 
-        if send_count <= 0 or send_preview is None:
+        if not eligible_items:
             db.delete(pending)
             db.commit()
             return True
@@ -1232,20 +1245,34 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
                 db.commit()
             return True
         term = fresh_term
-        should_clear = await send_new_match_notifications(
-            db,
-            term,
-            send_count,
-            _sendable_pending_preview(send_preview),
-            notification_item_ids=send_item_ids,
-        )
-        if should_clear is False:
-            return False
+
+        # One push per item: no aggregation into a single "keyword ほかN件"
+        # notification. Items that fail to send stay queued for retry.
+        remaining_items: list[dict] = []
+        for preview_item in eligible_items:
+            item_id = preview_item.get("id")
+            item_ids = [item_id] if isinstance(item_id, str) else []
+            should_clear = await send_new_match_notifications(
+                db,
+                term,
+                _pending_notification_item_count(preview_item),
+                _sendable_pending_preview(preview_item),
+                notification_item_ids=item_ids,
+            )
+            if should_clear is False:
+                remaining_items.append(preview_item)
 
         pending = db.get(PendingNotification, term.id)
-        if pending is not None:
-            db.delete(pending)
+        if pending is None:
+            return not remaining_items
+        if remaining_items:
+            pending.preview_item = {"items": remaining_items}
+            pending.new_count = sum(_pending_notification_item_count(item) for item in remaining_items)
+            pending.updated_at = datetime.now(timezone.utc)
             db.commit()
+            return False
+        db.delete(pending)
+        db.commit()
         return True
     except asyncio.CancelledError:
         raise
