@@ -714,7 +714,14 @@ struct WebViewHelper: UIViewRepresentable {
             } else {
                 uiView.load(URLRequest(url: url))
             }
-        } else {
+        } else if themeMode != context.coordinator.lastAppliedThemeMode
+            || fontSize != context.coordinator.lastAppliedFontSize
+            || fontFamilyCSS != context.coordinator.lastAppliedFontFamilyCSS
+            || readerMode != context.coordinator.lastAppliedReaderMode {
+            context.coordinator.lastAppliedThemeMode = themeMode
+            context.coordinator.lastAppliedFontSize = fontSize
+            context.coordinator.lastAppliedFontFamilyCSS = fontFamilyCSS
+            context.coordinator.lastAppliedReaderMode = readerMode
             uiView.evaluateJavaScript(styleInjectionJS(), completionHandler: nil)
         }
         if selectImagesCounter != context.coordinator.lastSelectImagesCounter {
@@ -910,6 +917,13 @@ struct WebViewHelper: UIViewRepresentable {
         var lastSaveAllImagesCounter = 0
         var lastImageSelectionActionCounter = 0
         var currentRequestURL: String?
+        // Tracks what styleInjectionJS() last applied so unrelated SwiftUI state
+        // changes (e.g. selectedImageCount ticking on every tap) don't re-run its
+        // DOM content-root rescoring on every view update.
+        var lastAppliedThemeMode: AppThemeMode?
+        var lastAppliedFontSize: CGFloat?
+        var lastAppliedFontFamilyCSS: String?
+        var lastAppliedReaderMode: Bool?
         private var hasCommittedPage = false
         private var pendingFailure: DispatchWorkItem?
 
@@ -940,6 +954,10 @@ struct WebViewHelper: UIViewRepresentable {
             hasCommittedPage = true
             pendingFailure?.cancel()
             DispatchQueue.main.async { self.parent.onLoadStateChange(.loaded) }
+            lastAppliedThemeMode = parent.themeMode
+            lastAppliedFontSize = parent.fontSize
+            lastAppliedFontFamilyCSS = parent.fontFamilyCSS
+            lastAppliedReaderMode = parent.readerMode
             webView.evaluateJavaScript(parent.styleInjectionJS(), completionHandler: nil)
             let cacheId = parent.cacheId
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, _ in
