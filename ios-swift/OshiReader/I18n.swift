@@ -363,47 +363,23 @@ class I18nManager: ObservableObject {
             "zh-TW": "圖片",
             "zh-CN": "图片"
         ],
-        "shareImage": [
-            "en": "Share Image",
-            "ja": "画像を共有",
-            "zh-TW": "分享圖片",
-            "zh-CN": "分享图片"
-        ],
-        "saveImage": [
-            "en": "Save Image",
-            "ja": "画像を保存",
-            "zh-TW": "儲存圖片",
-            "zh-CN": "保存图片"
-        ],
-        "openImage": [
-            "en": "Open Image",
-            "ja": "画像を開く",
-            "zh-TW": "開啟圖片",
-            "zh-CN": "打开图片"
-        ],
-        "imageLoadError": [
-            "en": "Could not read this image.",
-            "ja": "画像を読み込めませんでした。",
-            "zh-TW": "無法讀取此圖片。",
-            "zh-CN": "无法读取此图片。"
-        ],
         "photosAccessRequired": [
             "en": "Photos access is required to save images.",
             "ja": "画像を保存するには写真へのアクセスが必要です。",
             "zh-TW": "需要相簿存取權限才能儲存圖片。",
             "zh-CN": "需要照片访问权限才能保存图片。"
         ],
-        "imageSavedToPhotos": [
-            "en": "Saved to Photos.",
-            "ja": "写真に保存しました。",
-            "zh-TW": "已儲存到相簿。",
-            "zh-CN": "已保存到照片。"
+        "saveAllImages": [
+            "en": "Save All Images",
+            "ja": "すべての画像を保存",
+            "zh-TW": "儲存所有圖片",
+            "zh-CN": "保存所有图片"
         ],
-        "imageSaveError": [
-            "en": "Could not save this image.",
-            "ja": "画像を保存できませんでした。",
-            "zh-TW": "無法儲存此圖片。",
-            "zh-CN": "无法保存此图片。"
+        "selectMultipleImages": [
+            "en": "Select Multiple Images",
+            "ja": "複数の画像を選択",
+            "zh-TW": "選取多張圖片",
+            "zh-CN": "选择多张图片"
         ],
         "imageNoLargeImages": [
             "en": "No large images found on this page.",

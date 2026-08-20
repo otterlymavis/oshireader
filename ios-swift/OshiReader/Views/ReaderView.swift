@@ -4,12 +4,6 @@ import SwiftUI
 import UIKit
 import WebKit
 
-struct ReaderImageAction: Identifiable {
-    let id = UUID()
-    let url: URL
-    let alt: String?
-}
-
 enum ReaderWebLoadState {
     case loading
     case loaded
@@ -37,10 +31,10 @@ struct ReaderView: View {
     @State private var readerTheme: AppThemeMode = .light
     @State private var fontSize: CGFloat = 16.0
     @State private var isTranslated = false
-    @State private var imageAction: ReaderImageAction?
     @State private var saveImageStatus = ""
     @State private var showingSaveImageStatus = false
     @State private var selectImagesCounter = 0
+    @State private var saveAllImagesCounter = 0
     @State private var imageSelectionActionCounter = 0
     @State private var imageSelectionAction = ""
     @State private var isSelectingImages = false
@@ -147,6 +141,7 @@ struct ReaderView: View {
                             fontFamilyCSS: appearance.readerFontFamilyCSS,
                             readerMode: readerMode,
                             selectImagesCounter: selectImagesCounter,
+                            saveAllImagesCounter: saveAllImagesCounter,
                             imageSelectionActionCounter: imageSelectionActionCounter,
                             imageSelectionAction: imageSelectionAction,
                             onLoadStateChange: { state in
@@ -159,7 +154,6 @@ struct ReaderView: View {
                                     showOpenInBrowserBanner = false
                                 }
                             },
-                            onImageAction: { imageAction = $0 },
                             onImageSelectionState: { selectedImageCount = $0 },
                             onImageSelectionUnavailable: {
                                 isSelectingImages = false
@@ -173,7 +167,13 @@ struct ReaderView: View {
                                 saveImageStatus = i18n.t("imageSelectionError")
                                 showingSaveImageStatus = true
                             },
+                            onSaveAllImagesUnavailable: {
+                                isSavingSelectedImages = false
+                                saveImageStatus = i18n.t("imageSelectionError")
+                                showingSaveImageStatus = true
+                            },
                             onSelectedImages: { urls in saveSelectedImages(urls) },
+                            onAllImages: { urls in saveSelectedImages(urls, emptyMessageKey: "imageNoLargeImages") },
                             onContentBlocked: {
                                 if currentItem.platform == "twitter" {
                                     if !isSigningIntoX { showSignInBanner = true }
@@ -282,15 +282,28 @@ struct ReaderView: View {
                         .disabled(selectedImageCount == 0)
                         .accessibilityIdentifier("reader.saveSelectedImagesButton")
                     } else {
-                        Button {
-                            isSelectingImages = true
-                            selectedImageCount = 0
-                            selectImagesCounter += 1
+                        Menu {
+                            Button {
+                                isSavingSelectedImages = true
+                                saveAllImagesCounter += 1
+                            } label: {
+                                Label(i18n.t("saveAllImages"), systemImage: "square.and.arrow.down.on.square")
+                            }
+                            .accessibilityIdentifier("reader.saveAllImagesButton")
+
+                            Button {
+                                isSelectingImages = true
+                                selectedImageCount = 0
+                                selectImagesCounter += 1
+                            } label: {
+                                Label(i18n.t("selectMultipleImages"), systemImage: "checklist")
+                            }
+                            .accessibilityIdentifier("reader.selectImagesButton")
                         } label: {
-                            Image(systemName: "checklist")
+                            Image(systemName: "square.and.arrow.down")
                                 .foregroundColor(theme.colors.primary)
                         }
-                        .accessibilityIdentifier("reader.selectImagesButton")
+                        .accessibilityIdentifier("reader.imageActionsMenuButton")
                     }
                 }
             }
@@ -302,26 +315,6 @@ struct ReaderView: View {
                             .foregroundColor(theme.colors.primary)
                     }
                     .accessibilityIdentifier("reader.shareButton")
-                }
-            }
-        }
-        .confirmationDialog(i18n.t("imageActions"), isPresented: Binding(
-            get: { imageAction != nil },
-            set: { isPresented in
-                if !isPresented {
-                    imageAction = nil
-                }
-            }
-        )) {
-            if let action = imageAction {
-                ShareLink(item: action.url) {
-                    Label(i18n.t("shareImage"), systemImage: "square.and.arrow.up")
-                }
-                Button(i18n.t("saveImage")) {
-                    saveImage(action.url)
-                }
-                Button(i18n.t("openImage")) {
-                    UIApplication.shared.open(action.url)
                 }
             }
         }
@@ -582,51 +575,12 @@ struct ReaderView: View {
         }
     }
 
-    private func saveImage(_ url: URL) {
-        Task {
-            do {
-                let (data, response) = try await URLSession.shared.data(for: imageRequest(for: url))
-                if let httpResponse = response as? HTTPURLResponse,
-                   !(200...299).contains(httpResponse.statusCode) {
-                    throw URLError(.badServerResponse)
-                }
-                guard let image = UIImage(data: data) else {
-                    await MainActor.run {
-                        saveImageStatus = i18n.t("imageLoadError")
-                        showingSaveImageStatus = true
-                    }
-                    return
-                }
-                let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-                guard auth == .authorized || auth == .limited else {
-                    await MainActor.run {
-                        saveImageStatus = i18n.t("photosAccessRequired")
-                        showingSaveImageStatus = true
-                    }
-                    return
-                }
-                try await PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.creationRequestForAsset(from: image)
-                }
-                await MainActor.run {
-                    saveImageStatus = i18n.t("imageSavedToPhotos")
-                    showingSaveImageStatus = true
-                }
-            } catch {
-                await MainActor.run {
-                    saveImageStatus = i18n.t("imageSaveError")
-                    showingSaveImageStatus = true
-                }
-            }
-        }
-    }
-
-    private func saveSelectedImages(_ urls: [URL]) {
+    private func saveSelectedImages(_ urls: [URL], emptyMessageKey: String = "imageNoSelectedImages") {
         guard !urls.isEmpty else {
             isSelectingImages = false
             isSavingSelectedImages = false
             selectedImageCount = 0
-            saveImageStatus = i18n.t("imageNoSelectedImages")
+            saveImageStatus = i18n.t(emptyMessageKey)
             showingSaveImageStatus = true
             return
         }
@@ -693,14 +647,16 @@ struct WebViewHelper: UIViewRepresentable {
     let fontFamilyCSS: String
     let readerMode: Bool
     let selectImagesCounter: Int
+    let saveAllImagesCounter: Int
     let imageSelectionActionCounter: Int
     let imageSelectionAction: String
     let onLoadStateChange: (ReaderWebLoadState) -> Void
-    let onImageAction: (ReaderImageAction) -> Void
     let onImageSelectionState: (Int) -> Void
     let onImageSelectionUnavailable: () -> Void
     let onImageSelectionFailure: () -> Void
+    let onSaveAllImagesUnavailable: () -> Void
     let onSelectedImages: ([URL]) -> Void
+    let onAllImages: ([URL]) -> Void
     let onContentBlocked: () -> Void
 
     private static let uiTestImageFixtureHTML = """
@@ -711,8 +667,15 @@ struct WebViewHelper: UIViewRepresentable {
     <button class="oshi-uitest-image-button" aria-label="fixture image one"><img class="oshi-uitest-image" src="https://example.com/fixture-image-one.jpg" alt="fixture image one" width="400" height="300"></button>
     <button class="oshi-uitest-image-button" aria-label="fixture image two"><img class="oshi-uitest-image" src="https://example.com/fixture-image-two.jpg" alt="fixture image two" width="400" height="300"></button>
     </div>
+    <a id="fixture-linked-image" href="#fixture-target" aria-label="fixture linked image"><img class="oshi-uitest-image" src="https://example.com/fixture-image-linked.jpg" alt="fixture linked image" width="400" height="300"></a>
+    <p id="fixture-nav-status">not navigated</p>
     <p>This cached article contains deterministic image-selection fixtures.</p>
     </article></body></html>
+    <script>
+    window.addEventListener('hashchange', function() {
+      document.getElementById('fixture-nav-status').textContent = 'navigated:' + location.hash;
+    });
+    </script>
     """
 
     func makeCoordinator() -> Coordinator {
@@ -771,6 +734,15 @@ struct WebViewHelper: UIViewRepresentable {
             uiView.evaluateJavaScript("(function(){ if(!window.\(functionName)) return false; window.\(functionName)(); return true; })()") { result, _ in
                 guard (result as? Bool) == true else {
                     DispatchQueue.main.async { onImageSelectionFailure() }
+                    return
+                }
+            }
+        }
+        if saveAllImagesCounter != context.coordinator.lastSaveAllImagesCounter {
+            context.coordinator.lastSaveAllImagesCounter = saveAllImagesCounter
+            uiView.evaluateJavaScript("(function(){ if(!window.__oshiSaveAllImages) return false; window.__oshiSaveAllImages(); return true; })()") { result, _ in
+                guard (result as? Bool) == true else {
+                    DispatchQueue.main.async { onSaveAllImagesUnavailable() }
                     return
                 }
             }
@@ -935,6 +907,7 @@ struct WebViewHelper: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: WebViewHelper
         var lastSelectImagesCounter = 0
+        var lastSaveAllImagesCounter = 0
         var lastImageSelectionActionCounter = 0
         var currentRequestURL: String?
         private var hasCommittedPage = false
@@ -1124,17 +1097,17 @@ struct WebViewHelper: UIViewRepresentable {
             guard message.name == "oshireader",
                   let body = message.body as? [String: Any],
                   let type = body["type"] as? String else { return }
-            if type == "image-action",
-               let rawUrl = body["url"] as? String,
-               let url = URL(string: rawUrl) {
-                parent.onImageAction(ReaderImageAction(url: url, alt: body["alt"] as? String))
-            } else if type == "image-selection-state",
-                      let count = body["count"] as? Int {
+            if type == "image-selection-state",
+               let count = body["count"] as? Int {
                 DispatchQueue.main.async { self.parent.onImageSelectionState(count) }
             } else if type == "selected-images",
                       let rawUrls = body["urls"] as? [String] {
                 let urls = rawUrls.compactMap { URL(string: $0) }
                 DispatchQueue.main.async { self.parent.onSelectedImages(urls) }
+            } else if type == "all-images",
+                      let rawUrls = body["urls"] as? [String] {
+                let urls = rawUrls.compactMap { URL(string: $0) }
+                DispatchQueue.main.async { self.parent.onAllImages(urls) }
             }
         }
     }
@@ -1284,38 +1257,6 @@ private let readerInjectedJS = """
     var parts = String(value).split(',').map(function(part) { return part.trim().split(/\\s+/)[0]; }).filter(Boolean);
     return parts.length ? parts[parts.length - 1] : '';
   }
-  function imageCandidate(target) {
-    var el = target;
-    var depth = 0;
-    while (el && el.nodeType === 1 && depth < 8) {
-      var tag = (el.tagName || '').toUpperCase();
-      if (tag === 'IMG') {
-        return {
-          url: el.currentSrc || el.src || el.getAttribute('src') || el.getAttribute('data-src') || el.getAttribute('data-original') || el.getAttribute('data-lazy-src') || srcFromSrcset(el.getAttribute('srcset') || el.getAttribute('data-srcset')),
-          alt: el.getAttribute('alt') || el.getAttribute('title') || document.title || ''
-        };
-      }
-      var bg = '';
-      try {
-        var style = window.getComputedStyle(el);
-        var match = style && style.backgroundImage && style.backgroundImage.match(/url\\((["']?)(.*?)\\1\\)/);
-        bg = match ? match[2] : '';
-      } catch (e) {}
-      if (bg && bg !== 'none') return { url: bg, alt: el.getAttribute('aria-label') || el.getAttribute('title') || document.title || '' };
-      el = el.parentElement;
-      depth++;
-    }
-    return null;
-  }
-  function postImage(target) {
-    var found = imageCandidate(target);
-    if (!found) return false;
-    var imageUrl = absoluteUrl(found.url);
-    if (!/^https?:\\/\\//i.test(imageUrl)) return false;
-    window.webkit.messageHandlers.oshireader.postMessage({ type: 'image-action', url: imageUrl, alt: found.alt || '' });
-    return true;
-  }
-
   var imageSelectionMode = false;
   var selectedImageUrls = new Set();
   var imageSelectionStyle = null;
@@ -1413,7 +1354,20 @@ private let readerInjectedJS = """
     window.webkit.messageHandlers.oshireader.postMessage({ type: 'selected-images', urls: urls });
   };
 
+  window.__oshiSaveAllImages = function() {
+    var urls = [];
+    document.querySelectorAll('img').forEach(function(img) {
+      var url = selectableImageUrl(img);
+      if (url && urls.indexOf(url) === -1) urls.push(url);
+    });
+    window.webkit.messageHandlers.oshireader.postMessage({ type: 'all-images', urls: urls });
+  };
+
+  // Only intercept taps/long-presses while an explicit image-selection pass
+  // (started from the reader toolbar) is active; otherwise leave clicks and
+  // context menus alone so linked images navigate normally.
   document.addEventListener('click', function(event) {
+    if (!imageSelectionMode) return;
     var el = event.target;
     var depth = 0;
     while (el && el.nodeType === 1 && depth < 6) {
@@ -1423,16 +1377,9 @@ private let readerInjectedJS = """
         image = control && control.querySelector ? control.querySelector('img') : null;
       }
       if (image) {
-        if (imageSelectionMode) {
-          toggleImageSelection(image);
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
-        if (postImage(image)) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
+        toggleImageSelection(image);
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
       el = el.parentElement;
@@ -1441,14 +1388,11 @@ private let readerInjectedJS = """
   }, true);
 
   document.addEventListener('contextmenu', function(event) {
-    if (imageSelectionMode) {
-      if (event.target && (event.target.tagName || '').toUpperCase() === 'IMG') {
-        toggleImageSelection(event.target);
-      }
-      event.preventDefault();
-      return;
+    if (!imageSelectionMode) return;
+    if (event.target && (event.target.tagName || '').toUpperCase() === 'IMG') {
+      toggleImageSelection(event.target);
     }
-    if (postImage(event.target)) event.preventDefault();
+    event.preventDefault();
   }, true);
   return true;
 })();
