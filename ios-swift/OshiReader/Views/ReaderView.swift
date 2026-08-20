@@ -684,7 +684,12 @@ struct WebViewHelper: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.preferredContentMode = .mobile
         configuration.userContentController.add(context.coordinator, name: "oshireader")
+        // Some sites (e.g. girlschannel.net) ship a missing/broken viewport meta tag, which
+        // makes WKWebView render them zoomed in on first load. Force a sane one before the
+        // page lays out, and keep correcting it if the site's own script rewrites it later.
+        configuration.userContentController.addUserScript(WKUserScript(source: viewportFixJS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController.addUserScript(WKUserScript(source: readerInjectedJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -891,21 +896,43 @@ struct WebViewHelper: UIViewRepresentable {
                     '.content',
                     '#content'
                 ];
-                var best = null;
-                var bestScore = 0;
-                selectors.forEach(function(selector) {
-                    document.querySelectorAll(selector).forEach(function(el) {
-                        var text = el.innerText ? el.innerText.replace(/\\s+/g, ' ').trim() : '';
-                        var paragraphs = el.querySelectorAll('p, li, blockquote').length;
-                        var rect = el.getBoundingClientRect();
-                        var score = text.length + (paragraphs * 80) + Math.min(rect.height || 0, 1400);
-                        if (text.length >= 240 && rect.width > 0 && rect.height > 0 && score > bestScore) {
-                            best = el;
-                            bestScore = score;
-                        }
+                function applyReaderRoot() {
+                    document.querySelectorAll('[data-oshireader-reader-root="true"]').forEach(function(el) {
+                        el.removeAttribute('data-oshireader-reader-root');
                     });
-                });
-                if (best) best.setAttribute('data-oshireader-reader-root', 'true');
+                    var best = null;
+                    var bestScore = 0;
+                    selectors.forEach(function(selector) {
+                        document.querySelectorAll(selector).forEach(function(el) {
+                            var text = el.innerText ? el.innerText.replace(/\\s+/g, ' ').trim() : '';
+                            var paragraphs = el.querySelectorAll('p, li, blockquote').length;
+                            var rect = el.getBoundingClientRect();
+                            var score = text.length + (paragraphs * 80) + Math.min(rect.height || 0, 1400);
+                            if (text.length >= 240 && rect.width > 0 && rect.height > 0 && score > bestScore) {
+                                best = el;
+                                bestScore = score;
+                            }
+                        });
+                    });
+                    if (best) best.setAttribute('data-oshireader-reader-root', 'true');
+                }
+                applyReaderRoot();
+                // The style/scoring pass above only runs once, right when navigation
+                // finishes — but on ad- and consent-script-heavy pages the real
+                // article content can still be loading/settling at that point, so
+                // this one-shot pass can tag nothing and leave Reader Mode blank.
+                // Keep rescoring for a few seconds so late-arriving content still
+                // gets picked up, without re-running on every unrelated re-render.
+                if (!window.__oshiReaderRootCatchUp) {
+                    var attempts = 0;
+                    window.__oshiReaderRootCatchUp = setInterval(function() {
+                        attempts++;
+                        applyReaderRoot();
+                        if (attempts >= 8) {
+                            clearInterval(window.__oshiReaderRootCatchUp);
+                        }
+                    }, 750);
+                }
             }
         })();
         """
@@ -1259,6 +1286,35 @@ private func shouldBlockReaderRequest(_ rawUrl: String) -> Bool {
     if _ReaderRegex.schemeAllowlist?.firstMatch(in: rawUrl, range: range) != nil { return false }
     return _ReaderRegex.adBlocklist?.firstMatch(in: rawUrl, range: range) != nil
 }
+
+private let viewportFixJS = """
+(function () {
+  var desiredContent = 'width=device-width, initial-scale=1';
+  function applyViewport() {
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'viewport');
+      (document.head || document.documentElement).appendChild(meta);
+    }
+    if (meta.getAttribute('content') !== desiredContent) {
+      meta.setAttribute('content', desiredContent);
+    }
+  }
+  applyViewport();
+  document.addEventListener('DOMContentLoaded', applyViewport);
+  var target = document.documentElement || document;
+  // Watch for both a viewport meta tag being (re)inserted and its content
+  // attribute being rewritten in place — ad/consent-management scripts on
+  // sites like girlschannel.net commonly do the latter after initial load.
+  new MutationObserver(applyViewport).observe(target, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['name', 'content']
+  });
+})();
+"""
 
 private let readerInjectedJS = """
 (function () {
