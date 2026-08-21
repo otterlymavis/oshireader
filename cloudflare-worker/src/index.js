@@ -140,6 +140,20 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Render's free tier spins down after inactivity; a cold start can take
+// 30-90s. Ping /api/health first so a cold instance is warm before the
+// caller's own request (which would otherwise time out or 503).
+async function wakeBackend(backendURL, timeoutMs, logLabel) {
+  try {
+    await fetch(`${backendURL}/api/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { "user-agent": "oshireader-cloudflare-poller/1.0" },
+    });
+  } catch (wakeError) {
+    console.warn(`${logLabel} failed (continuing):`, String(wakeError));
+  }
+}
+
 function fiveChItestCacheRequest(boardKey) {
   return new Request(`https://oshireader.internal-cache/fivech-itest-io/${encodeURIComponent(boardKey)}`);
 }
@@ -323,6 +337,7 @@ async function proxyFiveCh(request, env) {
       }
       body = null;
     } catch (error) {
+      console.warn(`5ch itest upstream fetch failed (attempt ${attempt}):`, String(error));
       lastStatus = 0;
       lastBytes = 0;
     }
@@ -396,6 +411,7 @@ function notificationHealth(diagnostics) {
       if (activeNotifyTerms > 0 && apns.configured !== true) {
         return {
           healthy: false,
+          graced: true,
           reason: "Backend APNs is not configured",
           active_notify_terms: activeNotifyTerms,
           at_risk_terms: activeNotifyTerms,
@@ -404,21 +420,38 @@ function notificationHealth(diagnostics) {
       }
       return {
         healthy: true,
+        graced: true,
         active_notify_terms: activeNotifyTerms,
         at_risk_terms: atRiskTerms,
         active_silent_orphan_terms: backendHealth.active_silent_orphan_terms ?? 0,
       };
     }
+    const atRiskTermIds = backendHealth.active_notify_term_ids_without_verified_devices || [];
+    const watchTermsById = new Map(
+      (diagnostics.watch_terms || []).map((term) => [term.id, term]),
+    );
+    const atRiskKeywords = atRiskTermIds
+      .map((id) => watchTermsById.get(id)?.keyword)
+      .filter(Boolean);
     return {
       healthy: false,
+      // The backend only reports notification_health.healthy=false after its own
+      // ORPHANED_NOTIFICATION_GRACE_MINUTES window has elapsed, so this is already
+      // vetted against transient states (new term, device mid-registration, etc.).
+      graced: true,
       reason: "Backend notification health is degraded",
       active_notify_terms: activeNotifyTerms,
       at_risk_terms: atRiskTerms,
       active_silent_orphan_terms: backendHealth.active_silent_orphan_terms ?? 0,
-      at_risk_term_ids: backendHealth.active_notify_term_ids_without_verified_devices || [],
+      at_risk_term_ids: atRiskTermIds,
+      at_risk_keywords: atRiskKeywords.slice(0, 5),
     };
   }
 
+  // Legacy/degraded-response fallback: diagnostics.watch_terms carries no
+  // creation timestamp, so this path has no way to distinguish "just added"
+  // from "been broken for hours" — unlike the backend-computed path above.
+  // Callers must not alert on an ungraced result (see graced: false below).
   const watchTerms = diagnostics.watch_terms || [];
   const notifyTerms = watchTerms.filter((term) => term.is_active && term.notify_on_new);
   const atRiskTerms = notifyTerms.filter((term) => (term.notification_verified_devices || 0) <= 0);
@@ -430,11 +463,12 @@ function notificationHealth(diagnostics) {
   );
 
   if (!notifyTerms.length) {
-    return { healthy: true, reason: "No active notification terms" };
+    return { healthy: true, graced: true, reason: "No active notification terms" };
   }
   if (!apns.configured) {
     return {
       healthy: false,
+      graced: false,
       reason: "Backend APNs is not configured",
       active_notify_terms: notifyTerms.length,
       at_risk_terms: notifyTerms.length,
@@ -443,6 +477,7 @@ function notificationHealth(diagnostics) {
   if (verifiedDevices <= 0) {
     return {
       healthy: false,
+      graced: false,
       reason: "No verified APNs devices are registered",
       active_notify_terms: notifyTerms.length,
       at_risk_terms: notifyTerms.length,
@@ -452,6 +487,7 @@ function notificationHealth(diagnostics) {
   if (atRiskTerms.length) {
     return {
       healthy: false,
+      graced: false,
       reason: "Some active notification terms have no verified device",
       active_notify_terms: notifyTerms.length,
       at_risk_terms: atRiskTerms.length,
@@ -461,6 +497,7 @@ function notificationHealth(diagnostics) {
   }
   return {
     healthy: true,
+    graced: true,
     active_notify_terms: notifyTerms.length,
     at_risk_terms: 0,
     verified_devices: verifiedDevices,
@@ -567,8 +604,6 @@ function notificationWatchdogSummary(health, diagnostics = {}) {
     `pending_notifications=${(diagnostics.pending_notifications || []).length}`,
   ].join("\n");
 }
-
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function activePollingInputs(diagnostics) {
   const watchTerms = diagnostics.watch_terms;
@@ -680,14 +715,7 @@ export async function triggerBackendPoll(env, options = {}) {
   // after inactivity and a cold start can take 30-60 s. This must run first —
   // before fetchBackendDiagnostics — so a cold instance is warm by the time
   // we call /api/admin/poller-health or /api/admin/poll.
-  try {
-    await fetch(`${backendURL}/api/health`, {
-      signal: AbortSignal.timeout(60_000),
-      headers: { "user-agent": "oshireader-cloudflare-poller/1.0" },
-    });
-  } catch (wakeError) {
-    console.warn("Backend wake-up ping failed (continuing):", String(wakeError));
-  }
+  await wakeBackend(backendURL, 60_000, "Backend wake-up ping");
 
   if (respectDueWindow) {
     const diagnostics = await fetchBackendDiagnostics(backendURL, adminToken);
@@ -729,7 +757,7 @@ export async function triggerBackendPoll(env, options = {}) {
     } catch (error) {
       lastError = error;
     }
-    if (attempt < retries) await delay(retryDelayMs * (attempt + 1));
+    if (attempt < retries) await sleep(retryDelayMs * (attempt + 1));
   }
   if (!response?.ok) throw lastError || new Error("Backend poll failed without a response");
   const responseBody = await response.text();
@@ -770,7 +798,12 @@ export default {
               watchdogSummary(health.reason || "unknown", result.diagnostics),
             );
           }
-          if (!notifications.healthy) {
+          // Only alert on a graced result — the ungraced fallback path (used when
+          // the backend's own notification_health field is missing/degraded) has
+          // no way to distinguish a brand-new term from one broken for hours, and
+          // would otherwise alert immediately on states the backend's own grace
+          // period is designed to filter out.
+          if (!notifications.healthy && notifications.graced) {
             await notifyWatchdog(
               env,
               notificationWatchdogSummary(notifications, result.diagnostics),
@@ -799,14 +832,7 @@ export default {
         // this, a cold start (~50 s) causes fetchBackendDiagnostics to time out
         // and the health endpoint returns 503, making the monitor alarm even
         // when the last poll was recent.
-        try {
-          await fetch(`${backendURL}/api/health`, {
-            signal: AbortSignal.timeout(90_000),
-            headers: { "user-agent": "oshireader-cloudflare-poller/1.0" },
-          });
-        } catch (wakeError) {
-          console.warn("Health endpoint wake-up ping failed:", String(wakeError));
-        }
+        await wakeBackend(backendURL, 90_000, "Health endpoint wake-up ping");
         const diagnostics = await fetchBackendDiagnostics(backendURL, requireAdminToken(env));
         const health = pollHealth(
           diagnostics,

@@ -1173,7 +1173,83 @@ test("scheduled poll notifies watchdog when diagnostics are degraded", async (co
   assert.equal(webhookPayloads.length, 1);
 });
 
-test("scheduled poll notifies watchdog when notifications are not deliverable", async (context) => {
+test("scheduled poll notifies watchdog when backend-graced notification health is degraded", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const webhookPayloads = [];
+  globalThis.fetch = async (url, options) => {
+    if (url.endsWith("/api/admin/poll")) {
+      return new Response(JSON.stringify({ status: "poll completed" }), { status: 200 });
+    }
+    if (url.endsWith("/api/admin/poller-health")) {
+      return new Response(JSON.stringify({
+        apns: {
+          configured: true,
+          device_tokens_by_environment_and_verification: {
+            production: { verified: 1, unverified: 0 },
+          },
+        },
+        watch_terms: [
+          {
+            id: 7,
+            keyword: "Aiko",
+            is_active: true,
+            notify_on_new: true,
+            notification_verified_devices: 0,
+          },
+        ],
+        // notification_health is the backend's grace-period-vetted computation
+        // (see ORPHANED_NOTIFICATION_GRACE_MINUTES) — only this shape should
+        // trigger a watchdog alert.
+        notification_health: {
+          healthy: false,
+          active_notify_terms: 1,
+          active_notify_terms_without_verified_devices: 1,
+          active_silent_orphan_terms: 0,
+          active_notify_term_ids_without_verified_devices: [7],
+        },
+        pending_notifications: [],
+        latest_successful_poll: {
+          id: 1,
+          kind: "poll",
+          status: "completed",
+          created_at: new Date().toISOString(),
+        },
+        recent_events: [],
+      }), { status: 200 });
+    }
+    if (url === "https://hooks.example/watchdog") {
+      const payload = await options.json?.() || JSON.parse(options.body);
+      webhookPayloads.push(payload.text);
+      return new Response("ok", { status: 200 });
+    }
+    if (url.endsWith("/api/health")) {
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    }
+    throw new Error(`unexpected url ${url}`);
+  };
+  const pending = [];
+  await worker.scheduled(null, {
+    ADMIN_API_TOKEN: "secret",
+    BACKEND_URL: "https://backend.example",
+    ALERT_WEBHOOK_URL: "https://hooks.example/watchdog",
+  }, {
+    waitUntil(promise) {
+      pending.push(promise);
+    },
+  });
+  await Promise.all(pending);
+
+  assert.equal(webhookPayloads.length, 1);
+  assert.match(webhookPayloads[0], /notification watchdog degraded/);
+  assert.match(webhookPayloads[0], /Aiko/);
+});
+
+test("scheduled poll does not alert on the ungraced legacy notification fallback", async (context) => {
+  // When the backend response is missing notification_health (older/degraded
+  // backend), notificationHealth() falls back to computing from watch_terms
+  // directly — with no way to tell a brand-new term from one broken for hours.
+  // That result must not reach the webhook (graced: false).
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
   const webhookPayloads = [];
@@ -1229,7 +1305,5 @@ test("scheduled poll notifies watchdog when notifications are not deliverable", 
   });
   await Promise.all(pending);
 
-  assert.equal(webhookPayloads.length, 1);
-  assert.match(webhookPayloads[0], /notification watchdog degraded/);
-  assert.match(webhookPayloads[0], /Aiko/);
+  assert.equal(webhookPayloads.length, 0);
 });

@@ -609,6 +609,30 @@ class TestDeviceScopedBackgroundRefresh:
         assert r.json() == {"status": "poll completed"}
         mock_create_poll_task.assert_called_once()
 
+    def test_poll_failure_returns_clean_status_and_records_backend_event(self, client, db_session):
+        token = "2" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "production", "device_secret": "correct-secret-123"},
+        )
+
+        async def failing_poll():
+            raise RuntimeError("connector build error")
+
+        with patch(
+            "app.ingestion.scheduler.create_poll_task",
+            side_effect=lambda: asyncio.create_task(failing_poll()),
+        ):
+            r = client.post(
+                "/api/devices/background-refresh",
+                json={"token": token, "device_secret": "correct-secret-123"},
+            )
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "poll failed"}
+        event = db_session.query(BackendEvent).filter_by(kind="poll", status="failed").one()
+        assert "connector build error" in event.payload["error"]
+
     def test_limits_poll_to_fit_ios_background_budget(self, client):
         token = "1" * 64
         captured_timeout = None
@@ -833,7 +857,7 @@ class TestListAPNSTokens:
         assert r.status_code == 200
         assert r.json() == []
 
-    def test_list_returns_all_tokens(self, client):
+    def test_list_returns_all_tokens_redacted(self, client):
         token1 = "a" * 64
         token2 = "b" * 64
         client.post("/api/devices/apns-token", json=_registration(token1))
@@ -842,8 +866,9 @@ class TestListAPNSTokens:
         r = client.get("/api/devices/apns-tokens")
         assert r.status_code == 200
         tokens = [d["token"] for d in r.json()]
-        assert token1 in tokens
-        assert token2 in tokens
+        assert token1 not in tokens, "full token must not be exposed, only the redacted form"
+        assert token1[-8:] in tokens
+        assert token2[-8:] in tokens
 
     def test_list_sorted_newest_first(self, client):
         token1 = "c" * 64
@@ -854,7 +879,7 @@ class TestListAPNSTokens:
         r = client.get("/api/devices/apns-tokens")
         tokens = [d["token"] for d in r.json()]
         # token2 was upserted last, so it should appear first
-        assert tokens.index(token2) < tokens.index(token1)
+        assert tokens.index(token2[-8:]) < tokens.index(token1[-8:])
 
 
 class TestPruneSupersededAPNSTokens:

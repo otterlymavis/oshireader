@@ -17,9 +17,6 @@ final class NotificationService: UNNotificationServiceExtension {
             return
         }
         bestAttemptContent = content
-        // Hide source/author labels while preserving the title, message preview,
-        // link metadata, and any downloadable thumbnail attachment.
-        content.subtitle = ""
         sendReceiptDiagnostic(userInfo: content.userInfo)
 
         guard let url = thumbnailURL(from: content.userInfo) else {
@@ -47,8 +44,11 @@ final class NotificationService: UNNotificationServiceExtension {
                 )
             do {
                 try FileManager.default.moveItem(at: tempURL, to: destination)
+                // Keep the thumbnail out of the collapsed banner/lock screen; it only
+                // appears in the custom expanded view when the user long-presses.
+                let options = [UNNotificationAttachmentOptionsThumbnailHiddenKey: true]
                 content.attachments = [
-                    try UNNotificationAttachment(identifier: "preview", url: destination)
+                    try UNNotificationAttachment(identifier: "preview", url: destination, options: options)
                 ]
             } catch {
                 return

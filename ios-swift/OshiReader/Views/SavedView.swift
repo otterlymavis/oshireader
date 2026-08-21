@@ -42,12 +42,18 @@ struct SavedView: View {
                     
                     NavigationStack {
                         if let page = selectedPage {
-                            ReaderView(feedItem: page.toFeedItem())
-                                .id(page.id)
+                            ReaderView(
+                                feedItem: page.toFeedItem(),
+                                siblingItems: db.savedPages.map { $0.toFeedItem() },
+                                onNavigate: { item in
+                                    selectedPage = db.savedPages.first(where: { $0.id == item.id })
+                                }
+                            )
                         } else {
                             VStack(spacing: 16) {
                                 Text("📂")
                                     .font(.system(size: 64))
+                                    .accessibilityHidden(true)
                                 Text(i18n.t("savedSelectArticle"))
                                     .font(.headline)
                                     .foregroundColor(theme.colors.textSub)
@@ -72,6 +78,7 @@ struct SavedView: View {
                 VStack(spacing: 12) {
                     Text("📂")
                         .font(.system(size: 48))
+                        .accessibilityHidden(true)
                     Text(i18n.t("savedEmptyTitle"))
                         .font(.headline)
                         .foregroundColor(theme.colors.textSub)
@@ -110,7 +117,7 @@ struct SavedView: View {
                                 }
                             }
                         } else {
-                            NavigationLink(destination: ReaderView(feedItem: page.toFeedItem())) {
+                            NavigationLink(destination: ReaderView(feedItem: page.toFeedItem(), siblingItems: db.savedPages.map { $0.toFeedItem() })) {
                                 SavedPageCard(page: page, theme: theme)
                             }
                             .buttonStyle(PlainButtonStyle())
@@ -175,6 +182,8 @@ struct SavedPageCard: View {
         .background(theme.colors.card)
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(theme.mode == .dark ? 0.2 : 0.04), radius: 5, x: 0, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel([cleanDisplayText(page.title) ?? page.url, meta.name, formattedDate(page.saved_at)].joined(separator: ", "))
         .accessibilityIdentifier("saved.card.\(page.id)")
     }
     
