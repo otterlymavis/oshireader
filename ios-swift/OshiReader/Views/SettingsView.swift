@@ -496,19 +496,23 @@ struct SettingsView: View {
                 Label("All sources", systemImage: term.source_mode == .all ? "checkmark" : "globe")
             }
             ForEach(allPlatforms, id: \.0) { key, label in
-                Button {
-                    var selected = term.source_mode == .selected ? Set(term.selected_platforms) : []
-                    if term.source_mode == .all {
-                        selected = [key]
-                    } else if selected.contains(key) {
-                        selected.remove(key)
-                    } else {
-                        selected.insert(key)
-                    }
-                    updateSourceSelection(for: term, mode: .selected, platforms: Array(selected).sorted())
-                } label: {
-                    Label(label, systemImage: term.source_mode == .selected && term.selected_platforms.contains(key) ? "checkmark.square" : "square")
-                }
+                Toggle(
+                    label,
+                    isOn: Binding(
+                        get: { term.source_mode == .selected && term.selected_platforms.contains(key) },
+                        set: { isOn in
+                            var selected = term.source_mode == .selected ? Set(term.selected_platforms) : []
+                            if term.source_mode == .all {
+                                selected = isOn ? [key] : []
+                            } else if isOn {
+                                selected.insert(key)
+                            } else {
+                                selected.remove(key)
+                            }
+                            updateSourceSelection(for: term, mode: .selected, platforms: Array(selected).sorted())
+                        }
+                    )
+                )
             }
         } label: {
             Text(term.source_mode == .all ? "🌐" : "🔎")

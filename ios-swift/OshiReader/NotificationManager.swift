@@ -322,7 +322,6 @@ final class NotificationManager: ObservableObject {
             $0.watch_term_keyword
         }
 
-        let i18n = I18nManager.shared
         for (keyword, keywordItems) in counts where !keywordItems.isEmpty {
             let count = keywordItems.count
             let previewItem = keywordItems.sorted {
@@ -330,8 +329,17 @@ final class NotificationManager: ObservableObject {
                 (parseISO8601Date($1.published_at) ?? .distantPast)
             }.first
             let content = UNMutableNotificationContent()
-            content.title = i18n.tFormat("notifNewItemsTitle", keyword)
-            content.body = notificationBody(for: previewItem, count: count)
+            content.title = count > 1
+                ? "\(keyword) \(I18nManager.shared.tFormat("notifNewItemsMoreFmt", count - 1))"
+                : keyword
+            let itemTitle = cleanDisplayText(previewItem?.title)
+            let itemBody = cleanDisplayText(previewItem?.content_text)
+            if let itemTitle, !itemTitle.isEmpty {
+                content.subtitle = Self.limitedAlertText(itemTitle, limit: Self.alertSubtitleLimit)
+            }
+            if let itemBody, !itemBody.isEmpty, itemBody != itemTitle {
+                content.body = Self.limitedAlertText(itemBody, limit: Self.alertBodyLimit)
+            }
             content.sound = .default
             content.categoryIdentifier = Self.resultPreviewCategoryIdentifier
             content.userInfo = notificationUserInfo(for: previewItem, keyword: keyword, count: count)
@@ -357,15 +365,11 @@ final class NotificationManager: ObservableObject {
         }
     }
 
-    private func notificationBody(for item: FeedItem?, count: Int) -> String {
-        let i18n = I18nManager.shared
-        let preview = cleanDisplayText(item?.title)
-            ?? cleanDisplayText(item?.content_text)
-            ?? item?.url
-            ?? (count == 1 ? i18n.t("notifNewItemsBodyOne") : i18n.tFormat("notifNewItemsBodyMany", count))
-        let limitedPreview = preview.count > 140 ? "\(preview.prefix(137))..." : preview
-        guard count > 1 else { return limitedPreview }
-        return "\(limitedPreview)\n\(i18n.tFormat("notifNewItemsMoreFmt", count - 1))"
+    private static let alertSubtitleLimit = 50
+    private static let alertBodyLimit = 100
+
+    private static func limitedAlertText(_ value: String, limit: Int) -> String {
+        value.count <= limit ? value : "\(value.prefix(limit - 3))..."
     }
 
     private func notificationUserInfo(for item: FeedItem?, keyword: String, count: Int) -> [AnyHashable: Any] {
@@ -443,7 +447,10 @@ final class NotificationManager: ObservableObject {
                 .appendingPathComponent("oshireader-notification-\(UUID().uuidString).\(extensionHint)")
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: tempURL, to: destination)
-            return try UNNotificationAttachment(identifier: "preview", url: destination)
+            // Keep the thumbnail out of the collapsed banner/lock screen; it only
+            // appears in the custom expanded view when the user long-presses.
+            let options = [UNNotificationAttachmentOptionsThumbnailHiddenKey: true]
+            return try UNNotificationAttachment(identifier: "preview", url: destination, options: options)
         } catch {
             AppLogger.notifications.warning("Notification preview attachment failed: \(error.localizedDescription)")
             return nil

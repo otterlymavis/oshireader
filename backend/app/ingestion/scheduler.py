@@ -65,7 +65,7 @@ _queued_task: asyncio.Task | None = None
 _DISCUSSION_PLATFORMS: frozenset[str] = frozenset({"5ch", "girlschannel"})
 _WATCH_TERM_CLOCK_SKEW = timedelta(minutes=5)
 _DEVICE_OWNED_REFRESH_INTERVAL = timedelta(minutes=180)
-_MUTED_FEED_ITEMS_PER_TERM_LIMIT = 2000
+_MUTED_FEED_ITEMS_PER_TERM_LIMIT = 500
 _CATCHUP_NOTIFICATION_MIN_MATCH_AGE = timedelta(minutes=10)
 _PREVIEW_SOURCE_NEW_MATCH = "new_match"
 _PREVIEW_SOURCE_DISCUSSION_REPLY_UPDATE = "discussion_reply_update"
@@ -1207,19 +1207,32 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
             db.commit()
             return True
 
-        send_count = 0
-        send_preview: dict | None = None
-        send_item_ids: list[str] = []
-        for preview_item in pending_items:
-            if not _pending_preview_is_notification_eligible(db, term, preview_item, observed_at):
-                continue
-            send_count += _pending_notification_item_count(preview_item)
+        eligible_items = [
+            preview_item
+            for preview_item in pending_items
+            if _pending_preview_is_notification_eligible(db, term, preview_item, observed_at)
+        ]
+        # Oldest first, so a batch that accumulated across a missed delivery
+        # arrives in publish order instead of newest-first.
+        eligible_items.sort(
+            key=lambda item: _parse_pending_preview_published_at(item) or observed_at
+        )
+        # A source item can be queued more than once (e.g. a discussion thread
+        # re-queued as a reply update before the prior queue entry was
+        # delivered). Collapse to one send per id so a queuing duplicate
+        # doesn't become a duplicate push now that each item sends on its own.
+        seen_item_ids: set[str] = set()
+        deduped_items: list[dict] = []
+        for preview_item in eligible_items:
             item_id = preview_item.get("id")
-            if isinstance(item_id, str) and item_id not in send_item_ids:
-                send_item_ids.append(item_id)
-            send_preview = _newer_pending_preview(db, send_preview, preview_item, observed_at)
+            if isinstance(item_id, str):
+                if item_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(item_id)
+            deduped_items.append(preview_item)
+        eligible_items = deduped_items
 
-        if send_count <= 0 or send_preview is None:
+        if not eligible_items:
             db.delete(pending)
             db.commit()
             return True
@@ -1232,21 +1245,39 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
                 db.commit()
             return True
         term = fresh_term
-        should_clear = await send_new_match_notifications(
-            db,
-            term,
-            send_count,
-            _sendable_pending_preview(send_preview),
-            notification_item_ids=send_item_ids,
-        )
-        if should_clear is False:
-            return False
 
-        pending = db.get(PendingNotification, term.id)
-        if pending is not None:
-            db.delete(pending)
-            db.commit()
-        return True
+        # One push per item: no aggregation into a single "keyword ほかN件"
+        # notification. Items that fail to send stay queued for retry.
+        # Persist progress after every send (not just once at the end) so
+        # that if a later item raises, already-delivered items are already
+        # off the pending row and don't get resent on the next retry.
+        remaining_items: list[dict] = list(eligible_items)
+        for preview_item in eligible_items:
+            item_id = preview_item.get("id")
+            item_ids = [item_id] if isinstance(item_id, str) else []
+            should_clear = await send_new_match_notifications(
+                db,
+                term,
+                _pending_notification_item_count(preview_item),
+                _sendable_pending_preview(preview_item),
+                notification_item_ids=item_ids,
+            )
+            if should_clear is not False:
+                remaining_items.remove(preview_item)
+
+            pending = db.get(PendingNotification, term.id)
+            if pending is None:
+                return not remaining_items
+            if remaining_items:
+                pending.preview_item = {"items": remaining_items}
+                pending.new_count = sum(_pending_notification_item_count(item) for item in remaining_items)
+                pending.updated_at = datetime.now(timezone.utc)
+                db.commit()
+            else:
+                db.delete(pending)
+                db.commit()
+
+        return not remaining_items
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -1677,7 +1708,7 @@ async def _poll_once_unlocked() -> None:
 
         _prune_irrelevant_matches(db, all_terms)
 
-        # Prune: keep at most 200 items per (platform, watch_term) to
+        # Prune: keep at most 100 items per (platform, watch_term) to
         # prevent unbounded DB growth.  Community platforms (5ch, girlschannel)
         # are excluded — their threads are rare and long-lived.
         _prune_old_items(db)
@@ -1722,7 +1753,7 @@ def _prune_irrelevant_matches(db, terms: list[WatchTerm]) -> None:
 
 
 def _prune_old_items(db) -> None:
-    """Delete the oldest matches beyond 200 per (platform, watch_term) pair.
+    """Delete the oldest matches beyond 100 per (platform, watch_term) pair.
 
     Uses a single window-function query (ROW_NUMBER) instead of one query per
     pair — O(1) round-trips regardless of how many (platform, term) combos exist.
@@ -1763,7 +1794,7 @@ def _prune_old_muted_feed_items(db, per_term_limit: int) -> int:
 def _prune_old_items_with_limit(
     db,
     muted_per_term_limit: int,
-    match_per_term_platform_limit: int = 200,
+    match_per_term_platform_limit: int = 100,
     include_discussion_platforms: bool = False,
     raise_on_error: bool = False,
 ) -> dict[str, int]:

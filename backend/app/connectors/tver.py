@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -188,8 +188,9 @@ class TVERConnector(BaseConnector):
 
             # Bound concurrent detail lookups so a broad keyword can't burst up
             # to 25 simultaneous requests against statics.tver.jp from Render's
-            # single shared egress IP (this pattern mirrors fivech.py's
-            # _gather_limited, which exists for the same reason).
+            # single shared egress IP. Scoped to just the detail fetch (not the
+            # whole _process call) so episodes whose list-level fields already
+            # match don't wait behind slow in-flight HTTP requests.
             detail_fetch_semaphore = asyncio.Semaphore(_DETAIL_FETCH_CONCURRENCY)
 
             async def _process(ep: dict) -> Optional[SourceItemCreate]:
@@ -267,8 +268,10 @@ class TVERConnector(BaseConnector):
                     ]
                     content_text = "\n".join(dict.fromkeys(content_text_parts)) or None
 
-                    raw_payload = dict(ep)
-                    raw_payload["date_source"] = date_source
+                    raw_payload = {
+                        "source": "tver_api",
+                        "date_source": date_source,
+                    }
 
                     return SourceItemCreate(
                         platform=self.PLATFORM,

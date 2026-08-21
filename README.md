@@ -104,6 +104,7 @@ Configure these in your backend `.env` file:
 | `CORS_ALLOW_ORIGINS` | *None* | Comma-separated browser origins allowed by CORS (Native iOS calls bypass CORS) |
 | `YOUTUBE_API_KEY` | *None* | Optional API key for YouTube Data API (scrapes as a fallback) |
 | `TWITTER_BEARER_TOKEN` | *None* | Optional Bearer Token for Twitter/X API search |
+| `MAX_WATCH_TERMS_PER_DEVICE` | `50` | Caps how many watch terms one device can create; further creates get `409 watch_term_limit_reached` |
 | `APNS_TEAM_ID` | *None* | Apple Developer Team ID |
 | `APNS_KEY_ID` | *None* | APNs Key ID (`.p8` private key identifier) |
 | `APNS_PRIVATE_KEY` | *None* | APNs `.p8` raw private key contents |

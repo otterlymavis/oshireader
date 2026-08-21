@@ -29,6 +29,7 @@ from app.ingestion.scheduler import (
     _fetch_one_result,
     _is_notification_eligible,
     _notification_freshness_window,
+    _pending_notification_items,
     _prune_irrelevant_matches,
     _prune_old_items,
     _prune_old_items_with_limit,
@@ -99,7 +100,7 @@ class TestPruneOldItems:
         _prune_old_items(db)
 
         remaining = db.query(Match).filter(Match.watch_term_id == term.id).count()
-        assert remaining == 200
+        assert remaining == 100
 
     def test_prune_deletes_orphan_source_items(self, db):
         term = WatchTerm(keyword="k2", aliases=[])
@@ -234,7 +235,7 @@ class TestPruneOldItems:
             .filter(SourceItem.platform == "togetter")
             .count()
         )
-        assert count == 200
+        assert count == 100
 
     def test_prune_is_idempotent(self, db):
         term = WatchTerm(keyword="k4", aliases=[])
@@ -249,7 +250,7 @@ class TestPruneOldItems:
         _prune_old_items(db)
         count_after_second = db.query(Match).filter(Match.watch_term_id == term.id).count()
 
-        assert count_after_first == count_after_second == 200
+        assert count_after_first == count_after_second == 100
 
     def test_prune_keeps_newest_items(self, db):
         term = WatchTerm(keyword="k5", aliases=[])
@@ -267,8 +268,8 @@ class TestPruneOldItems:
             .order_by(SourceItem.published_at.desc())
             .all()
         )
-        assert len(kept_items) == 200
-        # The most recent 200 should have item_ids 209 down to 10
+        assert len(kept_items) == 100
+        # The most recent 100 should have item_ids 209 down to 110
         newest_id = kept_items[0].item_id
         oldest_id = kept_items[-1].item_id
         assert int(newest_id.replace("item", "")) > int(oldest_id.replace("item", ""))
@@ -1268,7 +1269,7 @@ class TestDeliverPendingNotification:
         mock_send.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_grouped_multi_item_delivery_sends_once_before_term_change(self, db):
+    async def test_multi_item_delivery_sends_one_notification_per_item(self, db):
         term = WatchTerm(
             keyword="Aiko",
             notify_on_new=True,
@@ -1305,8 +1306,10 @@ class TestDeliverPendingNotification:
                 new_count=2,
                 preview_item={
                     "items": [
-                        {"id": first.id, "url": first.url, "published_at": first.published_at.isoformat()},
+                        # Stored newest-first, as queuing appends; delivery
+                        # should still send in published-at (oldest-first) order.
                         {"id": second.id, "url": second.url, "published_at": second.published_at.isoformat()},
+                        {"id": first.id, "url": first.url, "published_at": first.published_at.isoformat()},
                     ],
                 },
             ),
@@ -1314,28 +1317,82 @@ class TestDeliverPendingNotification:
         db.commit()
         term_id = term.id
 
-        ExternalSession = sessionmaker(bind=db.get_bind())
-
-        async def mute_after_first_send(*_args, **_kwargs):
-            external_db = ExternalSession()
-            try:
-                external_term = external_db.get(WatchTerm, term_id)
-                external_term.notify_on_new = False
-                external_db.commit()
-            finally:
-                external_db.close()
-            return True
-
-        mock_send = AsyncMock(side_effect=mute_after_first_send)
+        mock_send = AsyncMock(return_value=True)
         with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_send):
             delivered = await _deliver_pending_notification(db, term)
 
         assert delivered is True
-        assert mock_send.call_count == 1
-        assert mock_send.call_args.args[2] == 2
-        assert mock_send.call_args.args[3]["id"] == second.id
-        assert mock_send.call_args.kwargs["notification_item_ids"] == [first.id, second.id]
+        assert mock_send.call_count == 2
+        first_call, second_call = mock_send.call_args_list
+        assert first_call.args[2] == 1
+        assert first_call.args[3]["id"] == first.id
+        assert first_call.kwargs["notification_item_ids"] == [first.id]
+        assert second_call.args[2] == 1
+        assert second_call.args[3]["id"] == second.id
+        assert second_call.kwargs["notification_item_ids"] == [second.id]
         assert db.get(PendingNotification, term_id) is None
+
+    @pytest.mark.asyncio
+    async def test_multi_item_delivery_retains_only_failed_items(self, db):
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=True,
+            is_active=True,
+            created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        )
+        first = SourceItem(
+            id="youtube:first",
+            platform="youtube",
+            item_id="first",
+            url="https://example.com/first",
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+            media_type="video",
+            title="Aiko first",
+            raw_payload={"date_parsed": True},
+        )
+        second = SourceItem(
+            id="youtube:second",
+            platform="youtube",
+            item_id="second",
+            url="https://example.com/second",
+            published_at=datetime.now(timezone.utc) - timedelta(minutes=9),
+            media_type="video",
+            title="Aiko second",
+            raw_payload={"date_parsed": True},
+        )
+        first_published_at = first.published_at.isoformat()
+        second_published_at = second.published_at.isoformat()
+        db.add_all([term, first, second])
+        db.flush()
+        db.add_all([
+            Match(watch_term_id=term.id, source_item_id=first.id),
+            Match(watch_term_id=term.id, source_item_id=second.id),
+            PendingNotification(
+                watch_term_id=term.id,
+                new_count=2,
+                preview_item={
+                    "items": [
+                        {"id": first.id, "url": first.url, "published_at": first_published_at},
+                        {"id": second.id, "url": second.url, "published_at": second_published_at},
+                    ],
+                },
+            ),
+        ])
+        db.commit()
+        term_id = term.id
+
+        mock_send = AsyncMock(side_effect=[True, False])
+        with patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_send):
+            delivered = await _deliver_pending_notification(db, term)
+
+        assert delivered is False
+        assert mock_send.call_count == 2
+        remaining = db.get(PendingNotification, term_id)
+        assert remaining is not None
+        assert remaining.new_count == 1
+        assert _pending_notification_items(remaining) == [
+            {"id": second.id, "url": second.url, "published_at": second_published_at},
+        ]
 
 
 class TestReportOrphanedNotificationTerms:
