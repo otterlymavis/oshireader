@@ -11,6 +11,7 @@ from app.connectors.base import (
     BaseConnector,
     CollectionMode,
     SourceItemCreate,
+    clean_html_text,
     parse_feed_date,
 )
 
@@ -75,7 +76,7 @@ class NoteConnector(BaseConnector):
                     media_type="article",
                     author=author,
                     title=title,
-                    content_text=summary or None,
+                    content_text=clean_html_text(summary),
                     thumbnail_url=thumb,
                     raw_payload={"feed_url": url, "matched_hashtag": keyword},
                 )

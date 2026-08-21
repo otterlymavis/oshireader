@@ -497,7 +497,7 @@ class FiveChConnector(BaseConnector):
                     published_at=subback_at,
                     media_type="text",
                     title=title,
-                    content_text=f"{match.group('posts')} posts",
+                    content_text=None,
                     thumbnail_url=None,
                     raw_payload={
                         "source": "5ch_itest",
@@ -826,7 +826,7 @@ class FiveChConnector(BaseConnector):
             published_at=published_at,
             media_type="text",
             title=hit.title,
-            content_text=f"{hit.posts} posts",
+            content_text=None,
             thumbnail_url=None,
             raw_payload={
                 "source": "2ch.sc_subject",
