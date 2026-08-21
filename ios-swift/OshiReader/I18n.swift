@@ -417,6 +417,132 @@ class I18nManager: ObservableObject {
             "zh-TW": "沒有圖片可以儲存。",
             "zh-CN": "没有图片可以保存。"
         ],
+        "active": [
+            "en": "Active",
+            "ja": "有効",
+            "zh-TW": "啟用中",
+            "zh-CN": "启用中"
+        ],
+        "refresh": [
+            "en": "Refresh",
+            "ja": "更新",
+            "zh-TW": "重新整理",
+            "zh-CN": "刷新"
+        ],
+        "translate": [
+            "en": "Translate",
+            "ja": "翻訳",
+            "zh-TW": "翻譯",
+            "zh-CN": "翻译"
+        ],
+        "selectImages": [
+            "en": "Select Images",
+            "ja": "画像を選択",
+            "zh-TW": "選取圖片",
+            "zh-CN": "选择图片"
+        ],
+        "close": [
+            "en": "Close",
+            "ja": "閉じる",
+            "zh-TW": "關閉",
+            "zh-CN": "关闭"
+        ],
+        "decreaseFontSize": [
+            "en": "Decrease Font Size",
+            "ja": "文字サイズを縮小",
+            "zh-TW": "縮小字體",
+            "zh-CN": "缩小字体"
+        ],
+        "increaseFontSize": [
+            "en": "Increase Font Size",
+            "ja": "文字サイズを拡大",
+            "zh-TW": "放大字體",
+            "zh-CN": "放大字体"
+        ],
+        "back": [
+            "en": "Back",
+            "ja": "戻る",
+            "zh-TW": "返回",
+            "zh-CN": "返回"
+        ],
+        "removeAliasFmt": [
+            "en": "Remove alias %@",
+            "ja": "別名「%@」を削除",
+            "zh-TW": "移除別名「%@」",
+            "zh-CN": "移除别名「%@」"
+        ],
+        "addOrConfirmAlias": [
+            "en": "Add Alias",
+            "ja": "別名を追加",
+            "zh-TW": "新增別名",
+            "zh-CN": "添加别名"
+        ],
+        "sourceSelectionMenu": [
+            "en": "Source Selection",
+            "ja": "ソース選択",
+            "zh-TW": "來源選擇",
+            "zh-CN": "来源选择"
+        ],
+        "searchStickersButton": [
+            "en": "Search Stickers",
+            "ja": "スタンプを検索",
+            "zh-TW": "搜尋貼圖",
+            "zh-CN": "搜索贴图"
+        ],
+        "scaleUp": [
+            "en": "Scale Up",
+            "ja": "拡大",
+            "zh-TW": "放大",
+            "zh-CN": "放大"
+        ],
+        "scaleDown": [
+            "en": "Scale Down",
+            "ja": "縮小",
+            "zh-TW": "縮小",
+            "zh-CN": "缩小"
+        ],
+        "rotateLeft": [
+            "en": "Rotate Left",
+            "ja": "左に回転",
+            "zh-TW": "向左旋轉",
+            "zh-CN": "向左旋转"
+        ],
+        "rotateRight": [
+            "en": "Rotate Right",
+            "ja": "右に回転",
+            "zh-TW": "向右旋轉",
+            "zh-CN": "向右旋转"
+        ],
+        "sourceStatusBadgeOK": [
+            "en": "Working",
+            "ja": "正常",
+            "zh-TW": "正常",
+            "zh-CN": "正常"
+        ],
+        "sourceStatusBadgeEmpty": [
+            "en": "No results yet",
+            "ja": "まだ結果なし",
+            "zh-TW": "尚無結果",
+            "zh-CN": "暂无结果"
+        ],
+        "sourceStatusBadgeFiltered": [
+            "en": "Filtered out",
+            "ja": "フィルターで除外",
+            "zh-TW": "已被篩選",
+            "zh-CN": "已被过滤"
+        ],
+        "sourceStatusBadgeFailed": [
+            "en": "Failed",
+            "ja": "失敗",
+            "zh-TW": "失敗",
+            "zh-CN": "失败"
+        ],
+        "sourceStatusBadgeUnknown": [
+            "en": "Unknown",
+            "ja": "不明",
+            "zh-TW": "未知",
+            "zh-CN": "未知"
+        ],
         "readerModeText": [
             "en": "Reader Text Mode",
             "ja": "リーダーテキスト表示",

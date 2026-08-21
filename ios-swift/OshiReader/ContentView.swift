@@ -45,6 +45,7 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(title(for: tab))
+                        .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
                         .accessibilityIdentifier("tab.\(tab.rawValue)")
                         .accessibilityAction {
                             selectedTab = tab

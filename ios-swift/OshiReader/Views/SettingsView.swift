@@ -254,6 +254,7 @@ struct SettingsView: View {
                                         .foregroundColor(theme.colors.text)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     }
+                                    .accessibilityAddTraits(newSelectedPlatforms.contains(key) ? .isSelected : [])
                                 }
                             }
                         }
@@ -434,6 +435,7 @@ struct SettingsView: View {
                                     .foregroundColor(theme.colors.textMuted)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(i18n.tFormat("removeAliasFmt", alias))
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
@@ -470,6 +472,7 @@ struct SettingsView: View {
                             .cornerRadius(99)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(addingAliasForId == term.id ? i18n.t("save") : i18n.t("addAlias"))
                 }
             }
         } else {
@@ -519,6 +522,7 @@ struct SettingsView: View {
                 .foregroundColor(theme.colors.textSub)
                 .clipShape(Circle())
         }
+        .accessibilityLabel(i18n.t("sourceSelectionMenu"))
         .accessibilityIdentifier("settings.keywordSources.\(term.keyword)")
     }
 
@@ -526,7 +530,7 @@ struct SettingsView: View {
         HStack(spacing: 6) {
             keywordNotificationButton(for: term)
 
-            Toggle("", isOn: Binding(
+            Toggle(i18n.t("active"), isOn: Binding(
                 get: { term.is_active },
                 set: { next in
                     db.updateTerm(id: term.id, isActive: next)
@@ -537,6 +541,7 @@ struct SettingsView: View {
             ))
             .labelsHidden()
             .tint(theme.colors.primary)
+            .accessibilityLabel(i18n.t("active"))
             .accessibilityIdentifier("settings.keywordToggle.\(term.keyword)")
         }
         .padding(.leading, 5)
@@ -810,6 +815,16 @@ struct SourceStatusView: View {
 
     private func row(for entry: SourceHealthEntry) -> some View {
         let platform = Platform.forRawValue(entry.platform)
+        var labelParts = [platform?.name ?? entry.platform, statusBadgeLabel(for: entry)]
+        if let checkedAt = entry.last_checked_at, let date = parseISO8601Date(checkedAt) {
+            labelParts.append(relativeTimeString(from: date))
+        }
+        if entry.status == "failure", let error = entry.last_error {
+            labelParts.append(error)
+        }
+        if entry.jina_ok == false {
+            labelParts.append(i18n.t("sourceStatusJinaDegraded") + (entry.jina_error.map { ": \($0)" } ?? ""))
+        }
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(platform?.name ?? entry.platform)
@@ -839,7 +854,19 @@ struct SourceStatusView: View {
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(labelParts.joined(separator: ", "))
         .accessibilityIdentifier("settings.sourceStatus.row.\(entry.platform)")
+    }
+
+    private func statusBadgeLabel(for entry: SourceHealthEntry) -> String {
+        switch entry.status {
+        case "success": return i18n.t("sourceStatusBadgeOK")
+        case "empty": return i18n.t("sourceStatusBadgeEmpty")
+        case "filtered": return i18n.t("sourceStatusBadgeFiltered")
+        case "failure": return i18n.t("sourceStatusBadgeFailed")
+        default: return i18n.t("sourceStatusBadgeUnknown")
+        }
     }
 
     private func statusBadge(for entry: SourceHealthEntry) -> some View {
@@ -852,7 +879,7 @@ struct SourceStatusView: View {
             default: return ("questionmark.circle", theme.colors.textSub)
             }
         }()
-        return Image(systemName: symbol).foregroundColor(color)
+        return Image(systemName: symbol).foregroundColor(color).accessibilityHidden(true)
     }
 
     private func load() async {

@@ -5,6 +5,7 @@ struct OshiView: View {
     @StateObject private var theme = ThemeManager.shared
     @StateObject private var i18n = I18nManager.shared
     
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var activePage = 0
     @State private var showEditorKeyword: String? = nil
     @State private var cachedSortedTerms: [WatchTerm]
@@ -25,6 +26,7 @@ struct OshiView: View {
                     VStack(spacing: 12) {
                         Text("(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧")
                             .font(.title)
+                            .accessibilityHidden(true)
                         Text(i18n.t("oshiEmpty"))
                             .font(.headline)
                             .foregroundColor(theme.colors.primary)
@@ -80,10 +82,11 @@ struct OshiView: View {
                                     Circle()
                                         .frame(width: idx == activePage ? 14 : 6, height: 6)
                                         .foregroundColor(idx == activePage ? theme.colors.primary : theme.colors.border)
-                                        .animation(.spring(), value: activePage)
+                                        .animation(reduceMotion ? nil : .spring(), value: activePage)
                                 }
                             }
                             .padding(.vertical, 12)
+                            .accessibilityHidden(true)
                         }
                     }
                 }

@@ -408,6 +408,7 @@ struct FeedView: View {
                             VStack(spacing: 16) {
                                 Text("📖")
                                     .font(.system(size: 64))
+                                    .accessibilityHidden(true)
                                 Text(i18n.t("feedSelectArticle"))
                                     .font(.headline)
                                     .foregroundColor(theme.colors.textSub)
@@ -506,6 +507,7 @@ struct FeedView: View {
                                     .background(selectedPlatform == nil ? theme.colors.primary : theme.colors.divider)
                                     .cornerRadius(10)
                                 }
+                                .accessibilityAddTraits(selectedPlatform == nil ? .isSelected : [])
                                 .accessibilityIdentifier("feed.platform.all")
                                 
                                 // Individual platforms
@@ -546,6 +548,7 @@ struct FeedView: View {
                                         .background(bg)
                                         .cornerRadius(10)
                                     }
+                                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                                     .accessibilityIdentifier("feed.platform.\(platformId)")
                                 }
                             }
@@ -563,6 +566,7 @@ struct FeedView: View {
                                 .cornerRadius(10)
                                 .padding(.trailing, 10)
                         }
+                        .accessibilityLabel(i18n.t("reorderSources"))
                         .accessibilityIdentifier("feed.reorderSourcesButton")
                     }
                     .background(theme.colors.card)
@@ -632,6 +636,7 @@ struct FeedView: View {
                     VStack(spacing: 12) {
                         Text("≽՞•ﻌ•՞≼")
                             .font(.system(size: 40))
+                            .accessibilityHidden(true)
                         Text(i18n.t("feedEmpty"))
                             .font(.headline)
                             .foregroundColor(theme.colors.primary)
@@ -735,6 +740,7 @@ struct FeedView: View {
                     .clipShape(Circle())
                     .shadow(color: Color.black.opacity(0.25), radius: 8, x: 0, y: 3)
             }
+            .accessibilityLabel(i18n.t("addCustomFeed"))
             .accessibilityIdentifier("feed.addCustomUrlButton")
             .padding(.trailing, 20)
             .padding(.bottom, 24)
@@ -751,6 +757,7 @@ struct FeedView: View {
                         Image(systemName: "arrow.clockwise")
                             .foregroundColor(theme.colors.primary)
                     }
+                    .accessibilityLabel(i18n.t("refresh"))
                     .accessibilityIdentifier("feed.refreshButton")
                 }
             }
@@ -1623,7 +1630,21 @@ struct FeedCard: View {
     let isSaved: Bool
     let theme: ThemeManager
     @StateObject private var appearance = AppearanceManager.shared
-    
+    @StateObject private var i18n = I18nManager.shared
+
+    private var accessibilitySummary: String {
+        let meta = theme.metadata(for: item.platform)
+        let parts: [String?] = [
+            cleanDisplayText(item.title),
+            cleanDisplayText(item.author),
+            item.watch_term_keyword.isEmpty ? nil : item.watch_term_keyword,
+            meta.name,
+            isSaved ? i18n.t("tabSaved") : nil,
+            relativeTime(from: item.published_at)
+        ]
+        return parts.compactMap { $0 }.joined(separator: ", ")
+    }
+
     var body: some View {
         let meta = theme.metadata(for: item.platform)
         let badgeBg = theme.style == .standard ? theme.standardBadgeBg : meta.bg
@@ -1711,9 +1732,11 @@ struct FeedCard: View {
         .background(theme.colors.card)
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(theme.mode == .dark ? 0.2 : 0.04), radius: 5, x: 0, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilitySummary)
         .accessibilityIdentifier("feed.card.\(item.id)")
     }
-    
+
     private func relativeTime(from isoDate: String) -> String {
         guard let date = parseISO8601Date(isoDate) else { return "" }
         return relativeTimeString(from: date)
@@ -1827,6 +1850,7 @@ struct FilterButton: View {
                 .foregroundColor(isSelected ? .white : theme.colors.textSub)
                 .cornerRadius(999)
         }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier(accessibilityId ?? "filter.option.\(text)")
     }
 }
@@ -1956,7 +1980,10 @@ struct ReorderSourcesSheet: View {
                             Image(systemName: "line.3.horizontal")
                                 .font(.subheadline)
                                 .foregroundColor(theme.colors.textMuted)
+                                .accessibilityHidden(true)
                         }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(meta.name)
                         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     }
                     .onMove { indices, newOffset in
@@ -2016,6 +2043,7 @@ private struct WallpaperBackgroundView: View {
                     .aspectRatio(contentMode: .fill)
                     .opacity(0.20)
                     .ignoresSafeArea()
+                    .accessibilityHidden(true)
             }
         }
         .task(id: urlString) { await load() }
