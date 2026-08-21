@@ -1248,7 +1248,10 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
 
         # One push per item: no aggregation into a single "keyword ほかN件"
         # notification. Items that fail to send stay queued for retry.
-        remaining_items: list[dict] = []
+        # Persist progress after every send (not just once at the end) so
+        # that if a later item raises, already-delivered items are already
+        # off the pending row and don't get resent on the next retry.
+        remaining_items: list[dict] = list(eligible_items)
         for preview_item in eligible_items:
             item_id = preview_item.get("id")
             item_ids = [item_id] if isinstance(item_id, str) else []
@@ -1259,21 +1262,22 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
                 _sendable_pending_preview(preview_item),
                 notification_item_ids=item_ids,
             )
-            if should_clear is False:
-                remaining_items.append(preview_item)
+            if should_clear is not False:
+                remaining_items.remove(preview_item)
 
-        pending = db.get(PendingNotification, term.id)
-        if pending is None:
-            return not remaining_items
-        if remaining_items:
-            pending.preview_item = {"items": remaining_items}
-            pending.new_count = sum(_pending_notification_item_count(item) for item in remaining_items)
-            pending.updated_at = datetime.now(timezone.utc)
-            db.commit()
-            return False
-        db.delete(pending)
-        db.commit()
-        return True
+            pending = db.get(PendingNotification, term.id)
+            if pending is None:
+                return not remaining_items
+            if remaining_items:
+                pending.preview_item = {"items": remaining_items}
+                pending.new_count = sum(_pending_notification_item_count(item) for item in remaining_items)
+                pending.updated_at = datetime.now(timezone.utc)
+                db.commit()
+            else:
+                db.delete(pending)
+                db.commit()
+
+        return not remaining_items
     except asyncio.CancelledError:
         raise
     except Exception as exc:

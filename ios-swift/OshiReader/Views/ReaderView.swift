@@ -930,6 +930,7 @@ struct WebViewHelper: UIViewRepresentable {
                         applyReaderRoot();
                         if (attempts >= 8) {
                             clearInterval(window.__oshiReaderRootCatchUp);
+                            window.__oshiReaderRootCatchUp = null;
                         }
                     }, 750);
                 }
