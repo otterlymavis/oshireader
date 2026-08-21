@@ -1144,6 +1144,20 @@ final class OshiReaderTests: XCTestCase {
         )
     }
 
+    func testFocusedFallbackPlatformsStillFetchBackendResults() {
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.backendPlatformsForFocusedRefresh("youtube"),
+            ["youtube"]
+        )
+        XCTAssertEqual(
+            BackgroundRefreshPolicy.backendPlatformsForFocusedRefresh("niconico"),
+            ["niconico"]
+        )
+        XCTAssertTrue(
+            BackgroundRefreshPolicy.backendPlatformsForFocusedRefresh("custom").isEmpty
+        )
+    }
+
     func testBackendFailureForcesDeviceFallbackPastRecentScrapeThrottle() {
         let fallbackPlatforms: Set<String> = ["youtube", "mdpr"]
         let forcedPlatforms = BackgroundRefreshPolicy.forcedForegroundDeviceFallbackPlatforms(
@@ -3107,9 +3121,11 @@ final class OshiReaderTests: XCTestCase {
         )
 
         XCTAssertEqual(center.requests.count, 1)
-        XCTAssertEqual(center.requests.first?.content.title, I18nManager.shared.tFormat("notifNewItemsTitle", "Enabled Oshi"))
-        XCTAssertEqual(center.requests.first?.content.body, "Enabled first\n\(I18nManager.shared.tFormat("notifNewItemsMoreFmt", 1))")
-        XCTAssertEqual(center.requests.first?.content.subtitle, "")
+        XCTAssertEqual(center.requests.first?.content.title, "Enabled Oshi \(I18nManager.shared.tFormat("notifNewItemsMoreFmt", 1))")
+        XCTAssertEqual(center.requests.first?.content.subtitle, "Enabled first")
+        XCTAssertEqual(center.requests.first?.content.body, "Expanded message preview")
+        XCTAssertNotEqual(center.requests.first?.content.subtitle, "Source label that must stay hidden")
+        XCTAssertNotEqual(center.requests.first?.content.body, "Source label that must stay hidden")
         XCTAssertEqual(center.requests.first?.content.categoryIdentifier, NotificationManager.resultPreviewCategoryIdentifier)
         XCTAssertEqual(center.requests.first?.content.threadIdentifier, "oshireader-enabled oshi")
         XCTAssertEqual(center.requests.first?.content.targetContentIdentifier, "youtube:enabled-1")
@@ -3199,8 +3215,10 @@ final class OshiReaderTests: XCTestCase {
         let ids = Set(center.requests.map { $0.identifier })
         XCTAssertTrue(ids.contains("oshireader-new-Oshi A"))
         XCTAssertTrue(ids.contains("oshireader-new-Oshi B"))
-        let bodyA = center.requests.first(where: { $0.identifier == "oshireader-new-Oshi A" })?.content.body
-        XCTAssertEqual(bodyA, "A1\n\(I18nManager.shared.tFormat("notifNewItemsMoreFmt", 1))")
+        let requestA = center.requests.first(where: { $0.identifier == "oshireader-new-Oshi A" })
+        XCTAssertEqual(requestA?.content.title, "Oshi A \(I18nManager.shared.tFormat("notifNewItemsMoreFmt", 1))")
+        XCTAssertEqual(requestA?.content.subtitle, "A1")
+        XCTAssertEqual(requestA?.content.body, "")
     }
 
     @MainActor
@@ -5239,12 +5257,12 @@ final class OshiReaderTests: XCTestCase {
         let saved = i18n.lang
         i18n.setLanguage("en")
 
-        let result = i18n.tFormat("notifNewItemsTitle", "Aiko")
-        XCTAssertEqual(result, "Aiko")
+        let result = i18n.tFormat("notifNewItemsMoreFmt", 3)
+        XCTAssertEqual(result, "+ 3 more")
 
         i18n.setLanguage("ja")
-        let jaResult = i18n.tFormat("notifNewItemsTitle", "愛子")
-        XCTAssertEqual(jaResult, "愛子")
+        let jaResult = i18n.tFormat("notifNewItemsMoreFmt", 3)
+        XCTAssertEqual(jaResult, "ほか3件")
 
         i18n.setLanguage(saved)
     }

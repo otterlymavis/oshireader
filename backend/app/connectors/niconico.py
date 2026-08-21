@@ -12,6 +12,7 @@ import httpx
 
 from app.config import settings
 from app.connectors.base import (
+    SCRAPE_USER_AGENT,
     BaseConnector,
     CollectionMode,
     SourceItemCreate,
@@ -28,7 +29,7 @@ _VID_ID_RE = re.compile(r'/watch/([a-zA-Z0-9]+)')
 _THUMB_RE = re.compile(r'<img[^>]+src="(https://[^"]+nicovideo\.jp[^"]+)"', re.I)
 
 _HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "User-Agent": SCRAPE_USER_AGENT,
     "Accept-Language": "ja,en;q=0.9",
 }
 

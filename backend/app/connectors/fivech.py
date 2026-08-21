@@ -17,6 +17,8 @@ from app.connectors.base import (
     CollectionMode,
     GOOGLE_NEWS_HEADERS,
     SourceItemCreate,
+    gather_limited,
+    is_recent_search_result,
     title_contains_keyword,
 )
 from app.config import settings
@@ -62,8 +64,6 @@ _DIRECT_EXTRA_SCAN_TIMEOUT_SECONDS = 24.0
 _DIRECT_EXTRA_SCAN_CURSOR_STEP = 32
 _DIRECT_EXTRA_SCAN_OFFSET_LIMIT = 512
 _ITEST_FETCH_TIMEOUT_SECONDS = 5.0
-_FIVECH_INDEX_MAX_AGE = timedelta(days=31)
-_FIVECH_INDEX_FUTURE_GRACE = timedelta(days=1)
 _DIRECT_BBSMENU_URL = "http://menu.2ch.sc/bbsmenu.html"
 _DIRECT_BBSMENU_CACHE_TTL_SECONDS = 3600.0
 
@@ -164,16 +164,6 @@ class _ThreadHit:
     thread_id: str
     title: str
     posts: int
-
-
-async def _gather_limited(coros, concurrency: int = _DIRECT_SUBJECT_CONCURRENCY):
-    semaphore = asyncio.Semaphore(concurrency)
-
-    async def run(coro):
-        async with semaphore:
-            return await coro
-
-    return await asyncio.gather(*(run(coro) for coro in coros), return_exceptions=True)
 
 
 def _decode_shift_jis(content: bytes) -> str:
@@ -338,15 +328,12 @@ def _parse_itest_datetime(value: str) -> datetime | None:
     return local.astimezone(timezone.utc)
 
 
-def _is_recent_index_result(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _FIVECH_INDEX_MAX_AGE <= published <= now + _FIVECH_INDEX_FUTURE_GRACE
-
-
 class FiveChConnector(BaseConnector):
     PLATFORM = "5ch"
     SUPPORTS_MEDIA_FILTER = False
+    # The itest.5ch.io + proxy + jina fallback chain needs longer than the
+    # scheduler's default fetch deadline.
+    MIN_FETCH_TIMEOUT_SECONDS = 35.0
 
     async def fetch(self, keyword: str, mode: CollectionMode) -> list[SourceItemCreate]:
         if mode == CollectionMode.MEDIA_ONLY:
@@ -417,7 +404,7 @@ class FiveChConnector(BaseConnector):
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, headers=GOOGLE_NEWS_HEADERS) as client:
             for start in range(0, len(_ITEST_BOARD_KEYS), _ITEST_REQUEST_CONCURRENCY):
                 board_batch = _ITEST_BOARD_KEYS[start:start + _ITEST_REQUEST_CONCURRENCY]
-                board_results = await _gather_limited(
+                board_results = await gather_limited(
                     [self._fetch_itest_board(client, board_key, keyword) for board_key in board_batch],
                     concurrency=_ITEST_REQUEST_CONCURRENCY,
                 )
@@ -466,7 +453,7 @@ class FiveChConnector(BaseConnector):
         items = self._parse_itest_board(text, board_key, keyword)
         if not items:
             return []
-        dated = await _gather_limited(
+        dated = await gather_limited(
             [self._apply_itest_latest_post_at(client, item) for item in items],
             concurrency=_ITEST_DAT_CONCURRENCY,
         )
@@ -475,7 +462,7 @@ class FiveChConnector(BaseConnector):
             if (
                 isinstance(item, SourceItemCreate)
                 and (item.raw_payload or {}).get("date_source") == "dat_latest_post"
-                and _is_recent_index_result(item.published_at)
+                and is_recent_search_result(item.published_at)
             )
         ]
 
@@ -510,7 +497,7 @@ class FiveChConnector(BaseConnector):
                     published_at=subback_at,
                     media_type="text",
                     title=title,
-                    content_text=f"{match.group('posts')} posts",
+                    content_text=None,
                     thumbnail_url=None,
                     raw_payload={
                         "source": "5ch_itest",
@@ -755,7 +742,7 @@ class FiveChConnector(BaseConnector):
     ) -> list[SourceItemCreate]:
         if not hits:
             return []
-        dated = await _gather_limited(
+        dated = await gather_limited(
             [self._build_direct_item(client, hit, keyword) for hit in hits[:_DIRECT_DAT_LIMIT]],
             concurrency=_DIRECT_DAT_CONCURRENCY,
         )
@@ -839,7 +826,7 @@ class FiveChConnector(BaseConnector):
             published_at=published_at,
             media_type="text",
             title=hit.title,
-            content_text=f"{hit.posts} posts",
+            content_text=None,
             thumbnail_url=None,
             raw_payload={
                 "source": "2ch.sc_subject",

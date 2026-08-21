@@ -438,6 +438,11 @@ enum BackgroundRefreshPolicy {
         }
     }
 
+    static func backendPlatformsForFocusedRefresh(_ platformId: String) -> [String] {
+        let normalized = Platform.normalize(platformId)
+        return Platform.shouldFetchFromBackend(normalized) ? [normalized] : []
+    }
+
     static func termsEligibleForDeviceFallback(
         _ activeTerms: [WatchTerm],
         subscribedPlatforms: [String]

@@ -1,29 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 
-from app.connectors.base import BaseConnector, CollectionMode, SourceItemCreate, contains_keyword
+from app.connectors.base import (
+    SCRAPE_USER_AGENT,
+    BaseConnector,
+    CollectionMode,
+    SourceItemCreate,
+    contains_keyword,
+    is_recent_search_result,
+)
 
 log = logging.getLogger(__name__)
 
 _YEAR_RE = re.compile(r'^(\d{4})年')
 _MONTH_DAY_RE = re.compile(r'(\d+)月(\d+)日')
 _TIME_RE = re.compile(r'(\d+):(\d+)')
-_MAX_INDEX_AGE = timedelta(days=31)
-_FUTURE_GRACE = timedelta(days=1)
-
-
-def _is_recent(published_at: datetime) -> bool:
-    published = published_at.astimezone(timezone.utc)
-    now = datetime.now(timezone.utc)
-    return now - _MAX_INDEX_AGE <= published <= now + _FUTURE_GRACE
 
 
 def _parse_timestamp_value(val: object) -> Optional[datetime]:
@@ -102,10 +101,12 @@ def _parse_tver_date(content: dict) -> Optional[datetime]:
 
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "User-Agent": SCRAPE_USER_AGENT,
     "Accept-Language": "ja,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
+
+_DETAIL_FETCH_CONCURRENCY = 4
 
 
 class TVERConnector(BaseConnector):
@@ -185,18 +186,24 @@ class TVERConnector(BaseConnector):
                 log.warning("TVer response JSON parse failed: %s", exc)
                 return []
 
-            items: list[SourceItemCreate] = []
-            for ep in episodes[:25]:
+            # Bound concurrent detail lookups so a broad keyword can't burst up
+            # to 25 simultaneous requests against statics.tver.jp from Render's
+            # single shared egress IP. Scoped to just the detail fetch (not the
+            # whole _process call) so episodes whose list-level fields already
+            # match don't wait behind slow in-flight HTTP requests.
+            detail_fetch_semaphore = asyncio.Semaphore(_DETAIL_FETCH_CONCURRENCY)
+
+            async def _process(ep: dict) -> Optional[SourceItemCreate]:
                 try:
                     content = ep.get("content") or ep.get("episode") or ep
                     ep_id = content.get("id") or content.get("seriesId") or ep.get("id")
                     if not ep_id:
-                        continue
-                    
+                        return None
+
                     title = content.get("title") or content.get("episodeTitle") or content.get("seriesTitle")
                     if not title:
-                        continue
-                    
+                        return None
+
                     # Construct URL
                     content_type = str(ep.get("type") or content.get("type") or "").lower()
                     if content_type == "series":
@@ -205,7 +212,7 @@ class TVERConnector(BaseConnector):
                         url = f"https://tver.jp/specials/{ep_id}"
                     else:
                         url = f"https://tver.jp/episodes/{ep_id}"
-                        
+
                     thumb_raw = content.get("thumbnailUrl") or content.get("thumbnailURL") or content.get("thumbnail_path")
                     thumb = None
                     if thumb_raw:
@@ -219,8 +226,41 @@ class TVERConnector(BaseConnector):
                     author = content.get("broadcasterName") or content.get("productionProviderName")
                     description = content.get("description") or content.get("episodeDescription")
                     series_title = content.get("seriesTitle")
-                    if not contains_keyword(keyword, title, description, author, series_title):
-                        continue
+                    published_at = _parse_tver_date(content)
+                    date_source = "search"
+
+                    # The search-list response has no cast/guest field even with
+                    # require_talent_data=true, so a name like an oshi's only ever
+                    # shows up in the per-episode detail description (e.g. "吉沢亮に
+                    # クレーム?"). Fetch that detail whenever the list-level fields
+                    # don't already confirm the match, or when we still need a date.
+                    detail_description = None
+                    detail_author = None
+                    if not published_at or not contains_keyword(keyword, title, description, author, series_title):
+                        async with detail_fetch_semaphore:
+                            detail = await self._fetch_episode_detail(client, str(ep_id))
+                        if detail:
+                            detail_description = detail.get("description")
+                            detail_author = detail.get("broadcastProviderLabel") or detail.get("productionProviderLabel")
+                            if not published_at:
+                                published_at = _parse_tver_date(detail)
+                                date_source = "episode_detail"
+
+                    # Check the list-level fields together with the detail-only
+                    # ones rather than replacing one with the other — a non-empty
+                    # but non-matching list description must not shadow a
+                    # genuinely matching detail description (or vice versa).
+                    if not contains_keyword(keyword, title, description, detail_description, author, detail_author, series_title):
+                        return None
+                    if detail_description:
+                        description = detail_description
+                    if not published_at:
+                        log.debug("Skipping TVer item without trustworthy date: %s", ep_id)
+                        return None
+                    if not is_recent_search_result(published_at):
+                        log.debug("Skipping stale TVer item %s dated %s", ep_id, published_at)
+                        return None
+
                     content_text_parts = [
                         str(part).strip()
                         for part in (series_title, description)
@@ -228,38 +268,29 @@ class TVERConnector(BaseConnector):
                     ]
                     content_text = "\n".join(dict.fromkeys(content_text_parts)) or None
 
-                    published_at = _parse_tver_date(content)
-                    date_source = "search"
-                    if not published_at:
-                        published_at = await self._fetch_episode_detail_date(client, str(ep_id))
-                        date_source = "episode_detail"
-                    if not published_at:
-                        log.debug("Skipping TVer item without trustworthy date: %s", ep_id)
-                        continue
-                    if not _is_recent(published_at):
-                        log.debug("Skipping stale TVer item %s dated %s", ep_id, published_at)
-                        continue
+                    raw_payload = {
+                        "source": "tver_api",
+                        "date_source": date_source,
+                    }
 
-                    raw_payload = dict(ep)
-                    raw_payload["date_source"] = date_source
-
-                    items.append(
-                        SourceItemCreate(
-                            platform=self.PLATFORM,
-                            item_id=str(ep_id),
-                            url=url,
-                            published_at=published_at,
-                            media_type="video",
-                            title=str(title),
-                            thumbnail_url=thumb,
-                            author=author,
-                            content_text=content_text,
-                            raw_payload=raw_payload,
-                        )
+                    return SourceItemCreate(
+                        platform=self.PLATFORM,
+                        item_id=str(ep_id),
+                        url=url,
+                        published_at=published_at,
+                        media_type="video",
+                        title=str(title),
+                        thumbnail_url=thumb,
+                        author=author,
+                        content_text=content_text,
+                        raw_payload=raw_payload,
                     )
                 except Exception as exc:
                     log.warning("Error parsing TVer episode item: %s", exc)
-                    
+                    return None
+
+            results = await asyncio.gather(*[_process(ep) for ep in episodes[:25]])
+            items = [item for item in results if item is not None]
             if items:
                 items.sort(key=lambda item: item.published_at, reverse=True)
                 return items
@@ -267,17 +298,16 @@ class TVERConnector(BaseConnector):
             # dates, so do not present indexed history as current TVer data.
             return []
 
-    async def _fetch_episode_detail_date(
+    async def _fetch_episode_detail(
         self,
         client: httpx.AsyncClient,
         episode_id: str,
-    ) -> Optional[datetime]:
+    ) -> Optional[dict]:
         try:
             resp = await client.get(f"https://statics.tver.jp/content/episode/{episode_id}.json")
             if not resp.is_success:
                 return None
-            data = resp.json()
+            return resp.json()
         except Exception as exc:
-            log.debug("TVer episode detail date fetch failed for %s: %s", episode_id, exc)
+            log.debug("TVer episode detail fetch failed for %s: %s", episode_id, exc)
             return None
-        return _parse_tver_date(data)

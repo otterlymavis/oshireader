@@ -4,9 +4,9 @@ import UserNotificationsUI
 
 final class NotificationViewController: UIViewController, UNNotificationContentExtension {
     private let imageView = UIImageView()
+    private let keywordLabel = UILabel()
     private let titleLabel = UILabel()
     private let bodyLabel = UILabel()
-    private let metaLabel = UILabel()
     private let textStack = UIStackView()
     private let container = UIStackView()
     private var imageWidthConstraint: NSLayoutConstraint?
@@ -27,20 +27,20 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
         imageView.accessibilityIdentifier = "notification.previewMedia"
         imageView.accessibilityLabel = "Notification media preview"
 
+        keywordLabel.font = .preferredFont(forTextStyle: .caption1)
+        keywordLabel.textColor = .secondaryLabel
+        keywordLabel.numberOfLines = 1
+
         titleLabel.font = .preferredFont(forTextStyle: .headline)
         titleLabel.numberOfLines = 2
 
         bodyLabel.font = .preferredFont(forTextStyle: .body)
         bodyLabel.numberOfLines = 6
 
-        metaLabel.font = .preferredFont(forTextStyle: .caption1)
-        metaLabel.textColor = .tertiaryLabel
-        metaLabel.numberOfLines = 1
-
         textStack.axis = .vertical
         textStack.spacing = 4
         textStack.translatesAutoresizingMaskIntoConstraints = false
-        [titleLabel, bodyLabel, metaLabel].forEach(textStack.addArrangedSubview)
+        [keywordLabel, titleLabel, bodyLabel].forEach(textStack.addArrangedSubview)
 
         container.axis = .vertical
         container.spacing = 12
@@ -74,29 +74,28 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
         let userInfo = content.userInfo
         let previewItem = dictionaryValue(userInfo["preview_item"])
 
+        let keyword = stringValue(userInfo["watch_term_keyword"]).map { base in
+            guard let moreCount = moreCount(from: userInfo) else { return base }
+            return "\(base) ほか\(moreCount)件"
+        }
         let title = firstNonEmpty(
             stringValue(userInfo["item_title"]),
-            stringValue(previewItem?["title"]),
-            content.title,
-            stringValue(userInfo["watch_term_keyword"]),
-            "OshiReader"
+            stringValue(previewItem?["title"])
         )
         let body = firstNonEmpty(
             stringValue(userInfo["item_content_text"]),
-            stringValue(previewItem?["content_text"]),
-            content.body,
-            stringValue(userInfo["item_url"]),
-            stringValue(previewItem?["url"])
+            stringValue(previewItem?["content_text"])
         )
+        keywordLabel.text = keyword
         titleLabel.text = title
         bodyLabel.text = body == title ? nil : body
-        metaLabel.text = metaText(from: content.userInfo)
         imageTask?.cancel()
         imageTask = nil
         imageView.image = image(from: content.attachments.first)
         imageView.isHidden = imageView.image == nil
+        keywordLabel.isHidden = keywordLabel.text?.isEmpty ?? true
+        titleLabel.isHidden = titleLabel.text?.isEmpty ?? true
         bodyLabel.isHidden = bodyLabel.text?.isEmpty ?? true
-        metaLabel.isHidden = metaLabel.text?.isEmpty ?? true
         updateLayout(for: view.bounds.width)
         updatePreferredContentSize()
 
@@ -133,12 +132,12 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
         )
     }
 
-    private func metaText(from userInfo: [AnyHashable: Any]) -> String? {
+    private func moreCount(from userInfo: [AnyHashable: Any]) -> Int? {
         guard let count = stringValue(userInfo["new_count"]),
               let numericCount = Int(count),
               numericCount > 1
         else { return nil }
-        return "ほか\(numericCount - 1)件"
+        return numericCount - 1
     }
 
     private func image(from attachment: UNNotificationAttachment?) -> UIImage? {

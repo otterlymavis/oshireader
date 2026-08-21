@@ -4,12 +4,6 @@ import SwiftUI
 import UIKit
 import WebKit
 
-struct ReaderImageAction: Identifiable {
-    let id = UUID()
-    let url: URL
-    let alt: String?
-}
-
 enum ReaderWebLoadState {
     case loading
     case loaded
@@ -18,6 +12,12 @@ enum ReaderWebLoadState {
 
 struct ReaderView: View {
     let feedItem: FeedItem
+    /// The ordered list `feedItem` was opened from (e.g. the current feed page).
+    /// Empty means "no sibling navigation" — prev/next controls stay hidden.
+    let siblingItems: [FeedItem]
+    /// Lets a split-view parent keep its own selection in sync when the user
+    /// moves between siblings from inside the reader instead of the list.
+    var onNavigate: ((FeedItem) -> Void)? = nil
 
     @StateObject private var db = LocalDB.shared
     @StateObject private var theme = ThemeManager.shared
@@ -26,14 +26,15 @@ struct ReaderView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
+    @State private var currentItem: FeedItem
     @State private var readerMode: Bool
     @State private var readerTheme: AppThemeMode = .light
     @State private var fontSize: CGFloat = 16.0
     @State private var isTranslated = false
-    @State private var imageAction: ReaderImageAction?
     @State private var saveImageStatus = ""
     @State private var showingSaveImageStatus = false
     @State private var selectImagesCounter = 0
+    @State private var saveAllImagesCounter = 0
     @State private var imageSelectionActionCounter = 0
     @State private var imageSelectionAction = ""
     @State private var isSelectingImages = false
@@ -44,8 +45,11 @@ struct ReaderView: View {
     @State private var isSigningIntoX = false
     @State private var showOpenInBrowserBanner = false
 
-    init(feedItem: FeedItem) {
+    init(feedItem: FeedItem, siblingItems: [FeedItem] = [], onNavigate: ((FeedItem) -> Void)? = nil) {
         self.feedItem = feedItem
+        self.siblingItems = siblingItems
+        self.onNavigate = onNavigate
+        _currentItem = State(initialValue: feedItem)
         _readerMode = State(initialValue: Self.initialReaderMode(for: feedItem))
         _isTranslated = State(initialValue: UserDefaults.standard.bool(forKey: "auto_translate_reader") && !Self.usesSystemSafari(for: feedItem))
     }
@@ -62,7 +66,7 @@ struct ReaderView: View {
     }
 
     var originalPageUrl: URL? {
-        guard let normalized = normalizedReaderUrl(feedItem.url, platform: feedItem.platform) else { return nil }
+        guard let normalized = normalizedReaderUrl(currentItem.url, platform: currentItem.platform) else { return nil }
         return URL(string: normalized)
     }
 
@@ -71,7 +75,7 @@ struct ReaderView: View {
             return URL(string: "https://x.com/login")
         }
         guard let originalUrl = originalPageUrl else { return nil }
-        if isTranslated, !Self.usesSystemSafari(for: feedItem) {
+        if isTranslated, !Self.usesSystemSafari(for: currentItem) {
             let targetLang: String
             switch i18n.lang {
             case "ja": targetLang = "ja"
@@ -89,15 +93,40 @@ struct ReaderView: View {
     }
 
     var isSaved: Bool {
-        db.savedPages.contains(where: { $0.id == feedItem.id })
+        db.savedPages.contains(where: { $0.id == currentItem.id })
+    }
+
+    var currentSiblingIndex: Int? {
+        siblingItems.firstIndex(where: { $0.id == currentItem.id })
+    }
+
+    var previousSiblingItem: FeedItem? {
+        guard let index = currentSiblingIndex, index > 0 else { return nil }
+        return siblingItems[index - 1]
+    }
+
+    var nextSiblingItem: FeedItem? {
+        guard let index = currentSiblingIndex, index + 1 < siblingItems.count else { return nil }
+        return siblingItems[index + 1]
+    }
+
+    func navigate(to item: FeedItem) {
+        currentItem = item
+        readerMode = Self.initialReaderMode(for: item)
+        isTranslated = UserDefaults.standard.bool(forKey: "auto_translate_reader") && !Self.usesSystemSafari(for: item)
+        isSigningIntoX = false
+        showSignInBanner = false
+        showOpenInBrowserBanner = false
+        onNavigate?(item)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if let url = targetUrl {
                 ZStack {
-                    if Self.usesSystemSafari(for: feedItem) {
+                    if Self.usesSystemSafari(for: currentItem) {
                         SafariReaderView(url: url)
+                            .id(url)
                             .background(bgColor)
                             .onAppear {
                                 webLoadState = .loaded
@@ -105,13 +134,14 @@ struct ReaderView: View {
                     } else {
                         WebViewHelper(
                             url: url,
-                            cacheId: feedItem.id,
-                            platform: feedItem.platform,
+                            cacheId: currentItem.id,
+                            platform: currentItem.platform,
                             themeMode: readerTheme,
                             fontSize: fontSize,
                             fontFamilyCSS: appearance.readerFontFamilyCSS,
                             readerMode: readerMode,
                             selectImagesCounter: selectImagesCounter,
+                            saveAllImagesCounter: saveAllImagesCounter,
                             imageSelectionActionCounter: imageSelectionActionCounter,
                             imageSelectionAction: imageSelectionAction,
                             onLoadStateChange: { state in
@@ -124,7 +154,6 @@ struct ReaderView: View {
                                     showOpenInBrowserBanner = false
                                 }
                             },
-                            onImageAction: { imageAction = $0 },
                             onImageSelectionState: { selectedImageCount = $0 },
                             onImageSelectionUnavailable: {
                                 isSelectingImages = false
@@ -138,9 +167,15 @@ struct ReaderView: View {
                                 saveImageStatus = i18n.t("imageSelectionError")
                                 showingSaveImageStatus = true
                             },
+                            onSaveAllImagesUnavailable: {
+                                isSavingSelectedImages = false
+                                saveImageStatus = i18n.t("imageSelectionError")
+                                showingSaveImageStatus = true
+                            },
                             onSelectedImages: { urls in saveSelectedImages(urls) },
+                            onAllImages: { urls in saveSelectedImages(urls, emptyMessageKey: "imageNoLargeImages") },
                             onContentBlocked: {
-                                if feedItem.platform == "twitter" {
+                                if currentItem.platform == "twitter" {
                                     if !isSigningIntoX { showSignInBanner = true }
                                 } else {
                                     showOpenInBrowserBanner = true
@@ -150,7 +185,7 @@ struct ReaderView: View {
                         .background(bgColor)
                     }
 
-                    if !Self.usesSystemSafari(for: feedItem), webLoadState != .loaded {
+                    if !Self.usesSystemSafari(for: currentItem), webLoadState != .loaded {
                         readerLoadStateOverlay
                             .allowsHitTesting(webLoadState == .failed)
                     }
@@ -171,38 +206,64 @@ struct ReaderView: View {
                     .foregroundColor(theme.colors.textMuted)
             }
 
-            if !Self.usesSystemSafari(for: feedItem) {
+            if !Self.usesSystemSafari(for: currentItem) {
                 readerControlBar
             }
         }
         .background(bgColor)
-        .navigationTitle(feedItem.title ?? i18n.t("readerTitle"))
+        .navigationTitle(currentItem.title ?? i18n.t("readerTitle"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItemGroup(placement: .navigationBarLeading) {
+                if !siblingItems.isEmpty {
+                    Button {
+                        if let previousSiblingItem { navigate(to: previousSiblingItem) }
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(previousSiblingItem == nil)
+                    .accessibilityLabel(i18n.t("readerPreviousArticle"))
+                    .accessibilityIdentifier("reader.previousArticleButton")
+
+                    Button {
+                        if let nextSiblingItem { navigate(to: nextSiblingItem) }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(nextSiblingItem == nil)
+                    .accessibilityLabel(i18n.t("readerNextArticle"))
+                    .accessibilityIdentifier("reader.nextArticleButton")
+                }
+            }
+
             ToolbarItem(placement: .navigationBarTrailing) {
-                if !Self.usesSystemSafari(for: feedItem) {
+                if !Self.usesSystemSafari(for: currentItem) {
                     Button {
                         isTranslated.toggle()
                     } label: {
                         Image(systemName: "translate")
                             .foregroundColor(isTranslated ? theme.colors.primary : theme.colors.textMuted)
                     }
+                    .accessibilityLabel(i18n.t("translate"))
+                    .accessibilityValue(isTranslated ? "on" : "off")
                     .accessibilityIdentifier("reader.translateButton")
                 }
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    _ = db.toggleSaved(item: feedItem)
+                    _ = db.toggleSaved(item: currentItem)
                 } label: {
                     Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                         .foregroundColor(theme.colors.primary)
                 }
+                .accessibilityLabel(i18n.t("tabSaved"))
+                .accessibilityValue(isSaved ? "on" : "off")
                 .accessibilityIdentifier("reader.bookmarkButton")
             }
 
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if !Self.usesSystemSafari(for: feedItem) {
+                if !Self.usesSystemSafari(for: currentItem) {
                     if isSavingSelectedImages {
                         ProgressView().tint(theme.colors.primary)
                     } else if isSelectingImages {
@@ -225,46 +286,40 @@ struct ReaderView: View {
                         .disabled(selectedImageCount == 0)
                         .accessibilityIdentifier("reader.saveSelectedImagesButton")
                     } else {
-                        Button {
-                            isSelectingImages = true
-                            selectedImageCount = 0
-                            selectImagesCounter += 1
+                        Menu {
+                            Button {
+                                isSavingSelectedImages = true
+                                saveAllImagesCounter += 1
+                            } label: {
+                                Label(i18n.t("saveAllImages"), systemImage: "square.and.arrow.down.on.square")
+                            }
+                            .accessibilityIdentifier("reader.saveAllImagesButton")
+
+                            Button {
+                                isSelectingImages = true
+                                selectedImageCount = 0
+                                selectImagesCounter += 1
+                            } label: {
+                                Label(i18n.t("selectMultipleImages"), systemImage: "checklist")
+                            }
+                            .accessibilityIdentifier("reader.selectImagesButton")
                         } label: {
-                            Image(systemName: "checklist")
+                            Image(systemName: "square.and.arrow.down")
                                 .foregroundColor(theme.colors.primary)
                         }
-                        .accessibilityIdentifier("reader.selectImagesButton")
+                        .accessibilityLabel(i18n.t("selectImages"))
+                        .accessibilityIdentifier("reader.imageActionsMenuButton")
                     }
                 }
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
-                if let url = targetUrl {
+                if let url = originalPageUrl {
                     ShareLink(item: url) {
                         Image(systemName: "square.and.arrow.up")
                             .foregroundColor(theme.colors.primary)
                     }
                     .accessibilityIdentifier("reader.shareButton")
-                }
-            }
-        }
-        .confirmationDialog(i18n.t("imageActions"), isPresented: Binding(
-            get: { imageAction != nil },
-            set: { isPresented in
-                if !isPresented {
-                    imageAction = nil
-                }
-            }
-        )) {
-            if let action = imageAction {
-                ShareLink(item: action.url) {
-                    Label(i18n.t("shareImage"), systemImage: "square.and.arrow.up")
-                }
-                Button(i18n.t("saveImage")) {
-                    saveImage(action.url)
-                }
-                Button(i18n.t("openImage")) {
-                    UIApplication.shared.open(action.url)
                 }
             }
         }
@@ -276,12 +331,21 @@ struct ReaderView: View {
         .onAppear {
             readerTheme = theme.mode
             fontSize = appearance.readerFontSize
-            if UserDefaults.standard.bool(forKey: "auto_translate_reader"), !Self.usesSystemSafari(for: feedItem) {
+            if UserDefaults.standard.bool(forKey: "auto_translate_reader"), !Self.usesSystemSafari(for: currentItem) {
                 isTranslated = true
             }
         }
         .onChange(of: appearance.fontSizeChoice) {
             fontSize = appearance.readerFontSize
+        }
+        .onChange(of: feedItem.id) { _, _ in
+            // A parent that swaps `feedItem` without recreating this view (e.g. a
+            // split-view pane whose selection changed) lands here; route it through
+            // the same soft reset chevron navigation uses so font/theme choices
+            // made mid-session survive instead of being torn down with a fresh view.
+            if feedItem.id != currentItem.id {
+                navigate(to: feedItem)
+            }
         }
     }
 
@@ -301,6 +365,7 @@ struct ReaderView: View {
         HStack(spacing: 10) {
             Image(systemName: "lock.fill")
                 .foregroundColor(theme.colors.textSub)
+                .accessibilityHidden(true)
             Text(i18n.t("readerSignInRequired"))
                 .font(.caption)
                 .foregroundColor(theme.colors.textSub)
@@ -320,6 +385,7 @@ struct ReaderView: View {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(theme.colors.textMuted)
             }
+            .accessibilityLabel(i18n.t("close"))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -333,6 +399,7 @@ struct ReaderView: View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.uturn.backward.circle.fill")
                 .foregroundColor(theme.colors.textSub)
+                .accessibilityHidden(true)
             Text(i18n.t("readerSignInReturnMessage"))
                 .font(.caption)
                 .foregroundColor(theme.colors.textSub)
@@ -358,6 +425,7 @@ struct ReaderView: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundColor(theme.colors.textSub)
+                .accessibilityHidden(true)
             Text(i18n.t("readerCouldNotDisplay"))
                 .font(.caption)
                 .foregroundColor(theme.colors.textSub)
@@ -377,6 +445,7 @@ struct ReaderView: View {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(theme.colors.textMuted)
             }
+            .accessibilityLabel(i18n.t("close"))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -387,7 +456,7 @@ struct ReaderView: View {
     }
 
     private func openInExternalBrowser() {
-        guard let url = targetUrl else { return }
+        guard let url = originalPageUrl else { return }
         UIApplication.shared.open(url)
     }
 
@@ -403,6 +472,7 @@ struct ReaderView: View {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 26, weight: .semibold))
                     .foregroundColor(theme.colors.textMuted)
+                    .accessibilityHidden(true)
                 Text(i18n.t("readerLoadFailed"))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(theme.colors.textSub)
@@ -478,17 +548,20 @@ struct ReaderView: View {
                     .font(.subheadline)
                     .foregroundColor(theme.colors.textSub)
             }
+            .accessibilityHidden(true)
 
             Text("\(Int(fontSize))")
                 .font(.caption)
                 .foregroundColor(theme.colors.textMuted)
-                .frame(width: 22)
+                .frame(minWidth: 22)
+                .accessibilityHidden(true)
 
             Button(action: { fontSize = min(28.0, fontSize + 2.0) }) {
                 Text("A+")
                     .font(.subheadline)
                     .foregroundColor(theme.colors.textSub)
             }
+            .accessibilityHidden(true)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -496,13 +569,30 @@ struct ReaderView: View {
         .cornerRadius(8)
         .opacity(readerMode ? 1 : 0.45)
         .disabled(!readerMode)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(i18n.t("fontSize"))
+        .accessibilityValue("\(Int(fontSize))")
+        .accessibilityAdjustableAction { direction in
+            guard readerMode else { return }
+            switch direction {
+            case .increment: fontSize = min(28.0, fontSize + 2.0)
+            case .decrement: fontSize = max(12.0, fontSize - 2.0)
+            @unknown default: break
+            }
+        }
     }
 
     private func themePicker(width: CGFloat) -> some View {
-        Picker("Theme", selection: $readerTheme) {
-            Image(systemName: "sun.max.fill").tag(AppThemeMode.light)
-            Image(systemName: "moon.fill").tag(AppThemeMode.dark)
-            Image(systemName: "doc.text.magnifyingglass").tag(AppThemeMode.sepia)
+        Picker(i18n.t("appTheme"), selection: $readerTheme) {
+            Label(i18n.t("themeLight"), systemImage: "sun.max.fill")
+                .labelStyle(.iconOnly)
+                .tag(AppThemeMode.light)
+            Label(i18n.t("themeDark"), systemImage: "moon.fill")
+                .labelStyle(.iconOnly)
+                .tag(AppThemeMode.dark)
+            Label(i18n.t("themeSepia"), systemImage: "doc.text.magnifyingglass")
+                .labelStyle(.iconOnly)
+                .tag(AppThemeMode.sepia)
         }
         .pickerStyle(.segmented)
         .frame(width: width)
@@ -516,51 +606,12 @@ struct ReaderView: View {
         }
     }
 
-    private func saveImage(_ url: URL) {
-        Task {
-            do {
-                let (data, response) = try await URLSession.shared.data(for: imageRequest(for: url))
-                if let httpResponse = response as? HTTPURLResponse,
-                   !(200...299).contains(httpResponse.statusCode) {
-                    throw URLError(.badServerResponse)
-                }
-                guard let image = UIImage(data: data) else {
-                    await MainActor.run {
-                        saveImageStatus = i18n.t("imageLoadError")
-                        showingSaveImageStatus = true
-                    }
-                    return
-                }
-                let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-                guard auth == .authorized || auth == .limited else {
-                    await MainActor.run {
-                        saveImageStatus = i18n.t("photosAccessRequired")
-                        showingSaveImageStatus = true
-                    }
-                    return
-                }
-                try await PHPhotoLibrary.shared().performChanges {
-                    PHAssetChangeRequest.creationRequestForAsset(from: image)
-                }
-                await MainActor.run {
-                    saveImageStatus = i18n.t("imageSavedToPhotos")
-                    showingSaveImageStatus = true
-                }
-            } catch {
-                await MainActor.run {
-                    saveImageStatus = i18n.t("imageSaveError")
-                    showingSaveImageStatus = true
-                }
-            }
-        }
-    }
-
-    private func saveSelectedImages(_ urls: [URL]) {
+    private func saveSelectedImages(_ urls: [URL], emptyMessageKey: String = "imageNoSelectedImages") {
         guard !urls.isEmpty else {
             isSelectingImages = false
             isSavingSelectedImages = false
             selectedImageCount = 0
-            saveImageStatus = i18n.t("imageNoSelectedImages")
+            saveImageStatus = i18n.t(emptyMessageKey)
             showingSaveImageStatus = true
             return
         }
@@ -627,14 +678,16 @@ struct WebViewHelper: UIViewRepresentable {
     let fontFamilyCSS: String
     let readerMode: Bool
     let selectImagesCounter: Int
+    let saveAllImagesCounter: Int
     let imageSelectionActionCounter: Int
     let imageSelectionAction: String
     let onLoadStateChange: (ReaderWebLoadState) -> Void
-    let onImageAction: (ReaderImageAction) -> Void
     let onImageSelectionState: (Int) -> Void
     let onImageSelectionUnavailable: () -> Void
     let onImageSelectionFailure: () -> Void
+    let onSaveAllImagesUnavailable: () -> Void
     let onSelectedImages: ([URL]) -> Void
+    let onAllImages: ([URL]) -> Void
     let onContentBlocked: () -> Void
 
     private static let uiTestImageFixtureHTML = """
@@ -645,8 +698,15 @@ struct WebViewHelper: UIViewRepresentable {
     <button class="oshi-uitest-image-button" aria-label="fixture image one"><img class="oshi-uitest-image" src="https://example.com/fixture-image-one.jpg" alt="fixture image one" width="400" height="300"></button>
     <button class="oshi-uitest-image-button" aria-label="fixture image two"><img class="oshi-uitest-image" src="https://example.com/fixture-image-two.jpg" alt="fixture image two" width="400" height="300"></button>
     </div>
+    <a id="fixture-linked-image" href="#fixture-target" aria-label="fixture linked image"><img class="oshi-uitest-image" src="https://example.com/fixture-image-linked.jpg" alt="fixture linked image" width="400" height="300"></a>
+    <p id="fixture-nav-status">not navigated</p>
     <p>This cached article contains deterministic image-selection fixtures.</p>
     </article></body></html>
+    <script>
+    window.addEventListener('hashchange', function() {
+      document.getElementById('fixture-nav-status').textContent = 'navigated:' + location.hash;
+    });
+    </script>
     """
 
     func makeCoordinator() -> Coordinator {
@@ -655,7 +715,12 @@ struct WebViewHelper: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.preferredContentMode = .mobile
         configuration.userContentController.add(context.coordinator, name: "oshireader")
+        // Some sites (e.g. girlschannel.net) ship a missing/broken viewport meta tag, which
+        // makes WKWebView render them zoomed in on first load. Force a sane one before the
+        // page lays out, and keep correcting it if the site's own script rewrites it later.
+        configuration.userContentController.addUserScript(WKUserScript(source: viewportFixJS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController.addUserScript(WKUserScript(source: readerInjectedJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -685,7 +750,14 @@ struct WebViewHelper: UIViewRepresentable {
             } else {
                 uiView.load(URLRequest(url: url))
             }
-        } else {
+        } else if themeMode != context.coordinator.lastAppliedThemeMode
+            || fontSize != context.coordinator.lastAppliedFontSize
+            || fontFamilyCSS != context.coordinator.lastAppliedFontFamilyCSS
+            || readerMode != context.coordinator.lastAppliedReaderMode {
+            context.coordinator.lastAppliedThemeMode = themeMode
+            context.coordinator.lastAppliedFontSize = fontSize
+            context.coordinator.lastAppliedFontFamilyCSS = fontFamilyCSS
+            context.coordinator.lastAppliedReaderMode = readerMode
             uiView.evaluateJavaScript(styleInjectionJS(), completionHandler: nil)
         }
         if selectImagesCounter != context.coordinator.lastSelectImagesCounter {
@@ -709,6 +781,21 @@ struct WebViewHelper: UIViewRepresentable {
                 }
             }
         }
+        if saveAllImagesCounter != context.coordinator.lastSaveAllImagesCounter {
+            context.coordinator.lastSaveAllImagesCounter = saveAllImagesCounter
+            uiView.evaluateJavaScript("(function(){ if(!window.__oshiSaveAllImages) return false; window.__oshiSaveAllImages(); return true; })()") { result, _ in
+                guard (result as? Bool) == true else {
+                    DispatchQueue.main.async { onSaveAllImagesUnavailable() }
+                    return
+                }
+            }
+        }
+    }
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "oshireader")
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
     }
 
     private func styleInjectionJS() -> String {
@@ -840,21 +927,44 @@ struct WebViewHelper: UIViewRepresentable {
                     '.content',
                     '#content'
                 ];
-                var best = null;
-                var bestScore = 0;
-                selectors.forEach(function(selector) {
-                    document.querySelectorAll(selector).forEach(function(el) {
-                        var text = el.innerText ? el.innerText.replace(/\\s+/g, ' ').trim() : '';
-                        var paragraphs = el.querySelectorAll('p, li, blockquote').length;
-                        var rect = el.getBoundingClientRect();
-                        var score = text.length + (paragraphs * 80) + Math.min(rect.height || 0, 1400);
-                        if (text.length >= 240 && rect.width > 0 && rect.height > 0 && score > bestScore) {
-                            best = el;
-                            bestScore = score;
-                        }
+                function applyReaderRoot() {
+                    document.querySelectorAll('[data-oshireader-reader-root="true"]').forEach(function(el) {
+                        el.removeAttribute('data-oshireader-reader-root');
                     });
-                });
-                if (best) best.setAttribute('data-oshireader-reader-root', 'true');
+                    var best = null;
+                    var bestScore = 0;
+                    selectors.forEach(function(selector) {
+                        document.querySelectorAll(selector).forEach(function(el) {
+                            var text = el.innerText ? el.innerText.replace(/\\s+/g, ' ').trim() : '';
+                            var paragraphs = el.querySelectorAll('p, li, blockquote').length;
+                            var rect = el.getBoundingClientRect();
+                            var score = text.length + (paragraphs * 80) + Math.min(rect.height || 0, 1400);
+                            if (text.length >= 240 && rect.width > 0 && rect.height > 0 && score > bestScore) {
+                                best = el;
+                                bestScore = score;
+                            }
+                        });
+                    });
+                    if (best) best.setAttribute('data-oshireader-reader-root', 'true');
+                }
+                applyReaderRoot();
+                // The style/scoring pass above only runs once, right when navigation
+                // finishes — but on ad- and consent-script-heavy pages the real
+                // article content can still be loading/settling at that point, so
+                // this one-shot pass can tag nothing and leave Reader Mode blank.
+                // Keep rescoring for a few seconds so late-arriving content still
+                // gets picked up, without re-running on every unrelated re-render.
+                if (!window.__oshiReaderRootCatchUp) {
+                    var attempts = 0;
+                    window.__oshiReaderRootCatchUp = setInterval(function() {
+                        attempts++;
+                        applyReaderRoot();
+                        if (attempts >= 8) {
+                            clearInterval(window.__oshiReaderRootCatchUp);
+                            window.__oshiReaderRootCatchUp = null;
+                        }
+                    }, 750);
+                }
             }
         })();
         """
@@ -863,8 +973,16 @@ struct WebViewHelper: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: WebViewHelper
         var lastSelectImagesCounter = 0
+        var lastSaveAllImagesCounter = 0
         var lastImageSelectionActionCounter = 0
         var currentRequestURL: String?
+        // Tracks what styleInjectionJS() last applied so unrelated SwiftUI state
+        // changes (e.g. selectedImageCount ticking on every tap) don't re-run its
+        // DOM content-root rescoring on every view update.
+        var lastAppliedThemeMode: AppThemeMode?
+        var lastAppliedFontSize: CGFloat?
+        var lastAppliedFontFamilyCSS: String?
+        var lastAppliedReaderMode: Bool?
         private var hasCommittedPage = false
         private var pendingFailure: DispatchWorkItem?
 
@@ -895,10 +1013,15 @@ struct WebViewHelper: UIViewRepresentable {
             hasCommittedPage = true
             pendingFailure?.cancel()
             DispatchQueue.main.async { self.parent.onLoadStateChange(.loaded) }
+            lastAppliedThemeMode = parent.themeMode
+            lastAppliedFontSize = parent.fontSize
+            lastAppliedFontFamilyCSS = parent.fontFamilyCSS
+            lastAppliedReaderMode = parent.readerMode
             webView.evaluateJavaScript(parent.styleInjectionJS(), completionHandler: nil)
+            let cacheId = parent.cacheId
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, _ in
                 guard let html = result as? String, !html.isEmpty else { return }
-                LocalDB.shared.saveContentCache(id: self.parent.cacheId, html: html)
+                LocalDB.shared.saveContentCache(id: cacheId, html: html)
             }
             checkForBlockedContent(in: webView)
         }
@@ -1051,17 +1174,17 @@ struct WebViewHelper: UIViewRepresentable {
             guard message.name == "oshireader",
                   let body = message.body as? [String: Any],
                   let type = body["type"] as? String else { return }
-            if type == "image-action",
-               let rawUrl = body["url"] as? String,
-               let url = URL(string: rawUrl) {
-                parent.onImageAction(ReaderImageAction(url: url, alt: body["alt"] as? String))
-            } else if type == "image-selection-state",
-                      let count = body["count"] as? Int {
+            if type == "image-selection-state",
+               let count = body["count"] as? Int {
                 DispatchQueue.main.async { self.parent.onImageSelectionState(count) }
             } else if type == "selected-images",
                       let rawUrls = body["urls"] as? [String] {
                 let urls = rawUrls.compactMap { URL(string: $0) }
                 DispatchQueue.main.async { self.parent.onSelectedImages(urls) }
+            } else if type == "all-images",
+                      let rawUrls = body["urls"] as? [String] {
+                let urls = rawUrls.compactMap { URL(string: $0) }
+                DispatchQueue.main.async { self.parent.onAllImages(urls) }
             }
         }
     }
@@ -1196,6 +1319,35 @@ private func shouldBlockReaderRequest(_ rawUrl: String) -> Bool {
     return _ReaderRegex.adBlocklist?.firstMatch(in: rawUrl, range: range) != nil
 }
 
+private let viewportFixJS = """
+(function () {
+  var desiredContent = 'width=device-width, initial-scale=1';
+  function applyViewport() {
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'viewport');
+      (document.head || document.documentElement).appendChild(meta);
+    }
+    if (meta.getAttribute('content') !== desiredContent) {
+      meta.setAttribute('content', desiredContent);
+    }
+  }
+  applyViewport();
+  document.addEventListener('DOMContentLoaded', applyViewport);
+  var target = document.documentElement || document;
+  // Watch for both a viewport meta tag being (re)inserted and its content
+  // attribute being rewritten in place — ad/consent-management scripts on
+  // sites like girlschannel.net commonly do the latter after initial load.
+  new MutationObserver(applyViewport).observe(target, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['name', 'content']
+  });
+})();
+"""
+
 private let readerInjectedJS = """
 (function () {
   if (window.__OSHIREADER_IMAGE_ACTIONS__) return true;
@@ -1211,38 +1363,6 @@ private let readerInjectedJS = """
     var parts = String(value).split(',').map(function(part) { return part.trim().split(/\\s+/)[0]; }).filter(Boolean);
     return parts.length ? parts[parts.length - 1] : '';
   }
-  function imageCandidate(target) {
-    var el = target;
-    var depth = 0;
-    while (el && el.nodeType === 1 && depth < 8) {
-      var tag = (el.tagName || '').toUpperCase();
-      if (tag === 'IMG') {
-        return {
-          url: el.currentSrc || el.src || el.getAttribute('src') || el.getAttribute('data-src') || el.getAttribute('data-original') || el.getAttribute('data-lazy-src') || srcFromSrcset(el.getAttribute('srcset') || el.getAttribute('data-srcset')),
-          alt: el.getAttribute('alt') || el.getAttribute('title') || document.title || ''
-        };
-      }
-      var bg = '';
-      try {
-        var style = window.getComputedStyle(el);
-        var match = style && style.backgroundImage && style.backgroundImage.match(/url\\((["']?)(.*?)\\1\\)/);
-        bg = match ? match[2] : '';
-      } catch (e) {}
-      if (bg && bg !== 'none') return { url: bg, alt: el.getAttribute('aria-label') || el.getAttribute('title') || document.title || '' };
-      el = el.parentElement;
-      depth++;
-    }
-    return null;
-  }
-  function postImage(target) {
-    var found = imageCandidate(target);
-    if (!found) return false;
-    var imageUrl = absoluteUrl(found.url);
-    if (!/^https?:\\/\\//i.test(imageUrl)) return false;
-    window.webkit.messageHandlers.oshireader.postMessage({ type: 'image-action', url: imageUrl, alt: found.alt || '' });
-    return true;
-  }
-
   var imageSelectionMode = false;
   var selectedImageUrls = new Set();
   var imageSelectionStyle = null;
@@ -1340,7 +1460,20 @@ private let readerInjectedJS = """
     window.webkit.messageHandlers.oshireader.postMessage({ type: 'selected-images', urls: urls });
   };
 
+  window.__oshiSaveAllImages = function() {
+    var urls = [];
+    document.querySelectorAll('img').forEach(function(img) {
+      var url = selectableImageUrl(img);
+      if (url && urls.indexOf(url) === -1) urls.push(url);
+    });
+    window.webkit.messageHandlers.oshireader.postMessage({ type: 'all-images', urls: urls });
+  };
+
+  // Only intercept taps/long-presses while an explicit image-selection pass
+  // (started from the reader toolbar) is active; otherwise leave clicks and
+  // context menus alone so linked images navigate normally.
   document.addEventListener('click', function(event) {
+    if (!imageSelectionMode) return;
     var el = event.target;
     var depth = 0;
     while (el && el.nodeType === 1 && depth < 6) {
@@ -1350,16 +1483,9 @@ private let readerInjectedJS = """
         image = control && control.querySelector ? control.querySelector('img') : null;
       }
       if (image) {
-        if (imageSelectionMode) {
-          toggleImageSelection(image);
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
-        if (postImage(image)) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
+        toggleImageSelection(image);
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
       el = el.parentElement;
@@ -1368,14 +1494,11 @@ private let readerInjectedJS = """
   }, true);
 
   document.addEventListener('contextmenu', function(event) {
-    if (imageSelectionMode) {
-      if (event.target && (event.target.tagName || '').toUpperCase() === 'IMG') {
-        toggleImageSelection(event.target);
-      }
-      event.preventDefault();
-      return;
+    if (!imageSelectionMode) return;
+    if (event.target && (event.target.tagName || '').toUpperCase() === 'IMG') {
+      toggleImageSelection(event.target);
     }
-    if (postImage(event.target)) event.preventDefault();
+    event.preventDefault();
   }, true);
   return true;
 })();

@@ -24,8 +24,13 @@ Primary scheduled monitor:
 Manual worker health check:
 
 ```sh
-curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
+curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
 ```
+
+`notifications` and `diagnostics` are only included in the response when the
+request presents the admin bearer token — an unauthenticated request only
+returns the top-level `status`/`healthy` fields.
 
 Healthy output must include:
 
@@ -97,7 +102,8 @@ curl -i https://oshireader.onrender.com/api/admin/poller-health \
 Then verify the Worker:
 
 ```sh
-curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health
+curl -fsS https://oshireader-feed-poller.oshireader-otterlymavis.workers.dev/health \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
 ```
 
 The Worker health check should report `status: ok`, `healthy: true`, no pending
@@ -157,6 +163,8 @@ These are intentionally conservative for the current Render instance:
 - `CONNECTOR_FETCH_TIMEOUT_SECONDS=8`
 - `NOTIFICATION_FRESHNESS_WINDOW_MINUTES=120`
 - `ORPHANED_NOTIFICATION_GRACE_MINUTES=60`
+- `RETENTION_DAYS=14`
+- `MAX_WATCH_TERMS_PER_DEVICE=50` — bounds worst-case DB storage growth per device
 - Worker `MIN_POLL_INTERVAL_MINUTES=120`
 - Worker `STALE_AFTER_MINUTES=360`
 - Worker `ACTIVE_POLL_TIMEOUT_MINUTES=30`

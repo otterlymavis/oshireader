@@ -66,7 +66,7 @@ from app.connectors.togetter import TogetterConnector
 from app.connectors.tver import TVERConnector, _parse_tver_date
 from app.connectors.twitter import TwitterConnector
 from app.connectors.yahoonews import YahooNewsConnector
-from app.connectors.yahoonews import _clean_html_summary
+from app.connectors.base import clean_html_text
 from app.connectors.youtube import YouTubeConnector, _parse_youtube_relative
 
 
@@ -1717,13 +1717,13 @@ class TestMdprFetch:
     async def test_prefers_direct_google_news_when_it_has_items(self):
         entry = _rss_entry(link="https://mdpr.jp/a1", title="Aiko - モデルプレス")
         with patch(
-            "app.connectors.mdpr.fetch_google_news_direct",
+            "app.connectors.base.fetch_google_news_direct",
             new=AsyncMock(return_value=b"<rss/>"),
         ), patch(
-            "app.connectors.mdpr.fetch_search_rss_via_proxy",
+            "app.connectors.base.fetch_search_rss_via_proxy",
             new=AsyncMock(return_value=None),
         ) as proxy, patch(
-            "app.connectors.mdpr.feedparser.parse",
+            "app.connectors.base.feedparser.parse",
             return_value=_FakeFeed([entry]),
         ):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
@@ -1738,17 +1738,17 @@ class TestMdprFetch:
         no_link = _FeedEntry(id="nl", link="", title="skip")
         no_title = _rss_entry(link="https://mdpr.jp/a2", title="   ")
         fake_feed = _FakeFeed([valid, no_link, no_title])
-        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
         assert result[0].title == "Aiko"
 
     @pytest.mark.asyncio
     async def test_raises_when_all_routes_are_unavailable(self):
-        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
             with pytest.raises(SourceUnavailableError):
                 await ModelPressConnector().fetch("Aiko", "all_info")
 
@@ -1756,9 +1756,9 @@ class TestMdprFetch:
     async def test_filters_stale_google_news_items(self):
         entry = _rss_entry(link="https://mdpr.jp/old", title="Aiko old - モデルプレス")
         entry.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
-        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.mdpr.feedparser.parse", return_value=_FakeFeed([entry])):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1767,18 +1767,34 @@ class TestMdprFetch:
         e1 = _rss_entry(link="https://mdpr.jp/a1", item_id="dup", title="Aiko A")
         e2 = _rss_entry(link="https://mdpr.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
 
     @pytest.mark.asyncio
+    async def test_stale_duplicate_does_not_shadow_fresh_entry_with_same_id(self):
+        """seen.add(item_id) must happen after filtering, not before — otherwise
+        a stale duplicate earlier in the feed permanently blocks a later, fresh
+        entry that shares its item_id."""
+        stale = _rss_entry(link="https://mdpr.jp/a1", item_id="dup", title="Aiko A")
+        stale.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
+        fresh = _rss_entry(link="https://mdpr.jp/a2", item_id="dup", title="Aiko B")
+        fake_feed = _FakeFeed([stale, fresh])
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=fake_feed):
+            result = await ModelPressConnector().fetch("Aiko", "all_info")
+        assert len(result) == 1
+        assert result[0].title == "Aiko B"
+
+    @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
         fake_feed = _FakeFeed([_rss_entry(link="https://mdpr.jp/a1", title="unrelated - モデルプレス")])
-        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.mdpr.feedparser.parse", return_value=fake_feed):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=fake_feed):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1789,9 +1805,9 @@ class TestMdprFetch:
             title="unrelated - モデルプレス",
             summary="Aiko appears elsewhere in the Google News cluster",
         )
-        with patch("app.connectors.mdpr.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.mdpr.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.mdpr.feedparser.parse", return_value=_FakeFeed([entry])):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await ModelPressConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1806,13 +1822,13 @@ class TestOriconFetch:
             title="Aiko 受賞 - ORICON NEWS",
         )
         with patch(
-            "app.connectors.oricon.fetch_google_news_direct",
+            "app.connectors.base.fetch_google_news_direct",
             new=AsyncMock(return_value=b"<rss/>"),
         ), patch(
-            "app.connectors.oricon.fetch_search_rss_via_proxy",
+            "app.connectors.base.fetch_search_rss_via_proxy",
             new=AsyncMock(return_value=None),
         ) as proxy, patch(
-            "app.connectors.oricon.feedparser.parse",
+            "app.connectors.base.feedparser.parse",
             return_value=_FakeFeed([entry]),
         ):
             result = await OriconConnector().fetch("Aiko", "all_info")
@@ -1827,9 +1843,9 @@ class TestOriconFetch:
         no_link = _FeedEntry(id="nl", link="", title="skip")
         empty_title = _rss_entry(link="https://oricon.co.jp/a2", title="  - ORICON NEWS")
         fake_feed = _FakeFeed([valid, no_link, empty_title])
-        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
         assert result[0].title == "Aiko 受賞"
@@ -1842,9 +1858,9 @@ class TestOriconFetch:
             title="unrelated - ORICON NEWS",
             summary="Aiko appears elsewhere in the Google News cluster",
         )
-        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -1852,16 +1868,16 @@ class TestOriconFetch:
     async def test_filters_stale_google_news_items(self):
         entry = _rss_entry(link="https://oricon.co.jp/old", title="Aiko old - ORICON NEWS")
         entry.published_parsed = (2023, 8, 4, 7, 0, 0, 4, 216, 0)
-        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.oricon.feedparser.parse", return_value=_FakeFeed([entry])):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=_FakeFeed([entry])):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
 
     @pytest.mark.asyncio
     async def test_raises_when_all_routes_are_unavailable(self):
-        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=None)):
             with pytest.raises(SourceUnavailableError):
                 await OriconConnector().fetch("Aiko", "all_info")
 
@@ -1870,18 +1886,18 @@ class TestOriconFetch:
         e1 = _rss_entry(link="https://oricon.co.jp/a1", item_id="dup", title="Aiko A")
         e2 = _rss_entry(link="https://oricon.co.jp/a2", item_id="dup", title="Aiko B")
         fake_feed = _FakeFeed([e1, e2])
-        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_filters_google_news_items_without_keyword(self):
         fake_feed = _FakeFeed([_rss_entry(link="https://oricon.co.jp/a1", title="受賞 - ORICON NEWS")])
-        with patch("app.connectors.oricon.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
-             patch("app.connectors.oricon.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
-             patch("app.connectors.oricon.feedparser.parse", return_value=fake_feed):
+        with patch("app.connectors.base.fetch_google_news_direct", new=AsyncMock(return_value=None)), \
+             patch("app.connectors.base.fetch_search_rss_via_proxy", new=AsyncMock(return_value=b"<rss/>")), \
+             patch("app.connectors.base.feedparser.parse", return_value=fake_feed):
             result = await OriconConnector().fetch("Aiko", "all_info")
         assert result == []
 
@@ -2614,7 +2630,27 @@ class TestYahooNewsFetch:
             "アイコの最新情報</a>&nbsp;&nbsp;"
             '<font color="#6f6f6f">Yahoo!ニュース</font>'
         )
-        assert _clean_html_summary(summary) == "アイコの最新情報 Yahoo!ニュース"
+        assert clean_html_text(summary) == "アイコの最新情報 Yahoo!ニュース"
+
+    @pytest.mark.asyncio
+    async def test_bing_fallback_strips_html_from_summary(self):
+        rss = """<?xml version="1.0"?>
+        <rss version="2.0"><channel>
+        <item>
+            <title>アイコの最新情報</title>
+            <link>https://news.yahoo.co.jp/articles/abc123</link>
+            <pubDate>Wed, 29 Jul 2026 10:00:00 GMT</pubDate>
+            <description>&lt;a href="x"&gt;アイコ&lt;/a&gt;&amp;nbsp;最新ニュース</description>
+        </item>
+        </channel></rss>"""
+        with patch(
+            "app.connectors.yahoonews.fetch_search_rss_via_proxy",
+            new=AsyncMock(return_value=rss.encode()),
+        ):
+            result = await YahooNewsConnector()._fetch_bing_news("アイコ")
+        assert len(result) == 1
+        assert "<a href" not in result[0].content_text
+        assert result[0].content_text == "アイコ 最新ニュース"
 
     @pytest.mark.asyncio
     async def test_empty_keyword_returns_empty(self):

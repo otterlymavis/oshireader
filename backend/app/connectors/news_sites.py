@@ -23,6 +23,7 @@ from app.connectors.base import (
     SourceItemCreate,
     build_google_news_jina_items,
     build_google_news_public_proxy_items,
+    clean_html_text,
     contains_keyword,
     fetch_google_news_direct,
     fetch_google_news_via_public_proxy,
@@ -40,8 +41,6 @@ from app.connectors.base import (
 from app.source_health import record_jina_result
 
 log = logging.getLogger(__name__)
-
-_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _unwrap_bing_news_url(link: str) -> str:
@@ -61,14 +60,6 @@ def _is_bing_news_redirect(link: str) -> bool:
         (host == "bing.com" or host.endswith(".bing.com"))
         and parsed.path.endswith("/news/apiclick.aspx")
     )
-
-
-def _clean_html_fragment(value: str | None) -> str | None:
-    if not value:
-        return None
-    text = BeautifulSoup(value, "lxml").get_text(" ", strip=True)
-    cleaned = _WHITESPACE_RE.sub(" ", text).strip()
-    return cleaned or None
 
 
 def _extract_window_state(html: str) -> dict:
@@ -333,7 +324,15 @@ class _GNewsSiteConnector(BaseConnector):
         for entry in feed.entries:
             title = (entry.get("title") or "").strip()
             summary = entry.get("summary") or ""
-            if not title_contains_keyword(keyword, title):
+            # Billboard JAPAN's feed carries a structured <artist> tag feedparser
+            # exposes as entry.artist; absent (None) on feeds that don't have it.
+            artist = entry.get("artist") or None
+            # Unlike the Google News/Bing aggregator paths (title-only by design —
+            # see title_contains_keyword's docstring: a clustered summary there can
+            # cover unrelated stories), this is the site's own per-article feed, so
+            # its summary (and artist, when present) is genuinely about this one
+            # article and belongs in the match check too.
+            if not contains_keyword(keyword, title, summary, artist):
                 continue
             link = entry.get("link", "")
             if not link:
@@ -359,6 +358,7 @@ class _GNewsSiteConnector(BaseConnector):
                     published_at=published,
                     media_type="article",
                     title=title,
+                    author=artist,
                     content_text=summary or None,
                     raw_payload={"site": self.SITE, "keyword": keyword, "source": "direct_rss"},
                 )
@@ -459,9 +459,9 @@ class AmebloConnector(_GNewsSiteConnector):
             if not item_id or item_id in seen:
                 continue
 
-            title = _clean_html_fragment(raw.get("entryTitle")) or ""
-            content = _clean_html_fragment(raw.get("entryContent"))
-            blog_title = _clean_html_fragment(raw.get("blogTitle"))
+            title = clean_html_text(raw.get("entryTitle")) or ""
+            content = clean_html_text(raw.get("entryContent"))
+            blog_title = clean_html_text(raw.get("blogTitle"))
             if not title:
                 continue
             if not contains_keyword(keyword, title, content, blog_title):
@@ -584,14 +584,21 @@ class RealSoundConnector(_GNewsSiteConnector):
                 continue
             title = title_link.get_text(" ", strip=True)
             item_url = urljoin("https://realsound.jp/", title_link.get("href", ""))
-            if not title or not item_url or not title_contains_keyword(keyword, title):
+            if not title or not item_url:
+                continue
+            excerpt = article.select_one(".entry-excerpt")
+            excerpt_text = excerpt.get_text(" ", strip=True) if excerpt else None
+            # This page is RealSound's own search results (?s=keyword), whose
+            # default WordPress search matches full post content, not just the
+            # title — so a title-only re-check here can drop genuine hits where
+            # the keyword only appears in the body. Check the excerpt too.
+            if not contains_keyword(keyword, title, excerpt_text):
                 continue
             if item_url in seen:
                 continue
             seen.add(item_url)
 
             time_element = article.select_one("time[datetime]")
-            excerpt = article.select_one(".entry-excerpt")
             author = article.select_one(".entry-author")
             image = article.select_one("img[src]")
             published = _parse_jst_datetime(time_element.get("datetime") if time_element else None)
@@ -608,7 +615,7 @@ class RealSoundConnector(_GNewsSiteConnector):
                     media_type="article",
                     author=author.get_text(" ", strip=True) if author else None,
                     title=title,
-                    content_text=excerpt.get_text(" ", strip=True) if excerpt else None,
+                    content_text=excerpt_text,
                     thumbnail_url=(
                         urljoin("https://realsound.jp/", image.get("src", ""))
                         if image

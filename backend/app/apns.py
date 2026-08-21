@@ -30,6 +30,8 @@ _PREVIEW_FIELD_LIMITS = {
     "published_at": 80,
     "source": 80,
 }
+_ALERT_SUBTITLE_LIMIT = 50
+_ALERT_BODY_LIMIT = 100
 _APNS_PAYLOAD_SOFT_LIMIT_BYTES = 3500
 _APNS_PAYLOAD_HARD_LIMIT_BYTES = 4096
 _APNS_MAX_ATTEMPTS = 3
@@ -94,16 +96,8 @@ def _host(environment: str | None = None) -> str:
     return "https://api.push.apple.com"
 
 
-def _preview_text(preview_item: dict | None) -> str | None:
-    if not preview_item:
-        return None
-    value = preview_item.get("title") or preview_item.get("content_text") or preview_item.get("url")
-    if not value:
-        return None
-    text = " ".join(str(value).split())
-    if not text:
-        return None
-    return text if len(text) <= 140 else f"{text[:137]}..."
+def _truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else f"{text[:limit - 3]}..."
 
 
 def _payload_value(preview_item: dict, key: str) -> str | None:
@@ -117,9 +111,7 @@ def _payload_value(preview_item: dict, key: str) -> str | None:
     if not text:
         return None
     limit = _PREVIEW_FIELD_LIMITS.get(key)
-    if limit and len(text) > limit:
-        return f"{text[:limit - 3]}..."
-    return text
+    return _truncate(text, limit) if limit else text
 
 
 def _payload_size(payload: dict) -> int:
@@ -284,6 +276,7 @@ async def revalidate_unverified_devices(db: Session) -> int:
             device.is_verified = True
             device.verified_at = now
             verified += 1
+    db.commit()
     record_backend_event(
         db,
         "apns_registration",
@@ -295,15 +288,19 @@ async def revalidate_unverified_devices(db: Session) -> int:
     return verified
 
 
+def _alert_text(value: str | None, limit: int) -> str | None:
+    return _truncate(value, limit) if value else None
+
+
 def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> dict:
-    preview = _preview_text(preview_item)
-    body = preview or (f"{count}件の新着があります。" if count != 1 else "1件の新着があります。")
-    if preview and count > 1:
-        body = f"{body}\nほか{count - 1}件"
-    alert = {
-        "title": f"{term.keyword} の新着",
-        "body": body,
-    }
+    item_title = _payload_value(preview_item, "title") if preview_item else None
+    item_body = _payload_value(preview_item, "content_text") if preview_item else None
+    title = f"{term.keyword} ほか{count - 1}件" if count > 1 else term.keyword
+    alert: dict = {"title": title}
+    if item_title:
+        alert["subtitle"] = _alert_text(item_title, _ALERT_SUBTITLE_LIMIT)
+    if item_body and item_body != item_title:
+        alert["body"] = _alert_text(item_body, _ALERT_BODY_LIMIT)
 
     payload = {
         "aps": {
@@ -319,6 +316,7 @@ def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> d
         "new_count": count,
     }
     if preview_item:
+        precomputed = {"title": item_title, "content_text": item_body}
         payload["preview_item"] = {
             key: value
             for key in (
@@ -334,7 +332,7 @@ def _payload(term: WatchTerm, count: int, preview_item: dict | None = None) -> d
                 "published_at",
                 "source",
             )
-            if (value := _payload_value(preview_item, key))
+            if (value := (precomputed[key] if key in precomputed else _payload_value(preview_item, key)))
         }
         top_level_preview_keys = {
             "id": "item_id",
