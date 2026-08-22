@@ -30,6 +30,7 @@ from app.auth import require_admin_auth, require_admin_or_device_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
 from app.diagnostics import record_backend_event
+from app.entitlements import backend_access_owner_secrets
 from app.source_health import snapshot as source_health_snapshot
 from app.connectors.base import (
     GOOGLE_NEWS_HEADERS,
@@ -1359,6 +1360,10 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     device_counts_by_term_id = _bulk_notification_device_counts(db, terms)
+    paid_backend_owners = backend_access_owner_secrets(
+        db,
+        {term.owner_device_secret for term in terms if term.owner_device_secret},
+    )
     for term in terms:
         device_counts = device_counts_by_term_id[term.id]
         row = {
@@ -1380,6 +1385,7 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
+            and term.owner_device_secret not in paid_backend_owners
             and device_counts["notification_verified_devices"] == 0
             and _orphaned_owner_grace_elapsed(term)
         ):
@@ -1522,6 +1528,10 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
     active_notify_terms = 0
     orphaned_grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     device_counts_by_term_id = _bulk_notification_device_counts(db, terms)
+    paid_backend_owners = backend_access_owner_secrets(
+        db,
+        {term.owner_device_secret for term in terms if term.owner_device_secret},
+    )
     for term in terms:
         device_counts = device_counts_by_term_id[term.id]
         row = {
@@ -1542,6 +1552,7 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
                 active_notify_without_verified_devices.append(row)
         elif (
             term.owner_device_secret
+            and term.owner_device_secret not in paid_backend_owners
             and device_counts["notification_verified_devices"] == 0
             and _orphaned_owner_grace_elapsed(term)
         ):

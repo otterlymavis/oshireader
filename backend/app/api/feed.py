@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_auth
 from app.database import get_db
+from app.entitlements import backend_access_allowed
 from app.models import Match, MutedFeedItem, SourceItem, WatchTerm
 from app.relevance import watch_term_matches
 from app.schemas import FeedItemMuteIn, FeedItemOut, SourceItemOut
@@ -28,6 +29,19 @@ _TIMELESS_PLATFORMS = ("5ch", "girlschannel")
 # (match-discovery) time — discussion-source scrapers heal published_at to the real
 # last-reply date, and other connectors carry real publication dates.
 _FEED_SORT_KEY = SourceItem.published_at
+
+
+def _require_paid_backend_access(auth: AuthContext, db: Session) -> None:
+    if auth.is_admin:
+        return
+    if not backend_access_allowed(db, auth.device_secret):
+        raise HTTPException(
+            402,
+            {
+                "code": "paid_backend_required",
+                "message": "An active purchase is required for backend feed access",
+            },
+        )
 
 
 @router.get("/matches/{match_id}/redirect")
@@ -53,6 +67,7 @@ def mute_feed_item(
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
+    _require_paid_backend_access(auth, db)
     term = get_owned_watch_term(db, body.watch_term_id, auth)
 
     source_item = db.get(SourceItem, body.source_item_id)
@@ -93,6 +108,7 @@ def get_feed(
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
+    _require_paid_backend_access(auth, db)
     q = (
         db.query(Match, SourceItem, WatchTerm)
         .join(SourceItem, Match.source_item_id == SourceItem.id)

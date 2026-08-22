@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from app.config import settings
-from app.models import APNSDeviceToken, Match, MutedFeedItem, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, DeviceEntitlement, Match, MutedFeedItem, SourceItem, WatchTerm
 
 # Supply a token so admin endpoints work in tests.
 os.environ.setdefault("ADMIN_API_TOKEN", "test-token")
@@ -67,6 +67,19 @@ def _make_match(db, term, item):
     db.commit()
     db.refresh(match)
     return match
+
+
+def _add_active_entitlement(db, owner_device_secret: str):
+    db.add(DeviceEntitlement(
+        owner_device_secret=owner_device_secret,
+        product_id="com.otterpia.oshireader.backend.test",
+        original_transaction_id=f"original-{owner_device_secret[:12]}",
+        latest_transaction_id=f"latest-{owner_device_secret[:12]}",
+        purchase_date=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        push_term_limit=3,
+    ))
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +301,7 @@ class TestFeedAPI:
         other_item = _make_item(db_session, item_id="other", title="Other item")
         _make_match(db_session, owned_term, owned_item)
         _make_match(db_session, other_term, other_item)
+        _add_active_entitlement(db_session, owner_secret)
 
         with patch.object(settings, "admin_api_token", "admin-secret"):
             resp = client.get(
@@ -300,6 +314,19 @@ class TestFeedAPI:
         assert len(rows) == 1
         assert rows[0]["item"]["id"] == owned_item.id
         assert rows[0]["watch_term_keyword"] == "Owned"
+
+    def test_device_feed_requires_active_entitlement(self, client, db_session):
+        secret = "unpaid-device-secret"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        term = _make_term(db_session, keyword="Unpaid", owner_device_secret=owner_secret)
+        item = _make_item(db_session, item_id="unpaid", title="Unpaid item")
+        _make_match(db_session, term, item)
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.get("/api/feed/", headers={"X-Device-Secret": secret})
+
+        assert resp.status_code == 402
+        assert resp.json()["detail"]["code"] == "paid_backend_required"
 
     def test_mute_feed_item_removes_only_that_match_and_keeps_term(self, client, db_session):
         term = _make_term(db_session, keyword="Discussion")
@@ -381,6 +408,7 @@ class TestFeedAPI:
         other_item = _make_item(db_session, item_id="other-mute", title="Other item")
         _make_match(db_session, owned_term, owned_item)
         _make_match(db_session, other_term, other_item)
+        _add_active_entitlement(db_session, owner_secret)
 
         with patch.object(settings, "admin_api_token", "admin-secret"):
             other_resp = client.post(

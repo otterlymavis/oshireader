@@ -661,6 +661,7 @@ class TestCreateWatchTerm:
         assert resp.status_code == 201
 
     def test_device_created_term_reuses_matching_global_term_history(self, client, db_session):
+        owner_secret = hashlib.sha256("device-secret".encode()).hexdigest()
         global_term = WatchTerm(keyword="Aiko", notify_on_new=False)
         item = SourceItem(
             id="news:aiko-1",
@@ -671,7 +672,20 @@ class TestCreateWatchTerm:
             title="Aiko update",
             media_type="article",
         )
-        db_session.add_all([global_term, item])
+        db_session.add_all([
+            global_term,
+            item,
+            DeviceEntitlement(
+                owner_device_secret=owner_secret,
+                product_id="com.otterpia.oshireader.backend.test",
+                environment="sandbox",
+                original_transaction_id="original-feed-history",
+                latest_transaction_id="latest-feed-history",
+                purchase_date=datetime.now(timezone.utc),
+                expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+                push_term_limit=3,
+            ),
+        ])
         db_session.flush()
         db_session.add(Match(watch_term_id=global_term.id, source_item_id=item.id, confidence=0.9))
         db_session.commit()

@@ -1,11 +1,12 @@
 import asyncio
+import hashlib
 
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from app.api import devices as devices_api
-from app.models import APNSDeviceToken, BackendEvent, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, DeviceEntitlement, WatchTerm
 
 _DEVICE_SECRET = "device-secret-123"
 
@@ -17,6 +18,28 @@ def _registration(token: str, environment: str = "sandbox", **extra):
         "device_secret": _DEVICE_SECRET,
         **extra,
     }
+
+
+@pytest.fixture()
+def active_device_entitlements(db_session):
+    now = datetime.now(timezone.utc)
+    for index, secret in enumerate([
+        _DEVICE_SECRET,
+        "correct-secret-123",
+        "secret-secret-secret",
+        "wrong-secret-123",
+    ]):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=hashlib.sha256(secret.encode()).hexdigest(),
+            product_id="com.otterpia.oshireader.backend.test",
+            environment="sandbox",
+            original_transaction_id=f"original-device-{index}",
+            latest_transaction_id=f"latest-device-{index}",
+            purchase_date=now,
+            expires_at=now + timedelta(days=30),
+            push_term_limit=3,
+        ))
+    db_session.commit()
 
 
 class TestAPNSTokenUpsert:
@@ -360,7 +383,23 @@ class TestAPNSTokenDelete:
         assert token not in listed
 
 
+@pytest.mark.usefixtures("active_device_entitlements")
 class TestDeviceScopedTestPush:
+    def test_requires_active_entitlement(self, client, db_session):
+        token = "0" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "sandbox", "device_secret": "unpaid-secret-123"},
+        )
+
+        response = client.post(
+            "/api/devices/apns-test-push",
+            json={"token": token, "device_secret": "unpaid-secret-123"},
+        )
+
+        assert response.status_code == 402
+        assert response.json()["detail"]["code"] == "paid_backend_required"
+
     def test_rejects_unregistered_token(self, client):
         r = client.post(
             "/api/devices/apns-test-push",
@@ -585,7 +624,23 @@ class TestDeviceScopedTestPush:
         assert r.status_code == 400
 
 
+@pytest.mark.usefixtures("active_device_entitlements")
 class TestDeviceScopedBackgroundRefresh:
+    def test_requires_active_entitlement(self, client):
+        token = "0" * 64
+        client.post(
+            "/api/devices/apns-token",
+            json={"token": token, "environment": "sandbox", "device_secret": "unpaid-secret-123"},
+        )
+
+        response = client.post(
+            "/api/devices/background-refresh",
+            json={"token": token, "device_secret": "unpaid-secret-123"},
+        )
+
+        assert response.status_code == 402
+        assert response.json()["detail"]["code"] == "paid_backend_required"
+
     def test_rejects_unregistered_token(self, client):
         r = client.post(
             "/api/devices/background-refresh",
