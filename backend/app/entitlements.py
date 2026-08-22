@@ -157,6 +157,30 @@ def push_delivery_allowed(db: Session, term: WatchTerm) -> bool:
     return state == "active"
 
 
+def backend_access_allowed(db: Session, owner_device_secret: str | None) -> bool:
+    """Return whether a device may consume hosted polling/feed resources."""
+    if owner_device_secret is None:
+        return False
+    entitlement = db.get(DeviceEntitlement, owner_device_secret)
+    return entitlement is not None and entitlement.is_active
+
+
+def backend_access_owner_secrets(db: Session, owner_device_secrets: set[str]) -> set[str]:
+    """Return active hosted-backend owners with one query for scheduler/health paths."""
+    if not owner_device_secrets:
+        return set()
+    entitlements = (
+        db.query(DeviceEntitlement)
+        .filter(DeviceEntitlement.owner_device_secret.in_(owner_device_secrets))
+        .all()
+    )
+    return {
+        entitlement.owner_device_secret
+        for entitlement in entitlements
+        if entitlement.is_active
+    }
+
+
 def clear_paused_pending_notifications(db: Session, owner_device_secret: str) -> int:
     state, _, _ = push_delivery_status(db, owner_device_secret)
     if state == "active":

@@ -299,7 +299,7 @@ class TestCreateWatchTerm:
         assert stale.notify_on_new is False
         assert stale.aliases == ["old"]
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
-        mock_poll.assert_called_once()
+        mock_poll.assert_not_called()
 
     def test_registered_device_does_not_adopt_same_keyword_when_old_owner_has_only_unverified_device(
         self,
@@ -350,7 +350,7 @@ class TestCreateWatchTerm:
         assert stale.owner_device_secret == stale_owner_secret
         assert stale.notify_on_new is False
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
-        mock_poll.assert_called_once()
+        mock_poll.assert_not_called()
 
     def test_registered_device_does_not_adopt_recent_orphaned_same_keyword(self, client, db_session):
         token = "a" * 64
@@ -390,7 +390,7 @@ class TestCreateWatchTerm:
         assert recent.owner_device_secret == stale_owner_secret
         assert recent.notify_on_new is False
         assert db_session.query(WatchTerm).filter_by(keyword="Aiko").count() == 2
-        mock_poll.assert_called_once()
+        mock_poll.assert_not_called()
 
     def test_device_create_notify_term_requires_verified_device(self, client, db_session):
         with patch.object(settings, "admin_api_token", "admin-secret"), \
@@ -430,7 +430,7 @@ class TestCreateWatchTerm:
         assert resp.status_code == 201
         assert resp.json()["notify_on_new"] is True
         assert db_session.query(WatchTerm).count() == 1
-        mock_poll.assert_called_once()
+        mock_poll.assert_not_called()
 
     def test_device_can_create_muted_term_without_verified_device(self, client, db_session):
         with patch.object(settings, "admin_api_token", "admin-secret"), \
@@ -444,7 +444,7 @@ class TestCreateWatchTerm:
         assert resp.status_code == 201
         assert resp.json()["notify_on_new"] is False
         assert db_session.query(WatchTerm).count() == 1
-        mock_poll.assert_called_once()
+        mock_poll.assert_not_called()
 
     def test_device_update_notify_term_requires_verified_device(self, client, db_session):
         owner_secret = hashlib.sha256("unverified-device-secret".encode()).hexdigest()
@@ -660,7 +660,47 @@ class TestCreateWatchTerm:
 
         assert resp.status_code == 201
 
+    def test_unpaid_device_create_does_not_enqueue_hosted_poll(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            response = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Unpaid", "notify_on_new": False},
+                headers={"X-Device-Secret": "unpaid-device-secret"},
+            )
+
+        assert response.status_code == 201
+        mock_poll.assert_not_called()
+
+    def test_entitled_device_create_enqueues_hosted_poll(self, client, db_session):
+        secret = "paid-device-secret"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        now = datetime.now(timezone.utc)
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=owner_secret,
+            product_id="com.otterpia.oshireader.backend.test",
+            environment="sandbox",
+            original_transaction_id="original-paid-create",
+            latest_transaction_id="latest-paid-create",
+            purchase_date=now,
+            expires_at=now + timedelta(days=30),
+            push_term_limit=3,
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            response = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Paid", "notify_on_new": False},
+                headers={"X-Device-Secret": secret},
+            )
+
+        assert response.status_code == 201
+        mock_poll.assert_called_once()
+
     def test_device_created_term_reuses_matching_global_term_history(self, client, db_session):
+        owner_secret = hashlib.sha256("device-secret".encode()).hexdigest()
         global_term = WatchTerm(keyword="Aiko", notify_on_new=False)
         item = SourceItem(
             id="news:aiko-1",
@@ -671,7 +711,20 @@ class TestCreateWatchTerm:
             title="Aiko update",
             media_type="article",
         )
-        db_session.add_all([global_term, item])
+        db_session.add_all([
+            global_term,
+            item,
+            DeviceEntitlement(
+                owner_device_secret=owner_secret,
+                product_id="com.otterpia.oshireader.backend.test",
+                environment="sandbox",
+                original_transaction_id="original-feed-history",
+                latest_transaction_id="latest-feed-history",
+                purchase_date=datetime.now(timezone.utc),
+                expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+                push_term_limit=3,
+            ),
+        ])
         db_session.flush()
         db_session.add(Match(watch_term_id=global_term.id, source_item_id=item.id, confidence=0.9))
         db_session.commit()
@@ -964,6 +1017,53 @@ class TestAdditionalRefreshTierGating:
 
 
 class TestUpdateWatchTerm:
+    def test_unpaid_device_update_does_not_enqueue_hosted_poll(self, client, db_session):
+        secret = "unpaid-update-secret"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        term = WatchTerm(keyword="Unpaid", aliases=[], owner_device_secret=owner_secret)
+        db_session.add(term)
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            response = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"aliases": ["No hosted trigger"]},
+                headers={"X-Device-Secret": secret},
+            )
+
+        assert response.status_code == 200
+        mock_poll.assert_not_called()
+
+    def test_entitled_device_update_enqueues_hosted_poll(self, client, db_session):
+        secret = "paid-update-secret"
+        owner_secret = hashlib.sha256(secret.encode()).hexdigest()
+        now = datetime.now(timezone.utc)
+        term = WatchTerm(keyword="Paid", aliases=[], owner_device_secret=owner_secret)
+        entitlement = DeviceEntitlement(
+            owner_device_secret=owner_secret,
+            product_id="com.otterpia.oshireader.backend.test",
+            environment="sandbox",
+            original_transaction_id="original-paid-update",
+            latest_transaction_id="latest-paid-update",
+            purchase_date=now,
+            expires_at=now + timedelta(days=30),
+            push_term_limit=3,
+        )
+        db_session.add_all([term, entitlement])
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll") as mock_poll:
+            response = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"aliases": ["Hosted trigger"]},
+                headers={"X-Device-Secret": secret},
+            )
+
+        assert response.status_code == 200
+        mock_poll.assert_called_once()
+
     def test_update_is_active(self, client, db_session):
         term = WatchTerm(keyword="Aiko")
         db_session.add(term)

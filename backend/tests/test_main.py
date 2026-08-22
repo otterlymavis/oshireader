@@ -18,7 +18,7 @@ from app.main import (
     _startup_status,
     database_operational_error_handler,
 )
-from app.models import APNSDeviceToken, BackendEvent, Match, MutedFeedItem, PendingNotification, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, DeviceEntitlement, Match, MutedFeedItem, PendingNotification, SourceItem, WatchTerm
 
 
 class TestGetDb:
@@ -528,6 +528,38 @@ class TestAdminStats:
         assert health["active_notify_terms_without_verified_devices"] == 0
         assert health["active_silent_orphan_term_ids"] == []
         assert health["active_notify_term_ids_without_verified_devices"] == []
+
+    def test_health_treats_entitled_silent_feed_term_without_apns_as_healthy(self, client, db_session):
+        owner = "paid-feed-owner"
+        now = datetime.now(timezone.utc)
+        db_session.add_all([
+            WatchTerm(
+                keyword="Paid feed",
+                is_active=True,
+                notify_on_new=False,
+                owner_device_secret=owner,
+                created_at=now - timedelta(hours=2),
+            ),
+            DeviceEntitlement(
+                owner_device_secret=owner,
+                product_id="com.otterpia.oshireader.backend.test",
+                environment="sandbox",
+                original_transaction_id="original-paid-feed-health",
+                latest_transaction_id="latest-paid-feed-health",
+                purchase_date=now,
+                expires_at=now + timedelta(days=30),
+                push_term_limit=3,
+            ),
+        ])
+        db_session.commit()
+
+        stats = client.get("/api/admin/stats").json()["notification_health"]
+        poller = client.get("/api/admin/poller-health").json()["notification_health"]
+
+        assert stats["healthy"] is True
+        assert stats["active_silent_orphan_terms"] == 0
+        assert poller["healthy"] is True
+        assert poller["active_silent_orphan_terms"] == 0
 
     def test_stats_keeps_recent_owner_scoped_terms_in_grace_period(self, client, db_session):
         db_session.add_all([

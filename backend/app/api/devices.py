@@ -14,6 +14,7 @@ from app.auth import require_admin_auth
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.diagnostics import record_backend_event
+from app.entitlements import backend_access_allowed
 from app.models import APNSDeviceToken, BackendEvent, WatchTerm
 from app.schemas import APNSDeviceTestPush, APNSDeviceTokenOut, APNSDeviceTokenUpsert
 
@@ -32,6 +33,18 @@ _RECENT_POLL_STATUSES = {
     "failed",
     "interrupted",
 }
+
+
+def _require_paid_backend_access(db: Session, owner_device_secret: str) -> None:
+    if backend_access_allowed(db, owner_device_secret):
+        return
+    raise HTTPException(
+        402,
+        {
+            "code": "paid_backend_required",
+            "message": "An active purchase is required for backend delivery",
+        },
+    )
 
 
 def _normalize_token(token: str) -> str:
@@ -290,6 +303,7 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
 @router.post("/apns-test-push")
 async def send_device_test_push(body: APNSDeviceTestPush, db: Session = Depends(get_db)) -> dict:
     stored = _find_authenticated_device(body, db, require_verified=False)
+    _require_paid_backend_access(db, _secret_digest(body.device_secret))
 
     from app.apns import send_test_push_to_device
     if body.return_before_delivery:
@@ -319,6 +333,7 @@ async def send_device_test_push(body: APNSDeviceTestPush, db: Session = Depends(
 @router.post("/background-refresh")
 async def request_device_background_refresh(body: APNSDeviceTestPush, db: Session = Depends(get_db)) -> dict:
     stored = _find_authenticated_device(body, db)
+    _require_paid_backend_access(db, _secret_digest(body.device_secret))
 
     from app.ingestion import scheduler as ingestion_scheduler
 

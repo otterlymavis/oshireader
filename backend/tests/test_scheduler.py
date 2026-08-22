@@ -38,6 +38,7 @@ from app.ingestion.scheduler import (
     _queue_pending_notification,
     _search_terms_for,
     _term_is_due,
+    _unentitled_owner_term_ids,
     connector_fetch_timeout_seconds,
 )
 from app.connectors.base import SourceItemCreate
@@ -48,6 +49,7 @@ from app.models import (
     APNSDeviceToken,
     BackendEvent,
     CollectionMode,
+    DeviceEntitlement,
     Match,
     MutedFeedItem,
     PendingNotification,
@@ -87,6 +89,54 @@ def _add_items(db, term, platform, count, start_days_ago=200):
         db.flush()
         db.add(Match(watch_term_id=term.id, source_item_id=item.id))
     db.commit()
+
+
+def test_unentitled_owner_terms_are_excluded_from_hosted_polling(db):
+    global_term = WatchTerm(keyword="Global", notify_on_new=False, is_active=True)
+    unpaid_term = WatchTerm(
+        keyword="Unpaid",
+        notify_on_new=False,
+        is_active=True,
+        owner_device_secret="unpaid-secret",
+    )
+    paid_term = WatchTerm(
+        keyword="Paid",
+        notify_on_new=False,
+        is_active=True,
+        owner_device_secret="paid-secret",
+    )
+    expired_term = WatchTerm(
+        keyword="Expired",
+        notify_on_new=False,
+        is_active=True,
+        owner_device_secret="expired-secret",
+    )
+    entitlement = DeviceEntitlement(
+        owner_device_secret="paid-secret",
+        product_id="com.otterpia.oshireader.backend.test",
+        environment="sandbox",
+        original_transaction_id="original-paid-secret",
+        latest_transaction_id="latest-paid-secret",
+        purchase_date=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        push_term_limit=3,
+    )
+    expired_entitlement = DeviceEntitlement(
+        owner_device_secret="expired-secret",
+        product_id="com.otterpia.oshireader.backend.expired",
+        environment="sandbox",
+        original_transaction_id="original-expired-secret",
+        latest_transaction_id="latest-expired-secret",
+        purchase_date=datetime.now(timezone.utc) - timedelta(days=31),
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        push_term_limit=3,
+    )
+    db.add_all([global_term, unpaid_term, paid_term, expired_term, entitlement, expired_entitlement])
+    db.commit()
+
+    excluded = _unentitled_owner_term_ids(db, [global_term, unpaid_term, paid_term, expired_term])
+
+    assert excluded == {unpaid_term.id, expired_term.id}
 
 
 class TestPruneOldItems:
@@ -1681,6 +1731,34 @@ class TestReportOrphanedDuplicateTerms:
 
 
 class TestReportOrphanedSilentTerms:
+    def test_keeps_entitled_feed_term_without_apns_device(self, db):
+        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        term = WatchTerm(
+            keyword="Aiko",
+            notify_on_new=False,
+            is_active=True,
+            owner_device_secret="paid-secret",
+            created_at=old,
+        )
+        entitlement = DeviceEntitlement(
+            owner_device_secret="paid-secret",
+            product_id="com.otterpia.oshireader.backend.test",
+            environment="sandbox",
+            original_transaction_id="original-paid-secret",
+            latest_transaction_id="latest-paid-secret",
+            purchase_date=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            push_term_limit=3,
+        )
+        db.add_all([term, entitlement])
+        db.commit()
+
+        with patch("app.ingestion.scheduler.settings") as mock_settings:
+            mock_settings.orphaned_notification_grace_minutes = 60
+            orphaned = _report_orphaned_silent_terms(db)
+
+        assert orphaned == set()
+
     def test_preserves_stale_silent_owner_scoped_term_without_device(self, db):
         old = datetime.now(timezone.utc) - timedelta(hours=2)
         term = WatchTerm(

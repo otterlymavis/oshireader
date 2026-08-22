@@ -9,7 +9,7 @@ from sqlalchemy import or_, text as sa_text
 
 from app.apns import revalidate_unverified_devices, send_new_match_notifications
 from app.config import settings
-from app.entitlements import push_delivery_allowed
+from app.entitlements import backend_access_owner_secrets, push_delivery_allowed
 from app.connectors.base import BaseConnector
 from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
@@ -389,6 +389,20 @@ def _inactive_owner_term_ids(db, terms: list[WatchTerm]) -> set[int]:
     }
 
 
+def _unentitled_owner_term_ids(db, terms: list[WatchTerm]) -> set[int]:
+    """Exclude every device-owned term whose hosted-backend purchase is inactive."""
+    active_owners = backend_access_owner_secrets(
+        db,
+        {term.owner_device_secret for term in terms if term.owner_device_secret},
+    )
+    return {
+        term.id
+        for term in terms
+        if term.owner_device_secret
+        and term.owner_device_secret not in active_owners
+    }
+
+
 def _report_orphaned_notification_terms(db) -> set[int]:
     """Report owner-scoped terms without devices without changing preferences.
 
@@ -501,7 +515,16 @@ def _report_orphaned_duplicate_terms(db) -> set[int]:
     )
     orphaned_ids: set[int] = set()
     orphaned_keywords: list[str] = []
+    paid_backend_owners = backend_access_owner_secrets(
+        db,
+        {term.owner_device_secret for term in candidates if term.owner_device_secret},
+    )
     for term in candidates:
+        # Silent terms are also used by the paid hosted-feed lane. Those users
+        # do not need an APNs token, so an active entitlement is sufficient to
+        # keep the term eligible for polling.
+        if term.owner_device_secret in paid_backend_owners:
+            continue
         if _term_has_verified_device(db, term):
             continue
 
@@ -537,7 +560,7 @@ def _report_orphaned_duplicate_terms(db) -> set[int]:
 
 
 def _report_orphaned_silent_terms(db) -> set[int]:
-    """Report silent owner terms without deactivating the user's keyword."""
+    """Report unpaid silent owner terms without deactivating the keyword."""
     grace_minutes = max(0, settings.orphaned_notification_grace_minutes)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=grace_minutes)
     candidates = (
@@ -550,7 +573,13 @@ def _report_orphaned_silent_terms(db) -> set[int]:
     )
     orphaned_ids: set[int] = set()
     orphaned_keywords: list[str] = []
+    paid_backend_owners = backend_access_owner_secrets(
+        db,
+        {term.owner_device_secret for term in candidates if term.owner_device_secret},
+    )
     for term in candidates:
+        if term.owner_device_secret in paid_backend_owners:
+            continue
         if _term_has_verified_device(db, term):
             continue
 
@@ -1614,16 +1643,16 @@ async def _poll_once_unlocked() -> None:
             .order_by(WatchTerm.id)
             .all()
         )
-        # Preserve the user's active setting, but do not fetch an owner-scoped
-        # term while its device is absent. Device registration makes the term
-        # eligible again on the next poll.
-        inactive_term_ids = _inactive_owner_term_ids(db, active_terms)
+        # Hosted polling is the paid resource boundary. Entitled feed-only
+        # devices remain eligible even without APNs registration; expired or
+        # never-purchased device terms remain stored but consume no polling.
+        unentitled_term_ids = _unentitled_owner_term_ids(db, active_terms)
         paused_push_term_ids = {
             term.id
             for term in active_terms
             if term.notify_on_new and not push_delivery_allowed(db, term)
         }
-        excluded_term_ids = orphaned_term_ids | inactive_term_ids | paused_push_term_ids
+        excluded_term_ids = orphaned_term_ids | unentitled_term_ids | paused_push_term_ids
         eligible_terms = [
             term for term in active_terms
             if term.id not in excluded_term_ids
