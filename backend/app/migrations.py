@@ -306,6 +306,7 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
             "is_verified": "BOOLEAN DEFAULT FALSE",
             "verified_at": "TIMESTAMP",
             "verification_attempted_at": "TIMESTAMP",
+            "apns_topic": "VARCHAR NOT NULL DEFAULT 'com.otterpia.oshireader.plus'",
         },
     )
     _add_missing_columns(
@@ -328,6 +329,13 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
         "pending_notifications",
         {
             "created_at": "TIMESTAMP",
+        },
+    )
+    _add_missing_columns(
+        engine,
+        "device_entitlements",
+        {
+            "push_term_limit": "INTEGER NOT NULL DEFAULT 0",
         },
     )
     _backfill_missing_defaults(engine)

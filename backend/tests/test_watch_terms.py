@@ -7,7 +7,22 @@ from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
-from app.models import APNSDeviceToken, Match, PendingNotification, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, DeviceEntitlement, Match, PendingNotification, SourceItem, WatchTerm
+
+
+@pytest.fixture(autouse=True)
+def _isolate_push_metering_from_legacy_watch_term_contracts(request, monkeypatch):
+    """Existing CRUD tests exercise APNs-device behavior independently of StoreKit.
+
+    The dedicated push-limit class below runs the real meter; older tests keep
+    their original scope so a missing entitlement does not hide the behavior
+    they were written to prove.
+    """
+    if "TestPushTermLimitGating" not in request.node.nodeid:
+        monkeypatch.setattr(
+            "app.api.watch_terms._require_available_push_slot",
+            lambda *args, **kwargs: None,
+        )
 
 
 class TestListWatchTerms:
@@ -715,6 +730,237 @@ class TestCreateWatchTerm:
         assert resp.status_code == 201
         created_id = int(resp.json()["id"])
         assert db_session.query(Match).filter_by(watch_term_id=created_id).count() == 0
+
+
+class TestRefreshTierGating:
+    """refresh_tier must never be trusted from the client — see
+    app.api.watch_terms._effective_refresh_tier. Only an active DeviceEntitlement
+    for the requesting device may unlock standard/premium.
+
+    A device-secret request only takes the non-admin path when ADMIN_API_TOKEN is
+    configured (see require_admin_or_device_auth); the default test client leaves
+    it unset and treats every request as admin, so each test patches it."""
+
+    device_secret_header = "plus-device-secret"
+
+    @property
+    def owner_device_secret(self) -> str:
+        return hashlib.sha256(self.device_secret_header.encode()).hexdigest()
+
+    def test_create_without_entitlement_clamps_to_free(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "free"
+
+    def test_create_with_active_entitlement_keeps_requested_tier(self, client, db_session):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=self.owner_device_secret,
+            product_id="com.otterpia.oshireader.plus.monthly",
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "premium"
+
+
+class TestPushTermLimitGating:
+    device_secret_header = "push-device-secret"
+
+    @property
+    def owner_device_secret(self) -> str:
+        return hashlib.sha256(self.device_secret_header.encode()).hexdigest()
+
+    def _add_entitlement(self, db_session, *, limit: int = 1, active: bool = True):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=self.owner_device_secret,
+            product_id="com.otterpia.oshireader.push.3",
+            original_transaction_id="orig-push",
+            latest_transaction_id="txn-push",
+            purchase_date=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30) if active else datetime.now(timezone.utc) - timedelta(days=1),
+            push_term_limit=limit,
+        ))
+        db_session.add(APNSDeviceToken(
+            token="c" * 64,
+            environment="sandbox",
+            device_secret=self.owner_device_secret,
+            is_verified=True,
+        ))
+        db_session.commit()
+
+    def test_create_push_term_requires_active_entitlement(self, client, db_session):
+        self._add_entitlement(db_session, active=False)
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "push_term_limit_reached"
+        assert resp.json()["detail"]["push_term_limit"] == 0
+
+    def test_create_rejects_when_limit_is_reached(self, client, db_session):
+        self._add_entitlement(db_session, limit=1)
+        db_session.add(WatchTerm(
+            keyword="Existing",
+            owner_device_secret=self.owner_device_secret,
+            notify_on_new=True,
+        ))
+        db_session.commit()
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "push_term_limit_reached"
+        assert db_session.query(WatchTerm).count() == 1
+
+    def test_update_consumes_available_slot(self, client, db_session):
+        self._add_entitlement(db_session, limit=1)
+        term = WatchTerm(
+            keyword="Aiko",
+            owner_device_secret=self.owner_device_secret,
+            notify_on_new=False,
+        )
+        db_session.add(term)
+        db_session.commit()
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"notify_on_new": True},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["notify_on_new"] is True
+
+    def test_update_rejects_when_limit_is_reached(self, client, db_session):
+        self._add_entitlement(db_session, limit=1)
+        existing = WatchTerm(
+            keyword="Existing",
+            owner_device_secret=self.owner_device_secret,
+            notify_on_new=True,
+        )
+        candidate = WatchTerm(
+            keyword="Aiko",
+            owner_device_secret=self.owner_device_secret,
+            notify_on_new=False,
+        )
+        db_session.add_all([existing, candidate])
+        db_session.commit()
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.patch(
+                f"/api/watch-terms/{candidate.id}",
+                json={"notify_on_new": True},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "push_term_limit_reached"
+        db_session.refresh(candidate)
+        assert candidate.notify_on_new is False
+
+    def test_admin_terms_are_not_metered(self, client):
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "notify_on_new": True},
+            )
+        assert resp.status_code == 201
+
+
+class TestAdditionalRefreshTierGating:
+    device_secret_header = "plus-device-secret"
+
+    @property
+    def owner_device_secret(self) -> str:
+        return hashlib.sha256(self.device_secret_header.encode()).hexdigest()
+
+    def test_create_with_expired_entitlement_clamps_to_free(self, client, db_session):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=self.owner_device_secret,
+            product_id="com.otterpia.oshireader.plus.monthly",
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.now(timezone.utc) - timedelta(days=60),
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "standard"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "free"
+
+    def test_update_without_entitlement_clamps_to_free(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", owner_device_secret=self.owner_device_secret, refresh_tier="free")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["refresh_tier"] == "free"
+
+    def test_update_with_active_entitlement_keeps_requested_tier(self, client, db_session):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=self.owner_device_secret,
+            product_id="com.otterpia.oshireader.plus.monthly",
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        ))
+        term = WatchTerm(keyword="Aiko", owner_device_secret=self.owner_device_secret, refresh_tier="free")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["refresh_tier"] == "premium"
+
+    def test_admin_created_term_is_not_clamped(self, client):
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "premium"},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "premium"
 
 
 class TestUpdateWatchTerm:

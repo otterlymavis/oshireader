@@ -1,4 +1,4 @@
-name: Distributed release gate
+name: Legacy OshiReader+ maintenance release gate
 
 on:
   workflow_dispatch:
@@ -45,6 +45,11 @@ jobs:
       APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
       APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
     steps:
+      - name: Confirm maintenance-only scope
+        run: |
+          echo "This workflow is only for critical maintenance of com.otterpia.oshireader.plus."
+          echo "All new product and paid-push development belongs in oshireader-local."
+
       - name: Check out source
         uses: actions/checkout@v4
 
@@ -73,7 +78,7 @@ jobs:
               "Release APNs environment": "APNS_ENVIRONMENT: production" in release,
               "Release production API": "OSHIREADER_API_BASE_URL: https://oshireader.onrender.com" in release,
               "production bundle identifier": "PRODUCT_BUNDLE_IDENTIFIER: com.otterpia.oshireader.plus" in project,
-              "backend APNs topic": "value: com.otterpia.oshireader.plus" in render,
+              "backend preserves legacy APNs topic": "com.otterpia.oshireader.plus,com.otterpia.oshireader" in render,
               "backend uses production APNs": 'APNS_USE_SANDBOX\n        value: "false"' in render,
               "APNs entitlement is build-configured": "$(APNS_ENVIRONMENT)" in entitlements,
           }

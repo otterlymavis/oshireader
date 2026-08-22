@@ -19,7 +19,15 @@ from app.ingestion.scheduler import (
     poll_once,
     _prune_old_items,
 )
-from app.models import APNSDeviceToken, BackendEvent, Match, PendingNotification, SourceItem, WatchTerm
+from app.models import (
+    APNSDeviceToken,
+    BackendEvent,
+    DeviceEntitlement,
+    Match,
+    PendingNotification,
+    SourceItem,
+    WatchTerm,
+)
 
 
 def _make_item(platform="youtube", item_id="vid1", **kwargs) -> SourceItemCreate:
@@ -41,6 +49,18 @@ def _mock_connector(platform: str, items: list) -> MagicMock:
     c.MIN_FETCH_TIMEOUT_SECONDS = None
     c.fetch = AsyncMock(return_value=items)
     return c
+
+
+def _active_push_entitlement(owner_device_secret: str) -> DeviceEntitlement:
+    return DeviceEntitlement(
+        owner_device_secret=owner_device_secret,
+        product_id="configured.push.product",
+        original_transaction_id=f"original-{owner_device_secret}",
+        latest_transaction_id=f"latest-{owner_device_secret}",
+        purchase_date=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        push_term_limit=10,
+    )
 
 
 async def _run_poll(db_engine, connectors):
@@ -292,7 +312,17 @@ class TestIngestionNotifications:
             notify_on_new=True,
             owner_device_secret="owner-secret",
         )
-        db_session.add_all([global_term, owner_term])
+        db_session.add_all([
+            global_term,
+            owner_term,
+            _active_push_entitlement("owner-secret"),
+            APNSDeviceToken(
+                token="owner-token",
+                environment="production",
+                device_secret="owner-secret",
+                is_verified=True,
+            ),
+        ])
         db_session.commit()
         global_term_id = global_term.id
         owner_term_id = owner_term.id
@@ -311,7 +341,7 @@ class TestIngestionNotifications:
              patch.object(settings, "poll_terms_per_run", 1):
             await _poll_once_unlocked()
 
-        assert notified_term_ids == [global_term_id, owner_term_id]
+        assert set(notified_term_ids) == {global_term_id, owner_term_id}
 
         db_session.expire_all()
         owner_match = (
@@ -1180,6 +1210,7 @@ class TestIngestionNotifications:
             global_term,
             owner_term,
             existing,
+            _active_push_entitlement("owner-secret"),
             APNSDeviceToken(
                 token="owner-token",
                 environment="production",

@@ -53,8 +53,16 @@ services:
       - key: APNS_PRIVATE_KEY
         sync: false
       - key: APNS_TOPIC
-        value: com.otterpia.oshireader.plus
+        value: com.otterpia.oshireader
+      - key: APNS_ALLOWED_TOPICS
+        value: com.otterpia.oshireader.plus,com.otterpia.oshireader
       - key: APNS_USE_SANDBOX
         value: "false"
+      - key: APP_STORE_BUNDLE_ID
+        value: com.otterpia.oshireader
+      - key: APP_STORE_APPLE_ID
+        sync: false
+      - key: PLUS_SUBSCRIPTION_TIERS
+        value: ""
       - key: CORS_ALLOW_ORIGINS
         sync: false

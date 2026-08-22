@@ -2,6 +2,11 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
+BASIC_PUSH_TERM_LIMIT = 3
+PRO_PUSH_TERM_LIMIT = 10
+ALLOWED_PUSH_TERM_LIMITS = frozenset({BASIC_PUSH_TERM_LIMIT, PRO_PUSH_TERM_LIMIT})
+
+
 class Settings(BaseSettings):
     youtube_api_key: str = ""
     twitter_bearer_token: str = ""
@@ -28,7 +33,11 @@ class Settings(BaseSettings):
     apns_key_id: str = ""
     apns_private_key: str = ""
     apns_private_key_path: str = ""
-    apns_topic: str = "com.otterpia.oshireader.plus"
+    apns_topic: str = "com.otterpia.oshireader"
+    apns_allowed_topics: str = "com.otterpia.oshireader.plus,com.otterpia.oshireader"
+    app_store_bundle_id: str = "com.otterpia.oshireader"
+    app_store_apple_id: str = ""  # numeric App Store Connect app ID; required to verify production StoreKit transactions
+    plus_subscription_tiers: str = ""  # comma-separated StoreKit product_id:push_term_limit entries
     apns_use_sandbox: bool = False  # set APNS_USE_SANDBOX=true only for Debug-config builds; TestFlight/App Store builds use the production APNs host
     apns_trust_registered_tokens: bool = False  # skip inline APNs validation on registration; tokens are trusted immediately and pruned on first delivery failure
     backend_public_url: str = "https://oshireader.onrender.com"
@@ -45,8 +54,30 @@ class Settings(BaseSettings):
         return value
 
     @property
+    def plus_subscription_tier_limits(self) -> dict[str, int]:
+        tiers: dict[str, int] = {}
+        for entry in self.plus_subscription_tiers.split(","):
+            product_id, separator, raw_limit = entry.strip().rpartition(":")
+            if not separator or not product_id:
+                continue
+            try:
+                limit = int(raw_limit)
+            except ValueError:
+                continue
+            if limit in ALLOWED_PUSH_TERM_LIMITS:
+                tiers[product_id] = limit
+        return tiers
+
+    @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
+    @property
+    def apns_allowed_topic_set(self) -> set[str]:
+        topics = {topic.strip() for topic in self.apns_allowed_topics.split(",") if topic.strip()}
+        if self.apns_topic:
+            topics.add(self.apns_topic)
+        return topics
 
     @property
     def refresh_intervals_minutes(self) -> dict[str, int]:

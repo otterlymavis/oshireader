@@ -27,7 +27,13 @@ from app.apns import (
     send_test_push_to_device,
     validate_device_registration_result,
 )
-from app.models import APNSDeviceToken, BackendEvent, WatchTerm
+from app.models import APNSDeviceToken, BackendEvent, DeviceEntitlement, WatchTerm
+
+
+@pytest.fixture(autouse=True)
+def _isolate_paid_delivery_from_legacy_apns_contracts(request, monkeypatch):
+    if "TestPaidPushDelivery" not in request.node.nodeid:
+        monkeypatch.setattr("app.apns.push_delivery_status", lambda *args, **kwargs: ("active", 50, 0))
 
 
 class TestPayload:
@@ -1108,3 +1114,66 @@ class TestCachedAuthToken:
         assert result == "new-tok"
         mock_fn.cache_clear.assert_called_once()
         assert mock_fn.call_count == 2
+
+
+class TestPaidPushDelivery:
+    @staticmethod
+    def _entitlement(owner_secret: str, *, limit: int = 1, active: bool = True) -> DeviceEntitlement:
+        return DeviceEntitlement(
+            owner_device_secret=owner_secret,
+            product_id="push.product",
+            original_transaction_id="orig-paid",
+            latest_transaction_id="txn-paid",
+            purchase_date=datetime.now(timezone.utc),
+            expires_at=(datetime.now(timezone.utc) + timedelta(days=30)) if active else (datetime.now(timezone.utc) - timedelta(days=1)),
+            push_term_limit=limit,
+        )
+
+    @pytest.mark.asyncio
+    async def test_inactive_entitlement_pauses_delivery(self, db_session):
+        owner = "paid-owner"
+        term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret=owner)
+        db_session.add_all([term, self._entitlement(owner, active=False)])
+        db_session.commit()
+        with patch("app.apns._send_one", new=AsyncMock()) as send:
+            should_clear = await send_new_match_notifications(db_session, term, 1)
+        assert should_clear is True
+        send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_over_limit_pauses_all_delivery_until_selection(self, db_session):
+        owner = "over-limit-owner"
+        first = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret=owner)
+        second = WatchTerm(keyword="Miku", notify_on_new=True, owner_device_secret=owner)
+        db_session.add_all([first, second, self._entitlement(owner, limit=1)])
+        db_session.commit()
+        with patch("app.apns._send_one", new=AsyncMock()) as send:
+            should_clear = await send_new_match_notifications(db_session, first, 1)
+        assert should_clear is True
+        send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_active_entitlement_within_limit_delivers(self, db_session):
+        owner = "active-paid-owner"
+        term = WatchTerm(keyword="Aiko", notify_on_new=True, owner_device_secret=owner)
+        device = _device("d" * 64)
+        device.device_secret = owner
+        db_session.add_all([term, device, self._entitlement(owner, limit=1)])
+        db_session.commit()
+        with patch("app.apns.apns_configured", return_value=True), \
+             patch("app.apns._send_one", new=AsyncMock(return_value=APNSSendResult(delivered=True))) as send:
+            should_clear = await send_new_match_notifications(db_session, term, 1)
+        assert should_clear is True
+        send.assert_called_once()
+
+
+class TestPerDeviceTopic:
+    @pytest.mark.asyncio
+    async def test_send_one_uses_registered_device_topic(self):
+        term, device = _term_and_device()
+        device.apns_topic = "com.otterpia.oshireader"
+        client = _mock_client(response=_mock_response(200, {}))
+        with patch("app.apns._cached_auth_token", return_value="tok"):
+            result = await _send_one(client, device, term, 1)
+        assert result.delivered is True
+        assert client.post.await_args.kwargs["headers"]["apns-topic"] == "com.otterpia.oshireader"

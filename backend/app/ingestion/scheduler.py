@@ -9,6 +9,7 @@ from sqlalchemy import or_, text as sa_text
 
 from app.apns import revalidate_unverified_devices, send_new_match_notifications
 from app.config import settings
+from app.entitlements import push_delivery_allowed
 from app.connectors.base import BaseConnector
 from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
@@ -645,7 +646,7 @@ def _queue_pending_notification(
     term: WatchTerm,
     candidates: list[_NotificationCandidate],
 ) -> None:
-    if not term.notify_on_new:
+    if not term.notify_on_new or not push_delivery_allowed(db, term):
         pending = db.get(PendingNotification, term.id)
         if pending is not None:
             db.delete(pending)
@@ -767,7 +768,7 @@ def _queue_recent_unnotified_match_notifications(
     limit: int = 200,
 ) -> int:
     """Catch up fresh matches that were saved before notification rules changed."""
-    if not term.notify_on_new:
+    if not term.notify_on_new or not push_delivery_allowed(db, term):
         return 0
 
     cutoff = observed_at - _notification_freshness_window()
@@ -1159,6 +1160,8 @@ def _fresh_sendable_notification_term(db, term_id: int) -> WatchTerm | None:
         .first()
     )
     if fresh_term is None or not fresh_term.is_active or not fresh_term.notify_on_new:
+        return None
+    if not push_delivery_allowed(db, fresh_term):
         return None
     return fresh_term
 
@@ -1615,15 +1618,21 @@ async def _poll_once_unlocked() -> None:
         # term while its device is absent. Device registration makes the term
         # eligible again on the next poll.
         inactive_term_ids = _inactive_owner_term_ids(db, active_terms)
+        paused_push_term_ids = {
+            term.id
+            for term in active_terms
+            if term.notify_on_new and not push_delivery_allowed(db, term)
+        }
+        excluded_term_ids = orphaned_term_ids | inactive_term_ids | paused_push_term_ids
         eligible_terms = [
             term for term in active_terms
-            if term.id not in orphaned_term_ids and term.id not in inactive_term_ids
+            if term.id not in excluded_term_ids
         ]
         due_terms = [term for term in eligible_terms if _term_is_due(term, datetime.now(timezone.utc))]
         if not due_terms:
             flushed_pending_term_ids = await _flush_pending_notifications(
                 db,
-                exclude_term_ids=orphaned_term_ids | inactive_term_ids,
+                exclude_term_ids=excluded_term_ids,
             )
             record_backend_event(
                 db,
@@ -1678,7 +1687,7 @@ async def _poll_once_unlocked() -> None:
 
         flushed_pending_term_ids = await _flush_pending_notifications(
             db,
-            exclude_term_ids=orphaned_term_ids | inactive_term_ids,
+            exclude_term_ids=excluded_term_ids,
         )
         fetch_cache: dict[tuple[str, str, str], list] = {}
 
@@ -1703,7 +1712,7 @@ async def _poll_once_unlocked() -> None:
 
         await _flush_pending_notifications(
             db,
-            exclude_term_ids={t.id for t in all_terms} | orphaned_term_ids,
+            exclude_term_ids={t.id for t in all_terms} | excluded_term_ids,
         )
 
         _prune_irrelevant_matches(db, all_terms)

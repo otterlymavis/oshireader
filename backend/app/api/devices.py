@@ -147,6 +147,7 @@ def _is_same_device_identity(stored: APNSDeviceToken, body: APNSDeviceTokenUpser
         and body.device_id
         and stored.device_id == body.device_id
         and stored.environment == body.environment
+        and stored.apns_topic == body.bundle_id
     )
 
 
@@ -162,6 +163,7 @@ def _retire_superseded_device_tokens(
         db.query(APNSDeviceToken)
         .filter(
             APNSDeviceToken.environment == stored.environment,
+            APNSDeviceToken.apns_topic == stored.apns_topic,
             APNSDeviceToken.token != stored.token,
             APNSDeviceToken.device_id == stored.device_id,
         )
@@ -186,6 +188,7 @@ def _redacted_device_row(device: APNSDeviceToken, owner_term_count: int) -> dict
     return {
         "token": device.token[-8:],
         "environment": device.environment,
+        "bundle_id": device.apns_topic,
         "device_id_present": bool(device.device_id),
         "device_id": device.device_id[-8:] if device.device_id else None,
         "owner_term_count": owner_term_count,
@@ -199,12 +202,15 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
     token = _normalize_token(body.token)
     if not token or len(token) != 64 or any(ch not in "0123456789abcdef" for ch in token):
         raise HTTPException(400, "Invalid APNs device token")
+    if body.bundle_id not in settings.apns_allowed_topic_set:
+        raise HTTPException(422, "bundle_id is not an allowed APNs topic")
 
     stored = db.get(APNSDeviceToken, token)
     previously_verified_for_environment = bool(
         stored
         and stored.is_verified
         and stored.environment == body.environment
+        and stored.apns_topic == body.bundle_id
         and stored.device_secret
         and _secret_matches(stored.device_secret, body.device_secret)
     )
@@ -219,6 +225,7 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
         raise HTTPException(409, "APNs device token is registered to another device secret")
 
     stored.environment = body.environment
+    stored.apns_topic = body.bundle_id
     stored.device_id = body.device_id
     stored.device_secret = _secret_digest(body.device_secret)
     if not previously_verified_for_environment:
@@ -276,6 +283,7 @@ async def upsert_apns_token(body: APNSDeviceTokenUpsert, db: Session = Depends(g
         last_seen_at=stored.last_seen_at,
         is_verified=stored.is_verified,
         verification_error=verification_error,
+        bundle_id=stored.apns_topic,
     )
 
 
@@ -373,6 +381,7 @@ def list_apns_tokens(_: None = Depends(require_admin_auth), db: Session = Depend
             device_id=device.device_id[-8:] if device.device_id else None,
             last_seen_at=device.last_seen_at,
             is_verified=device.is_verified,
+            bundle_id=device.apns_topic,
         )
         for device in devices
     ]
