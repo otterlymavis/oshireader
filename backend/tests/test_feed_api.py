@@ -4,11 +4,13 @@ from __future__ import annotations
 import os
 import hashlib
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from unittest.mock import patch
 
 import pytest
 
 from app.config import settings
+from app.feed_redirects import signed_match_redirect_url
 from app.models import APNSDeviceToken, DeviceEntitlement, Match, MutedFeedItem, SourceItem, WatchTerm
 
 # Supply a token so admin endpoints work in tests.
@@ -475,13 +477,52 @@ class TestFeedAPI:
         item = _make_item(db_session, item_id="redirect")
         match = _make_match(db_session, term, item)
 
-        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                match.id,
+                item.url,
+                issued_at=datetime.now(timezone.utc),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
         assert resp.status_code == 307
         assert resp.headers["location"] == item.url
 
     def test_match_redirect_404_for_unknown_match(self, client):
-        resp = client.get("/api/feed/matches/999999/redirect", follow_redirects=False)
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                999999,
+                "https://example.com/missing",
+                issued_at=datetime.now(timezone.utc),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
         assert resp.status_code == 404
+
+    def test_match_redirect_rejects_unsigned_enumeration(self, client, db_session):
+        term = _make_term(db_session)
+        item = _make_item(db_session, item_id="unsigned-redirect")
+        match = _make_match(db_session, term, item)
+
+        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+
+        assert resp.status_code == 403
+
+    def test_match_redirect_rejects_expired_signature(self, client, db_session):
+        term = _make_term(db_session)
+        item = _make_item(db_session, item_id="expired-redirect")
+        match = _make_match(db_session, term, item)
+
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                match.id,
+                item.url,
+                issued_at=datetime.now(timezone.utc) - timedelta(days=31),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
+
+        assert resp.status_code == 403
 
     def test_match_redirect_rejects_non_http_url(self, client, db_session):
         term = _make_term(db_session)
@@ -490,7 +531,14 @@ class TestFeedAPI:
         db_session.commit()
         match = _make_match(db_session, term, item)
 
-        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                match.id,
+                item.url,
+                issued_at=datetime.now(timezone.utc),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
         assert resp.status_code == 404
 
     def test_feed_filter_by_term_id(self, client, db_session):
@@ -505,6 +553,20 @@ class TestFeedAPI:
         rows = resp.json()
         assert len(rows) == 1
         assert rows[0]["watch_term_id"] == t1.id
+
+    def test_feed_filter_by_multiple_term_ids(self, client, db_session):
+        terms = [_make_term(db_session, keyword=f"term-{index}") for index in range(3)]
+        for index, term in enumerate(terms):
+            item = _make_item(
+                db_session,
+                item_id=f"term-filter-{index}",
+                title=f"{term.keyword} item",
+            )
+            _make_match(db_session, term, item)
+
+        rows = client.get(f"/api/feed/?term_ids={terms[0].id},{terms[2].id}").json()
+
+        assert {row["watch_term_id"] for row in rows} == {terms[0].id, terms[2].id}
 
     def test_feed_days_filter_excludes_old_items(self, client, db_session):
         term = _make_term(db_session)
@@ -768,6 +830,30 @@ class TestFeedAPI:
         ids = [r["item"]["id"] for r in resp.json()]
         assert new_item.id in ids
         assert old_item.id not in ids
+
+    def test_feed_until_holds_a_stable_pagination_snapshot(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        before_cutoff = _make_item(
+            db_session,
+            item_id="before-cutoff",
+            title="Aiko before cutoff",
+        )
+        after_cutoff = _make_item(
+            db_session,
+            item_id="after-cutoff",
+            title="Aiko after cutoff",
+        )
+        older_match = _make_match(db_session, term, before_cutoff)
+        newer_match = _make_match(db_session, term, after_cutoff)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
+        older_match.created_at = cutoff - timedelta(seconds=1)
+        newer_match.created_at = cutoff + timedelta(seconds=1)
+        db_session.commit()
+
+        until_ts = quote(cutoff.isoformat())
+        rows = client.get(f"/api/feed/?days=0&until={until_ts}").json()
+
+        assert [row["item"]["id"] for row in rows] == [before_cutoff.id]
 
     def test_since_filter_timeless_platforms_always_included(self, client, db_session):
         """5ch/girlschannel items survive the since filter regardless of match age."""

@@ -159,6 +159,46 @@ class TestVerifyEntitlement:
         assert resp.json()["is_active"] is False
         assert resp.json()["push_term_limit"] == 0
 
+    def test_replayed_purchase_cannot_clear_a_revocation(self, client, db_session):
+        purchase_date = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000)
+        revocation_date = int(datetime.now(timezone.utc).timestamp() * 1000)
+        original = _configure_product_tiers()
+        try:
+            with _device_auth():
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        purchaseDate=purchase_date,
+                        revocationDate=revocation_date,
+                    ),
+                ):
+                    client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "revoked-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        purchaseDate=purchase_date,
+                        revocationDate=None,
+                        expiresDate=None,
+                    ),
+                ):
+                    resp = client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "original-purchase-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+        finally:
+            settings.plus_subscription_tiers = original
+
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is False
+        stored = db_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+        assert stored.revoked_at is not None
+        assert stored.expires_at is not None
+
     def test_non_consumable_without_expiry_is_lifetime_active(self, client, db_session):
         original = _configure_product_tiers(3)
         try:
@@ -282,3 +322,48 @@ class TestAppStoreServerNotifications:
             assert stored.latest_transaction_id == "new"
             assert stored.push_term_limit == 10
             assert stored.expires_at is None
+
+    def test_ignores_notification_for_an_older_transaction(self, client, db_session):
+        current_purchase = datetime.now(timezone.utc)
+        current_expiry = current_purchase + timedelta(days=30)
+        db_session.add(DeviceEntitlement(
+            owner_device_secret="owner-a",
+            product_id=_PRODUCT_ID,
+            original_transaction_id="orig-1",
+            latest_transaction_id="current",
+            purchase_date=current_purchase,
+            expires_at=current_expiry,
+            push_term_limit=10,
+        ))
+        db_session.commit()
+        notification = SimpleNamespace(
+            data=SimpleNamespace(signedTransactionInfo="old-transaction-jws"),
+            rawNotificationType="DID_RENEW",
+        )
+        old_purchase = int((current_purchase - timedelta(days=30)).timestamp() * 1000)
+        old_expiry = int((current_purchase - timedelta(days=1)).timestamp() * 1000)
+        original = _configure_product_tiers(3)
+        try:
+            with patch("app.api.entitlements.verify_signed_notification", return_value=notification), \
+                 patch(
+                     "app.api.entitlements.verify_signed_transaction",
+                     return_value=_FakeTransaction(
+                         transactionId="old",
+                         purchaseDate=old_purchase,
+                         expiresDate=old_expiry,
+                     ),
+                 ):
+                resp = client.post(
+                    "/api/entitlements/apple-notifications",
+                    json={"signedPayload": "notification-jws"},
+                )
+        finally:
+            settings.plus_subscription_tiers = original
+
+        assert resp.status_code == 200
+        assert resp.json()["updated"] == 0
+        stored = db_session.get(DeviceEntitlement, "owner-a")
+        db_session.refresh(stored)
+        assert stored.latest_transaction_id == "current"
+        assert stored.push_term_limit == 10
+        assert stored.expires_at.replace(tzinfo=timezone.utc) == current_expiry

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_auth
 from app.database import get_db
 from app.entitlements import backend_access_allowed
+from app.feed_redirects import match_redirect_signature_is_valid
 from app.models import Match, MutedFeedItem, SourceItem, WatchTerm
 from app.relevance import watch_term_matches
 from app.schemas import FeedItemMuteIn, FeedItemOut, SourceItemOut
@@ -45,7 +46,14 @@ def _require_paid_backend_access(auth: AuthContext, db: Session) -> None:
 
 
 @router.get("/matches/{match_id}/redirect")
-def redirect_match(match_id: int, db: Session = Depends(get_db)):
+def redirect_match(
+    match_id: int,
+    expires: Optional[int] = Query(None),
+    signature: Optional[str] = Query(None, min_length=64, max_length=64),
+    db: Session = Depends(get_db),
+):
+    if expires is None or signature is None or not match_redirect_signature_is_valid(match_id, expires, signature):
+        raise HTTPException(403, "feed redirect is invalid or expired")
     row = (
         db.query(SourceItem.url)
         .join(Match, Match.source_item_id == SourceItem.id)
@@ -99,12 +107,14 @@ def mute_feed_item(
 @router.get("/", response_model=list[FeedItemOut])
 def get_feed(
     term_id: Optional[int] = Query(None),
+    term_ids: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     media_type: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     days: int = Query(30, ge=0, le=365),
     since: Optional[datetime] = Query(None),
+    until: Optional[datetime] = Query(None),
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
@@ -124,7 +134,7 @@ def get_feed(
             SourceItem.raw_payload["source"].as_string().is_(None),
             SourceItem.raw_payload["source"].as_string() != "google_news",
         ))
-        .order_by(_FEED_SORT_KEY.desc())
+        .order_by(_FEED_SORT_KEY.desc(), Match.id.desc())
     )
     if not auth.is_admin:
         q = q.filter(WatchTerm.owner_device_secret == auth.device_secret)
@@ -153,8 +163,19 @@ def get_feed(
         # they're ordered.
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         q = q.filter(_FEED_SORT_KEY >= cutoff)
+    if until is not None:
+        aware_until = until.replace(tzinfo=timezone.utc) if until.tzinfo is None else until
+        q = q.filter(Match.created_at <= aware_until)
     if term_id is not None:
         q = q.filter(Match.watch_term_id == term_id)
+    if term_ids is not None:
+        try:
+            parsed_term_ids = {int(value) for value in term_ids.split(",") if value}
+        except ValueError as exc:
+            raise HTTPException(422, "term_ids must contain comma-separated integers") from exc
+        if not parsed_term_ids or len(parsed_term_ids) > 50:
+            raise HTTPException(422, "term_ids must contain between 1 and 50 values")
+        q = q.filter(Match.watch_term_id.in_(parsed_term_ids))
     if platform:
         q = q.filter(SourceItem.platform == platform)
     if media_type:

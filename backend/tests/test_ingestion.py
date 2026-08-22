@@ -259,7 +259,8 @@ class TestIngestionNotifications:
         TestSession = sessionmaker(bind=db_engine)
         with patch("app.ingestion.scheduler._build_connectors", return_value=[connector]), \
              patch("app.ingestion.scheduler.SessionLocal", TestSession), \
-             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify):
+             patch("app.ingestion.scheduler.send_new_match_notifications", new=mock_notify), \
+             patch.object(settings, "admin_api_token", "redirect-test-secret"):
             await _poll_once_unlocked()
 
         mock_notify.assert_called_once()
@@ -270,7 +271,8 @@ class TestIngestionNotifications:
         assert preview_item["match_id"]
         assert preview_item["media_type"] == "video"
         assert preview_item["published_at"]
-        assert preview_item["redirect_url"].endswith(f"/api/feed/matches/{preview_item['match_id']}/redirect")
+        assert f"/api/feed/matches/{preview_item['match_id']}/redirect?" in preview_item["redirect_url"]
+        assert "signature=" in preview_item["redirect_url"]
 
     @pytest.mark.asyncio
     async def test_multiple_new_items_each_send_their_own_notification(self, db_engine, db_session):

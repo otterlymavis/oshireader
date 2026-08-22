@@ -61,7 +61,26 @@ def _apply_decoded_entitlement(
     entitlement: DeviceEntitlement,
     decoded: DecodedEntitlement,
     push_term_limit: int,
-) -> None:
+) -> bool:
+    """Apply only entitlement state that is at least as new as the stored state.
+
+    StoreKit transaction JWS values remain cryptographically valid after a
+    refund. A client can therefore replay the original transaction after the
+    server has processed its revocation. Purchase time orders renewals and new
+    purchases; for one transaction, revocation is terminal.
+    """
+    stored_purchase_date = entitlement.purchase_date
+    if stored_purchase_date is not None and stored_purchase_date.tzinfo is None:
+        stored_purchase_date = stored_purchase_date.replace(tzinfo=decoded.purchase_date.tzinfo)
+    if stored_purchase_date is not None and decoded.purchase_date < stored_purchase_date:
+        return False
+    if (
+        decoded.latest_transaction_id == entitlement.latest_transaction_id
+        and entitlement.revoked_at is not None
+        and decoded.revoked_at is None
+    ):
+        return False
+
     entitlement.product_id = decoded.product_id
     entitlement.environment = decoded.environment
     entitlement.original_transaction_id = decoded.original_transaction_id
@@ -70,6 +89,7 @@ def _apply_decoded_entitlement(
     entitlement.expires_at = decoded.expires_at
     entitlement.revoked_at = decoded.revoked_at
     entitlement.push_term_limit = push_term_limit
+    return True
 
 
 @router.post("/verify", response_model=EntitlementStatusOut)
@@ -132,14 +152,17 @@ def apple_notifications(
         .filter(DeviceEntitlement.original_transaction_id == decoded.original_transaction_id)
         .all()
     )
-    for entitlement in entitlements:
-        _apply_decoded_entitlement(entitlement, decoded, tier_limit)
+    applied = [
+        entitlement
+        for entitlement in entitlements
+        if _apply_decoded_entitlement(entitlement, decoded, tier_limit)
+    ]
     db.flush()
-    for entitlement in entitlements:
+    for entitlement in applied:
         clear_paused_pending_notifications(db, entitlement.owner_device_secret)
     db.commit()
     return {
         "accepted": True,
-        "updated": len(entitlements),
+        "updated": len(applied),
         "notification_type": str(getattr(notification, "rawNotificationType", None) or ""),
     }
