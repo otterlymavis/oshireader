@@ -84,6 +84,38 @@ jobs:
               )
           if "/api/entitlements/apple-notifications" not in openapi.get("paths", {}):
               raise SystemExit("Apple notification lifecycle endpoint is not deployed")
+          feed_operation = openapi.get("paths", {}).get("/api/feed/", {}).get("get", {})
+          feed_parameters = {
+              parameter.get("name")
+              for parameter in feed_operation.get("parameters", [])
+          }
+          required_feed_parameters = {
+              "term_ids",
+              "since",
+              "until",
+              "scan",
+              "scan_before_published_at",
+              "scan_before_match_id",
+          }
+          missing_feed_parameters = required_feed_parameters - feed_parameters
+          if missing_feed_parameters:
+              raise SystemExit(
+                  f"Paid feed continuation parameters are not deployed: {sorted(missing_feed_parameters)}"
+              )
+          feed_headers = (
+              feed_operation.get("responses", {})
+              .get("200", {})
+              .get("headers", {})
+          )
+          required_feed_headers = {
+              "X-OshiReader-Next-Published-At",
+              "X-OshiReader-Next-Match-ID",
+          }
+          missing_feed_headers = required_feed_headers - feed_headers.keys()
+          if missing_feed_headers:
+              raise SystemExit(
+                  f"Paid feed continuation headers are not deployed: {sorted(missing_feed_headers)}"
+              )
           print(f"Backend is healthy at commit {health.get('commit', 'unknown')}")
           PY
             then
