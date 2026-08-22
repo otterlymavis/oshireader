@@ -104,7 +104,24 @@ def mute_feed_item(
     db.commit()
 
 
-@router.get("/", response_model=list[FeedItemOut])
+@router.get(
+    "/",
+    response_model=list[FeedItemOut],
+    responses={
+        200: {
+            "headers": {
+                "X-OshiReader-Next-Published-At": {
+                    "description": "Published date of the last scanned row; paired with the immutable match cursor.",
+                    "schema": {"type": "string", "format": "date-time"},
+                },
+                "X-OshiReader-Next-Match-ID": {
+                    "description": "Immutable continuation cursor for a bounded feed scan.",
+                    "schema": {"type": "integer"},
+                },
+            },
+        },
+    },
+)
 def get_feed(
     response: Response,
     term_id: Optional[int] = Query(None),
@@ -154,12 +171,15 @@ def get_feed(
         # Filter by when the item was *stored* (matched_at), not published_at.
         # Items with broadcast dates earlier in the day but fetched after last sync
         # must still appear (e.g. TVer episodes with midnight broadcast dates).
-        # Timeless platforms always bypass this — unlike the days-based window
-        # below, incremental sync must surface new activity on old forum threads
-        # regardless of how old the original match is.
+        # Old forum threads remain eligible only when their last-reply timestamp
+        # advanced after the checkpoint. This surfaces new activity without making
+        # every incremental refresh rescan the complete unpruned forum history.
         q = q.filter(
             or_(Match.created_at > aware_since,
-                SourceItem.platform.in_(_TIMELESS_PLATFORMS))
+                and_(
+                    SourceItem.platform.in_(_TIMELESS_PLATFORMS),
+                    SourceItem.published_at > aware_since,
+                ))
         )
     elif days > 0 and not viewing_timeless:
         # Apply the window using each row's effective sort date (created_at for 5ch,
@@ -190,19 +210,14 @@ def get_feed(
             raise HTTPException(422, "offset must be zero for continuation scans")
         if (scan_before_published_at is None) != (scan_before_match_id is None):
             raise HTTPException(422, "both continuation cursor fields are required")
+        # Scan in immutable Match.id order. SourceItem.published_at can advance while
+        # a discussion thread receives replies; using it as the continuation key can
+        # move an unseen row ahead of the previous page and skip it. Keep accepting
+        # and emitting the published-at header for deployed-client compatibility, but
+        # never use that mutable value to decide which rows remain.
+        q = q.order_by(None).order_by(Match.id.desc())
         if scan_before_published_at is not None and scan_before_match_id is not None:
-            aware_before = (
-                scan_before_published_at.replace(tzinfo=timezone.utc)
-                if scan_before_published_at.tzinfo is None
-                else scan_before_published_at
-            )
-            q = q.filter(or_(
-                SourceItem.published_at < aware_before,
-                and_(
-                    SourceItem.published_at == aware_before,
-                    Match.id < scan_before_match_id,
-                ),
-            ))
+            q = q.filter(Match.id < scan_before_match_id)
 
         raw_rows = q.limit(_MAX_FEED_SCAN_ROWS).all()
         rows = []

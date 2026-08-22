@@ -241,14 +241,6 @@ class TestFeedAPI:
     def test_continuation_scan_crosses_irrelevant_scan_caps(self, client, db_session, monkeypatch):
         monkeypatch.setattr("app.api.feed._MAX_FEED_SCAN_ROWS", 3)
         term = _make_term(db_session, keyword="Aiko")
-        for index in range(4):
-            stale = _make_item(
-                db_session,
-                item_id=f"continuation-stale-{index}",
-                days_ago=index,
-                title=f"Unrelated article {index}",
-            )
-            _make_match(db_session, term, stale)
         expected_ids = []
         for index in range(3):
             relevant = _make_item(
@@ -259,6 +251,14 @@ class TestFeedAPI:
             )
             _make_match(db_session, term, relevant)
             expected_ids.append(relevant.id)
+        for index in range(4):
+            stale = _make_item(
+                db_session,
+                item_id=f"continuation-stale-{index}",
+                days_ago=index,
+                title=f"Unrelated article {index}",
+            )
+            _make_match(db_session, term, stale)
 
         parameters = {
             "scan": "true",
@@ -286,13 +286,102 @@ class TestFeedAPI:
             pytest.fail("continuation scan did not terminate")
 
         assert page_sizes[0] == 0
-        assert collected_ids == expected_ids
+        assert collected_ids == list(reversed(expected_ids))
+
+    def test_continuation_scan_does_not_skip_item_when_published_at_moves(self, client, db_session, monkeypatch):
+        monkeypatch.setattr("app.api.feed._MAX_FEED_SCAN_ROWS", 2)
+        term = _make_term(db_session, keyword="Aiko")
+        items = []
+        for index in range(3):
+            item = _make_item(
+                db_session,
+                item_id=f"moving-cursor-{index}",
+                days_ago=index + 1,
+                title=f"Aiko article {index}",
+            )
+            _make_match(db_session, term, item)
+            items.append(item)
+
+        first = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 1,
+                "days": 0,
+                "term_ids": str(term.id),
+            },
+        )
+        assert first.status_code == 200
+        assert first.json()[0]["item"]["id"] == items[2].id
+
+        # This unseen row moves ahead of the prior page's published-at value.
+        # An immutable Match.id cursor must still return it on the next page.
+        items[1].published_at = datetime.now(timezone.utc) + timedelta(days=1)
+        db_session.commit()
+        second = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 1,
+                "days": 0,
+                "term_ids": str(term.id),
+                "scan_before_published_at": first.headers["X-OshiReader-Next-Published-At"],
+                "scan_before_match_id": first.headers["X-OshiReader-Next-Match-ID"],
+            },
+        )
+
+        assert second.status_code == 200
+        assert second.json()[0]["item"]["id"] == items[1].id
+
+    def test_incremental_scan_limits_old_forum_rows_to_recent_activity(self, client, db_session):
+        checkpoint = datetime.now(timezone.utc) - timedelta(hours=1)
+        term = _make_term(db_session, keyword="Aiko")
+        stale = _make_item(
+            db_session,
+            item_id="stale-forum-thread",
+            days_ago=30,
+            title="Aiko stale thread",
+            platform="5ch",
+        )
+        active = _make_item(
+            db_session,
+            item_id="active-forum-thread",
+            days_ago=0,
+            title="Aiko active thread",
+            platform="5ch",
+        )
+        stale_match = _make_match(db_session, term, stale)
+        active_match = _make_match(db_session, term, active)
+        stale_match.created_at = checkpoint - timedelta(days=1)
+        active_match.created_at = checkpoint - timedelta(days=1)
+        db_session.commit()
+
+        response = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 10,
+                "since": checkpoint.isoformat(),
+                "until": datetime.now(timezone.utc).isoformat(),
+                "term_ids": str(term.id),
+            },
+        )
+
+        assert response.status_code == 200
+        assert [row["item"]["id"] for row in response.json()] == [active.id]
 
     def test_feed_empty(self, client):
         resp = client.get("/api/feed/")
         assert resp.status_code == 200
         assert resp.json() == []
         assert resp.headers["server-timing"].startswith("feed;dur=")
+
+    def test_openapi_declares_continuation_response_headers(self, client):
+        operation = client.get("/openapi.json").json()["paths"]["/api/feed/"]["get"]
+        headers = operation["responses"]["200"]["headers"]
+
+        assert "X-OshiReader-Next-Published-At" in headers
+        assert "X-OshiReader-Next-Match-ID" in headers
 
     def test_feed_compresses_large_response_when_client_supports_gzip(self, client, db_session):
         term = _make_term(db_session, keyword="Aiko")
@@ -905,10 +994,10 @@ class TestFeedAPI:
 
         assert [row["item"]["id"] for row in rows] == [before_cutoff.id]
 
-    def test_since_filter_timeless_platforms_always_included(self, client, db_session):
-        """5ch/girlschannel items survive the since filter regardless of match age."""
+    def test_since_filter_timeless_platforms_include_recent_activity(self, client, db_session):
+        """A recently active forum thread survives even when its match is old."""
         term = _make_term(db_session)
-        old_girlschannel = _make_item(db_session, platform="girlschannel", item_id="gc1", days_ago=180)
+        old_girlschannel = _make_item(db_session, platform="girlschannel", item_id="gc1", days_ago=0)
         match = _make_match(db_session, term, old_girlschannel)
 
         # Backdate the match so the since filter would normally exclude it
@@ -923,13 +1012,13 @@ class TestFeedAPI:
         resp = client.get(f"/api/feed/?since={since_ts}")
         assert resp.status_code == 200
         ids = [r["item"]["id"] for r in resp.json()]
-        assert old_girlschannel.id in ids, "timeless platform item must bypass the since filter"
+        assert old_girlschannel.id in ids, "recent forum activity must bypass the old match date"
 
     def test_5ch_since_filter_bypasses_match_age(self, client, db_session):
         from urllib.parse import quote
 
         term = _make_term(db_session, keyword="Aiko")
-        old_5ch = _make_item(db_session, platform="5ch", item_id="old-since", days_ago=1, title="Aiko old matched thread")
+        old_5ch = _make_item(db_session, platform="5ch", item_id="old-since", days_ago=0, title="Aiko old matched thread")
         match = _make_match(db_session, term, old_5ch)
         db_session.query(Match).filter(Match.id == match.id).update(
             {"created_at": datetime.now(timezone.utc) - timedelta(days=90)},

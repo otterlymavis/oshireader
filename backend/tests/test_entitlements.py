@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from types import SimpleNamespace
 
 from appstoreserverlibrary.models.Environment import Environment
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.api.entitlements import _upsert_entitlement_atomically
 from app.config import settings
-from app.entitlements import EntitlementVerificationError
+from app.database import Base
+from app.entitlements import DecodedEntitlement, EntitlementVerificationError
 from app.models import DeviceEntitlement, WatchTerm
 
 _DEVICE_SECRET_HEADER = "plus-device-secret"
@@ -243,6 +248,72 @@ class TestVerifyEntitlement:
         assert stored.revoked_at is None
         assert stored.expires_at is None
         assert stored.push_term_limit == 10
+
+    def test_concurrent_refund_and_replay_leave_entitlement_revoked(self, tmp_path):
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'entitlement-race.db'}",
+            connect_args={"check_same_thread": False},
+        )
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        purchase_date = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000)
+        revocation_date = int(datetime.now(timezone.utc).timestamp() * 1000)
+        seed = Session()
+        seed.add(DeviceEntitlement(
+            owner_device_secret=_OWNER_DEVICE_SECRET,
+            product_id=_PRODUCT_ID,
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.fromtimestamp(purchase_date / 1000, timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            push_term_limit=3,
+        ))
+        seed.commit()
+        seed.close()
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def apply(transaction):
+            session = Session()
+            try:
+                barrier.wait(timeout=5)
+                _upsert_entitlement_atomically(
+                    session,
+                    _OWNER_DEVICE_SECRET,
+                    DecodedEntitlement(transaction),
+                    3,
+                    create_if_missing=False,
+                )
+                session.commit()
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+            finally:
+                session.close()
+
+        refund = threading.Thread(target=apply, args=(_FakeTransaction(
+            purchaseDate=purchase_date,
+            revocationDate=revocation_date,
+        ),))
+        replay = threading.Thread(target=apply, args=(_FakeTransaction(
+            purchaseDate=purchase_date,
+            revocationDate=None,
+        ),))
+        refund.start()
+        replay.start()
+        refund.join(timeout=10)
+        replay.join(timeout=10)
+
+        assert not refund.is_alive()
+        assert not replay.is_alive()
+        assert errors == []
+        verify_session = Session()
+        try:
+            stored = verify_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+            assert stored.revoked_at is not None
+        finally:
+            verify_session.close()
+            engine.dispose()
 
     def test_non_consumable_without_expiry_is_lifetime_active(self, client, db_session):
         original = _configure_product_tiers(3)
