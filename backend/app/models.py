@@ -135,6 +135,38 @@ class BackendEvent(Base):
     created_at = Column(DateTime, default=_utcnow, index=True)
 
 
+class DeviceEntitlement(Base):
+    """StoreKit Plus subscription state for a device, keyed by owner_device_secret.
+
+    One row per device — a subscription is account-wide, not per watch term.
+    Written only by the transaction-verification endpoint after validating a
+    StoreKit 2 signed transaction against Apple's certificate chain; never
+    trust a client-supplied tier directly (see app/api/watch_terms.py).
+    """
+    __tablename__ = "device_entitlements"
+
+    owner_device_secret = Column(String, primary_key=True)
+    product_id = Column(String, nullable=False)
+    environment = Column(String, nullable=False, default="production")  # sandbox | production
+    original_transaction_id = Column(String, nullable=False, index=True)
+    latest_transaction_id = Column(String, nullable=False)
+    purchase_date = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, index=True)
+    revoked_at = Column(DateTime)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    @property
+    def is_active(self) -> bool:
+        if self.revoked_at is not None:
+            return False
+        if self.expires_at is None:
+            return True
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at > _utcnow()
+
+
 class MigrationLog(Base):
     """Tracks one-time migrations so they never re-run on subsequent boots."""
     __tablename__ = "migration_log"

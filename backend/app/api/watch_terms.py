@@ -11,7 +11,7 @@ from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_
 from app.config import settings
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll, resolve_sendable_pending_preview
-from app.models import APNSDeviceToken, Match, PendingNotification, WatchTerm
+from app.models import APNSDeviceToken, DeviceEntitlement, Match, PendingNotification, WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
 router = APIRouter(prefix="/api/watch-terms", tags=["watch-terms"])
@@ -43,6 +43,30 @@ def _term_with_keyword_exists(
 
 
 _INLINE_REVERIFY_WINDOW = timedelta(minutes=5)
+
+
+def _device_has_active_plus_entitlement(db: Session, owner_device_secret: str | None) -> bool:
+    if owner_device_secret is None:
+        return False
+    entitlement = db.get(DeviceEntitlement, owner_device_secret)
+    return entitlement is not None and entitlement.is_active
+
+
+def _effective_refresh_tier(
+    db: Session,
+    *,
+    is_admin: bool,
+    owner_device_secret: str | None,
+    requested_tier: str,
+) -> str:
+    """Never trust a client-supplied paid tier — clamp to free without an active
+    Plus entitlement. Admin-created (global) terms are exempt, matching every
+    other owner-only check in this router."""
+    if is_admin or requested_tier == "free":
+        return requested_tier
+    if _device_has_active_plus_entitlement(db, owner_device_secret):
+        return requested_tier
+    return "free"
 
 
 def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> bool:
@@ -164,6 +188,12 @@ async def create_term(
     term = WatchTerm(**body.model_dump())
     if not auth.is_admin:
         term.owner_device_secret = auth.device_secret
+        term.refresh_tier = _effective_refresh_tier(
+            db,
+            is_admin=False,
+            owner_device_secret=term.owner_device_secret,
+            requested_tier=term.refresh_tier,
+        )
         existing_count = (
             db.query(WatchTerm)
             .filter(WatchTerm.owner_device_secret == auth.device_secret)
@@ -206,6 +236,13 @@ async def update_term(
 ):
     term = get_owned_watch_term(db, term_id, auth)
     updates = body.model_dump(exclude_unset=True)
+    if "refresh_tier" in updates:
+        updates["refresh_tier"] = _effective_refresh_tier(
+            db,
+            is_admin=auth.is_admin,
+            owner_device_secret=term.owner_device_secret,
+            requested_tier=updates["refresh_tier"],
+        )
     _require_nonempty_source_selection(
         updates.get("source_mode", term.source_mode),
         updates.get("selected_platforms", term.selected_platforms or []),

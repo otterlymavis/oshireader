@@ -56,5 +56,11 @@ services:
         value: com.otterpia.oshireader.plus
       - key: APNS_USE_SANDBOX
         value: "false"
+      - key: APP_STORE_BUNDLE_ID
+        value: com.otterpia.oshireader.plus
+      - key: APP_STORE_APPLE_ID
+        sync: false
+      - key: PLUS_SUBSCRIPTION_PRODUCT_IDS
+        sync: false
       - key: CORS_ALLOW_ORIGINS
         sync: false

@@ -115,6 +115,18 @@ class WatchTermUpdate(BaseModel):
         return sorted({p.strip().casefold() for p in v if isinstance(p, str) and p.strip()})
 
 
+class EntitlementVerifyRequest(BaseModel):
+    signed_transaction: str = Field(min_length=1, max_length=8000)
+
+
+class EntitlementStatusOut(BaseModel):
+    is_active: bool
+    product_id: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 def _utc(v: datetime) -> datetime:
     return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
 

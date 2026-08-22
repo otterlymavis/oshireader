@@ -25,7 +25,7 @@ from sqlalchemy import case, func
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.api import credentials, devices, feed, watch_terms
+from app.api import credentials, devices, entitlements, feed, watch_terms
 from app.auth import require_admin_auth, require_admin_or_device_auth
 from app.config import settings
 from app.database import engine, get_db, SessionLocal
@@ -515,6 +515,7 @@ app.include_router(watch_terms.router)
 app.include_router(feed.router)
 app.include_router(credentials.router)
 app.include_router(devices.router)
+app.include_router(entitlements.router)
 
 
 @app.exception_handler(OperationalError)

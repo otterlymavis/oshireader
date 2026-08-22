@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
-from app.models import APNSDeviceToken, Match, PendingNotification, SourceItem, WatchTerm
+from app.models import APNSDeviceToken, DeviceEntitlement, Match, PendingNotification, SourceItem, WatchTerm
 
 
 class TestListWatchTerms:
@@ -715,6 +715,120 @@ class TestCreateWatchTerm:
         assert resp.status_code == 201
         created_id = int(resp.json()["id"])
         assert db_session.query(Match).filter_by(watch_term_id=created_id).count() == 0
+
+
+class TestRefreshTierGating:
+    """refresh_tier must never be trusted from the client — see
+    app.api.watch_terms._effective_refresh_tier. Only an active DeviceEntitlement
+    for the requesting device may unlock standard/premium.
+
+    A device-secret request only takes the non-admin path when ADMIN_API_TOKEN is
+    configured (see require_admin_or_device_auth); the default test client leaves
+    it unset and treats every request as admin, so each test patches it."""
+
+    device_secret_header = "plus-device-secret"
+
+    @property
+    def owner_device_secret(self) -> str:
+        return hashlib.sha256(self.device_secret_header.encode()).hexdigest()
+
+    def test_create_without_entitlement_clamps_to_free(self, client):
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "free"
+
+    def test_create_with_active_entitlement_keeps_requested_tier(self, client, db_session):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=self.owner_device_secret,
+            product_id="com.otterpia.oshireader.plus.monthly",
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "premium"
+
+    def test_create_with_expired_entitlement_clamps_to_free(self, client, db_session):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=self.owner_device_secret,
+            product_id="com.otterpia.oshireader.plus.monthly",
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.now(timezone.utc) - timedelta(days=60),
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        ))
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"), \
+             patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "standard"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "free"
+
+    def test_update_without_entitlement_clamps_to_free(self, client, db_session):
+        term = WatchTerm(keyword="Aiko", owner_device_secret=self.owner_device_secret, refresh_tier="free")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["refresh_tier"] == "free"
+
+    def test_update_with_active_entitlement_keeps_requested_tier(self, client, db_session):
+        db_session.add(DeviceEntitlement(
+            owner_device_secret=self.owner_device_secret,
+            product_id="com.otterpia.oshireader.plus.monthly",
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        ))
+        term = WatchTerm(keyword="Aiko", owner_device_secret=self.owner_device_secret, refresh_tier="free")
+        db_session.add(term)
+        db_session.commit()
+
+        with patch.object(settings, "admin_api_token", "admin-secret"):
+            resp = client.patch(
+                f"/api/watch-terms/{term.id}",
+                json={"refresh_tier": "premium"},
+                headers={"X-Device-Secret": self.device_secret_header},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["refresh_tier"] == "premium"
+
+    def test_admin_created_term_is_not_clamped(self, client):
+        with patch("app.api.watch_terms.queue_poll"):
+            resp = client.post(
+                "/api/watch-terms/",
+                json={"keyword": "Aiko", "refresh_tier": "premium"},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["refresh_tier"] == "premium"
 
 
 class TestUpdateWatchTerm:

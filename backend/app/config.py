@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     apns_private_key: str = ""
     apns_private_key_path: str = ""
     apns_topic: str = "com.otterpia.oshireader.plus"
+    app_store_bundle_id: str = "com.otterpia.oshireader.plus"
+    app_store_apple_id: str = ""  # numeric App Store Connect app ID; required to verify production StoreKit transactions
+    plus_subscription_product_ids: str = ""  # comma-separated StoreKit product IDs that grant the Plus refresh tier
     apns_use_sandbox: bool = False  # set APNS_USE_SANDBOX=true only for Debug-config builds; TestFlight/App Store builds use the production APNs host
     apns_trust_registered_tokens: bool = False  # skip inline APNs validation on registration; tokens are trusted immediately and pruned on first delivery failure
     backend_public_url: str = "https://oshireader.onrender.com"
@@ -43,6 +46,10 @@ class Settings(BaseSettings):
         if value.startswith("postgres://"):
             return value.replace("postgres://", "postgresql://", 1)
         return value
+
+    @property
+    def plus_subscription_product_id_set(self) -> set[str]:
+        return {p.strip() for p in self.plus_subscription_product_ids.split(",") if p.strip()}
 
     @property
     def cors_origins(self) -> list[str]:
