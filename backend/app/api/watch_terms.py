@@ -11,6 +11,7 @@ from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_
 from app.config import settings
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll, resolve_sendable_pending_preview
+from app.entitlements import push_delivery_status
 from app.models import APNSDeviceToken, DeviceEntitlement, Match, PendingNotification, WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
@@ -50,6 +51,39 @@ def _device_has_active_plus_entitlement(db: Session, owner_device_secret: str | 
         return False
     entitlement = db.get(DeviceEntitlement, owner_device_secret)
     return entitlement is not None and entitlement.is_active
+
+
+def _push_term_limit(db: Session, owner_device_secret: str | None) -> int:
+    if owner_device_secret is None:
+        return 0
+    entitlement = db.get(DeviceEntitlement, owner_device_secret)
+    if entitlement is None or not entitlement.is_active:
+        return 0
+    return max(0, entitlement.push_term_limit)
+
+
+def _require_available_push_slot(
+    db: Session,
+    *,
+    owner_device_secret: str | None,
+    exclude_id: int | None = None,
+) -> None:
+    limit = _push_term_limit(db, owner_device_secret)
+    query = db.query(WatchTerm).filter(
+        WatchTerm.owner_device_secret == owner_device_secret,
+        WatchTerm.notify_on_new == True,  # noqa: E712
+    )
+    if exclude_id is not None:
+        query = query.filter(WatchTerm.id != exclude_id)
+    if query.count() >= limit:
+        raise HTTPException(
+            409,
+            {
+                "code": "push_term_limit_reached",
+                "message": f"Your subscription supports up to {limit} push-enabled watch terms",
+                "push_term_limit": limit,
+            },
+        )
 
 
 def _effective_refresh_tier(
@@ -207,6 +241,11 @@ async def create_term(
                     "message": f"Maximum of {settings.max_watch_terms_per_device} watch terms per device",
                 },
             )
+        if term.notify_on_new:
+            _require_available_push_slot(
+                db,
+                owner_device_secret=term.owner_device_secret,
+            )
         await _require_verified_notification_device(db, term)
     if _term_with_keyword_exists(
         db,
@@ -254,6 +293,16 @@ async def update_term(
         exclude_id=term.id,
     ):
         raise HTTPException(409, "A watch term with this keyword already exists")
+    if (
+        not auth.is_admin
+        and updates.get("notify_on_new") is True
+        and not term.notify_on_new
+    ):
+        _require_available_push_slot(
+            db,
+            owner_device_secret=term.owner_device_secret,
+            exclude_id=term.id,
+        )
     for k, v in updates.items():
         setattr(term, k, v)
     # A queued poll still passes through due-term selection. Make every fetch-
@@ -298,6 +347,15 @@ async def trigger_notification(
     term = get_owned_watch_term(db, term_id, auth)
     if not term.notify_on_new:
         raise HTTPException(409, {"code": "notifications_disabled", "message": "Enable notifications for this term first"})
+    delivery_state, limit, count = push_delivery_status(db, term.owner_device_secret)
+    if delivery_state != "active":
+        raise HTTPException(409, {
+            "code": "push_delivery_paused",
+            "message": "Paid push delivery is paused until the entitlement is active and term usage is within its limit",
+            "push_delivery_state": delivery_state,
+            "push_term_limit": limit,
+            "push_term_count": count,
+        })
     if not apns_configured():
         raise HTTPException(503, "APNs is not configured")
 

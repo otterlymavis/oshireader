@@ -1,0 +1,19 @@
+OshiReader+ is a native feed reader designed to help you follow your favorite Japanese creators, idols, anime, and topics in one unified timeline.
+
+Track your "Oshi" across supported Japanese media platforms and curated news feeds. OshiReader+ searches public feeds and news sources to bring you the latest articles, videos, and discussions without algorithmic clutter.
+
+KEY FEATURES:
+• Multi-Source Ingestion: Search and follow topics across YouTube, NicoNico, TVer, note, Ameblo, Natalie, BARKS, ModelPress, Yahoo News, and curated Japanese entertainment RSS feeds.
+• Alias Support: Add nicknames and alternative spellings to ensure you never miss an update.
+• Clean & Focused Reader: Built-in distraction-free article reader with image saving and quick sharing.
+• On-Device Privacy: All feed ingestion and data storage happens directly on your device. No cloud accounts, no tracking, and no external servers.
+• Home Screen & Lock Screen Widgets: Check the latest updates at a glance.
+• Encrypted Backup & Export: Export your watchlists and saved items anytime with encrypted backups and OPML support.
+
+Supported Sources include:
+- YouTube, NicoNico, TVer
+- note, Ameblo
+- Natalie, BARKS, Real Sound, Billboard Japan, CinemaCafe, Hochi, AERA dot.
+- ModelPress, Yahoo News, 5channel, Girls Channel
+
+Keep up with everything you love about Japanese entertainment with OshiReader+.

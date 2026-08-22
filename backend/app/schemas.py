@@ -119,10 +119,17 @@ class EntitlementVerifyRequest(BaseModel):
     signed_transaction: str = Field(min_length=1, max_length=8000)
 
 
+class AppStoreNotificationRequest(BaseModel):
+    signedPayload: str = Field(min_length=1, max_length=30000)
+
+
 class EntitlementStatusOut(BaseModel):
     is_active: bool
     product_id: Optional[str] = None
     expires_at: Optional[datetime] = None
+    push_term_limit: int = 0
+    push_term_count: int = 0
+    push_delivery_state: Literal["inactive", "active", "selection_required"] = "inactive"
 
     model_config = {"from_attributes": True}
 
@@ -218,6 +225,7 @@ class APNSDeviceTokenUpsert(BaseModel):
     environment: Literal["sandbox", "production"] = "sandbox"
     device_id: Optional[str] = None
     device_secret: str = Field(min_length=16, max_length=200)
+    bundle_id: str = Field(default="com.otterpia.oshireader.plus", min_length=3, max_length=200)
 
 
 class APNSDeviceTokenOut(BaseModel):
@@ -227,6 +235,7 @@ class APNSDeviceTokenOut(BaseModel):
     last_seen_at: Optional[datetime]
     is_verified: bool
     verification_error: Optional[str] = None
+    bundle_id: str = "com.otterpia.oshireader.plus"
 
     model_config = {"from_attributes": True}
 

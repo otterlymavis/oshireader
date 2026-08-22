@@ -15,6 +15,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.entitlements import push_delivery_status
 from app.diagnostics import record_backend_event
 from app.models import APNSDeviceToken, WatchTerm
 
@@ -94,6 +95,10 @@ def _host(environment: str | None = None) -> str:
     if env == "sandbox":
         return "https://api.sandbox.push.apple.com"
     return "https://api.push.apple.com"
+
+
+def _topic(device: APNSDeviceToken) -> str:
+    return device.apns_topic or settings.apns_topic
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -211,7 +216,7 @@ async def validate_device_registration_result(
     host = _host(device.environment)
     headers = {
         "authorization": f"bearer {_cached_auth_token()}",
-        "apns-topic": settings.apns_topic,
+        "apns-topic": _topic(device),
         "apns-push-type": "background",
         "apns-priority": "5",
         "apns-collapse-id": "oshireader-device-registration",
@@ -366,12 +371,12 @@ def _collapse_id(term: WatchTerm, preview_item: dict | None = None) -> str:
     return f"oshireader-{term.id}-{digest}"[:64]
 
 
-def _device_identity_key(device: APNSDeviceToken) -> tuple[str, str, str]:
+def _device_identity_key(device: APNSDeviceToken) -> tuple[str, str, str, str]:
     if device.device_id:
-        return (device.environment or "", "device_id", device.device_id)
+        return (device.environment or "", _topic(device), "device_id", device.device_id)
     if device.device_secret:
-        return (device.environment or "", "secret", device.device_secret)
-    return (device.environment or "", "token", device.token)
+        return (device.environment or "", _topic(device), "secret", device.device_secret)
+    return (device.environment or "", _topic(device), "token", device.token)
 
 
 def _device_recency(device: APNSDeviceToken) -> float:
@@ -384,7 +389,7 @@ def _device_recency(device: APNSDeviceToken) -> float:
 
 
 def _dedupe_devices(devices: list[APNSDeviceToken]) -> list[APNSDeviceToken]:
-    newest_by_identity: dict[tuple[str, str, str], APNSDeviceToken] = {}
+    newest_by_identity: dict[tuple[str, str, str, str], APNSDeviceToken] = {}
     for device in devices:
         key = _device_identity_key(device)
         existing = newest_by_identity.get(key)
@@ -437,7 +442,7 @@ async def _send_one(
     url = f"{_host(device.environment)}/3/device/{device.token}"
     headers = {
         "authorization": f"bearer {_cached_auth_token()}",
-        "apns-topic": settings.apns_topic,
+        "apns-topic": _topic(device),
         "apns-push-type": "alert",
         "apns-priority": "10",
         "apns-collapse-id": _collapse_id(term, preview_item),
@@ -509,6 +514,26 @@ async def send_new_match_notifications(
             "skipped",
             "Watch term notifications are disabled",
             {"term_id": term.id, "keyword": term.keyword, "new_count": count},
+        )
+        db.commit()
+        return True
+    delivery_state, push_term_limit, push_term_count = push_delivery_status(
+        db,
+        term.owner_device_secret,
+    )
+    if delivery_state != "active":
+        record_backend_event(
+            db,
+            "apns",
+            "skipped",
+            "Paid push delivery is paused",
+            {
+                "term_id": term.id,
+                "keyword": term.keyword,
+                "push_delivery_state": delivery_state,
+                "push_term_limit": push_term_limit,
+                "push_term_count": push_term_count,
+            },
         )
         db.commit()
         return True
@@ -674,7 +699,7 @@ async def send_test_push(db: Session) -> dict:
             host = _host(device.environment)
             headers = {
                 "authorization": f"bearer {_cached_auth_token()}",
-                "apns-topic": settings.apns_topic,
+                "apns-topic": _topic(device),
                 "apns-push-type": "alert",
                 "apns-priority": "10",
                 "apns-collapse-id": collapse_id,
@@ -720,7 +745,7 @@ async def send_test_push_to_device(db: Session, device: APNSDeviceToken) -> dict
     host = _host(device.environment)
     headers = {
         "authorization": f"bearer {_cached_auth_token()}",
-        "apns-topic": settings.apns_topic,
+        "apns-topic": _topic(device),
         "apns-push-type": "alert",
         "apns-priority": "10",
         "apns-collapse-id": f"oshireader-test-{uuid.uuid4().hex[:12]}",

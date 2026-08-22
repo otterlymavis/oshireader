@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from app.config import Settings
+from app.config import BASIC_PUSH_TERM_LIMIT, PRO_PUSH_TERM_LIMIT, Settings
 
 
 class TestCorsOrigins:
@@ -57,3 +57,25 @@ class TestInternalScheduler:
     def test_internal_scheduler_can_be_enabled_by_env_style_value(self):
         s = Settings(internal_scheduler_enabled="true")
         assert s.internal_scheduler_enabled is True
+
+
+class TestPaidPushTiers:
+    def test_catalog_is_disabled_by_default(self):
+        assert Settings().plus_subscription_tier_limits == {}
+
+    def test_products_map_to_basic_and_pro_limits(self):
+        settings = Settings(
+            plus_subscription_tiers="local.basic.monthly:3,local.pro.annual:10"
+        )
+        assert settings.plus_subscription_tier_limits == {
+            "local.basic.monthly": BASIC_PUSH_TERM_LIMIT,
+            "local.pro.annual": PRO_PUSH_TERM_LIMIT,
+        }
+
+    def test_unsupported_limits_are_ignored(self):
+        settings = Settings(
+            plus_subscription_tiers="local.free:0,local.other:5,local.basic:3"
+        )
+        assert settings.plus_subscription_tier_limits == {
+            "local.basic": BASIC_PUSH_TERM_LIMIT,
+        }

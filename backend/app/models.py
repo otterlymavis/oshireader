@@ -77,6 +77,7 @@ class APNSDeviceToken(Base):
 
     token = Column(String, primary_key=True)
     environment = Column(String, default="sandbox", index=True)
+    apns_topic = Column(String, nullable=False, default="com.otterpia.oshireader.plus", index=True)
     device_id = Column(String, index=True)
     device_secret = Column(String, index=True)
     is_verified = Column(Boolean, nullable=False, default=False)
@@ -153,6 +154,7 @@ class DeviceEntitlement(Base):
     purchase_date = Column(DateTime, nullable=False)
     expires_at = Column(DateTime, index=True)
     revoked_at = Column(DateTime)
+    push_term_limit = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     @property

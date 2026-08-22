@@ -71,11 +71,19 @@ jobs:
 
           with urllib.request.urlopen(f"{base}/openapi.json", timeout=20) as response:
               openapi = json.load(response)
-          properties = (openapi.get("components", {}).get("schemas", {})
-                        .get("APNSDeviceTokenOut", {}).get("properties", {}))
-          required = {"is_verified", "verification_error"}
-          if not required.issubset(properties):
-              raise SystemExit(f"APNs response contract is not deployed: {sorted(properties)}")
+          schemas = openapi.get("components", {}).get("schemas", {})
+          apns_properties = schemas.get("APNSDeviceTokenOut", {}).get("properties", {})
+          required_apns = {"is_verified", "verification_error", "bundle_id"}
+          if not required_apns.issubset(apns_properties):
+              raise SystemExit(f"APNs response contract is not deployed: {sorted(apns_properties)}")
+          entitlement_properties = schemas.get("EntitlementStatusOut", {}).get("properties", {})
+          required_entitlement = {"push_term_limit", "push_term_count", "push_delivery_state"}
+          if not required_entitlement.issubset(entitlement_properties):
+              raise SystemExit(
+                  f"Paid-push entitlement contract is not deployed: {sorted(entitlement_properties)}"
+              )
+          if "/api/entitlements/apple-notifications" not in openapi.get("paths", {}):
+              raise SystemExit("Apple notification lifecycle endpoint is not deployed")
           print(f"Backend is healthy at commit {health.get('commit', 'unknown')}")
           PY
             then

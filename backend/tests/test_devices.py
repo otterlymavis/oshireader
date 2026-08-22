@@ -31,6 +31,24 @@ class TestAPNSTokenUpsert:
         assert data["environment"] == "sandbox"
         assert data["is_verified"] is True
         assert data["verification_error"] is None
+        assert data["bundle_id"] == "com.otterpia.oshireader.plus"
+
+    def test_local_app_topic_is_persisted(self, client, db_session):
+        token = "9" * 64
+        response = client.post(
+            "/api/devices/apns-token",
+            json=_registration(token, bundle_id="com.otterpia.oshireader"),
+        )
+        assert response.status_code == 201
+        assert response.json()["bundle_id"] == "com.otterpia.oshireader"
+        assert db_session.get(APNSDeviceToken, token).apns_topic == "com.otterpia.oshireader"
+
+    def test_unknown_app_topic_is_rejected(self, client):
+        response = client.post(
+            "/api/devices/apns-token",
+            json=_registration("8" * 64, bundle_id="com.example.untrusted"),
+        )
+        assert response.status_code == 422
 
     def test_upsert_normalizes_token(self, client):
         raw = "  " + "AB" * 32 + "  "

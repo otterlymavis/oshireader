@@ -55,9 +55,12 @@ class TestApplyStartupMigrations:
         assert "matches" in tables
         assert "platform_credentials" in tables
         assert "apns_device_tokens" in tables
+        assert "device_entitlements" in tables
         assert "backend_events" in tables
         assert "migration_log" in tables
         assert "device_secret" in _column_names(fresh_engine, "apns_device_tokens")
+        assert "apns_topic" in _column_names(fresh_engine, "apns_device_tokens")
+        assert "push_term_limit" in _column_names(fresh_engine, "device_entitlements")
 
     def test_creates_feed_performance_indexes(self, fresh_engine):
         with patch("app.migrations.SessionLocal", sessionmaker(bind=fresh_engine)):

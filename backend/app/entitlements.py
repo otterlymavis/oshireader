@@ -22,6 +22,8 @@ from appstoreserverlibrary.signed_data_verifier import (
 )
 
 from app.config import settings
+from app.models import DeviceEntitlement, PendingNotification, WatchTerm
+from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +84,22 @@ def verify_signed_transaction(signed_transaction: str) -> JWSTransactionDecodedP
         raise EntitlementVerificationError(f"verification failed: {exc.status.name}") from exc
 
 
+def verify_signed_notification(signed_payload: str):
+    """Verify an App Store Server Notification V2 in either environment."""
+    try:
+        return _production_verifier().verify_and_decode_notification(signed_payload)
+    except EntitlementVerificationError:
+        pass
+    except VerificationException as exc:
+        if exc.status != VerificationStatus.INVALID_ENVIRONMENT:
+            raise EntitlementVerificationError(f"notification verification failed: {exc.status.name}") from exc
+
+    try:
+        return _sandbox_verifier().verify_and_decode_notification(signed_payload)
+    except VerificationException as exc:
+        raise EntitlementVerificationError(f"notification verification failed: {exc.status.name}") from exc
+
+
 def _epoch_ms_to_datetime(value: int | None) -> datetime | None:
     if value is None:
         return None
@@ -101,3 +119,60 @@ class DecodedEntitlement:
         self.purchase_date = _epoch_ms_to_datetime(payload.purchaseDate) or datetime.now(timezone.utc)
         self.expires_at = _epoch_ms_to_datetime(payload.expiresDate)
         self.revoked_at = _epoch_ms_to_datetime(payload.revocationDate)
+
+
+def push_term_count(db: Session, owner_device_secret: str | None) -> int:
+    if owner_device_secret is None:
+        return 0
+    return (
+        db.query(WatchTerm)
+        .filter(
+            WatchTerm.owner_device_secret == owner_device_secret,
+            WatchTerm.notify_on_new == True,  # noqa: E712
+        )
+        .count()
+    )
+
+
+def push_delivery_status(
+    db: Session,
+    owner_device_secret: str | None,
+) -> tuple[str, int, int]:
+    count = push_term_count(db, owner_device_secret)
+    if owner_device_secret is None:
+        return "active", count, count
+    entitlement = db.get(DeviceEntitlement, owner_device_secret)
+    if entitlement is None or not entitlement.is_active or entitlement.push_term_limit <= 0:
+        return "inactive", 0, count
+    limit = max(0, entitlement.push_term_limit)
+    if count > limit:
+        return "selection_required", limit, count
+    return "active", limit, count
+
+
+def push_delivery_allowed(db: Session, term: WatchTerm) -> bool:
+    if term.owner_device_secret is None:
+        return True
+    state, _, _ = push_delivery_status(db, term.owner_device_secret)
+    return state == "active"
+
+
+def clear_paused_pending_notifications(db: Session, owner_device_secret: str) -> int:
+    state, _, _ = push_delivery_status(db, owner_device_secret)
+    if state == "active":
+        return 0
+    term_ids = [
+        term_id
+        for (term_id,) in (
+            db.query(WatchTerm.id)
+            .filter(WatchTerm.owner_device_secret == owner_device_secret)
+            .all()
+        )
+    ]
+    if not term_ids:
+        return 0
+    return (
+        db.query(PendingNotification)
+        .filter(PendingNotification.watch_term_id.in_(term_ids))
+        .delete(synchronize_session=False)
+    )
