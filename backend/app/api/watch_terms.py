@@ -11,7 +11,7 @@ from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_
 from app.config import settings
 from app.database import get_db
 from app.ingestion.scheduler import queue_poll, resolve_sendable_pending_preview
-from app.entitlements import push_delivery_status
+from app.entitlements import backend_access_allowed, push_delivery_status
 from app.models import APNSDeviceToken, DeviceEntitlement, Match, PendingNotification, WatchTerm
 from app.schemas import WatchTermCreate, WatchTermOut, WatchTermUpdate
 
@@ -115,6 +115,16 @@ def _owner_has_verified_device(db: Session, owner_device_secret: str | None) -> 
         .first()
         is not None
     )
+
+
+def _queue_poll_for_authorized_backend(
+    db: Session,
+    *,
+    auth: AuthContext,
+    owner_device_secret: str | None,
+) -> None:
+    if auth.is_admin or backend_access_allowed(db, owner_device_secret):
+        queue_poll()
 
 
 def _recently_registered_unverified_devices(
@@ -262,7 +272,11 @@ async def create_term(
         db.rollback()
         raise HTTPException(409, "A watch term with this keyword already exists")
     db.refresh(term)
-    queue_poll()
+    _queue_poll_for_authorized_backend(
+        db,
+        auth=auth,
+        owner_device_secret=term.owner_device_secret,
+    )
     return term
 
 
@@ -331,7 +345,11 @@ async def update_term(
         raise HTTPException(409, "A watch term with this keyword already exists")
     db.refresh(term)
     if should_poll:
-        queue_poll()
+        _queue_poll_for_authorized_backend(
+            db,
+            auth=auth,
+            owner_device_secret=term.owner_device_secret,
+        )
     return term
 
 
