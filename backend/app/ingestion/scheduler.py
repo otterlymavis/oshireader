@@ -871,13 +871,21 @@ def _pending_notification_item_count(preview_item: dict) -> int:
 
 
 def _sendable_pending_preview(preview_item: dict) -> dict:
-    if _PENDING_NOTIFICATION_COUNT_KEY not in preview_item:
-        return preview_item
-    return {
+    sendable = {
         key: value
         for key, value in preview_item.items()
         if key != _PENDING_NOTIFICATION_COUNT_KEY
     }
+    match_id = sendable.get("match_id")
+    source_url = sendable.get("url")
+    if isinstance(match_id, int) and isinstance(source_url, str):
+        sendable["redirect_url"] = signed_match_redirect_url(
+            settings.backend_public_url,
+            match_id,
+            source_url,
+            issued_at=datetime.now(timezone.utc),
+        )
+    return sendable
 
 
 def _pending_preview_is_estimated(db, preview_item: dict, observed_at: datetime) -> bool:
@@ -1237,7 +1245,7 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
                 db,
                 term,
                 pending.new_count,
-                pending.preview_item,
+                _sendable_pending_preview(pending.preview_item),
             )
             if should_clear is False:
                 return False

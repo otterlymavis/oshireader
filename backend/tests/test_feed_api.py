@@ -238,6 +238,56 @@ class TestFeedAPI:
             f"query requested more rows than the scan cap allows: {seen_limits}"
         )
 
+    def test_continuation_scan_crosses_irrelevant_scan_caps(self, client, db_session, monkeypatch):
+        monkeypatch.setattr("app.api.feed._MAX_FEED_SCAN_ROWS", 3)
+        term = _make_term(db_session, keyword="Aiko")
+        for index in range(4):
+            stale = _make_item(
+                db_session,
+                item_id=f"continuation-stale-{index}",
+                days_ago=index,
+                title=f"Unrelated article {index}",
+            )
+            _make_match(db_session, term, stale)
+        expected_ids = []
+        for index in range(3):
+            relevant = _make_item(
+                db_session,
+                item_id=f"continuation-relevant-{index}",
+                days_ago=10 + index,
+                title=f"Aiko article {index}",
+            )
+            _make_match(db_session, term, relevant)
+            expected_ids.append(relevant.id)
+
+        parameters = {
+            "scan": "true",
+            "limit": 2,
+            "days": 0,
+            "term_ids": str(term.id),
+        }
+        collected_ids = []
+        page_sizes = []
+        for _ in range(5):
+            response = client.get("/api/feed/", params=parameters)
+            assert response.status_code == 200
+            rows = response.json()
+            page_sizes.append(len(rows))
+            collected_ids.extend(row["item"]["id"] for row in rows)
+            next_published_at = response.headers.get("X-OshiReader-Next-Published-At")
+            next_match_id = response.headers.get("X-OshiReader-Next-Match-ID")
+            if next_published_at is None and next_match_id is None:
+                break
+            assert next_published_at is not None
+            assert next_match_id is not None
+            parameters["scan_before_published_at"] = next_published_at
+            parameters["scan_before_match_id"] = next_match_id
+        else:
+            pytest.fail("continuation scan did not terminate")
+
+        assert page_sizes[0] == 0
+        assert collected_ids == expected_ids
+
     def test_feed_empty(self, client):
         resp = client.get("/api/feed/")
         assert resp.status_code == 200

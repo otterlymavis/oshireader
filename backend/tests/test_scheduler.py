@@ -37,6 +37,7 @@ from app.ingestion.scheduler import (
     _queue_duplicate_term_notifications,
     _queue_pending_notification,
     _search_terms_for,
+    _sendable_pending_preview,
     _term_is_due,
     _unentitled_owner_term_ids,
     connector_fetch_timeout_seconds,
@@ -904,6 +905,26 @@ class TestPollTermWindow:
         assert selected == terms
         assert offset == 0
         assert next_offset == 0
+
+
+class TestPendingNotificationPreview:
+    def test_unsigned_queued_redirect_is_resigned_at_delivery(self):
+        preview = {
+            "match_id": 123,
+            "url": "https://example.com/source",
+            "redirect_url": "https://backend.example.com/api/feed/matches/123/redirect",
+            "_notification_count": 2,
+        }
+
+        with patch.object(app_settings, "admin_api_token", "redirect-test-secret"), \
+             patch.object(app_settings, "backend_public_url", "https://backend.example.com"):
+            sendable = _sendable_pending_preview(preview)
+
+        assert sendable["redirect_url"].startswith(
+            "https://backend.example.com/api/feed/matches/123/redirect?"
+        )
+        assert "signature=" in sendable["redirect_url"]
+        assert "_notification_count" not in sendable
 
 
 class TestTermRefreshCadence:

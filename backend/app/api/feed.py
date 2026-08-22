@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.auth import AuthContext, get_owned_watch_term, require_admin_or_device_auth
@@ -106,6 +106,7 @@ def mute_feed_item(
 
 @router.get("/", response_model=list[FeedItemOut])
 def get_feed(
+    response: Response,
     term_id: Optional[int] = Query(None),
     term_ids: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
@@ -115,6 +116,9 @@ def get_feed(
     days: int = Query(30, ge=0, le=365),
     since: Optional[datetime] = Query(None),
     until: Optional[datetime] = Query(None),
+    scan: bool = Query(False),
+    scan_before_published_at: Optional[datetime] = Query(None),
+    scan_before_match_id: Optional[int] = Query(None, ge=1),
     auth: AuthContext = Depends(require_admin_or_device_auth),
     db: Session = Depends(get_db),
 ):
@@ -180,6 +184,49 @@ def get_feed(
         q = q.filter(SourceItem.platform == platform)
     if media_type:
         q = q.filter(SourceItem.media_type == media_type)
+
+    if scan:
+        if offset != 0:
+            raise HTTPException(422, "offset must be zero for continuation scans")
+        if (scan_before_published_at is None) != (scan_before_match_id is None):
+            raise HTTPException(422, "both continuation cursor fields are required")
+        if scan_before_published_at is not None and scan_before_match_id is not None:
+            aware_before = (
+                scan_before_published_at.replace(tzinfo=timezone.utc)
+                if scan_before_published_at.tzinfo is None
+                else scan_before_published_at
+            )
+            q = q.filter(or_(
+                SourceItem.published_at < aware_before,
+                and_(
+                    SourceItem.published_at == aware_before,
+                    Match.id < scan_before_match_id,
+                ),
+            ))
+
+        raw_rows = q.limit(_MAX_FEED_SCAN_ROWS).all()
+        rows = []
+        consumed = 0
+        for row in raw_rows:
+            consumed += 1
+            if watch_term_matches(row[2], row[1]):
+                rows.append(row)
+                if len(rows) == limit:
+                    break
+        if consumed and (consumed < len(raw_rows) or len(raw_rows) == _MAX_FEED_SCAN_ROWS):
+            last_match, last_item, _ = raw_rows[consumed - 1]
+            response.headers["X-OshiReader-Next-Published-At"] = last_item.published_at.isoformat()
+            response.headers["X-OshiReader-Next-Match-ID"] = str(last_match.id)
+        return [
+            FeedItemOut(
+                match_id=match.id,
+                watch_term_id=term.id,
+                watch_term_keyword=term.keyword,
+                item=SourceItemOut.model_validate(item),
+                matched_at=match.created_at,
+            )
+            for match, item, term in rows
+        ]
 
     needed = offset + limit
     relevant_rows = []

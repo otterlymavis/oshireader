@@ -199,6 +199,51 @@ class TestVerifyEntitlement:
         assert stored.revoked_at is not None
         assert stored.expires_at is not None
 
+    def test_newer_purchase_after_revocation_reactivates_entitlement(self, client, db_session):
+        old_purchase = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+        new_purchase = int(datetime.now(timezone.utc).timestamp() * 1000)
+        revocation_date = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000)
+        original = _configure_product_tiers(10)
+        try:
+            with _device_auth():
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        transactionId="refunded",
+                        purchaseDate=old_purchase,
+                        revocationDate=revocation_date,
+                    ),
+                ):
+                    client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "refunded-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        transactionId="repurchased",
+                        purchaseDate=new_purchase,
+                        revocationDate=None,
+                        expiresDate=None,
+                    ),
+                ):
+                    resp = client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "repurchase-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+        finally:
+            settings.plus_subscription_tiers = original
+
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is True
+        stored = db_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+        assert stored.latest_transaction_id == "repurchased"
+        assert stored.revoked_at is None
+        assert stored.expires_at is None
+        assert stored.push_term_limit == 10
+
     def test_non_consumable_without_expiry_is_lifetime_active(self, client, db_session):
         original = _configure_product_tiers(3)
         try:
