@@ -228,7 +228,15 @@ def get_feed(
                 rows.append(row)
                 if len(rows) == limit:
                     break
-        if consumed and (consumed < len(raw_rows) or len(raw_rows) == _MAX_FEED_SCAN_ROWS):
+        # A full result page is ambiguous: it may be the exact terminal page.
+        # Still emit its cursor so scan clients can make one final empty request
+        # and distinguish a valid scan response from a legacy server that ignored
+        # the continuation contract.
+        if consumed and (
+            len(rows) == limit
+            or consumed < len(raw_rows)
+            or len(raw_rows) == _MAX_FEED_SCAN_ROWS
+        ):
             last_match, last_item, _ = raw_rows[consumed - 1]
             response.headers["X-OshiReader-Next-Published-At"] = last_item.published_at.isoformat()
             response.headers["X-OshiReader-Next-Match-ID"] = str(last_match.id)

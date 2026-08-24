@@ -288,6 +288,48 @@ class TestFeedAPI:
         assert page_sizes[0] == 0
         assert collected_ids == list(reversed(expected_ids))
 
+    def test_exact_size_terminal_scan_page_emits_cursor_then_empty_page(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        for index in range(2):
+            item = _make_item(
+                db_session,
+                item_id=f"exact-terminal-{index}",
+                title=f"Aiko exact terminal {index}",
+            )
+            _make_match(db_session, term, item)
+
+        first = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 2,
+                "days": 0,
+                "term_ids": str(term.id),
+            },
+        )
+
+        assert first.status_code == 200
+        assert len(first.json()) == 2
+        next_published_at = first.headers["X-OshiReader-Next-Published-At"]
+        next_match_id = first.headers["X-OshiReader-Next-Match-ID"]
+
+        terminal = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 2,
+                "days": 0,
+                "term_ids": str(term.id),
+                "scan_before_published_at": next_published_at,
+                "scan_before_match_id": next_match_id,
+            },
+        )
+
+        assert terminal.status_code == 200
+        assert terminal.json() == []
+        assert "X-OshiReader-Next-Published-At" not in terminal.headers
+        assert "X-OshiReader-Next-Match-ID" not in terminal.headers
+
     def test_continuation_scan_does_not_skip_item_when_published_at_moves(self, client, db_session, monkeypatch):
         monkeypatch.setattr("app.api.feed._MAX_FEED_SCAN_ROWS", 2)
         term = _make_term(db_session, keyword="Aiko")
