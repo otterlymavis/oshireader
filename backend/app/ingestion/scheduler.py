@@ -10,6 +10,7 @@ from sqlalchemy import or_, text as sa_text
 from app.apns import revalidate_unverified_devices, send_new_match_notifications
 from app.config import settings
 from app.entitlements import backend_access_owner_secrets, push_delivery_allowed
+from app.feed_redirects import signed_match_redirect_url
 from app.connectors.base import BaseConnector
 from app.connectors.fivech import FiveChConnector
 from app.connectors.girlschannel import GirlsChannelConnector
@@ -870,13 +871,21 @@ def _pending_notification_item_count(preview_item: dict) -> int:
 
 
 def _sendable_pending_preview(preview_item: dict) -> dict:
-    if _PENDING_NOTIFICATION_COUNT_KEY not in preview_item:
-        return preview_item
-    return {
+    sendable = {
         key: value
         for key, value in preview_item.items()
         if key != _PENDING_NOTIFICATION_COUNT_KEY
     }
+    match_id = sendable.get("match_id")
+    source_url = sendable.get("url")
+    if isinstance(match_id, int) and isinstance(source_url, str):
+        sendable["redirect_url"] = signed_match_redirect_url(
+            settings.backend_public_url,
+            match_id,
+            source_url,
+            issued_at=datetime.now(timezone.utc),
+        )
+    return sendable
 
 
 def _pending_preview_is_estimated(db, preview_item: dict, observed_at: datetime) -> bool:
@@ -1030,7 +1039,12 @@ def _preview_for_match(
         "notification_preview_source": preview_source,
         "platform": source_item.platform,
         "url": source_item.url,
-        "redirect_url": f"{public_base_url}/api/feed/matches/{match.id}/redirect",
+        "redirect_url": signed_match_redirect_url(
+            public_base_url,
+            match.id,
+            source_item.url,
+            issued_at=queued_at,
+        ),
         "title": source_item.title,
         "content_text": source_item.content_text,
         "author": source_item.author,
@@ -1231,7 +1245,7 @@ async def _deliver_pending_notification(db, term: WatchTerm) -> bool:
                 db,
                 term,
                 pending.new_count,
-                pending.preview_item,
+                _sendable_pending_preview(pending.preview_item),
             )
             if should_clear is False:
                 return False

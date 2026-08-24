@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from types import SimpleNamespace
 
 from appstoreserverlibrary.models.Environment import Environment
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.api.entitlements import _upsert_entitlement_atomically
 from app.config import settings
-from app.entitlements import EntitlementVerificationError
+from app.database import Base
+from app.entitlements import DecodedEntitlement, EntitlementVerificationError
 from app.models import DeviceEntitlement, WatchTerm
 
 _DEVICE_SECRET_HEADER = "plus-device-secret"
@@ -159,6 +164,157 @@ class TestVerifyEntitlement:
         assert resp.json()["is_active"] is False
         assert resp.json()["push_term_limit"] == 0
 
+    def test_replayed_purchase_cannot_clear_a_revocation(self, client, db_session):
+        purchase_date = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000)
+        revocation_date = int(datetime.now(timezone.utc).timestamp() * 1000)
+        original = _configure_product_tiers()
+        try:
+            with _device_auth():
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        purchaseDate=purchase_date,
+                        revocationDate=revocation_date,
+                    ),
+                ):
+                    client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "revoked-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        purchaseDate=purchase_date,
+                        revocationDate=None,
+                        expiresDate=None,
+                    ),
+                ):
+                    resp = client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "original-purchase-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+        finally:
+            settings.plus_subscription_tiers = original
+
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is False
+        stored = db_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+        assert stored.revoked_at is not None
+        assert stored.expires_at is not None
+
+    def test_newer_purchase_after_revocation_reactivates_entitlement(self, client, db_session):
+        old_purchase = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+        new_purchase = int(datetime.now(timezone.utc).timestamp() * 1000)
+        revocation_date = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000)
+        original = _configure_product_tiers(10)
+        try:
+            with _device_auth():
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        transactionId="refunded",
+                        purchaseDate=old_purchase,
+                        revocationDate=revocation_date,
+                    ),
+                ):
+                    client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "refunded-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+                with patch(
+                    "app.api.entitlements.verify_signed_transaction",
+                    return_value=_FakeTransaction(
+                        transactionId="repurchased",
+                        purchaseDate=new_purchase,
+                        revocationDate=None,
+                        expiresDate=None,
+                    ),
+                ):
+                    resp = client.post(
+                        "/api/entitlements/verify",
+                        json={"signed_transaction": "repurchase-jws"},
+                        headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                    )
+        finally:
+            settings.plus_subscription_tiers = original
+
+        assert resp.status_code == 200
+        assert resp.json()["is_active"] is True
+        stored = db_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+        assert stored.latest_transaction_id == "repurchased"
+        assert stored.revoked_at is None
+        assert stored.expires_at is None
+        assert stored.push_term_limit == 10
+
+    def test_concurrent_refund_and_replay_leave_entitlement_revoked(self, tmp_path):
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'entitlement-race.db'}",
+            connect_args={"check_same_thread": False},
+        )
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        purchase_date = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000)
+        revocation_date = int(datetime.now(timezone.utc).timestamp() * 1000)
+        seed = Session()
+        seed.add(DeviceEntitlement(
+            owner_device_secret=_OWNER_DEVICE_SECRET,
+            product_id=_PRODUCT_ID,
+            original_transaction_id="orig-1",
+            latest_transaction_id="txn-1",
+            purchase_date=datetime.fromtimestamp(purchase_date / 1000, timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            push_term_limit=3,
+        ))
+        seed.commit()
+        seed.close()
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def apply(transaction):
+            session = Session()
+            try:
+                barrier.wait(timeout=5)
+                _upsert_entitlement_atomically(
+                    session,
+                    _OWNER_DEVICE_SECRET,
+                    DecodedEntitlement(transaction),
+                    3,
+                    create_if_missing=False,
+                )
+                session.commit()
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+            finally:
+                session.close()
+
+        refund = threading.Thread(target=apply, args=(_FakeTransaction(
+            purchaseDate=purchase_date,
+            revocationDate=revocation_date,
+        ),))
+        replay = threading.Thread(target=apply, args=(_FakeTransaction(
+            purchaseDate=purchase_date,
+            revocationDate=None,
+        ),))
+        refund.start()
+        replay.start()
+        refund.join(timeout=10)
+        replay.join(timeout=10)
+
+        assert not refund.is_alive()
+        assert not replay.is_alive()
+        assert errors == []
+        verify_session = Session()
+        try:
+            stored = verify_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+            assert stored.revoked_at is not None
+        finally:
+            verify_session.close()
+            engine.dispose()
+
     def test_non_consumable_without_expiry_is_lifetime_active(self, client, db_session):
         original = _configure_product_tiers(3)
         try:
@@ -282,3 +438,48 @@ class TestAppStoreServerNotifications:
             assert stored.latest_transaction_id == "new"
             assert stored.push_term_limit == 10
             assert stored.expires_at is None
+
+    def test_ignores_notification_for_an_older_transaction(self, client, db_session):
+        current_purchase = datetime.now(timezone.utc)
+        current_expiry = current_purchase + timedelta(days=30)
+        db_session.add(DeviceEntitlement(
+            owner_device_secret="owner-a",
+            product_id=_PRODUCT_ID,
+            original_transaction_id="orig-1",
+            latest_transaction_id="current",
+            purchase_date=current_purchase,
+            expires_at=current_expiry,
+            push_term_limit=10,
+        ))
+        db_session.commit()
+        notification = SimpleNamespace(
+            data=SimpleNamespace(signedTransactionInfo="old-transaction-jws"),
+            rawNotificationType="DID_RENEW",
+        )
+        old_purchase = int((current_purchase - timedelta(days=30)).timestamp() * 1000)
+        old_expiry = int((current_purchase - timedelta(days=1)).timestamp() * 1000)
+        original = _configure_product_tiers(3)
+        try:
+            with patch("app.api.entitlements.verify_signed_notification", return_value=notification), \
+                 patch(
+                     "app.api.entitlements.verify_signed_transaction",
+                     return_value=_FakeTransaction(
+                         transactionId="old",
+                         purchaseDate=old_purchase,
+                         expiresDate=old_expiry,
+                     ),
+                 ):
+                resp = client.post(
+                    "/api/entitlements/apple-notifications",
+                    json={"signedPayload": "notification-jws"},
+                )
+        finally:
+            settings.plus_subscription_tiers = original
+
+        assert resp.status_code == 200
+        assert resp.json()["updated"] == 0
+        stored = db_session.get(DeviceEntitlement, "owner-a")
+        db_session.refresh(stored)
+        assert stored.latest_transaction_id == "current"
+        assert stored.push_term_limit == 10
+        assert stored.expires_at.replace(tzinfo=timezone.utc) == current_expiry

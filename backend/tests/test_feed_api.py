@@ -4,11 +4,13 @@ from __future__ import annotations
 import os
 import hashlib
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from unittest.mock import patch
 
 import pytest
 
 from app.config import settings
+from app.feed_redirects import signed_match_redirect_url
 from app.models import APNSDeviceToken, DeviceEntitlement, Match, MutedFeedItem, SourceItem, WatchTerm
 
 # Supply a token so admin endpoints work in tests.
@@ -236,11 +238,192 @@ class TestFeedAPI:
             f"query requested more rows than the scan cap allows: {seen_limits}"
         )
 
+    def test_continuation_scan_crosses_irrelevant_scan_caps(self, client, db_session, monkeypatch):
+        monkeypatch.setattr("app.api.feed._MAX_FEED_SCAN_ROWS", 3)
+        term = _make_term(db_session, keyword="Aiko")
+        expected_ids = []
+        for index in range(3):
+            relevant = _make_item(
+                db_session,
+                item_id=f"continuation-relevant-{index}",
+                days_ago=10 + index,
+                title=f"Aiko article {index}",
+            )
+            _make_match(db_session, term, relevant)
+            expected_ids.append(relevant.id)
+        for index in range(4):
+            stale = _make_item(
+                db_session,
+                item_id=f"continuation-stale-{index}",
+                days_ago=index,
+                title=f"Unrelated article {index}",
+            )
+            _make_match(db_session, term, stale)
+
+        parameters = {
+            "scan": "true",
+            "limit": 2,
+            "days": 0,
+            "term_ids": str(term.id),
+        }
+        collected_ids = []
+        page_sizes = []
+        for _ in range(5):
+            response = client.get("/api/feed/", params=parameters)
+            assert response.status_code == 200
+            rows = response.json()
+            page_sizes.append(len(rows))
+            collected_ids.extend(row["item"]["id"] for row in rows)
+            next_published_at = response.headers.get("X-OshiReader-Next-Published-At")
+            next_match_id = response.headers.get("X-OshiReader-Next-Match-ID")
+            if next_published_at is None and next_match_id is None:
+                break
+            assert next_published_at is not None
+            assert next_match_id is not None
+            parameters["scan_before_published_at"] = next_published_at
+            parameters["scan_before_match_id"] = next_match_id
+        else:
+            pytest.fail("continuation scan did not terminate")
+
+        assert page_sizes[0] == 0
+        assert collected_ids == list(reversed(expected_ids))
+
+    def test_exact_size_terminal_scan_page_emits_cursor_then_empty_page(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        for index in range(2):
+            item = _make_item(
+                db_session,
+                item_id=f"exact-terminal-{index}",
+                title=f"Aiko exact terminal {index}",
+            )
+            _make_match(db_session, term, item)
+
+        first = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 2,
+                "days": 0,
+                "term_ids": str(term.id),
+            },
+        )
+
+        assert first.status_code == 200
+        assert len(first.json()) == 2
+        next_published_at = first.headers["X-OshiReader-Next-Published-At"]
+        next_match_id = first.headers["X-OshiReader-Next-Match-ID"]
+
+        terminal = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 2,
+                "days": 0,
+                "term_ids": str(term.id),
+                "scan_before_published_at": next_published_at,
+                "scan_before_match_id": next_match_id,
+            },
+        )
+
+        assert terminal.status_code == 200
+        assert terminal.json() == []
+        assert "X-OshiReader-Next-Published-At" not in terminal.headers
+        assert "X-OshiReader-Next-Match-ID" not in terminal.headers
+
+    def test_continuation_scan_does_not_skip_item_when_published_at_moves(self, client, db_session, monkeypatch):
+        monkeypatch.setattr("app.api.feed._MAX_FEED_SCAN_ROWS", 2)
+        term = _make_term(db_session, keyword="Aiko")
+        items = []
+        for index in range(3):
+            item = _make_item(
+                db_session,
+                item_id=f"moving-cursor-{index}",
+                days_ago=index + 1,
+                title=f"Aiko article {index}",
+            )
+            _make_match(db_session, term, item)
+            items.append(item)
+
+        first = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 1,
+                "days": 0,
+                "term_ids": str(term.id),
+            },
+        )
+        assert first.status_code == 200
+        assert first.json()[0]["item"]["id"] == items[2].id
+
+        # This unseen row moves ahead of the prior page's published-at value.
+        # An immutable Match.id cursor must still return it on the next page.
+        items[1].published_at = datetime.now(timezone.utc) + timedelta(days=1)
+        db_session.commit()
+        second = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 1,
+                "days": 0,
+                "term_ids": str(term.id),
+                "scan_before_published_at": first.headers["X-OshiReader-Next-Published-At"],
+                "scan_before_match_id": first.headers["X-OshiReader-Next-Match-ID"],
+            },
+        )
+
+        assert second.status_code == 200
+        assert second.json()[0]["item"]["id"] == items[1].id
+
+    def test_incremental_scan_limits_old_forum_rows_to_recent_activity(self, client, db_session):
+        checkpoint = datetime.now(timezone.utc) - timedelta(hours=1)
+        term = _make_term(db_session, keyword="Aiko")
+        stale = _make_item(
+            db_session,
+            item_id="stale-forum-thread",
+            days_ago=30,
+            title="Aiko stale thread",
+            platform="5ch",
+        )
+        active = _make_item(
+            db_session,
+            item_id="active-forum-thread",
+            days_ago=0,
+            title="Aiko active thread",
+            platform="5ch",
+        )
+        stale_match = _make_match(db_session, term, stale)
+        active_match = _make_match(db_session, term, active)
+        stale_match.created_at = checkpoint - timedelta(days=1)
+        active_match.created_at = checkpoint - timedelta(days=1)
+        db_session.commit()
+
+        response = client.get(
+            "/api/feed/",
+            params={
+                "scan": "true",
+                "limit": 10,
+                "since": checkpoint.isoformat(),
+                "until": datetime.now(timezone.utc).isoformat(),
+                "term_ids": str(term.id),
+            },
+        )
+
+        assert response.status_code == 200
+        assert [row["item"]["id"] for row in response.json()] == [active.id]
+
     def test_feed_empty(self, client):
         resp = client.get("/api/feed/")
         assert resp.status_code == 200
         assert resp.json() == []
         assert resp.headers["server-timing"].startswith("feed;dur=")
+
+    def test_openapi_declares_continuation_response_headers(self, client):
+        operation = client.get("/openapi.json").json()["paths"]["/api/feed/"]["get"]
+        headers = operation["responses"]["200"]["headers"]
+
+        assert "X-OshiReader-Next-Published-At" in headers
+        assert "X-OshiReader-Next-Match-ID" in headers
 
     def test_feed_compresses_large_response_when_client_supports_gzip(self, client, db_session):
         term = _make_term(db_session, keyword="Aiko")
@@ -475,13 +658,52 @@ class TestFeedAPI:
         item = _make_item(db_session, item_id="redirect")
         match = _make_match(db_session, term, item)
 
-        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                match.id,
+                item.url,
+                issued_at=datetime.now(timezone.utc),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
         assert resp.status_code == 307
         assert resp.headers["location"] == item.url
 
     def test_match_redirect_404_for_unknown_match(self, client):
-        resp = client.get("/api/feed/matches/999999/redirect", follow_redirects=False)
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                999999,
+                "https://example.com/missing",
+                issued_at=datetime.now(timezone.utc),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
         assert resp.status_code == 404
+
+    def test_match_redirect_rejects_unsigned_enumeration(self, client, db_session):
+        term = _make_term(db_session)
+        item = _make_item(db_session, item_id="unsigned-redirect")
+        match = _make_match(db_session, term, item)
+
+        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+
+        assert resp.status_code == 403
+
+    def test_match_redirect_rejects_expired_signature(self, client, db_session):
+        term = _make_term(db_session)
+        item = _make_item(db_session, item_id="expired-redirect")
+        match = _make_match(db_session, term, item)
+
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                match.id,
+                item.url,
+                issued_at=datetime.now(timezone.utc) - timedelta(days=31),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
+
+        assert resp.status_code == 403
 
     def test_match_redirect_rejects_non_http_url(self, client, db_session):
         term = _make_term(db_session)
@@ -490,7 +712,14 @@ class TestFeedAPI:
         db_session.commit()
         match = _make_match(db_session, term, item)
 
-        resp = client.get(f"/api/feed/matches/{match.id}/redirect", follow_redirects=False)
+        with patch.object(settings, "admin_api_token", "redirect-test-secret"):
+            redirect_url = signed_match_redirect_url(
+                "https://backend.example.com",
+                match.id,
+                item.url,
+                issued_at=datetime.now(timezone.utc),
+            )
+            resp = client.get(redirect_url, follow_redirects=False)
         assert resp.status_code == 404
 
     def test_feed_filter_by_term_id(self, client, db_session):
@@ -505,6 +734,20 @@ class TestFeedAPI:
         rows = resp.json()
         assert len(rows) == 1
         assert rows[0]["watch_term_id"] == t1.id
+
+    def test_feed_filter_by_multiple_term_ids(self, client, db_session):
+        terms = [_make_term(db_session, keyword=f"term-{index}") for index in range(3)]
+        for index, term in enumerate(terms):
+            item = _make_item(
+                db_session,
+                item_id=f"term-filter-{index}",
+                title=f"{term.keyword} item",
+            )
+            _make_match(db_session, term, item)
+
+        rows = client.get(f"/api/feed/?term_ids={terms[0].id},{terms[2].id}").json()
+
+        assert {row["watch_term_id"] for row in rows} == {terms[0].id, terms[2].id}
 
     def test_feed_days_filter_excludes_old_items(self, client, db_session):
         term = _make_term(db_session)
@@ -769,10 +1012,34 @@ class TestFeedAPI:
         assert new_item.id in ids
         assert old_item.id not in ids
 
-    def test_since_filter_timeless_platforms_always_included(self, client, db_session):
-        """5ch/girlschannel items survive the since filter regardless of match age."""
+    def test_feed_until_holds_a_stable_pagination_snapshot(self, client, db_session):
+        term = _make_term(db_session, keyword="Aiko")
+        before_cutoff = _make_item(
+            db_session,
+            item_id="before-cutoff",
+            title="Aiko before cutoff",
+        )
+        after_cutoff = _make_item(
+            db_session,
+            item_id="after-cutoff",
+            title="Aiko after cutoff",
+        )
+        older_match = _make_match(db_session, term, before_cutoff)
+        newer_match = _make_match(db_session, term, after_cutoff)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
+        older_match.created_at = cutoff - timedelta(seconds=1)
+        newer_match.created_at = cutoff + timedelta(seconds=1)
+        db_session.commit()
+
+        until_ts = quote(cutoff.isoformat())
+        rows = client.get(f"/api/feed/?days=0&until={until_ts}").json()
+
+        assert [row["item"]["id"] for row in rows] == [before_cutoff.id]
+
+    def test_since_filter_timeless_platforms_include_recent_activity(self, client, db_session):
+        """A recently active forum thread survives even when its match is old."""
         term = _make_term(db_session)
-        old_girlschannel = _make_item(db_session, platform="girlschannel", item_id="gc1", days_ago=180)
+        old_girlschannel = _make_item(db_session, platform="girlschannel", item_id="gc1", days_ago=0)
         match = _make_match(db_session, term, old_girlschannel)
 
         # Backdate the match so the since filter would normally exclude it
@@ -787,13 +1054,13 @@ class TestFeedAPI:
         resp = client.get(f"/api/feed/?since={since_ts}")
         assert resp.status_code == 200
         ids = [r["item"]["id"] for r in resp.json()]
-        assert old_girlschannel.id in ids, "timeless platform item must bypass the since filter"
+        assert old_girlschannel.id in ids, "recent forum activity must bypass the old match date"
 
     def test_5ch_since_filter_bypasses_match_age(self, client, db_session):
         from urllib.parse import quote
 
         term = _make_term(db_session, keyword="Aiko")
-        old_5ch = _make_item(db_session, platform="5ch", item_id="old-since", days_ago=1, title="Aiko old matched thread")
+        old_5ch = _make_item(db_session, platform="5ch", item_id="old-since", days_ago=0, title="Aiko old matched thread")
         match = _make_match(db_session, term, old_5ch)
         db_session.query(Match).filter(Match.id == match.id).update(
             {"created_at": datetime.now(timezone.utc) - timedelta(days=90)},
