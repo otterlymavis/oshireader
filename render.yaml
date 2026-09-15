@@ -61,8 +61,10 @@ services:
       - key: APP_STORE_BUNDLE_ID
         value: com.otterpia.oshireader
       - key: APP_STORE_APPLE_ID
-        sync: false
+        value: "6781246175"
       - key: PLUS_SUBSCRIPTION_TIERS
-        value: ""
+        value: com.otterpia.oshireader.hosted.monthly:10,com.otterpia.oshireader.hosted.yearly:10,com.otterpia.oshireader.hosted.lifetime:1
+      - key: PLUS_NON_CONSUMABLE_PRODUCT_IDS
+        value: com.otterpia.oshireader.hosted.lifetime
       - key: CORS_ALLOW_ORIGINS
         sync: false

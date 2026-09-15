@@ -61,6 +61,8 @@ class TestApplyStartupMigrations:
         assert "device_secret" in _column_names(fresh_engine, "apns_device_tokens")
         assert "apns_topic" in _column_names(fresh_engine, "apns_device_tokens")
         assert "push_term_limit" in _column_names(fresh_engine, "device_entitlements")
+        assert "permanent_product_id" in _column_names(fresh_engine, "device_entitlements")
+        assert "permanent_push_term_limit" in _column_names(fresh_engine, "device_entitlements")
 
     def test_creates_feed_performance_indexes(self, fresh_engine):
         with patch("app.migrations.SessionLocal", sessionmaker(bind=fresh_engine)):
@@ -68,6 +70,10 @@ class TestApplyStartupMigrations:
 
         assert "ix_matches_watch_term_created_at" in _index_names(fresh_engine, "matches")
         assert "ix_source_items_platform_published_at" in _index_names(fresh_engine, "source_items")
+        assert (
+            "ix_device_entitlements_permanent_original_transaction_id"
+            in _index_names(fresh_engine, "device_entitlements")
+        )
 
     def test_idempotent_second_call_succeeds(self, fresh_engine):
         Session = sessionmaker(bind=fresh_engine)

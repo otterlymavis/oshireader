@@ -59,7 +59,7 @@ def _push_term_limit(db: Session, owner_device_secret: str | None) -> int:
     entitlement = db.get(DeviceEntitlement, owner_device_secret)
     if entitlement is None or not entitlement.is_active:
         return 0
-    return max(0, entitlement.push_term_limit)
+    return entitlement.effective_push_term_limit
 
 
 def _require_available_push_slot(

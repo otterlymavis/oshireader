@@ -40,8 +40,8 @@ def _status_out(
         )
     return EntitlementStatusOut(
         is_active=entitlement.is_active,
-        product_id=entitlement.product_id,
-        expires_at=entitlement.expires_at,
+        product_id=entitlement.effective_product_id,
+        expires_at=entitlement.effective_expires_at,
         push_term_limit=limit,
         push_term_count=count,
         push_delivery_state=state,
@@ -72,6 +72,21 @@ def _entitlement_values(
         "expires_at": decoded.expires_at,
         "revoked_at": decoded.revoked_at,
         "push_term_limit": push_term_limit,
+    }
+
+
+def _permanent_entitlement_values(
+    decoded: DecodedEntitlement,
+    push_term_limit: int,
+) -> dict:
+    return {
+        "permanent_product_id": decoded.product_id,
+        "permanent_environment": decoded.environment,
+        "permanent_original_transaction_id": decoded.original_transaction_id,
+        "permanent_latest_transaction_id": decoded.latest_transaction_id,
+        "permanent_purchase_date": decoded.purchase_date,
+        "permanent_revoked_at": decoded.revoked_at,
+        "permanent_push_term_limit": push_term_limit,
     }
 
 
@@ -151,6 +166,82 @@ def _upsert_entitlement_atomically(
         return _load_entitlement(db, owner_device_secret), False
 
 
+def _update_permanent_entitlement_atomically(
+    db: Session,
+    owner_device_secret: str,
+    decoded: DecodedEntitlement,
+    push_term_limit: int,
+) -> bool:
+    predicates = [
+        DeviceEntitlement.owner_device_secret == owner_device_secret,
+        or_(
+            DeviceEntitlement.permanent_purchase_date.is_(None),
+            DeviceEntitlement.permanent_purchase_date <= decoded.purchase_date,
+        ),
+    ]
+    if decoded.revoked_at is None:
+        predicates.append(or_(
+            DeviceEntitlement.permanent_latest_transaction_id != decoded.latest_transaction_id,
+            DeviceEntitlement.permanent_latest_transaction_id.is_(None),
+            DeviceEntitlement.permanent_revoked_at.is_(None),
+        ))
+    result = db.execute(
+        update(DeviceEntitlement)
+        .where(and_(*predicates))
+        .values(**_permanent_entitlement_values(decoded, push_term_limit))
+    )
+    if result.rowcount != 1:
+        return False
+
+    # Keep legacy primary fields synchronized when they still represent this
+    # same non-consumable. Effective-state properties otherwise prefer the
+    # dedicated permanent slot.
+    db.execute(
+        update(DeviceEntitlement)
+        .where(
+            DeviceEntitlement.owner_device_secret == owner_device_secret,
+            DeviceEntitlement.original_transaction_id == decoded.original_transaction_id,
+        )
+        .values(**_entitlement_values(decoded, push_term_limit))
+    )
+    return True
+
+
+def _upsert_permanent_entitlement_atomically(
+    db: Session,
+    owner_device_secret: str,
+    decoded: DecodedEntitlement,
+    push_term_limit: int,
+    *,
+    create_if_missing: bool,
+) -> tuple[DeviceEntitlement | None, bool]:
+    if _update_permanent_entitlement_atomically(
+        db, owner_device_secret, decoded, push_term_limit
+    ):
+        return _load_entitlement(db, owner_device_secret), True
+
+    entitlement = _load_entitlement(db, owner_device_secret)
+    if entitlement is not None or not create_if_missing:
+        return entitlement, False
+
+    values = _entitlement_values(decoded, push_term_limit)
+    values.update(_permanent_entitlement_values(decoded, push_term_limit))
+    try:
+        with db.begin_nested():
+            entitlement = DeviceEntitlement(
+                owner_device_secret=owner_device_secret,
+                **values,
+            )
+            db.add(entitlement)
+            db.flush()
+        return entitlement, True
+    except IntegrityError:
+        if _update_permanent_entitlement_atomically(
+            db, owner_device_secret, decoded, push_term_limit
+        ):
+            return _load_entitlement(db, owner_device_secret), True
+        return _load_entitlement(db, owner_device_secret), False
+
 @router.post("/verify", response_model=EntitlementStatusOut)
 def verify(
     body: EntitlementVerifyRequest,
@@ -172,14 +263,15 @@ def verify(
         raise HTTPException(503, "plus_subscription_tiers is not configured")
     push_term_limit = tier_limits.get(decoded.product_id)
     if push_term_limit is None:
-        raise HTTPException(422, "product_id is not a recognized Plus subscription")
+        raise HTTPException(422, "product_id is not a recognized paid product")
 
-    entitlement, applied = _upsert_entitlement_atomically(
-        db,
-        auth.device_secret,
-        decoded,
-        push_term_limit,
-        create_if_missing=True,
+    upsert = (
+        _upsert_permanent_entitlement_atomically
+        if decoded.product_id in settings.plus_non_consumable_product_id_set
+        else _upsert_entitlement_atomically
+    )
+    entitlement, applied = upsert(
+        db, auth.device_secret, decoded, push_term_limit, create_if_missing=True
     )
     db.flush()
     if applied:
@@ -214,13 +306,21 @@ def apple_notifications(
         owner_device_secret
         for (owner_device_secret,) in (
             db.query(DeviceEntitlement.owner_device_secret)
-            .filter(DeviceEntitlement.original_transaction_id == decoded.original_transaction_id)
+            .filter(or_(
+                DeviceEntitlement.original_transaction_id == decoded.original_transaction_id,
+                DeviceEntitlement.permanent_original_transaction_id == decoded.original_transaction_id,
+            ))
             .all()
         )
     ]
+    upsert = (
+        _upsert_permanent_entitlement_atomically
+        if decoded.product_id in settings.plus_non_consumable_product_id_set
+        else _upsert_entitlement_atomically
+    )
     applied = []
     for owner_device_secret in owner_device_secrets:
-        _, did_apply = _upsert_entitlement_atomically(
+        _, did_apply = upsert(
             db,
             owner_device_secret,
             decoded,

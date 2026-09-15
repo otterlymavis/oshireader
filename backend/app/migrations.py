@@ -336,6 +336,13 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
         "device_entitlements",
         {
             "push_term_limit": "INTEGER NOT NULL DEFAULT 0",
+            "permanent_product_id": "VARCHAR",
+            "permanent_environment": "VARCHAR",
+            "permanent_original_transaction_id": "VARCHAR",
+            "permanent_latest_transaction_id": "VARCHAR",
+            "permanent_purchase_date": "TIMESTAMP",
+            "permanent_revoked_at": "TIMESTAMP",
+            "permanent_push_term_limit": "INTEGER NOT NULL DEFAULT 0",
         },
     )
     _backfill_missing_defaults(engine)
@@ -357,6 +364,10 @@ def apply_startup_migrations(engine: Engine, *, run_cleanups: bool = True) -> No
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_matches_watch_term_created_at"
             " ON matches (watch_term_id, created_at DESC)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_device_entitlements_permanent_original_transaction_id"
+            " ON device_entitlements (permanent_original_transaction_id)"
         ))
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_source_items_published_at"
