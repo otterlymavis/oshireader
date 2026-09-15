@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from app.config import BASIC_PUSH_TERM_LIMIT, PRO_PUSH_TERM_LIMIT, Settings
+from app.config import (
+    BASIC_PUSH_TERM_LIMIT,
+    ONE_WATCH_WORD_PUSH_TERM_LIMIT,
+    PRO_PUSH_TERM_LIMIT,
+    Settings,
+)
 
 
 class TestCorsOrigins:
@@ -65,11 +70,23 @@ class TestPaidPushTiers:
 
     def test_products_map_to_basic_and_pro_limits(self):
         settings = Settings(
-            plus_subscription_tiers="local.basic.monthly:3,local.pro.annual:10"
+            plus_subscription_tiers=(
+                "local.one-time:1,local.basic.monthly:3,local.pro.annual:10"
+            )
         )
         assert settings.plus_subscription_tier_limits == {
+            "local.one-time": ONE_WATCH_WORD_PUSH_TERM_LIMIT,
             "local.basic.monthly": BASIC_PUSH_TERM_LIMIT,
             "local.pro.annual": PRO_PUSH_TERM_LIMIT,
+        }
+
+    def test_non_consumable_product_ids_are_trimmed_and_deduplicated(self):
+        settings = Settings(
+            plus_non_consumable_product_ids=" local.lifetime,local.lifetime, other.permanent "
+        )
+        assert settings.plus_non_consumable_product_id_set == {
+            "local.lifetime",
+            "other.permanent",
         }
 
     def test_unsupported_limits_are_ignored(self):

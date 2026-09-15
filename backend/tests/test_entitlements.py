@@ -119,6 +119,128 @@ class TestVerifyEntitlement:
         assert stored.environment == "production"
         assert stored.push_term_limit == 10
 
+    def test_subscription_yields_to_owned_lifetime_plan_after_expiry(self, client, db_session):
+        lifetime_product = "com.otterpia.oshireader.hosted.lifetime"
+        subscription_product = "com.otterpia.oshireader.hosted.monthly"
+        now = datetime.now(timezone.utc)
+        original_tiers = settings.plus_subscription_tiers
+        original_permanent = settings.plus_non_consumable_product_ids
+        settings.plus_subscription_tiers = (
+            f"{lifetime_product}:1,{subscription_product}:10"
+        )
+        settings.plus_non_consumable_product_ids = lifetime_product
+
+        def verify(transaction: _FakeTransaction):
+            with _device_auth(), patch(
+                "app.api.entitlements.verify_signed_transaction",
+                return_value=transaction,
+            ):
+                return client.post(
+                    "/api/entitlements/verify",
+                    json={"signed_transaction": "jws"},
+                    headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                )
+
+        try:
+            lifetime = verify(_FakeTransaction(
+                productId=lifetime_product,
+                originalTransactionId="lifetime-original",
+                transactionId="lifetime-purchase",
+                purchaseDate=int((now - timedelta(days=2)).timestamp() * 1000),
+                expiresDate=None,
+            ))
+            subscription = verify(_FakeTransaction(
+                productId=subscription_product,
+                originalTransactionId="subscription-original",
+                transactionId="subscription-purchase",
+                purchaseDate=int((now - timedelta(days=1)).timestamp() * 1000),
+                expiresDate=int((now + timedelta(days=1)).timestamp() * 1000),
+            ))
+            expired = verify(_FakeTransaction(
+                productId=subscription_product,
+                originalTransactionId="subscription-original",
+                transactionId="subscription-expired",
+                purchaseDate=int(now.timestamp() * 1000),
+                expiresDate=int((now - timedelta(seconds=1)).timestamp() * 1000),
+            ))
+        finally:
+            settings.plus_subscription_tiers = original_tiers
+            settings.plus_non_consumable_product_ids = original_permanent
+
+        assert lifetime.status_code == 200
+        assert lifetime.json()["product_id"] == lifetime_product
+        assert lifetime.json()["push_term_limit"] == 1
+        assert subscription.status_code == 200
+        assert subscription.json()["product_id"] == subscription_product
+        assert subscription.json()["push_term_limit"] == 10
+        assert expired.status_code == 200
+        assert expired.json()["is_active"] is True
+        assert expired.json()["product_id"] == lifetime_product
+        assert expired.json()["expires_at"] is None
+        assert expired.json()["push_term_limit"] == 1
+
+        stored = db_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+        db_session.refresh(stored)
+        assert stored.original_transaction_id == "subscription-original"
+        assert stored.permanent_original_transaction_id == "lifetime-original"
+        assert stored.effective_push_term_limit == 1
+
+    def test_lifetime_refund_is_terminal_after_subscription_expires(self, client, db_session):
+        lifetime_product = "com.otterpia.oshireader.hosted.lifetime"
+        now = datetime.now(timezone.utc)
+        original_tiers = settings.plus_subscription_tiers
+        original_permanent = settings.plus_non_consumable_product_ids
+        settings.plus_subscription_tiers = f"{lifetime_product}:1"
+        settings.plus_non_consumable_product_ids = lifetime_product
+
+        def verify(transaction: _FakeTransaction):
+            with _device_auth(), patch(
+                "app.api.entitlements.verify_signed_transaction",
+                return_value=transaction,
+            ):
+                return client.post(
+                    "/api/entitlements/verify",
+                    json={"signed_transaction": "jws"},
+                    headers={"X-Device-Secret": _DEVICE_SECRET_HEADER},
+                )
+
+        purchase_date = int((now - timedelta(days=1)).timestamp() * 1000)
+        try:
+            verify(_FakeTransaction(
+                productId=lifetime_product,
+                originalTransactionId="lifetime-original",
+                transactionId="lifetime-purchase",
+                purchaseDate=purchase_date,
+                expiresDate=None,
+            ))
+            refunded = verify(_FakeTransaction(
+                productId=lifetime_product,
+                originalTransactionId="lifetime-original",
+                transactionId="lifetime-purchase",
+                purchaseDate=purchase_date,
+                expiresDate=None,
+                revocationDate=int(now.timestamp() * 1000),
+            ))
+            replayed = verify(_FakeTransaction(
+                productId=lifetime_product,
+                originalTransactionId="lifetime-original",
+                transactionId="lifetime-purchase",
+                purchaseDate=purchase_date,
+                expiresDate=None,
+                revocationDate=None,
+            ))
+        finally:
+            settings.plus_subscription_tiers = original_tiers
+            settings.plus_non_consumable_product_ids = original_permanent
+
+        assert refunded.status_code == 200
+        assert refunded.json()["is_active"] is False
+        assert replayed.status_code == 200
+        assert replayed.json()["is_active"] is False
+        stored = db_session.get(DeviceEntitlement, _OWNER_DEVICE_SECRET)
+        db_session.refresh(stored)
+        assert stored.permanent_revoked_at is not None
+
     def test_verify_twice_updates_existing_row_not_duplicate(self, client, db_session):
         original = _configure_product_tiers()
         try:

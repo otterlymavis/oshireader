@@ -142,9 +142,9 @@ def push_delivery_status(
     if owner_device_secret is None:
         return "active", count, count
     entitlement = db.get(DeviceEntitlement, owner_device_secret)
-    if entitlement is None or not entitlement.is_active or entitlement.push_term_limit <= 0:
+    if entitlement is None or not entitlement.is_active or entitlement.effective_push_term_limit <= 0:
         return "inactive", 0, count
-    limit = max(0, entitlement.push_term_limit)
+    limit = entitlement.effective_push_term_limit
     if count > limit:
         return "selection_required", limit, count
     return "active", limit, count

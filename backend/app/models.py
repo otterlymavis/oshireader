@@ -155,10 +155,27 @@ class DeviceEntitlement(Base):
     expires_at = Column(DateTime, index=True)
     revoked_at = Column(DateTime)
     push_term_limit = Column(Integer, nullable=False, default=0)
+    # A non-consumable can coexist with a higher-limit subscription. Keep its
+    # latest verified transaction so it becomes the effective entitlement when
+    # the subscription expires or is revoked.
+    permanent_product_id = Column(String)
+    permanent_environment = Column(String)
+    permanent_original_transaction_id = Column(String, index=True)
+    permanent_latest_transaction_id = Column(String)
+    permanent_purchase_date = Column(DateTime)
+    permanent_revoked_at = Column(DateTime)
+    permanent_push_term_limit = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     @property
-    def is_active(self) -> bool:
+    def primary_is_active(self) -> bool:
+        # When both slots describe the same non-consumable transaction, the
+        # permanent slot is authoritative (including a later refund).
+        if (
+            self.permanent_original_transaction_id is not None
+            and self.original_transaction_id == self.permanent_original_transaction_id
+        ):
+            return False
         if self.revoked_at is not None:
             return False
         if self.expires_at is None:
@@ -167,6 +184,43 @@ class DeviceEntitlement(Base):
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         return expires_at > _utcnow()
+
+    @property
+    def permanent_is_active(self) -> bool:
+        return (
+            self.permanent_original_transaction_id is not None
+            and self.permanent_revoked_at is None
+        )
+
+    @property
+    def uses_permanent_entitlement(self) -> bool:
+        if not self.permanent_is_active:
+            return False
+        if not self.primary_is_active:
+            return True
+        return self.permanent_push_term_limit > self.push_term_limit
+
+    @property
+    def is_active(self) -> bool:
+        return self.primary_is_active or self.permanent_is_active
+
+    @property
+    def effective_product_id(self) -> str:
+        if self.uses_permanent_entitlement and self.permanent_product_id is not None:
+            return self.permanent_product_id
+        return self.product_id
+
+    @property
+    def effective_expires_at(self) -> Optional[datetime]:
+        return None if self.uses_permanent_entitlement else self.expires_at
+
+    @property
+    def effective_push_term_limit(self) -> int:
+        if not self.is_active:
+            return 0
+        if self.uses_permanent_entitlement:
+            return max(0, self.permanent_push_term_limit)
+        return max(0, self.push_term_limit)
 
 
 class MigrationLog(Base):
