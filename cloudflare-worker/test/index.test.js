@@ -442,6 +442,102 @@ test("health reports stale polling as degraded", async (context) => {
   assert.equal((await response.json()).status, "degraded");
 });
 
+test("health accepts a fresh no-due-terms scheduler check", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+    pending_notifications: [],
+    latest_poll: {
+      id: 2,
+      kind: "poll",
+      status: "skipped",
+      created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      payload: { due_terms: 0, total_terms: 1 },
+    },
+    latest_successful_poll: {
+      id: 1,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.healthy, true);
+  assert.equal(body.no_work, true);
+  assert.match(body.reason, /no due terms/);
+});
+
+test("health does not let an old no-due-terms check mask stale polling", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+    pending_notifications: [],
+    latest_poll: {
+      id: 2,
+      kind: "poll",
+      status: "skipped",
+      created_at: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+      payload: { due_terms: 0, total_terms: 1 },
+    },
+    latest_successful_poll: {
+      id: 1,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date(Date.now() - 8 * 60 * 60_000).toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).status, "degraded");
+});
+
+test("health requires an explicit zero due-term count for a no-work check", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    watch_terms: [{ id: 1, keyword: "Aiko", is_active: true }],
+    pending_notifications: [],
+    latest_poll: {
+      id: 2,
+      kind: "poll",
+      status: "skipped",
+      created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      payload: { total_terms: 1 },
+    },
+    latest_successful_poll: {
+      id: 1,
+      kind: "poll",
+      status: "completed",
+      created_at: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+    },
+    recent_events: [],
+  }), { status: 200 });
+
+  const response = await worker.fetch(
+    new Request("https://worker.example/health"),
+    { ADMIN_API_TOKEN: "secret", BACKEND_URL: "https://backend.example" },
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).status, "degraded");
+});
+
 test("health reports missing polling inputs as degraded", async (context) => {
   const originalFetch = globalThis.fetch;
   context.after(() => { globalThis.fetch = originalFetch; });
