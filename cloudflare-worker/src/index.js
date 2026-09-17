@@ -524,6 +524,29 @@ function pollHealth(
     };
   }
 
+  // A scheduler pass that recently and successfully found no due terms is
+  // healthy even when the last connector-running poll is older than the
+  // watchdog threshold. This is expected when active free-tier terms use a
+  // longer refresh interval than the health threshold. Keep this distinct
+  // from fully idle (no active terms), and require the explicit due_terms=0
+  // payload so an arbitrary skipped/failed event cannot mask stale polling.
+  const latestPoll = diagnostics.latest_poll;
+  const latestPollPayload = latestPoll?.payload;
+  const latestPollAt = latestPoll?.created_at ? Date.parse(latestPoll.created_at) : Number.NaN;
+  const latestPollAgeMinutes = (Date.now() - latestPollAt) / 60_000;
+  if (latestPoll?.status === "skipped" &&
+      latestPollPayload?.due_terms === 0 &&
+      Number.isFinite(latestPollAgeMinutes) &&
+      latestPollAgeMinutes >= 0 &&
+      latestPollAgeMinutes <= staleAfterMinutes) {
+    return {
+      healthy: true,
+      no_work: true,
+      age_minutes: Math.floor(latestPollAgeMinutes),
+      reason: "latest scheduler check found no due terms",
+    };
+  }
+
   const event = diagnostics.latest_successful_poll;
   const completedAt = event?.created_at ? Date.parse(event.created_at) : Number.NaN;
   const activePollAgeMinutes = activeBackendPollAgeMinutes(diagnostics, completedAt);
