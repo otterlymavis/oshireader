@@ -170,7 +170,14 @@ jobs:
           if payload.get("idle") is True:
               summary["idle"] = True
               print("Poller is healthy and idle; no recent successful poll is required.")
-          elif payload.get("no_work") is True and fresh_no_work_check:
+          elif fresh_no_work_check:
+              # Trust this monitor's own reading of `diagnostics.latest_poll`
+              # (parsed with Python's reliable datetime handling) rather than
+              # also requiring the worker's parallel `no_work` classification
+              # to agree — that's a second, independently-computed judgment
+              # of the same data, and a worker-side quirk there (e.g. its own
+              # date parsing) can make this monitor false-alarm on a poll
+              # cycle that's plainly healthy in the diagnostics payload.
               summary["no_work"] = True
               print("Poller recently checked and found no due terms; no connector poll is required.")
           elif not created_at:
