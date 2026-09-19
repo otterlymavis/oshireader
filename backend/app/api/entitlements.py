@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.auth import AuthContext, require_admin_or_device_auth
 from app.config import settings
 from app.database import get_db
+from app.diagnostics import record_backend_event
 from app.entitlements import (
     DecodedEntitlement,
     EntitlementVerificationError,
@@ -242,6 +243,14 @@ def _upsert_permanent_entitlement_atomically(
             return _load_entitlement(db, owner_device_secret), True
         return _load_entitlement(db, owner_device_secret), False
 
+def _device_correlation_id(device_secret: str) -> str:
+    # device_secret here is already a SHA-256 hash (see AuthContext), never
+    # the raw client value. Truncate further so the event log only carries
+    # enough to correlate a device's own requests over time, not a full
+    # credential-strength value.
+    return device_secret[:12]
+
+
 @router.post("/verify", response_model=EntitlementStatusOut)
 def verify(
     body: EntitlementVerifyRequest,
@@ -250,32 +259,65 @@ def verify(
 ):
     if auth.device_secret is None:
         raise HTTPException(400, "a device secret is required")
+    device_id = _device_correlation_id(auth.device_secret)
 
     try:
         payload = verify_signed_transaction(body.signed_transaction)
         decoded = DecodedEntitlement(payload)
     except EntitlementVerificationError as exc:
         log.warning("StoreKit transaction verification failed: %s", exc)
+        record_backend_event(
+            db, "entitlement_verify", "failed",
+            "Transaction could not be verified",
+            {"device_id": device_id, "error": str(exc)},
+        )
+        db.commit()
         raise HTTPException(422, "transaction could not be verified") from exc
 
     tier_limits = settings.plus_subscription_tier_limits
     if not tier_limits:
+        record_backend_event(
+            db, "entitlement_verify", "failed",
+            "plus_subscription_tiers is not configured",
+            {"device_id": device_id, "product_id": decoded.product_id},
+        )
+        db.commit()
         raise HTTPException(503, "plus_subscription_tiers is not configured")
     push_term_limit = tier_limits.get(decoded.product_id)
     if push_term_limit is None:
+        record_backend_event(
+            db, "entitlement_verify", "failed",
+            "product_id is not a recognized paid product",
+            {"device_id": device_id, "product_id": decoded.product_id, "known_product_ids": list(tier_limits)},
+        )
+        db.commit()
         raise HTTPException(422, "product_id is not a recognized paid product")
 
-    upsert = (
-        _upsert_permanent_entitlement_atomically
-        if decoded.product_id in settings.plus_non_consumable_product_id_set
-        else _upsert_entitlement_atomically
-    )
+    is_non_consumable = decoded.product_id in settings.plus_non_consumable_product_id_set
+    upsert = _upsert_permanent_entitlement_atomically if is_non_consumable else _upsert_entitlement_atomically
     entitlement, applied = upsert(
         db, auth.device_secret, decoded, push_term_limit, create_if_missing=True
     )
     db.flush()
     if applied:
         clear_paused_pending_notifications(db, auth.device_secret)
+    record_backend_event(
+        db, "entitlement_verify", "applied" if applied else "no_op",
+        "Entitlement verification completed",
+        {
+            "device_id": device_id,
+            "product_id": decoded.product_id,
+            "is_non_consumable": is_non_consumable,
+            "push_term_limit": push_term_limit,
+            "original_transaction_id": decoded.original_transaction_id,
+            "environment": decoded.environment,
+            "applied": applied,
+            "resulting_is_active": entitlement.is_active if entitlement is not None else None,
+            "resulting_effective_push_term_limit": (
+                entitlement.effective_push_term_limit if entitlement is not None else None
+            ),
+        },
+    )
     db.commit()
     if entitlement is not None:
         db.refresh(entitlement)

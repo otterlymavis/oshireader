@@ -1371,6 +1371,11 @@ def get_stats(_: None = Depends(require_admin_auth), db: Session = Depends(get_d
             "keyword": term.keyword,
             "is_active": term.is_active,
             "notify_on_new": term.notify_on_new,
+            # Same truncation as _device_correlation_id in api/entitlements.py —
+            # owner_device_secret is already a hash, never the raw client
+            # value, so this is just enough to correlate a term against an
+            # entitlement_verify event's device_id, not a credential.
+            "owner_device_id": term.owner_device_secret[:12] if term.owner_device_secret else None,
             **device_counts,
         }
         watch_term_rows.append(row)
@@ -1539,6 +1544,11 @@ def get_poller_health(_: None = Depends(require_admin_auth), db: Session = Depen
             "keyword": term.keyword,
             "is_active": term.is_active,
             "notify_on_new": term.notify_on_new,
+            # Same truncation as _device_correlation_id in api/entitlements.py —
+            # owner_device_secret is already a hash, never the raw client
+            # value, so this is just enough to correlate a term against an
+            # entitlement_verify event's device_id, not a credential.
+            "owner_device_id": term.owner_device_secret[:12] if term.owner_device_secret else None,
             **device_counts,
         }
         watch_term_rows.append(row)
